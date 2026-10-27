@@ -1,0 +1,12 @@
+# The game (your own copy) and everything derived from it stay local.
+/source/
+/re/*
+!/re/FINDINGS.md
+!/re/opcodes.md
+!/re/scripts/
+!/re/proto/
+/re/proto/__pycache__/
+
+engine/build*/
+__pycache__/
+.DS_Store
