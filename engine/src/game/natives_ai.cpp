@@ -60,11 +60,11 @@ GameObject *pilot_target(World &w, GameObject &o) {
 	return nullptr;
 }
 
-// AIAttackRangeCaller (OMF 0x35020d60): base (+0x5f4, 1) x multiplier (+0x5f8) x the pilot's
-// attack-range stat, at least 40.
+// AIAttackRangeCaller (OMF 0x35020d60): base (+0x5f4, 1 to start, see jitter_attack_range) x
+// multiplier (+0x5f8) x the pilot's attack-range stat, at least 40.
 float attack_range(World &w, const GameObject &o) {
 	float stat = o.pilot ? o.pilot->stat(0x5e8, time_ms(w)) : 120.0f;
-	return std::max(40.0f, 1.0f * o.ai_range_multiplier * stat);
+	return std::max(40.0f, o.ai_range_base * o.ai_range_multiplier * stat);
 }
 
 // DE_COMF2Fighter::GetDesirability (0x3502b120). -0.75 x danger at the spot, plus
@@ -250,6 +250,7 @@ void attack(World &w, GameObject &pilot, GameObject &self, GameObject &target, f
 	m.type = kTypeAttack;
 	m.target = target.handle;
 	m.value = aggression;
+	pilot.pilot_aggression = aggression;
 	w.issue_command(self, m);
 	if (target.handle == pilot.pilot_target) return;
 	pilot.pilot_target = target.handle;
@@ -330,13 +331,15 @@ void reassign_commands(GameObject &o) {
 // linked with (+0x334: every other fighter prepared in the scene) that take it as an enemy
 // (IsEnemyFighter 0x3502a740: not itself, and not on its team, +0x49c >= 0). Fighters carry no
 // team here (their pilots' factions are not decoded), so that is every other fighter.
-std::vector<GameObject *> World::enemies_of(GameObject &f) {
+std::vector<GameObject *> World::linked_fighters(GameObject &f) {
 	std::vector<GameObject *> out;
-	for (GameObject *e : fighters()) {
-		if (e != &f && in_scene(*e)) out.push_back(e);
+	for (uint32_t h : f.linked_fighters) {
+		if (GameObject *e = object(h); e && e != &f && in_scene(*e)) out.push_back(e);
 	}
 	return out;
 }
+
+std::vector<GameObject *> World::enemies_of(GameObject &f) { return linked_fighters(f); }
 
 // DE_COMF2Fighter::GlobalInterest (0x3502ae40): recomputed when more than 300 ms of scene time
 // have passed since the last time (+0x488): its own interest (+500) times (900 - d + 1) for every
@@ -375,10 +378,7 @@ GameObject *World::current_target_of(GameObject &f) {
 		auto enemies = enemies_of(f);
 		GameObject *best = nullptr;
 		float best_score = -1e11f;
-		std::vector<GameObject *> others;
-		for (GameObject *e : fighters()) {
-			if (e != &f && in_scene(*e)) others.push_back(e);
-		}
+		std::vector<GameObject *> others = linked_fighters(f);
 		for (auto it = others.rbegin(); it != others.rend(); ++it) {
 			GameObject *p = *it;
 			auto pt = p->world().t;
@@ -1118,6 +1118,29 @@ void register_ai_natives(World &w) {
 	reg("CObject::int Random(int)", [](const NativeContext &c) {
 		c.ret_u32(uint32_t(int32_t(random01(c.world) * float(c.arg<int32_t>(0)))));
 	});
+}
+
+// DE_COMF2Fighter::Tick (OMF 0x350253a0), for a fighter no controller drives (no controller, or
+// one bound to no device) that the local machine simulates (+0x1f8): when its update count is a
+// multiple of 64, the attack-range base (+0x5f4) grows by 0.065; a draw r = Rand(2 - 1 /
+// aggression of the pilot's last Attack, +0x3dc) above 0.9 cuts it to 60%, below 0.1 adds 0.4;
+// it stays within 0.65 .. 1.3. With no Attack yet, 1 / 0 makes the draw -inf: the 0.4 is added.
+void World::jitter_attack_range(GameObject &o) {
+	if (o.user_controlled || (o.creature_ticks & ~63u) != o.creature_ticks) return;
+	GameObject *pilot = nullptr;
+	for (auto *ch : o.children) {
+		if (ch->class_path == "Actor\Creature\Pilot") {
+			pilot = ch;
+			break;
+		}
+	}
+	if (!pilot) return;
+	o.ai_range_base += 0.065f;
+	float r = random01(*this) * (2.0f - 1.0f / pilot->pilot_aggression);
+	if (r > 0.9f) o.ai_range_base *= 0.6f;
+	if (r < 0.1f) o.ai_range_base += 0.4f;
+	if (o.ai_range_base < 0.65f) o.ai_range_base = 0.65f;
+	else if (o.ai_range_base > 1.3f) o.ai_range_base = 1.3f;
 }
 
 }  // namespace game

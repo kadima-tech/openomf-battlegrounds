@@ -499,6 +499,8 @@ const MaterialDef &ForceSystem::material(GameObject &o) {
 			d.psize_lo = c.f32(), d.psize_hi = c.f32(), d.life_lo = c.f32(), d.life_hi = c.f32();
 			d.intensity_lo = c.f32();
 			d.mask = c.u32();
+			d.mesh_heights = c.boolean();  // +0xc4
+			if (d.mesh_heights && getenv("OPENBG_DEBUG_MATERIALS")) fprintf(stderr, "[material] %s uses mesh heights (+0xc4)\n", o.name.c_str());
 		}
 		// References: [property][material][particle spawning v2: BOOL renderer, BOOL spawner]
 		// [common force v2: BOOL actor to create].
@@ -679,13 +681,47 @@ void ForceSystem::process(GameObject &mo, GameObject &f, const Contact &c) {
 				}
 			}
 		}
+		// The created actor (+0x94) stands at the touch point, its Z along the surface normal
+		// (DE_CCoordinateSystem::Set(+0x18): Y the world's up made perpendicular, X = Y x Z).
+		Vec z = c.face_normal;
+		float zl = len(z);
+		z = zl > 0 ? mul(z, 1 / zl) : Vec{0, 0, 1};
+		Vec up = std::fabs(z[1]) > 0.99f ? Vec{1, 0, 0} : Vec{0, 1, 0};
+		Vec x = cross(up, z);
+		x = mul(x, 1 / std::max(len(x), 1e-6f));
+		Vec y = cross(z, x);
+		GameObject *n = nullptr;
 		if (m.actor_to_create) {
 			if (GameObject *t = w_.global_object(m.actor_to_create)) {
-				GameObject *n = w_.copy_tree(*t);
+				n = w_.copy_tree(*t);
 				n->local.t = c.point;
-				w_.enter_scene(n);
+				n->local.r = {x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]};
 			}
 		}
+		// +0xc4 on a mesh: the touched face's extent along that frame's X from the touch point,
+		// as values BeginX (lowest) and EndX (highest) on the created actor and on the force,
+		// where the material's script hook reads them (BLightningWall::ProcessForce).
+		const MeshShape *ms = c.touched->shape == GameObject::Shape::Mesh ? mesh_shape(c.touched->mesh) : nullptr;
+		if (m.mesh_heights && ms && c.face >= 0 && size_t(c.face) < ms->tris.size()) {
+			de::Transform tw = c.touched->world();
+			float tx = dot(c.point, x), lo = 9999999.0f, hi = -9999999.0f;
+			for (const Vec &v : ms->tris[size_t(c.face)]) {
+				float vx = dot(tw.apply(v), x);
+				if (vx < lo) lo = vx;
+				if (vx > hi) hi = vx;
+			}
+			auto set = [&](GameObject *o, const char *name, float v) {
+				uint32_t bits;
+				memcpy(&bits, &v, 4);
+				w_.values[o][name].bits = bits;
+			};
+			for (GameObject *o : {n, &f}) {
+				if (!o) continue;
+				set(o, "BeginX", lo - tx);
+				set(o, "EndX", hi - tx);
+			}
+		}
+		if (n) w_.enter_scene(n);
 	}
 	// DE_CMaterial::ProcessForce(force, position, normal): the script hooks.
 	auto hit = hooks_.find(&mo);
@@ -954,8 +990,10 @@ void ForceSystem::push_against_fighters(GameObject &f) {
 	FighterSurfaces &fs = surfaces(f);
 	if (!fs.skip_push && fs.push_sphere) {
 		float moved = len(sub(f.local.t, fs.last_pos)) + 0.1f;
-		for (GameObject *b : w_.fighters()) {
-			if (b == &f || !b->spawned || w_.global_interest_of(b) == 0) continue;
+		auto linked = w_.linked_fighters(f);  // walked from the last
+		for (auto it = linked.rbegin(); it != linked.rend(); ++it) {
+			GameObject *b = *it;
+			if (!b->spawned || w_.global_interest_of(b) == 0) continue;
 			FighterSurfaces &bs = surfaces(*b);
 			if (bs.skip_push || !bs.push_sphere) continue;
 			Vec ca = fs.push_sphere->world().t, cb = bs.push_sphere->world().t;

@@ -255,6 +255,29 @@ void register_core_natives(World &w) {
 		float d = 2 * (a[0] / l * n[0] + a[1] / l * n[1] + a[2] / l * n[2]);
 		write_vec(c.mem(), v, {(a[0] / l - n[0] * d) * l, (a[1] / l - n[1] * d) * l, (a[2] / l - n[2] * d) * l});
 	});
+	// CoordinateSystemReflectBySurfaceNormalCaller (0x7014b320): with t = normalize(n x X) and
+	// the frame F = (n x t, t, n), each of the system's rows is taken into F, its n component
+	// negated, and turned back: the frame mirrored across the surface (for a unit n,
+	// r - 2 (r . n) n).
+	reg("CObject::CCoordinateSystem::ReflectBySurfaceNormal(class CVector)", [](const NativeContext &c) {
+		uint32_t cs = c.self_handle(), nh = c.arg<uint32_t>(0);
+		if (!cs || !nh) return;
+		using V = std::array<float, 3>;
+		auto cross = [](const V &a, const V &b) { return V{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; };
+		auto dot = [](const V &a, const V &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+		V n = read_vec(c.mem(), nh);
+		V rows[3] = {read_vec(c.mem(), cs), read_vec(c.mem(), cs + 12), read_vec(c.mem(), cs + 24)};
+		V t = cross(n, rows[0]);
+		float tl = std::sqrt(dot(t, t));
+		if (tl > 0) t = {t[0] / tl, t[1] / tl, t[2] / tl};
+		V a = cross(n, t);
+		for (int i = 0; i < 3; ++i) {
+			float ka = dot(rows[i], a), kt = dot(rows[i], t), kn = -dot(rows[i], n);
+			V r{};
+			for (int j = 0; j < 3; ++j) r[size_t(j)] = ka * a[size_t(j)] + kt * t[size_t(j)] + kn * n[size_t(j)];
+			write_vec(c.mem(), cs + uint32_t(i) * 12, r);
+		}
+	});
 	reg("CObject::CVector::Reverse()", [](const NativeContext &c) {  // ReverseCaller 0x7014ab30
 		if (uint32_t v = c.self_handle()) {
 			auto a = read_vec(c.mem(), v);
@@ -374,7 +397,8 @@ void register_core_natives(World &w) {
 	reg("CActor::SetLocalPosition(class CVector)", [](const NativeContext &c) {
 		if (auto *o = c.self()) {
 			o->local.t = read_vec(c.mem(), c.arg<uint32_t>(0));
-			// A session-created fighter enters play when BFighter::ObjectSpawn first places it.
+			// A session fighter not yet in the scene (its slot normally adds it, OwnCreature) joins it
+			// when BFighter::ObjectSpawn first places it.
 			if (o->fighter && !o->spawned && c.world.session) {
 				o->spawned = true;
 				if (std::find(c.world.scene_roots.begin(), c.world.scene_roots.end(), o) == c.world.scene_roots.end()) {

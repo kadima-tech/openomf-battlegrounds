@@ -64,7 +64,12 @@ std::vector<de::ObjectRef> passive_references(const de::World &data, const de::O
 }
 
 // ClassExecutor (Core 0x701434b0): contents [name][entry state name]; references: its class.
-std::pair<de::ObjectRef, std::string> executor_class(const de::World &data, const de::ObjectRef &exec) {
+struct ExecutorClass {
+	de::ObjectRef cls;
+	std::string entry;
+	uint32_t interval = 0;  // +0x44: v2 16, v3+ stored
+};
+ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 	de::ObjectRef cls;
 	for (auto &lists : reference_lists(data, exec)) {
 		for (auto &l : lists) {
@@ -74,9 +79,10 @@ std::pair<de::ObjectRef, std::string> executor_class(const de::World &data, cons
 		}
 	}
 	std::string entry = "Entry";
+	uint32_t interval = 0;
 	try {
 		de::Contents c(exec.file->object_data(exec.info()).contents);
-		de::begin_chunk(c);
+		de::Chunk ch = de::begin_chunk(c);
 		uint32_t n = c.u32();
 		c.seek(c.pos() + n);
 		uint32_t m = c.u32();
@@ -84,10 +90,14 @@ std::pair<de::ObjectRef, std::string> executor_class(const de::World &data, cons
 			auto bytes = c.bytes(m);
 			entry.assign(bytes.begin(), bytes.end());
 			while (!entry.empty() && entry.back() == 0) entry.pop_back();
+		} else {
+			c.seek(c.pos() + m);
 		}
+		if (ch.version == 2) interval = 16;
+		else if (ch.version >= 3) interval = uint32_t(c.i32());
 	} catch (const std::exception &) {
 	}
-	return {cls, entry};
+	return {cls, entry, interval};
 }
 
 }  // namespace
@@ -97,10 +107,11 @@ std::vector<Brain *> World::activate_executors(GameObject *o, const std::vector<
 	if (!o || !activated_.insert(o).second) return out;
 	for (auto &p : properties) {
 		if (!p || p.info().class_path != "ClassExecutor") continue;
-		auto [cls, entry] = executor_class(data_, p);
+		auto [cls, entry, interval] = executor_class(data_, p);
 		if (!cls) continue;
 		try {
 			Brain *b = attach_brain(o, cls, entry);
+			b->interval = interval;
 			b->started = true;
 			if (run) start_brain(b);
 			out.push_back(b);
@@ -120,15 +131,49 @@ void World::add_executor_property(GameObject *o, const de::ObjectRef &executor) 
 	static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
 	if (debug) fprintf(stderr, "[executor %u] %s gets %s%s\n", frame_, o->name.c_str(), executor.info().name.c_str(), activated_.count(o) ? " (running)" : "");
 	if (!activated_.count(o)) return;  // enter_scene attaches it
-	auto [cls, entry] = executor_class(data_, executor);
+	auto [cls, entry, interval] = executor_class(data_, executor);
 	if (!cls) return;
 	try {
 		Brain *b = attach_brain(o, cls, entry);
+		b->interval = interval;
 		b->started = true;
 		start_brain(b);
 	} catch (const std::exception &e) {
 		log.push_back(o->name + ": " + e.what());
 	}
+}
+
+std::vector<Brain *> World::brain_list(GameObject *o) {
+	std::vector<Brain *> out;
+	if (!o) return out;
+	auto own = [&](GameObject *x) {
+		for (auto &bp : brains_) {
+			if (bp->owner == x) out.push_back(bp.get());
+		}
+	};
+	if (session && o == session->obj) {
+		own(o);
+		for (GameObject *m : session->modifiers) {
+			auto v = brain_list(m);
+			out.insert(out.end(), v.begin(), v.end());
+		}
+	} else if (SessionSlot *sl = session ? session->slot_of(o) : nullptr; sl && sl->obj == o) {
+		for (GameObject *m : sl->modifiers) {
+			auto v = brain_list(m);
+			out.insert(out.end(), v.begin(), v.end());
+		}
+	} else if (o->is("Actor\\Creature")) {
+		own(o);
+		for (auto &c : objects_) {
+			if (c.component_owner == o) {
+				auto v = brain_list(&c);
+				out.insert(out.end(), v.begin(), v.end());
+			}
+		}
+	} else {
+		own(o);
+	}
+	return out;
 }
 
 void World::start_brain(Brain *b) {
@@ -174,10 +219,18 @@ void World::enter_scene(GameObject *root, bool defer_start) {
 				continue;
 			}
 		}
+		// DE_CPassiveObjectReference::ObjPrepare (Core 0x7004db70): with +0x2c, a copy of its target
+		// is made and prepared, under the reference's parent with +0x30 (a fighter's
+		// OMFFighterControllerReference: its JoystickInputManager with the hookup executor).
+		if (o->class_path == "PassiveObjectReference" && o->file && !o->reference_created) {
+			o->reference_created = true;
+			if (GameObject *n = create_object_reference(o)) branch.push_back(n);
+		}
 		branch.insert(branch.end(), o->children.begin(), o->children.end());
 	}
 	// Every actor of the branch is prepared (its executors attached) before any entry runs, so
 	// that a script's Interface() calls find the behaviors of the actors around it.
+	number_affectors(root);
 	std::vector<Brain *> started;
 	for (GameObject *o : branch) {
 		if (o && o->is_actor && o->file && !o->brain) {
@@ -239,6 +292,45 @@ static bool read_reference(const GameObject *o, ReferenceFlags &flags, de::Guid 
 		return true;
 	} catch (const std::exception &) {
 		return false;
+	}
+}
+
+// DE_CPassiveObjectReference contents (Core 0x7004d9e0), v1: [name][passive reference: BOOL, 0x20,
+// file GUID, object GUID][BOOL +0x2c create when prepared][BOOL +0x30 under the reference's parent].
+GameObject *World::create_object_reference(GameObject *o) {
+	try {
+		de::Contents c(o->file->object_data(o->file->objects()[o->index]).contents);
+		size_t body = 0;
+		int version = 0;
+		while (c.remaining() > 1) {  // the class's own chunk is the last
+			de::Chunk ch = de::begin_chunk(c);
+			if (ch.end > c.size()) return nullptr;
+			body = c.pos(), version = ch.version;
+			c.seek(ch.end);
+		}
+		if (version != 1) return nullptr;
+		c.seek(body);
+		uint32_t name_len = c.u32();
+		c.seek(c.pos() + name_len);
+		if (!c.boolean() || c.u8() != 0x20) return nullptr;
+		c.guid();
+		de::Guid target = c.guid();
+		bool create = c.boolean(), under_parent = c.boolean();
+		static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
+		if (debug) fprintf(stderr, "[objref %u] %s: create %d under parent %d -> %s\n", frame_, o->name.c_str(), create, under_parent,
+		                   data_.by_guid(target) ? data_.by_guid(target).info().name.c_str() : "?");
+		if (!create) return nullptr;
+		GameObject *tpl = global_object(data_.by_guid(target));
+		if (!tpl) return nullptr;
+		GameObject *n = copy_tree(*tpl);
+		if (under_parent && o->parent) {
+			n->parent = o->parent;
+			o->parent->children.push_back(n);
+		}
+		return n;
+	} catch (const std::exception &e) {
+		log.push_back(o->name + ": " + e.what());
+		return nullptr;
 	}
 }
 
@@ -365,10 +457,9 @@ void initialize_node(World &w, SessionState &s, SessionNode &n) {
 	for (auto &t : n.attached) {
 		if (GameObject *tpl = w.global_object(t)) {
 			GameObject *m = w.copy_tree(*tpl);
-			// The original parents it to the master; it hangs off the session here so that
-			// Session().Interface(...) finds its behaviors.
-			m->parent = s.obj;
-			s.obj->children.push_back(m);
+			// Under the modifier that attaches it (the master); the session's brain list reaches it.
+			m->parent = n.obj;
+			n.obj->children.push_back(m);
 			s.modifiers.insert(s.modifiers.begin() + long(std::min(pos, s.modifiers.size())), m);
 			++pos;
 			make_node(w, s, m);
@@ -384,6 +475,35 @@ void call_hook(World &w, const ScriptHook &h, uint32_t arg = 0, bool with_arg = 
 }
 
 }  // namespace
+
+// DE_CDescription::ObjProcessReferences (Core 0x701f17a0), v6: [member casts][BOOL icon]
+// [BOOL large representation][resource components][replacement objects][BOOL medium].
+static std::pair<std::vector<de::ObjectRef>, std::vector<de::ObjectRef>> description_lists(World &w, const de::ObjectRef &d) {
+	std::vector<de::ObjectRef> components, replacements;
+	try {
+		de::Contents c(d.file->object_data(d.info()).references);
+		c.seek(de::begin_chunk(c).end);  // DE_CObject's
+		if (c.remaining() < 2) return {};
+		de::Chunk ch = de::begin_chunk(c);
+		if (ch.version != 6) return {};
+		auto list = [&](std::vector<de::ObjectRef> *out) {
+			while (c.pos() < ch.end && c.boolean()) {
+				de::ObjectRef r = w.data().resolve(*d.file, de::Reference::read(c));
+				if (out && r) out->push_back(r);
+			}
+		};
+		auto single = [&] {
+			if (c.pos() < ch.end && c.boolean()) de::Reference::read(c);
+		};
+		list(nullptr);
+		single();
+		single();
+		list(&components);
+		list(&replacements);
+	} catch (const std::exception &) {
+	}
+	return {components, replacements};
+}
 
 GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	de::ObjectRef src = source_of(desc);
@@ -417,11 +537,33 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 		if (!m && refs.size() > 1) m = refs[1];
 		if (m) add(m);
 	}
-	// The description's values (e.g. "2 Wins" -> ScoreLimit) go onto the resource.
+	// DE_CDescription::NewResource: each of the description's replacement objects (+0x80) takes
+	// the place of the resource's descendant of its name, and a copy of each resource component
+	// (+0x6c: a score limit's ScoreLimit value, an arena's extra actors) joins the resource.
 	if (res) {
-		for (GameObject *ch : desc->children) {
-			if (ch->is("Value")) {
-				GameObject *v = w.copy_tree(*ch);
+		auto [components, replacements] = description_lists(w, src);
+		for (auto &r : replacements) {
+			GameObject *tpl = w.global_object(r);
+			if (!tpl) continue;
+			std::function<GameObject *(GameObject *)> find = [&](GameObject *o) -> GameObject * {
+				for (GameObject *ch : o->children) {
+					if (ch->name == tpl->name) return ch;
+					if (GameObject *x = find(ch)) return x;
+				}
+				return nullptr;
+			};
+			if (GameObject *old = find(res)) {
+				GameObject *n = w.copy_tree(*tpl);
+				n->parent = old->parent;
+				auto &v = old->parent->children;
+				std::replace(v.begin(), v.end(), old, n);
+				old->parent = nullptr;
+				w.destroy(old);
+			}
+		}
+		for (auto &r : components) {
+			if (GameObject *tpl = w.global_object(r)) {
+				GameObject *v = w.copy_tree(*tpl);
 				v->parent = res;
 				res->children.push_back(v);
 			}
@@ -508,7 +650,7 @@ void render_tick(World &w, float ms) {
 void update_session(World &w) {
 	{
 		auto hooks = w.delta_tick_hooks;
-		float ms = World::kTickMs;
+		float ms = float(w.frame_ms());
 		for (auto &[b, m] : hooks) {
 			if (b->inst.shut_down) continue;
 			std::vector<uint8_t> args(4);
@@ -516,7 +658,7 @@ void update_session(World &w) {
 			b->call_handle(w, m, args);
 		}
 	}
-	if (w.render_ticks_per_frame) render_tick(w, World::kTickMs);
+	if (w.render_ticks_per_frame) render_tick(w, float(w.frame_ms()));
 	if (!w.session || !w.session->begun) return;
 	auto &s = *w.session;
 	// DE_CStandardSession::Update: connect each active client without a slot to the next

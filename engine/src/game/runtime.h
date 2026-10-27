@@ -142,7 +142,7 @@ struct GameObject {
 	uint32_t activations = 0;  // bumped on every activation so renderers know when to capture
 	// Fighter physics (DE_CFighterPhysics, the fighter's +0x1cc).
 	bool fighter = false;  // has FighterStats and is moved by World::tick's physics step
-	bool spawned = false;  // physics runs from the engine's ObjectSpawn on
+	bool spawned = false;  // a fighter prepared into the scene (DE_CFighterPhysics +0x1a8): in play
 	bool user_controlled = false;  // reads World::input; otherwise driven by AI commands
 	const Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
 	const std::map<std::string, std::vector<struct InputRequirement>> *inputs = nullptr;  // kind 24 bank
@@ -198,6 +198,13 @@ struct GameObject {
 	uint32_t local_orientation_block = 0;  // ... and by LocalOrientation() (the actor's own)
 	GameObject *last_hit = nullptr, *last_hit_by = nullptr;  // physics +0x134 / +0x140
 	int invulnerable_frames = 0;
+	uint32_t creature_ticks = 0;    // DE_CCreature +0x1d4: updates run (Tick adds one at its end)
+	float ai_range_base = 1;        // fighter +0x5f4: AIAttackRange's base, jittered every 64 updates
+	bool temporal_registered = false;  // in its rate's temporal set
+	uint64_t affector_seq = 0;  // its place in the scene's affector list (0: not in it)
+	std::vector<uint32_t> linked_fighters;  // fighter +0x334, filled pairwise by ObjPrepare
+	bool fighter_prepared = false;
+	bool reference_created = false;  // a PassiveObjectReference that has made its object
 	float move_multiplier = 1, turn_multiplier = 1;  // fighter +0x4bc / +0x4c0
 	float global_interest = 0;             // CActor::SetGlobalInterest (fighter +500)
 	uint32_t interest_time = 0;            // fighter +0x488: scene ms GlobalInterest was last worked out
@@ -210,6 +217,7 @@ struct GameObject {
 	uint32_t pilot_target = 0;             // pilot +0x338: current attack target
 	float pilot_target_since = 0;          // pilot +0x3e0: when it became the target (ms)
 	float quality_offset = 0;              // pilot +0x3d0: set by Attack on a new target
+	float pilot_aggression = 0;            // pilot +0x3dc: the aggression of its last Attack
 	std::vector<uint32_t> love, hate;      // pilot +0x348 / +0x35c: pilot handles
 	// DE_COMF2Fighter::Guide state (physics +0x200 mode, +0x204 power, +0x208 frames).
 	int guide_mode = 0, guide_frames = -1;
@@ -296,6 +304,10 @@ struct Brain {
 	size_t attached = 0;                               // behaviors[0..attached) are the class's own
 	std::vector<std::string> behavior_names;
 	bool started = false;  // its entry has been run up to its first wait (activation)
+	// Its ClassExecutor's interval (+0x44, ms): a temporal of that rate (DE_CClassExecutorInstance::
+	// Setup), 0 none. A creature's behaviour executor is ticked by the creature instead.
+	uint32_t interval = 0;
+	bool temporal_registered = false;
 	float tick_debt = 0;   // scene ms gathered towards its creature's next update
 	std::vector<de::ObjectRef> globals;  // op 8 global entries, over the visible behaviors
 
@@ -405,15 +417,21 @@ public:
 
 	// Load the compiled class `class_object` and start it on `owner` at `entry`.
 	Brain *attach_brain(GameObject *owner, const de::ObjectRef &class_object, const std::string &entry);
-	// One game frame: run every brain one pulse, then simple physics.
-	void tick();
+	// One frame, DE_CScene::PassTime (Core 0x70070040): the scene clock (real milliseconds)
+	// advances by `ms`. On the way every temporal set (one per update rate) is advanced in time
+	// order, at its own tick times, each ticking its elements newest first: creatures, executors
+	// with an interval, collision testers, the input manager. Then, once, the delta-tick hooks
+	// with the frame's time, the session's update and the effects.
+	void tick(uint32_t ms = kFrameMs);
 	uint32_t frame() const { return frame_; }
-	// Scene time. The engine's clock is real milliseconds (DE_CWindow::Run, Core: a frame every
-	// 20 ms at most, 50 a second); creatures update on multiples of their SceneTicksPerUpdate, 16 ms
-	// for a fighter (+0x1dc), so the game simulates 62.5 updates a second. A world tick here is one
-	// such 16 ms step: everything timed by the scene clock advances by kTickMs per tick.
+	uint32_t frame_ms() const { return frame_ms_; }
+	// DE_CWindow::Run (Core) runs a frame once at least 20 ms have passed: 50 a second at most.
+	static constexpr uint32_t kFrameMs = 20;
+	// A fighter's update rate (SceneTicksPerUpdate, +0x1dc): 62.5 updates a second.
 	static constexpr float kTickMs = 16;
-	float scene_ms() const { return float(frame_) * kTickMs; }
+	float scene_ms() const { return float(scene_ms_); }
+	// The input manager's ticks (DE_CJoystickInputManager, 16 ms): input records age in these.
+	uint32_t input_ticks() const { return input_ticks_; }
 
 	void register_native(const std::string &key, Native fn) { natives_[key] = std::move(fn); }
 	// Floor height under (x, z) at or below `from_y`; the app wires in arena collision.
@@ -435,6 +453,8 @@ public:
 	// CActor::AddProperty of a ClassExecutor: it becomes one of the actor's properties, run when the
 	// actor is prepared into the scene, or at once if it already was.
 	void add_executor_property(GameObject *o, const de::ObjectRef &executor);
+	// DE_CPassiveObjectReference::ObjPrepare: the copy a create-on-prepare reference makes.
+	GameObject *create_object_reference(GameObject *reference);
 	// DE_CAffector::OwnerActor (+0x118: set at run time, else from the data; the affector itself
 	// without one -- a fighter's own affectors fall back to the fighter).
 	GameObject *affector_owner(GameObject *a);
@@ -452,6 +472,19 @@ public:
 	// creator after Scene().Add, and its entry reads them).
 	void enter_scene(GameObject *root, bool defer_start = false);
 	void start_pending_brains();
+	// ObjNumBrainInstance / ObjBrainInstance, the brains Interface() searches, in order: an
+	// object's own executors; a session's, then each modifier's (DE_CStandardSession 0x4500f610);
+	// a slot's slot modifiers' (DE_CStandardSessionSlot 0x4501b130); a creature's, then its
+	// components' (DE_CCreature 0x150173b0). Defined in session.cpp.
+	std::vector<Brain *> brain_list(GameObject *o);
+	// Every brain, in attach order.
+	std::vector<Brain *> brains() const {
+		std::vector<Brain *> v;
+		for (auto &b : brains_) v.push_back(b.get());
+		return v;
+	}
+	// DE_COMF2Fighter::Tick's attack-range step (natives_ai.cpp).
+	void jitter_attack_range(GameObject &fighter);
 	GameObject *resolve_passive_reference(GameObject *reference);
 	// An actor's properties (DE_CActor +0x20 list): its executors, state manager, ...
 	std::vector<de::ObjectRef> actor_properties(const de::ObjectRef &r) const;
@@ -584,8 +617,15 @@ public:
 	// A native value-class instance, initialised as its constructor would (CAttackInfo defaults).
 	uint32_t make_instance(const std::string &class_name, uint32_t count);
 	void reset_attack_info(uint32_t block);
+	// The scene's affectors in DE_CScene's list order (+0x184), as DE_CAffector::IsTouching walks
+	// them: DE_CScene::Add (Core 0x7006ed50) adds an actor's children first, the last first, then
+	// the actor itself, so each branch joins in post-order; Remove keeps the others' order.
 	std::vector<GameObject *> affectors();
+	// Number a branch's affectors that are not yet in the list, in that order.
+	void number_affectors(GameObject *root);
 	std::vector<GameObject *> fighters();  // every fighter object
+	// A fighter's linked fighters (+0x334) still in the scene, in list order.
+	std::vector<GameObject *> linked_fighters(GameObject &f);
 	// COMF2Fighter::CurrentTarget: the nearest enemy fighter in front, within 200 units.
 	GameObject *best_melee_target(GameObject &o);
 	void guide(GameObject &o);  // DE_COMF2Fighter::Guide, once per frame
@@ -625,7 +665,26 @@ private:
 	std::map<uint32_t, Interface> interfaces_;                         // handle -> target
 	std::map<std::pair<const Brain *, uint32_t>, uint32_t> interface_handles_;  // kind -> bank (global_reference)
 	std::deque<de::AnimBank> banks_;
-	uint32_t frame_ = 0;
+	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
+	bool input_registered_ = false;
+	uint64_t affector_seq_ = 0;
+	// DE_CScene's temporal sets (TemporalElementSetForRate 0x70072230), in creation order.
+	struct Temporal {
+		enum Kind { Creature, Brain, Tester, Input } kind;
+		uint32_t handle = 0;      // creature object / collision tester
+		struct Brain *brain = nullptr;
+	};
+	struct TemporalSet {
+		uint32_t rate = 0, next = 0;  // next tick: last tick (+0x38) + rate
+		std::vector<Temporal> elements;
+	};
+	std::vector<TemporalSet> temporal_sets_;
+	TemporalSet &temporal_set(uint32_t rate);
+	void add_temporal(uint32_t rate, Temporal t);
+	void register_temporals();
+	void advance(TemporalSet &set);
+	void creature_tick(GameObject &o);
+	void input_tick();
 
 	friend void register_core_natives(World &);
 	friend void register_ai_natives(World &);
@@ -633,6 +692,10 @@ private:
 	friend void register_session_natives(World &);
 	friend void register_script_natives(World &);
 	void run_commands(GameObject &o);
+
+public:
+	// CCollisionTester::Activate (Core): the tester joins the 16 ms temporal set.
+	void activate_tester(uint32_t handle) { add_temporal(16, {Temporal::Tester, handle, nullptr}); }
 };
 
 void register_core_natives(World &w);
@@ -653,7 +716,7 @@ const Pilot *pilot_of(GameObject *o);
 GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r);
 void register_simple_physics_natives(World &w);
 // Active collision testers (natives_combat.cpp), once per tick.
-void tick_collision_testers(World &w);
+void tick_collision_tester(World &w, uint32_t handle);
 // 0..1 from the engine's deterministic generator (MATH::Rand stands on it: Rand(x) = x * random01).
 float random01(World &w);
 

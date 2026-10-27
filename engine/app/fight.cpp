@@ -112,19 +112,20 @@ Fighter &setup_fighter(game::World &world, const std::string &name, bool user, b
 		for (auto &ch : fi.bank.channels) fprintf(stderr, " %s", ch.name.c_str());
 		fprintf(stderr, "\n");
 	}
-	// The fighter's command manager (Fighter.DEObjects StandardFighterCommandManager) carries the
-	// hookup executor from Controllers.DEObjects; BFighter::ResolveFighterMembers finds it by name.
-	auto *cm = world.create_child(fi.actor, "StandardFighterCommandManager", "UniqueActorProperty\\CommandManager");
-	world.create_child(cm, "StandardFighterHookupExecutor", "CommandExecutor\\StandardHookup");
 	fi.actor->user_controlled = user && !world.all_ai;
-	// The executor's entry state (ClassExecutor contents, Core 0x701434b0): "Entry".
-	fi.brain = world.attach_brain(fi.actor, cls_obj, "Entry");
+	// The robot's own executors (its properties: StandardJaguarExecutor running PJaguar, EPreCache),
+	// attached as the scene's preparation does; they run from the next tick. A fighter without
+	// one gets P<Name> at "Entry".
+	world.activate_executors(fi.actor, world.properties_of(*fi.actor), false);
+	fi.brain = fi.actor->brain;
+	if (!fi.brain || fi.brain->cls.name != "P" + name) fi.brain = world.attach_brain(fi.actor, cls_obj, "Entry");
 	// Fighter.DEObjects FighterStatsExecutor: PFighterStats (health, energy, stun) runs on its own
 	// object under the fighter (BFighterStats::Entry takes the creature from Parent()).
 	if (auto *common = with_stats ? world.data().file("Fighter") : nullptr) {
 		for (uint32_t i = 0; i < common->objects().size(); ++i) {
 			if (common->objects()[i].class_path == "Class" && common->objects()[i].name == "PFighterStats") {
 				auto *stats = world.create_child(fi.actor, "Stats", "ClassExecutor");
+				stats->component_owner = fi.actor;  // a component: Interface() reaches its brain
 				fi.stats = world.attach_brain(stats, {common, i}, "Entry");
 			}
 		}
@@ -736,19 +737,24 @@ int main(int argc, char **argv) {
 				world.input.evade = k[SDL_SCANCODE_LSHIFT];
 				world.input.duck = k[SDL_SCANCODE_C];
 			}
-			// World ticks of 16 ms of real time (62.5 a second, the fighters' update rate; see
-			// World::kTickMs), drawn as often as the display allows.
+			// DE_CWindow::Run: a frame once at least 20 ms of real time have passed, passing the scene
+			// all of it (World::tick; the fighters update every 16 ms of scene time within). A
+			// screenshot run passes exactly 20 ms a frame so it is repeatable.
 			Uint64 now = SDL_GetPerformanceCounter();
-			accum += double(now - last) / double(SDL_GetPerformanceFrequency());
+			accum += double(now - last) * 1000.0 / double(SDL_GetPerformanceFrequency());
 			last = now;
-			const double tick_s = game::World::kTickMs / 1000.0;
-			int steps = shot ? 1 : 0;  // screenshots render every tick so preludes blend as in play
-			while (!shot && accum >= tick_s && steps < 8) {
-				accum -= tick_s;
-				++steps;
+			uint32_t frame_ms = 0;
+			if (shot) {
+				frame_ms = game::World::kFrameMs;
+			} else if (accum >= game::World::kFrameMs) {
+				frame_ms = uint32_t(std::min(accum, 2000.0));  // a stall: at most 2 s at once
+				accum = accum > 2000 ? 0 : accum - frame_ms;  // the leftover fraction carries over
 			}
-			if (accum > tick_s) accum = 0;  // fell behind (a stall): do not race to catch up
-			for (int s = 0; s < steps; ++s, ++fr) {
+			if (frame_ms == 0) {
+				SDL_Delay(1);
+				continue;
+			}
+			{
 				if (fr == spawn_frame) {
 					spawn_all(floor0);
 				}
@@ -756,8 +762,9 @@ int main(int argc, char **argv) {
 					apply_holds(fr);
 				}
 				pilot_tick();
-				world.tick();
+				world.tick(frame_ms);
 				print_texts(fr);
+				++fr;
 			}
 			// The frame's sounds, heard from the player's Listener (BFighterCameraMover moves it under
 			// the fighter) facing as the fight camera does.

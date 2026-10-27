@@ -69,16 +69,20 @@ SimplePhysics &SimplePhysicsSystem::state(GameObject &p) {
 			c.squeezed(), c.squeezed();
 			s.push_from_surfaces = c.boolean();
 		}
-		// References: [object][physics][simple physics v2: test affectors, force].
+		// References (DE_CSimplePhysics::ObjProcessReferences, Core 0x701db8b0): [object][physics]
+		// [simple physics v2: the test affectors (+0x50, a BOOL-terminated list), then BOOL + the
+		// force (+0x60)] -- the single reference reads as the chunk's second list.
 		auto lists = reference_lists(w_.data(), {p.file, p.index});
 		GameObject *actor = actor_of(p);
-		if (lists.size() > 2 && !lists[2].empty()) {
+		if (lists.size() > 2 && !lists[2].empty() && actor) {
 			for (auto &r : lists[2][0]) {
-				if (!r || !actor) continue;
+				if (!r) continue;
 				if (GameObject *a = nearest_copy(actor, r)) {
 					if (a->is("Actor\\Affector")) s.affectors.push_back(a);
-					else if (a->is("UniqueActorProperty\\Force")) s.force = a;
 				}
+			}
+			if (lists[2].size() > 1 && !lists[2][1].empty() && lists[2][1][0]) {
+				if (GameObject *f = nearest_copy(actor, lists[2][1][0]); f && f->is("UniqueActorProperty\\Force")) s.force = f;
 			}
 		}
 	} catch (const std::exception &) {
@@ -87,12 +91,6 @@ SimplePhysics &SimplePhysicsSystem::state(GameObject &p) {
 	// acceleration (both given in the actor's frame).
 	GameObject *actor = actor_of(p);
 	if (s.affectors.empty() && actor && actor->is("Actor\\Affector")) s.affectors.push_back(actor);
-	if (!s.force && actor) {
-		// The force is the common force on the same actor (the +0x60 reference).
-		for (GameObject *c : actor->children) {
-			if (c->is("UniqueActorProperty\\Force\\Common")) s.force = c;
-		}
-	}
 	if (s.force && actor) {
 		GameObject *owner = actor->owner_actor ? actor->owner_actor : actor;
 		for (GameObject *f = actor; f; f = f->parent) {

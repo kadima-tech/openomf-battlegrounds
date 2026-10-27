@@ -696,9 +696,11 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 		throw std::runtime_error("no entry " + entry + " in " + b->cls.name);
 	}
 	b->exec->start(*start);
-	owner->brain = b.get();
+	// The object's behaviour is its first executor (DE_CCreature +0x1a0, GatherBehaviorInstances).
+	Brain *made = b.get();
+	if (!owner->brain) owner->brain = made;
 	brains_.push_back(std::move(b));
-	return owner->brain;
+	return made;
 }
 
 std::map<std::string, InputSequence> read_input_bank(const de::ObjectsFile &f, const de::ObjectInfo &o) {
@@ -1009,8 +1011,8 @@ bool World::verify(const InputSequence &seq) const {
 	// requirements; a requirement's age/gap bounds, once met, stay met while it moves on to
 	// older records that still match its buttons and directions.
 	// A record's counter is its age: DE_CJoystickInputManager::Tick inserts new records at 0 and
-	// increments every older record once per frame.
-	auto age = [&](size_t hi) { return frame_ - input_history[hi].start; };
+	// increments every older record once per tick (16 ms).
+	auto age = [&](size_t hi) { return input_ticks_ - input_history[hi].start; };
 	int ri = int(seq.size()) - 1;
 	auto unbounded_age = [&](const InputRequirement &r) { return r.min_age == 0 && r.max_age == 0; };
 	auto unbounded_gap = [&](const InputRequirement &r) { return r.min_gap == 0 && r.max_gap == 0; };
@@ -1042,9 +1044,118 @@ bool World::verify(const InputSequence &seq) const {
 	return false;
 }
 
-void World::tick() {
-	++frame_;
-	// Input history (DE_CJoystickInputManager::Tick/InsertRecord): a record per change.
+// DE_CScene::TemporalElementSetForRate: the set of a rate, made on first use with its last tick at
+// (now / rate) x rate, so every element of a rate ticks together on multiples of it.
+World::TemporalSet &World::temporal_set(uint32_t rate) {
+	for (auto &s : temporal_sets_) {
+		if (s.rate == rate) return s;
+	}
+	TemporalSet s;
+	s.rate = rate;
+	s.next = scene_ms_ / rate * rate + rate;
+	temporal_sets_.push_back(std::move(s));
+	return temporal_sets_.back();
+}
+
+void World::add_temporal(uint32_t rate, Temporal t) {
+	if (rate == 0) return;
+	TemporalSet &s = temporal_set(rate);
+	for (auto &e : s.elements) {
+		if (e.kind == t.kind && e.handle == t.handle && e.brain == t.brain) return;
+	}
+	static const bool debug = getenv("OPENBG_DEBUG_TEMPORALS") != nullptr;
+	if (debug) {
+		const char *kinds[] = {"creature", "executor", "tester", "input"};
+		std::string who = t.brain && t.brain->owner ? t.brain->owner->name : t.handle && object(t.handle) ? object(t.handle)->name : "-";
+		fprintf(stderr, "[temporal %u] %s %s every %u ms\n", scene_ms_, kinds[t.kind], who.c_str(), rate);
+	}
+	s.elements.push_back(t);
+}
+
+// The creature whose behaviour executor (+0x1a0, its first) a brain is: ticked by the creature.
+static bool is_creature_behaviour(World &w, const Brain &b) {
+	if (!b.owner || !b.owner->is("Actor\\Creature") || w.creature_rate(b.owner) == 0) return false;
+	for (const Brain *o : w.brains()) {
+		if (o->owner == b.owner) return o == &b;
+	}
+	return false;
+}
+
+// Elements join their sets as the scene meets them: creatures with a SceneTicksPerUpdate
+// (DE_CCreature::ObjPrepare), executors with an interval (DE_CClassExecutorInstance::Setup 0x70144df0:
+// AddTemporal(scene, instance, executor +0x44) once it has resumed; none without one).
+void World::register_temporals() {
+	if (!input_registered_) {
+		input_registered_ = true;
+		add_temporal(16, {Temporal::Input, 0, nullptr});  // DE_CJoystickInputManager +0x10c
+	}
+	for (GameObject *o : scene_objects()) {
+		if (o->temporal_registered || !o->is("Actor\\Creature")) continue;
+		uint32_t rate = creature_rate(o);
+		if (rate == 0) continue;
+		o->temporal_registered = true;
+		add_temporal(rate, {Temporal::Creature, o->handle, nullptr});
+		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's
+		// order, joins this one's list (+0x334), and this one joins theirs.
+		if (o->fighter && !o->fighter_prepared) {
+			o->fighter_prepared = true;
+			o->spawned = true;  // in play from here: physics, commands, pushes, drawing
+			for (GameObject *g : fighters()) {
+				if (g == o || !g->fighter_prepared || !in_scene(*g)) continue;
+				o->linked_fighters.push_back(g->handle);
+				g->linked_fighters.push_back(o->handle);
+			}
+		}
+	}
+	for (auto &bp : brains_) {
+		Brain *b = bp.get();
+		if (b->temporal_registered || !b->started) continue;
+		b->temporal_registered = true;
+		// DE_CClassExecutor::ObjPrepare (0x70143840) always hands Setup a scene, so an executor with an interval
+		// joins its set even when it is also its creature's behaviour (+0x1a0), ticked by both.
+		add_temporal(b->interval, {Temporal::Brain, 0, b});
+	}
+}
+
+static void pulse(World &w, Brain *b) {
+	if (!b || b->inst.shut_down || !b->exec->running()) return;
+	try {
+		b->exec->pulse();
+	} catch (const std::exception &e) {
+		w.log.push_back(b->owner->name + ": " + e.what());
+		b->inst.shut_down = true;
+	}
+}
+
+// DE_COMF2Fighter::Tick (OMF 0x350253a0) over DE_CCreature::Tick (Creature 0x15016870): the
+// command manager (+0x118), the physics (+0x1cc), the behaviour executor (+0x1a0); then the
+// fighter's guide and attack trailer points, and for a computer-controlled fighter every 64th
+// update a step of its attack-range base.
+void World::creature_tick(GameObject &o) {
+	if (o.fighter) {
+		validate_animation(o);  // as InternalWorldUpdate does when something needs positions
+		run_commands(o);
+		physics_step(o);
+	}
+	for (auto &bp : brains_) {
+		if (bp->owner == &o) {
+			if (is_creature_behaviour(*this, *bp)) pulse(*this, bp.get());
+			break;
+		}
+	}
+	++o.creature_ticks;
+	if (o.fighter) {
+		guide(o);
+		particles->tick_trailers(o);
+		if (o.invulnerable_frames > 0) --o.invulnerable_frames;
+		jitter_attack_range(o);
+	}
+}
+
+// DE_CJoystickInputManager::Tick (Creature 0x150020c0): a record per input change; older records
+// age by one per tick.
+void World::input_tick() {
+	++input_ticks_;
 	uint16_t buttons = uint16_t((input.left_punch ? 1 : 0) | (input.right_punch ? 2 : 0) | (input.left_kick ? 4 : 0) |
 	                            (input.right_kick ? 8 : 0) | (input.jump ? 0x10 : 0) | (input.duck_evade() ? 0x20 : 0));
 	int dir = -1;  // bit index: 0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left, 7 up-left
@@ -1058,19 +1169,31 @@ void World::tick() {
 	else if (input.left) dir = 6;
 	uint16_t dirs = uint16_t(dir >= 0 ? 1u << dir : 0x100u);
 	if (input_history.empty() || input_history.back().buttons != buttons || input_history.back().directions != dirs) {
-		input_history.push_back({buttons, dirs, frame_});
+		input_history.push_back({buttons, dirs, input_ticks_});
 		if (input_history.size() > 64) {
 			input_history.erase(input_history.begin());
 		}
 	}
-	// Over a snapshot: the hooks these run may create objects (deque iterators do not survive it).
-	for (GameObject *op : fighters()) {
-		GameObject &o = *op;
-		{
-			validate_animation(o);  // as InternalWorldUpdate does when something needs positions
-			run_commands(o);
+}
+
+// DE_CTemporalElementSet::AdvanceTime (Core 0x70072090): every element, newest first.
+void World::advance(TemporalSet &set) {
+	auto elements = set.elements;  // a tick may add elements
+	for (auto it = elements.rbegin(); it != elements.rend(); ++it) {
+		switch (it->kind) {
+		case Temporal::Creature:
+			if (GameObject *o = object(it->handle); o && o->active) creature_tick(*o);
+			break;
+		case Temporal::Brain: pulse(*this, it->brain); break;
+		case Temporal::Tester: tick_collision_tester(*this, it->handle); break;
+		case Temporal::Input: input_tick(); break;
 		}
 	}
+}
+
+void World::tick(uint32_t ms) {
+	++frame_;
+	frame_ms_ = ms;
 	// OPENBG_CALLS="Katana@400-402" (or "*@..."): log the methods brains of that owner enter.
 	static const char *calls = getenv("OPENBG_CALLS");
 	if (calls) {
@@ -1085,54 +1208,26 @@ void World::tick() {
 		}
 		if (window) fprintf(stderr, "[call] --- frame %u\n", frame_);
 	}
-	// By index: a pulse may add brains (a session script creating a fighter). A brain on a
-	// creature that updates less often than every frame (DE_CCreature::SetTime: one update per
-	// SceneTicksPerUpdate scene ms; pickup spawners use 100) waits for its time.
-	for (size_t i = 0; i < brains_.size(); ++i) {
-		Brain *b = brains_[i].get();
-		if (!b->exec->running()) {
-			continue;
+	// PassTime: the set whose next tick comes first (the first made, on a tie) advances, the
+	// clock standing at that tick, until the next tick lies beyond the frame.
+	uint32_t left = ms;
+	for (;;) {
+		register_temporals();
+		TemporalSet *first = nullptr;
+		for (auto &s : temporal_sets_) {
+			if (!first || s.next - scene_ms_ < first->next - scene_ms_) first = &s;
 		}
-		// DE_CCreature::SetTime (Creature 0x15015d20): a creature with a SceneTicksPerUpdate updates at
-		// creation + n x rate, the creation time being its rate's temporal set's last tick
-		// (DE_CScene::AddTemporal: every creature of a rate updates together, on multiples of it)
-		// or 1 with actor flag 0x10; up to 100 updates catch up at once. Without a rate, once per
-		// scene update.
-		int updates = 1;
-		if (uint32_t rate = b->owner ? creature_rate(b->owner) : 0; rate > 0) {
-			uint32_t now = uint32_t(scene_ms()), prev = frame_ ? uint32_t(float(frame_ - 1) * kTickMs) : 0;
-			uint32_t origin = 0;
-			for (GameObject *o = b->owner; o; o = o->parent) {
-				if (o->is("Actor\\Creature")) {
-					origin = (o->actor_flags & 0x10) ? 1 : 0;
-					break;
-				}
-			}
-			auto index = [&](uint32_t t) { return t < origin ? -1 : int64_t((t - origin) / rate); };
-			updates = int(std::min<int64_t>(100, index(now) - (frame_ ? index(prev) : -1)));
-		}
-		for (int u = 0; u < updates && b->exec->running(); ++u) {
-		try {
-			b->exec->pulse();
-		} catch (const std::exception &e) {
-			log.push_back(b->owner->name + ": " + e.what());
-			b->inst.shut_down = true;
-		}
-		}
+		if (!first || first->next - scene_ms_ > left) break;
+		left -= first->next - scene_ms_;
+		scene_ms_ = first->next;
+		first->next += first->rate;
+		advance(*first);
+		forces->tick();
+		start_pending_brains();
 	}
+	scene_ms_ += left;
 	update_session(*this);
-	for (GameObject *op : fighters()) {
-		GameObject &o = *op;
-		{
-			guide(o);
-			particles->tick_trailers(o);
-			physics_step(o);
-			if (o.invulnerable_frames > 0) --o.invulnerable_frames;
-		}
-	}
 	simple_physics->tick();
-	forces->tick();
-	tick_collision_testers(*this);
 	particles->step();
 	start_pending_brains();
 }
@@ -1227,7 +1322,8 @@ void World::surface_friction(GameObject &o, float material) {
 }
 
 void World::physics_step(GameObject &o) {
-	if (!o.spawned) {
+	// DE_CFighterPhysics::Tick runs once prepared into the scene (+0x1a8) and enabled (+0x38).
+	if (!o.spawned || !o.physics_enabled) {
 		return;
 	}
 	static const bool debug_momentum = getenv("OPENBG_DEBUG_MOMENTUM") != nullptr;
@@ -1397,16 +1493,7 @@ uint32_t World::interface_for(GameObject *o, uint32_t gid) {
 	if (!o || !gid) {
 		return 0;
 	}
-	// The object's own brains first, then those of its components (e.g. a fighter's stats brain,
-	// which runs on a child object).
-	std::vector<Brain *> order;
-	for (auto &bp : brains_) {
-		if (bp->owner == o) order.push_back(bp.get());
-	}
-	for (auto &bp : brains_) {
-		if (bp->owner && bp->owner->parent == o) order.push_back(bp.get());
-	}
-	for (Brain *b : order) {
+	for (Brain *b : brain_list(o)) {
 		for (uint32_t i = 0; i < b->attached && i < b->behaviors.size(); ++i) {
 			if (b->behaviors[i] != gid) {
 				continue;
@@ -1429,8 +1516,7 @@ uint32_t World::interface_for(GameObject *o, uint32_t gid) {
 
 bool World::has_interface_named(GameObject *o, const std::string &behavior) {
 	if (!o) return false;
-	for (auto &bp : brains_) {
-		if (bp->owner != o && !(bp->owner && bp->owner->parent == o)) continue;
+	for (Brain *bp : brain_list(o)) {
 		for (uint32_t i = 0; i < bp->attached && i < bp->behaviors.size(); ++i) {
 			for (auto &[key, id] : behavior_ids_) {
 				if (id == bp->behaviors[i] && key.first->objects()[key.second].name == behavior) return true;

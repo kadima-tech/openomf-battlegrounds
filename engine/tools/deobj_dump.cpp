@@ -697,6 +697,31 @@ int main(int argc, char **argv) {
 			}
 			return 0;
 		}
+		if (!strcmp(argv[1], "executors") && argc > 2) {  // executors <Data>: every ClassExecutor's version and interval (+0x44)
+			de::World w(argv[2]);
+			for (auto &e : std::filesystem::directory_iterator(argv[2])) {
+				if (e.path().extension() != ".DEObjects") continue;
+				const de::ObjectsFile *fp = w.file(e.path().stem().string());
+				if (!fp) continue;
+				const de::ObjectsFile &f = *fp;
+				for (const auto &o : f.objects()) {
+					if (o.class_path != "ClassExecutor") continue;
+					de::Contents c(f.object_data(o).contents);
+					de::Chunk b = de::begin_chunk(c);
+					auto block = [&] {
+						uint32_t n = c.u32();
+						auto v = c.bytes(n);
+						std::string s(v.begin(), v.end());
+						while (!s.empty() && s.back() == 0) s.pop_back();
+						return s;
+					};
+					std::string name = block(), entry = b.version >= 2 ? block() : "";
+					int32_t interval = b.version == 2 ? 16 : b.version >= 3 ? c.i32() : 0;
+					printf("%-28s %-36s v%d interval %d entry %s\n", e.path().stem().string().c_str(), o.name.c_str(), b.version, interval, entry.c_str());
+				}
+			}
+			return 0;
+		}
 		if (!strcmp(argv[1], "meshflags") && argc > 2) {  // meshflags <file>: DE_CMesh +0x40 per mesh
 			de::ObjectsFile f(read_file(argv[2]));
 			for (auto &o : f.objects()) {
@@ -716,6 +741,37 @@ int main(int argc, char **argv) {
 		}
 		if (!strcmp(argv[1], "particles") && argc > 2) {  // particles <Data dir> [file stem]
 			return cmd_particles(argv[2], argc > 3 ? argv[3] : nullptr);
+		}
+		if (!strcmp(argv[1], "descriptions") && argc > 2) {  // descriptions <Data>: each description's v6 reference sections
+			de::World w(argv[2]);
+			for (auto &e : std::filesystem::directory_iterator(argv[2])) {
+				if (e.path().extension() != ".DEObjects") continue;
+				const de::ObjectsFile *f = w.file(e.path().stem().string());
+				if (!f) continue;
+				for (const auto &o : f->objects()) {
+					if (o.class_path.rfind("Description", 0) != 0) continue;
+					de::Contents c(f->object_data(o).references);
+					c.seek(de::begin_chunk(c).end);  // DE_CObject's
+					if (c.remaining() < 2) continue;
+					de::Chunk ch = de::begin_chunk(c);
+					if (ch.version != 6) continue;
+					auto name = [&] {
+						auto t = w.resolve(*f, de::Reference::read(c));
+						return t ? t.info().name + " [" + t.info().class_path + "]" : std::string("<null>");
+					};
+					auto list = [&] {
+						std::string out;
+						while (c.pos() < ch.end && c.boolean()) out += " " + name();
+						return out;
+					};
+					auto single = [&] { return c.pos() < ch.end && c.boolean() ? " " + name() : std::string(); };
+					std::string casts = list(), icon = single(), large = single(), comps = list(), repl = list(), medium = single();
+					printf("%s: %s [%s]\n  casts:%s\n  icon:%s large:%s medium:%s\n  components:%s\n  replacements:%s\n",
+					       e.path().stem().string().c_str(), o.name.c_str(), o.class_path.c_str(), casts.c_str(), icon.c_str(), large.c_str(),
+					       medium.c_str(), comps.c_str(), repl.c_str());
+				}
+			}
+			return 0;
 		}
 		if (!strcmp(argv[1], "refs") && argc > 4) {  // refs <Data dir> <file stem> <object>
 			return cmd_refs(argv[2], argv[3], argv[4]);

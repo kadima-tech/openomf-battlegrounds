@@ -144,11 +144,11 @@ struct NeedSystem {
 		return out;
 	}
 
-	// InternalUpdateNeedInfo, once per scene update.
+	// InternalUpdateNeedInfo, once per scene time (k.frame: that time + 1).
 	Known &update(GameObject *creature) {
 		Known &k = known[creature];
-		if (k.frame == w.frame()) return k;
-		k.frame = w.frame();
+		if (k.frame == uint32_t(w.scene_ms()) + 1) return k;
+		k.frame = uint32_t(w.scene_ms()) + 1;
 		GameObject *previous = k.greatest;
 		k.needs.clear();
 		k.greatest = nullptr;

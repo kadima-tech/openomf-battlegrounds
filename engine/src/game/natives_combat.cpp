@@ -322,36 +322,32 @@ GameObject *danger_property(GameObject &a) {
 
 // DE_CCollisionTester::Tick: an active tester tests every scene tick and sends its notify methods
 // a collision event when something touched.
-void tick_collision_testers(World &w) {
-	std::vector<uint32_t> handles;
-	for (auto &[h, t] : g_testers) {
-		if (t.active && (!t.notify.empty() || t.force)) handles.push_back(h);
+// DE_CCollisionTester's temporal tick (16 ms, CCollisionTester::Activate): test, hand the
+// contacts to the attached force, then the notify methods.
+void tick_collision_tester(World &w, uint32_t h) {
+	auto it = g_testers.find(h);
+	if (it == g_testers.end() || !it->second.active || (it->second.notify.empty() && !it->second.force)) return;
+	Tester &t = it->second;
+	run_tester(w, t);
+	if (t.results.empty()) return;
+	if (t.force) {
+		for (auto &r : t.results) {
+			Contact ct;
+			ct.source = r.source;
+			ct.touched = r.touched;
+			ct.point = r.point;
+			ct.normal = ct.face_normal = r.normal;
+			ct.distance = r.distance;
+			w.forces->deliver(*t.force, ct);
+		}
 	}
-	for (uint32_t h : handles) {
-		auto it = g_testers.find(h);
-		if (it == g_testers.end() || !it->second.active) continue;
-		Tester &t = it->second;
-		run_tester(w, t);
-		if (t.results.empty()) continue;
-		if (t.force) {
-			for (auto &r : t.results) {
-				Contact ct;
-				ct.source = r.source;
-				ct.touched = r.touched;
-				ct.point = r.point;
-				ct.normal = ct.face_normal = r.normal;
-				ct.distance = r.distance;
-				w.forces->deliver(*t.force, ct);
-			}
-		}
-		if (!t.event) t.event = w.memory().alloc(16);
-		auto notify = t.notify;
-		for (auto &[b, m] : notify) {
-			if (!b || b->inst.shut_down) continue;
-			std::vector<uint8_t> args(4);
-			memcpy(args.data(), &t.event, 4);
-			b->call_handle(w, m, args);
-		}
+	if (!t.event) t.event = w.memory().alloc(16);
+	auto notify = t.notify;
+	for (auto &[b, m] : notify) {
+		if (!b || b->inst.shut_down) continue;
+		std::vector<uint8_t> args(4);
+		memcpy(args.data(), &t.event, 4);
+		b->call_handle(w, m, args);
 	}
 }
 
@@ -371,11 +367,25 @@ void World::reset_attack_info(uint32_t a) {
 	mem_.set<uint8_t>(a + kFlags, 0);
 }
 
+void World::number_affectors(GameObject *root) {
+	if (!root) return;
+	for (auto it = root->children.rbegin(); it != root->children.rend(); ++it) number_affectors(*it);
+	if (root->shape != GameObject::Shape::None && !root->affector_seq) root->affector_seq = ++affector_seq_;
+}
+
 std::vector<GameObject *> World::affectors() {
 	std::vector<GameObject *> out;
 	for (auto &o : objects_) {
-		if (o.shape != GameObject::Shape::None && in_scene(o)) out.push_back(&o);
+		if (o.shape == GameObject::Shape::None) continue;
+		if (!in_scene(o)) {
+			o.affector_seq = 0;  // out of the list; joins at the end when added again
+			continue;
+		}
+		// In the scene by another way than enter_scene (parented under a scene actor): it joins now.
+		if (!o.affector_seq) o.affector_seq = ++affector_seq_;
+		out.push_back(&o);
 	}
+	std::stable_sort(out.begin(), out.end(), [](const GameObject *a, const GameObject *b) { return a->affector_seq < b->affector_seq; });
 	return out;
 }
 
@@ -681,7 +691,10 @@ void register_combat_natives(World &w) {
 	reg("CCollisionTester::AddNotify(class CClassExecutorInstance,Method(class CCollisionEvent))", [](const NativeContext &c) {
 		g_testers[c.self_handle()].notify.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 	});
-	reg("CCollisionTester::Activate()", [](const NativeContext &c) { g_testers[c.self_handle()].active = true; });
+	reg("CCollisionTester::Activate()", [](const NativeContext &c) {
+		g_testers[c.self_handle()].active = true;
+		c.world.activate_tester(c.self_handle());
+	});
 	reg("CCollisionTester::SetAttachedForce(class CForce)", [](const NativeContext &c) { g_testers[c.self_handle()].force = c.arg_object(0); });
 	reg("CCollisionTester::NeedSurfaceNormal()", [](const NativeContext &) {});
 	reg("CCollisionTester::Deactivate()", [](const NativeContext &c) { g_testers[c.self_handle()].active = false; });
@@ -769,6 +782,27 @@ void register_combat_natives(World &w) {
 		auto it = g_testers.find(c.mem().get<uint32_t>(r));
 		return it == g_testers.end() ? nullptr : &it->second;
 	};
+	// ApplyForceCollisionResultsCaller (Core 0x7007abb0) -> DE_CCollisionResults::ApplyForce
+	// (0x7007bde0): a collision event carrying the force to collision i's touched affector (its
+	// materials process it), or to every collision's with i = -1.
+	reg("CAffector::CCollisionResults::ApplyForce(class CForce,int)", [=](const NativeContext &c) {
+		Tester *t = tester_of_results(c);
+		GameObject *force = c.arg_object(0);
+		int32_t i = c.arg<int32_t>(1);
+		if (!t || !force) return;
+		auto results = t->results;  // a material may run scripts that test again
+		for (size_t k = 0; k < results.size(); ++k) {
+			if (i != -1 && size_t(i) != k) continue;
+			const Collision &r = results[k];
+			Contact ct;
+			ct.source = r.source;
+			ct.touched = r.touched;
+			ct.point = r.point;
+			ct.normal = ct.face_normal = r.normal;
+			ct.distance = r.distance;
+			c.world.forces->deliver(*force, ct);
+		}
+	});
 	reg("CAffector::CCollisionResults::int NumCollisions()", [=](const NativeContext &c) {
 		Tester *t = tester_of_results(c);
 		c.ret_u32(t ? uint32_t(t->results.size()) : 0);

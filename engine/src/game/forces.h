@@ -80,6 +80,7 @@ struct MaterialDef {
 	float spawn_offset = 0;       // +0x8c (x particle size along the normal)
 	bool common = false;          // CommonForceParticleSpawningMaterial
 	uint32_t mask = 0;            // +0x9c
+	bool mesh_heights = false;    // +0xc4: the created actor takes the touched mesh face's heights (not ported)
 	float size_lo = 0, size_hi = 1000, strength_lo = 0, strength_hi = 1000;  // +0xa0..+0xac
 	float psize_lo = 1, psize_hi = 100, life_lo = 1000, life_hi = 10000;      // +0xb0..+0xbc
 	float intensity_lo = 1;       // +0xc0: particle intensity at the lowest strength
