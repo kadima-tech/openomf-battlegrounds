@@ -39,6 +39,11 @@ struct Particle {
 	std::array<float, 4> color{1, 1, 1, 1};
 	float intensity = 1;  // channel 4
 	float rotation = 0;   // channel 5 (turns)
+	float bolt_t = -1;    // DE_CLighteningSpawner's particle data: how far along its bolt (0..1)
+	// A FourFaceTriangle renderer's per-particle triangle (corners x size, in its frame) and the
+	// texture coordinates of the corners and the centre, made when the particle is born.
+	std::array<float, 9> tri{};
+	std::array<float, 8> tri_uv{};
 };
 
 // CManualParticleSpawner::CNewParticleInfo.
@@ -60,6 +65,7 @@ struct ModifierControl {
 	bool spawning = false;
 	int32_t burst = 0;
 	float radius = -1;  // CRandomEllipsoidSpawner::SetRadius (+0x84..: all three radii; -1 unset)
+	float beam_length = -1, beam_start = -1;  // CBeamSpawner::SetTotalLength (+0x60) / SetInitialSpawnLength (+100)
 	std::vector<NewParticleInfo> requests;
 };
 
@@ -73,6 +79,9 @@ struct ParticleInstance {
 		int32_t initial = 0;
 		int32_t mesh_burst = 0;  // DE_CMeshSpawner::Begin: one particle per vertex, once
 		float kill_countdown = 5000;  // DE_CKillWithParticles +0x74 (ms; 999999 once it has killed)
+		bool beam_done = false;       // DE_CBeamSpawner's instance flag: the beam is laid once
+		std::array<float, 3> bolt_target{};  // DE_CLighteningSpawner's instance data: the target's last position
+		bool bolt_target_set = false;
 	};
 	std::vector<PerModifier> per_modifier;
 	std::vector<Particle> particles;
@@ -134,6 +143,23 @@ struct SparkBurst {
 	std::vector<Spark> sparks;
 };
 
+// A Mesh\PointStreamer trail on an actor (DE_CPointStreamer::DE_CInstanceInfo::Process, Core
+// 0x701d17f0): while enabled a point every `interval` ms at the actor, each living `life` ms and
+// rising by `rise` per ms; drawn from the oldest point to the actor.
+struct Trail {
+	GameObject *actor = nullptr;
+	GameObject *mesh = nullptr;  // the actor's copy of the streamer (Enable/Disable)
+	const de::PointStreamerDef *def = nullptr;
+	struct Point {
+		std::array<float, 3> pos;
+		float time = 0, v = 0;
+	};
+	std::vector<Point> points;
+	float next = 0, last = -1;
+	bool enabled = true;
+	uint32_t stepped = 0;
+};
+
 class ParticleSystem {
 public:
 	explicit ParticleSystem(World &w) : w_(w) {}
@@ -163,6 +189,9 @@ public:
 	}
 	void add_sparks(SparkBurst b) { sparks_.push_back(std::move(b)); }
 	const std::vector<SparkBurst> &sparks() const { return sparks_; }
+	const std::vector<std::unique_ptr<Trail>> &trails() const { return trails_; }
+	// CPointStreamer::Enable / Disable, on the streamer's object.
+	void set_trail_enabled(GameObject *mesh, bool on);
 	// DE_COMF2Fighter::Tick: every trailer of the fighter adds its point.
 	void tick_trailers(GameObject &fighter);
 
@@ -192,6 +221,11 @@ private:
 	std::vector<GameObject *> kills_;  // KillWithParticles victims, deleted after the step
 	std::vector<SparkBurst> sparks_;
 	void step_sparks(float now);
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::unique_ptr<de::PointStreamerDef>> streamer_defs_;
+	std::map<const GameObject *, std::vector<const de::PointStreamerDef *>> actor_streamers_;
+	std::vector<std::unique_ptr<Trail>> trails_;
+	std::map<const GameObject *, bool> trail_enabled_;
+	void step_trails(float now);
 };
 
 // Scene time in milliseconds (the game runs at 60 frames a second).

@@ -120,6 +120,58 @@ ParticleModifierDef read_modifier(const World &w, const ObjectRef &r) {
 				m.accel_angle = c.f32();
 			}
 		}
+	} else if (m.kind == "Rotator") {
+		if (v == 1) {
+			m.rotator_mode = c.i32();
+			m.curve = read_embedded_float(c);
+			m.rotator_factor = c.f32();
+		}
+	} else if (m.kind == "MiscellaneousNewParticleFunctions") {
+		if (v == 1) {
+			m.curve = read_embedded_float(c);
+			m.misc_mode = c.u32();
+		}
+	} else if (m.kind == "PushDownZModifier") {
+		if (v == 2) {
+			m.push_amount = c.f32();
+			m.push_mode = c.i32();
+		} else if (v == 1) {
+			m.push_mode = 5;
+		}
+	} else if (m.kind == "BeamSpawner") {
+		if (v >= 1 && v <= 3) {
+			m.beam_length = c.f32();
+			m.beam_spacing = c.f32();
+			m.beam_spacing_variation = c.f32();
+			if (v != 3) {
+				m.life_span = c.f32();
+				m.life_span_variation = c.f32();
+			}
+			m.beam_78 = c.i32();
+			if (v >= 2) {
+				m.beam_radius = c.f32();
+				m.beam_radius_variation = c.f32();
+				m.beam_start = c.f32();
+			}
+		}
+	} else if (m.kind == "AutoExternalSpawner") {
+		if (v == 1) {
+			m.auto_every = c.i32();
+			m.auto_random = c.i32();
+			m.auto_size = c.f32();
+			m.auto_life = c.f32();
+		}
+	} else if (m.kind == "LighteningSpawner") {
+		if (v == 1 || v == 2) {
+			m.bolt_jitter = c.f32();
+			for (auto &x : m.bolt_78) x = c.f32();
+			m.bolt_8c = c.i32();
+			m.bolt_90 = c.f32();
+			m.bolt_94 = c.i32();
+			m.bolt_min_segment = c.f32();
+			m.bolt_taper = c.boolean();
+			if (v == 2) m.bolt_follow = c.boolean();
+		}
 	} else if (m.kind == "MeshSpawner") {
 		if (v == 1) {
 			m.spawn_time = c.f32();
@@ -141,8 +193,15 @@ ParticleModifierDef read_modifier(const World &w, const ObjectRef &r) {
 			auto [start, sub] = list.back();
 			rc.seek(start);
 			begin_chunk(rc);
-			if (m.kind == "MiscellaneousParticleFunctions" && sub.version == 1) {
+			if ((m.kind == "MiscellaneousParticleFunctions" || m.kind == "Rotator" || m.kind == "MiscellaneousNewParticleFunctions") &&
+			    sub.version == 1) {
 				if (ObjectRef f = read_advanced_reference(w, *r.file, rc)) m.curve = read_float_value(w, f);
+			} else if (m.kind == "AutoExternalSpawner" && sub.version == 1 && rc.pos() < sub.end && rc.boolean()) {
+				m.auto_spawner = w.resolve(*r.file, Reference::read(rc));
+			} else if (m.kind == "LighteningSpawner" && sub.version == 1) {
+				while (rc.pos() < sub.end && rc.boolean()) {
+					if (ObjectRef k = w.resolve(*r.file, Reference::read(rc))) m.bolt_targets.push_back(k);
+				}
 			} else if (m.kind == "KillWithParticles") {
 				while (rc.pos() < sub.end && rc.boolean()) {
 					if (ObjectRef k = w.resolve(*r.file, Reference::read(rc))) m.kill.push_back(k);
@@ -202,6 +261,40 @@ ParticleGeneratorDef read_generator(const World &w, const ObjectRef &r) {
 
 bool ParticleModifierDef::is_spawner() const {
 	return kind.size() >= 7 && kind.compare(kind.size() - 7, 7, "Spawner") == 0;
+}
+
+bool is_point_streamer(const ObjectRef &r) { return r && r.info().class_path == "Mesh\\PointStreamer"; }
+
+PointStreamerDef read_point_streamer(const World &w, const ObjectRef &r) {
+	PointStreamerDef p;
+	p.object = r;
+	if (!is_point_streamer(r)) return p;
+	try {
+		auto d = r.file->object_data(r.info());
+		Contents c(d.contents);
+		Chunk mesh = begin_chunk(c);
+		c.seek(mesh.end);
+		if (c.remaining() > 1) {
+			Chunk ch = begin_chunk(c);
+			if (ch.version == 2 || ch.version == 3) {
+				p.interval = c.f32();
+				p.life = c.f32();
+				p.width0 = c.f32();
+				p.width1 = c.f32();
+				p.alpha0 = c.f32();
+				p.alpha1 = c.f32();
+				p.texture_length = c.f32();
+				c.i32();
+				if (ch.version == 3) {
+					p.mode = c.i32();
+					p.rise = c.f32();
+				}
+			}
+		}
+	} catch (const std::exception &) {
+	}
+	p.image = read_mesh_image(w, r);
+	return p;
 }
 
 bool is_particle_renderer(const ObjectRef &r) {
@@ -271,6 +364,30 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 				if (v < 5 && old_flag) p.color_mode = 2;
 			}
 			c.seek(b.end);
+		} else if (p.kind == "FourFaceTriangle" && c.remaining() > 1) {
+			Chunk b = begin_chunk(c);
+			if (b.version == 1) {
+				p.color = read_embedded_color(c);
+				for (auto &x : p.tri_corners) x = c.f32();
+				for (auto &x : p.tri_jitter) x = c.f32();
+				for (auto &x : p.tri_b4) x = c.f32();
+				p.tri_facing = c.i32();
+				p.tri_uv_plane = c.i32();
+			}
+			c.seek(b.end);
+		} else if (p.kind == "StreamParticleRenderer" && c.remaining() > 1) {
+			Chunk b = begin_chunk(c);
+			if (b.version == 1) {
+				p.color = read_embedded_color(c);
+				p.stream_color_mode = c.i32();
+				p.stream_uv_mode = c.i32();
+				p.stream_width = c.f32();
+				p.stream_uv_scale = c.f32();
+				p.stream_breaks = c.boolean();
+				p.stream_uv_offset = c.f32();
+				p.stream_max_gap = c.f32();
+			}
+			c.seek(b.end);
 		} else if (p.kind == "Ring" && c.remaining() > 1) {
 			Chunk b = begin_chunk(c);
 			if (b.version == 1) {
@@ -322,6 +439,22 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 				for (FloatValue *v : {&p.inner_height, &p.outer_height, &p.inner_radius, &p.outer_radius}) {
 					if (ObjectRef t = read_advanced_reference(w, *r.file, rc)) *v = read_float_value(w, t);
 				}
+			}
+		}
+		if (p.kind == "FourFaceTriangle" && list.size() >= 4) {
+			auto [start, ch] = list[3];
+			rc.seek(start);
+			begin_chunk(rc);
+			if (ch.version == 2) {
+				if (ObjectRef cr = read_advanced_reference(w, *r.file, rc)) p.color = read_color_value(w, cr), p.color_ref = cr;
+			}
+		}
+		if (p.kind == "StreamParticleRenderer" && list.size() >= 4) {
+			auto [start, ch] = list[3];
+			rc.seek(start);
+			begin_chunk(rc);
+			if (ch.version == 1) {
+				if (ObjectRef cr = read_advanced_reference(w, *r.file, rc)) p.color = read_color_value(w, cr), p.color_ref = cr;
 			}
 		}
 		if (p.kind == "BillboardedQuad" && list.size() >= 4) {

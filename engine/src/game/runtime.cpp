@@ -1134,6 +1134,7 @@ void World::tick() {
 	forces->tick();
 	tick_collision_testers(*this);
 	particles->step();
+	start_pending_brains();
 }
 
 // Affector references: [object][actor properties][affector v4: BOOL owner actor, BOOL

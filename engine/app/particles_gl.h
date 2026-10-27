@@ -33,6 +33,11 @@ private:
 	GLuint image(const de::ObjectRef &r);
 	void ring(const game::ParticleInstance &in, const std::array<float, 3> &right, const std::array<float, 3> &up,
 	          std::map<std::pair<GLuint, bool>, Batch> &batches);
+	void stream(const game::World &world, const game::ParticleInstance &in, const std::array<float, 3> &cam,
+	            std::map<std::pair<GLuint, bool>, Batch> &batches);
+	void triangles(const game::World &world, const game::ParticleInstance &in, const float *view, const std::array<float, 3> &cam,
+	               std::map<std::pair<GLuint, bool>, Batch> &batches);
+	void trail(const game::World &world, const game::Trail &t, const std::array<float, 3> &cam, std::map<std::pair<GLuint, bool>, Batch> &batches);
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> images_;
 	GLuint prog_ = 0, vao_ = 0, vbo_ = 0, white_ = 0;
 };

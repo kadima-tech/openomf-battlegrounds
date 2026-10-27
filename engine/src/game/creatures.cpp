@@ -155,6 +155,8 @@ void register_creature_natives(World &w) {
 	reg("CActor::AddProperty(class CObject)", [](const NativeContext &c) {
 		GameObject *o = c.self(), *p = c.arg_object(0);
 		if (o && p && std::find(o->components.begin(), o->components.end(), p) == o->components.end()) o->components.push_back(p);
+		// A class executor property runs its class on the actor (Jaguar's lasers get theirs this way).
+		if (o && p && p->file && p->class_path == "ClassExecutor") c.world.add_executor_property(o, de::ObjectRef{p->file, p->index});
 		// A texture manager's or mesh's image property: what it draws from now on.
 		if (o && p && o->file && p->file && p->is("Image") && (o->is("TextureManager") || o->is("Mesh"))) {
 			c.world.texture_overrides[{o->file, o->index}] = de::ObjectRef{p->file, p->index};

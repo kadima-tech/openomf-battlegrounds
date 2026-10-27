@@ -504,6 +504,14 @@ static int cmd_particles(const char *dir, const char *only) {
 			       p.height, p.cone_mode, p.normalize, p.offset[0], p.offset[1], p.offset[2], p.color.rgba[0], p.color.rgba[1],
 			       p.color.rgba[2], p.color.rgba[3], p.color.color ? " (modulated)" : "",
 			       p.image ? p.image.info().name.c_str() : "-");
+			if (p.kind == "FourFaceTriangle")
+				printf("    triangle %g,%g,%g %g,%g,%g %g,%g,%g jitter %g,%g,%g,%g,%g,%g,%g,%g,%g b4 %g,%g,%g,%g facing %d uv plane %d\n", p.tri_corners[0],
+				       p.tri_corners[1], p.tri_corners[2], p.tri_corners[3], p.tri_corners[4], p.tri_corners[5], p.tri_corners[6], p.tri_corners[7],
+				       p.tri_corners[8], p.tri_jitter[0], p.tri_jitter[1], p.tri_jitter[2], p.tri_jitter[3], p.tri_jitter[4], p.tri_jitter[5],
+				       p.tri_jitter[6], p.tri_jitter[7], p.tri_jitter[8], p.tri_b4[0], p.tri_b4[1], p.tri_b4[2], p.tri_b4[3], p.tri_facing, p.tri_uv_plane);
+			if (p.kind == "StreamParticleRenderer")
+				printf("    stream colour %d uv %d width %g uv x%g +%g breaks %d gap %g\n", p.stream_color_mode, p.stream_uv_mode, p.stream_width,
+				       p.stream_uv_scale, p.stream_uv_offset, p.stream_breaks, p.stream_max_gap);
 			auto &g = p.generator;
 			printf("    generator %s local %d channels %d%d%d%d%d%d reset %d\n", g.object ? g.object.info().name.c_str() : "-",
 			       g.local, g.channels[0], g.channels[1], g.channels[2], g.channels[3], g.channels[4], g.channels[5],
@@ -532,6 +540,13 @@ static int cmd_particles(const char *dir, const char *only) {
 					       m.wrap[0], m.wrap[1], m.wrap[2]);
 				} else if (m.kind == "MeshSpawner") {
 					printf(" | burst %d mesh %s", m.mesh_burst, m.mesh ? m.mesh.info().name.c_str() : "-");
+				} else if (m.kind == "LighteningSpawner") {
+					printf(" | jitter %g min %g 78 %g,%g,%g,%g 8c %d 90 %g 94 %d taper %d follow %d targets", m.bolt_jitter, m.bolt_min_segment, m.bolt_78[0],
+					       m.bolt_78[1], m.bolt_78[2], m.bolt_78[3], m.bolt_8c, m.bolt_90, m.bolt_94, m.bolt_taper, m.bolt_follow);
+					for (auto &t : m.bolt_targets) printf(" %s", t.info().name.c_str());
+				} else if (m.kind == "BeamSpawner") {
+					printf(" | length %g spacing %g~%g radius %g~%g start %g", m.beam_length, m.beam_spacing, m.beam_spacing_variation, m.beam_radius,
+					       m.beam_radius_variation, m.beam_start);
 				}
 				printf("\n");
 			}

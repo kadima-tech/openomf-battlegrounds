@@ -47,6 +47,20 @@ Rows frame_from_z(const Vec &dir) {
 	Vec y = cross(z, x);
 	return {x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]};
 }
+// DE_CCoordinateSystem::RotateLocalX/Y/Z: the frame turned about its own axis (the other two
+// rows rotate in their plane).
+Rows rotate_local(const Rows &r, int axis, float a) {
+	float c = std::cos(a), s = std::sin(a);
+	int i = (axis + 1) % 3, j = (axis + 2) % 3;
+	Rows out = r;
+	for (int k = 0; k < 3; ++k) {
+		float ri = r[size_t(i * 3 + k)], rj = r[size_t(j * 3 + k)];
+		out[size_t(i * 3 + k)] = ri * c + rj * s;
+		out[size_t(j * 3 + k)] = rj * c - ri * s;
+	}
+	return out;
+}
+
 Rows rotate_axis(const Rows &r, int axis, float a) {
 	float c = std::cos(a), s = std::sin(a);
 	Rows out = r;
@@ -110,6 +124,8 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 		if (in->actor == actor && in->def == def) return *in;
 	}
 	auto in = std::make_unique<ParticleInstance>();
+	static const bool debug = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
+	if (debug) fprintf(stderr, "[particles %u] new instance of %s on %s\n", w_.frame(), def->object.info().name.c_str(), actor ? actor->name.c_str() : "-");
 	in->def = def;
 	in->actor = actor;
 	in->time = scene_time_ms(w_);
@@ -177,6 +193,64 @@ std::vector<NewParticleInfo> *ParticleSystem::requests(GameObject *actor, const 
 		}
 	}
 	return nullptr;
+}
+
+void ParticleSystem::set_trail_enabled(GameObject *mesh, bool on) {
+	trail_enabled_[mesh] = on;
+	for (auto &t : trails_) {
+		if (t->mesh == mesh) t->enabled = on;
+	}
+}
+
+void ParticleSystem::step_trails(float now) {
+	for (GameObject *o : w_.scene_objects()) {
+		if (!o->is_actor || !o->file || !shown(o) || !o->active) continue;
+		auto it = actor_streamers_.find(o);
+		if (it == actor_streamers_.end()) {
+			std::vector<const de::PointStreamerDef *> list;
+			for (auto &r : w_.properties_of(*o)) {
+				if (!de::is_point_streamer(r)) continue;
+				auto key = std::make_pair(r.file, r.index);
+				auto d = streamer_defs_.find(key);
+				if (d == streamer_defs_.end()) d = streamer_defs_.emplace(key, std::make_unique<de::PointStreamerDef>(de::read_point_streamer(w_.data(), r))).first;
+				list.push_back(d->second.get());
+			}
+			it = actor_streamers_.emplace(o, std::move(list)).first;
+		}
+		for (const de::PointStreamerDef *def : it->second) {
+			Trail *t = nullptr;
+			for (auto &x : trails_) {
+				if (x->actor == o && x->def == def) t = x.get();
+			}
+			if (!t) {
+				auto nt = std::make_unique<Trail>();
+				nt->actor = o;
+				nt->def = def;
+				nt->mesh = nearest_copy(o, def->object);
+				if (auto e = trail_enabled_.find(nt->mesh); nt->mesh && e != trail_enabled_.end()) nt->enabled = e->second;
+				t = trails_.emplace_back(std::move(nt)).get();
+				static const bool debug = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
+				if (debug) fprintf(stderr, "[particles %u] trail %s on %s (every %g ms, life %g)\n", w_.frame(), def->object.info().name.c_str(), o->name.c_str(), def->interval, def->life);
+			}
+			float dt = t->last >= 0 ? now - t->last : 0;
+			t->last = now;
+			t->stepped = w_.frame();
+			// A new point once `interval` has passed (texture v = time / length).
+			if (t->enabled && t->next < now) {
+				t->next = now + def->interval;
+				auto p = o->world().t;
+				t->points.push_back({{p[0], p[1], p[2]}, now, def->texture_length != 0 ? now / def->texture_length : 0});
+			}
+			// Points older than the life go; the rest rise.
+			size_t gone = 0;
+			while (gone < t->points.size() && now > def->life + t->points[gone].time) ++gone;
+			t->points.erase(t->points.begin(), t->points.begin() + long(gone));
+			for (auto &p : t->points) p.pos[1] += dt * def->rise;
+		}
+	}
+	// Trails of actors that left the scene go once their points have.
+	trails_.erase(std::remove_if(trails_.begin(), trails_.end(), [&](const std::unique_ptr<Trail> &t) { return t->stepped + 2 < w_.frame(); }),
+	              trails_.end());
 }
 
 void ParticleSystem::step_sparks(float now) {
@@ -249,6 +323,7 @@ void ParticleSystem::step() {
 	for (GameObject *k : kills_) w_.destroy(k);
 	kills_.clear();
 	step_sparks(now);
+	step_trails(now);
 	// OPENBG_DEBUG_PARTICLES=1: the live effects once a second.
 	static const bool debug = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
 	if (debug) {
@@ -344,6 +419,22 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 			}
 			ctl.requests.clear();
 		} else if (m.is_spawner()) {
+			if (m.kind == "LighteningSpawner" && m.bolt_follow && pm.bolt_target_set && !m.bolt_targets.empty()) {
+				// DE_CLighteningSpawner::ManageParticles (0x4000bb70): with follow, the bolts' points
+				// move with the first target, each by how far along its bolt it is.
+				if (GameObject *target = nearest_copy(in.actor, m.bolt_targets[0])) {
+					Vec now = target->world().t;
+					if (gen.local) {
+						de::Transform t = in.actor->world();
+						now = t.inverse_rotate(sub(now, Vec{t.t[0], t.t[1], t.t[2]}));
+					}
+					Vec d = sub(now, pm.bolt_target);
+					pm.bolt_target = now;
+					for (auto &p : in.particles) {
+						if (p.bolt_t >= 0) p.pos = add(p.pos, mul(d, p.bolt_t));
+					}
+				}
+			}
 			// DE_CParticleModifier::CommonSpawnerManageParticles.
 			float step = in.dt;
 			pm.countdown -= step;
@@ -387,6 +478,43 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 				p.size = rand_to(w, ctl.spawn_size_variation) + ctl.spawn_size;
 				p.inv_life = life(false);
 			}
+			const float beam_length = ctl.beam_length >= 0 ? ctl.beam_length : m.beam_length;
+			const float beam_start = ctl.beam_start >= 0 ? ctl.beam_start : m.beam_start;
+			static const bool dbg_beam = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
+			if (dbg_beam && m.kind == "BeamSpawner")
+				fprintf(stderr, "[particles %u] beam %s: length %.1f (data %.1f), start %.1f, spacing %.1f~%.1f, done %d\n", w.frame(),
+				        m.object.info().name.c_str(), beam_length, m.beam_length, beam_start, m.beam_spacing, m.beam_spacing_variation, pm.beam_done);
+			if (m.kind == "BeamSpawner" && !pm.beam_done && beam_length != 0) {
+				// DE_CBeamSpawner::ManageParticles (0x4000a460): once per instance, particles along the
+				// actor's Z from the start distance to the length, at the spacing (+ up to its
+				// variation), each on a ring of the radius (+ up to its variation) at a random angle.
+				pm.beam_done = true;
+				for (float z = beam_start; z < beam_length;) {
+					Particle &p = spawn(0);
+					Vec v{0, 0, z};
+					if (m.beam_radius != 0 || m.beam_radius_variation != 0) {
+						float a = float(int(random01(w) * 256) & 0xff) * (6.2831853f / 256);
+						float sn = std::sin(a), cs = std::cos(a);
+						v[0] = sn * m.beam_radius + rand_to(w, sn * m.beam_radius_variation);
+						v[1] = cs * m.beam_radius + rand_to(w, cs * m.beam_radius_variation);
+					}
+					z += rand_to(w, m.beam_spacing_variation) + m.beam_spacing;
+					p.age = 0;
+					p.size = rand_to(w, ctl.spawn_size_variation) + ctl.spawn_size;
+					p.inv_life = ctl.life_span == 0 && ctl.life_span_variation == 0
+					                 ? 0
+					                 : 1 / (rand_to(w, ctl.life_span_variation) + ctl.life_span + 1);
+					p.flags |= 0x100;
+					place(p, v);
+					if (m.beam_spacing <= 0 && m.beam_spacing_variation <= 0) break;
+				}
+				static const bool debug = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
+				if (debug && in.particles.size() > first_new) {
+					const Vec &a = in.particles[first_new].pos, &b = in.particles.back().pos;
+					fprintf(stderr, "[particles %u] %s lays %zu from %.1f %.1f %.1f to %.1f %.1f %.1f\n", w.frame(), m.object.info().name.c_str(),
+					        in.particles.size() - first_new, a[0], a[1], a[2], b[0], b[1], b[2]);
+				}
+			}
 			if (m.kind == "MeshSpawner") {
 				// DE_CMeshSpawner::ManageParticles: its burst puts one particle on every vertex.
 				if (pm.mesh_burst != 0) {
@@ -406,6 +534,54 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 				Particle &p = in.particles[i];
 				if (p.flags & 0x100) {
 					p.flags &= ~0x100u;
+					continue;
+				}
+				if (m.kind == "BeamSpawner") continue;  // its CommonSpawnerNewParticles places nothing
+				if (m.kind == "LighteningSpawner") {
+					// DE_CLighteningSpawner::CommonSpawnerNewParticles (0x4000bf40): the particle at
+					// the actor, then a bolt from it to every target: a start point, the bolt's
+					// subdivisions (Bolt), and an end point at the target that ends the stream.
+					place(p, {0, 0, 0});
+					p.bolt_t = -1;
+					const Vec from = p.pos;
+					const float size = p.size, inv_life = p.inv_life;
+					for (const auto &tr : m.bolt_targets) {
+						GameObject *target = nearest_copy(in.actor, tr);
+						if (!target) continue;
+						Vec to = target->world().t;
+						if (gen.local) {
+							de::Transform t = in.actor->world();
+							to = t.inverse_rotate(sub(to, Vec{t.t[0], t.t[1], t.t[2]}));
+						}
+						pm.bolt_target = to;
+						pm.bolt_target_set = true;
+						auto point = [&](const Vec &at, float along, float sz, bool connected) {
+							Particle &q = in.particles.emplace_back();
+							q.flags = kNew | kAlive | 0x100 | (connected ? kRelative : 0);
+							q.serial = pm.serial++;
+							q.pos = q.prev = at;
+							q.bolt_t = along;
+							q.size = sz;
+							q.inv_life = inv_life;
+						};
+						point(from, 0, m.bolt_taper ? 0 : size, true);
+						// Bolt(a, b, t, life, half): segments longer than the shortest split at their
+						// middle, moved by up to +- jitter x length / 2 on each axis; t counts down
+						// from 1 at the start, the points store 1 - t.
+						std::function<void(const Vec &, const Vec &, float, float)> bolt = [&](const Vec &a, const Vec &b, float t, float half) {
+							Vec d = sub(b, a);
+							float l = length(d);
+							float q = half * 0.5f;
+							if (!(m.bolt_min_segment < l)) return;
+							float j = l * m.bolt_jitter;
+							Vec mid{d[0] * 0.5f + center_rand(w, j) + a[0], d[1] * 0.5f + center_rand(w, j) + a[1], d[2] * 0.5f + center_rand(w, j) + a[2]};
+							bolt(a, mid, t + q, q);
+							point(mid, 1 - t, m.bolt_taper ? t * size : size, true);
+							bolt(mid, b, t - q, q);
+						};
+						bolt(from, to, 0.5f, 0.5f);
+						point(to, 1, m.bolt_taper ? 0 : size, false);
+					}
 					continue;
 				}
 				Vec v{0, 0, 0};
@@ -490,6 +666,30 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 					break;
 				default: break;
 				}
+			} else if (m.kind == "AutoExternalSpawner" && m.auto_spawner) {
+				// DE_CAutoExternalSpawner::ManageParticleUserData (0x40001560): chosen new particles
+				// have the external manual spawner spawn one where they are.
+				GameObject *ext = nearest_copy(in.actor, m.auto_spawner);
+				if (ext) {
+					de::Transform t = in.actor->world();
+					fresh([&](Particle &p) {
+						bool every = m.auto_every != 0 && p.serial % m.auto_every == 0;
+						bool chance = m.auto_random != 0 && int(random01(w) * float(m.auto_random)) == 0;
+						if (!every && !chance) return;
+						NewParticleInfo info;
+						info.pos = gen.local ? add(rotate(p.pos, t.r), Vec{t.t[0], t.t[1], t.t[2]}) : p.pos;
+						info.size = m.auto_size * p.size;
+						info.life_span = (p.inv_life != 0 ? 1 / p.inv_life : 0) * m.auto_life;
+						control(ext).requests.push_back(info);
+					});
+				}
+			} else if (m.kind == "MiscellaneousNewParticleFunctions" && m.misc_mode <= 2) {
+				// DE_CMiscellaneousNewParticleFunctions::ManageParticleUserData (0x40004980): each new
+				// particle's orientation turns about its own X / Y / Z by a random angle within
+				// +- half the curve at its age, in degrees.
+				fresh([&](Particle &p) {
+					p.orientation = rotate_local(p.orientation, int(m.misc_mode), center_rand(w, m.curve.eval(p.age)) * 0.017453292f);
+				});
 			} else if (m.kind == "MomentumAndAcceleration") {
 				Rows ar = in.actor->world().r;
 				Vec local = inverse_rotate(am, ar);
@@ -506,6 +706,32 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 		}
 	}
 
+	if (in.created > 0 && in.def->kind == "FourFaceTriangle") {
+		// DE_CFourFaceTriangleParticleRenderer::DE_CInstanceInfo::Process (0x400145d0), on a new
+		// particle: its corners (jittered, x size, turned by its orientation unless camera-facing)
+		// and a planar texture projection at a random offset.
+		for (auto &p : in.particles) {
+			if (!(p.flags & kNew)) continue;
+			float ou = rand_to(w, 1), ov = rand_to(w, 1);
+			for (int k = 0; k < 9; ++k) p.tri[size_t(k)] = in.def->tri_corners[size_t(k)] + rand_to(w, in.def->tri_jitter[size_t(k)]);
+			if (p.size != 1)
+				for (auto &x : p.tri) x *= p.size;
+			int a = in.def->tri_uv_plane == 2 ? 1 : 0, b = in.def->tri_uv_plane == 0 ? 1 : 2;
+			float sc = in.def->tri_b4[3];
+			for (int k = 0; k < 3; ++k) {
+				p.tri_uv[size_t(k * 2)] = sc * p.tri[size_t(k * 3 + a)] + ou;
+				p.tri_uv[size_t(k * 2 + 1)] = sc * p.tri[size_t(k * 3 + b)] + ov;
+			}
+			p.tri_uv[6] = ou;
+			p.tri_uv[7] = ov;
+			if (gen.channels[de::kChOrientation] && in.def->tri_facing == 0) {
+				for (int k = 0; k < 3; ++k) {
+					Vec v = rotate({p.tri[size_t(k * 3)], p.tri[size_t(k * 3 + 1)], p.tri[size_t(k * 3 + 2)]}, p.orientation);
+					for (int j = 0; j < 3; ++j) p.tri[size_t(k * 3 + j)] = v[size_t(j)];
+				}
+			}
+		}
+	}
 	// 4. Age and move (SetTime).
 	int alive = 0;
 	for (auto &p : in.particles) {
@@ -607,6 +833,34 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 					break;
 				}
 				default: break;
+				}
+			}
+		} else if (m.kind == "Rotator") {
+			// DE_CRotator::Modify (0x40009150), on the rotation channel.
+			for (auto &p : in.particles) {
+				float v = m.curve.eval(p.age);
+				if (m.rotator_mode == 1) p.rotation += v * m.rotator_factor * dt;
+				else if (m.rotator_mode == 3) p.rotation += p.size * m.rotator_factor * v * dt;
+				else if (m.rotator_mode == 4) p.rotation = v + m.rotator_factor;
+			}
+		} else if (m.kind == "OriginMagnet") {
+			// DE_CParticleOriginMagnet::Modify (0x40008210): a point that moves from the particle's
+			// spawn position to the actor as it ages; the particle is drawn towards it by the life left.
+			const Vec &c = in.actor_pos;
+			for (auto &p : in.particles) {
+				float left = 1 - p.age;
+				Vec target = add(c, mul(sub(p.prev, c), left));
+				p.pos = add(target, mul(sub(p.pos, target), left));
+			}
+		} else if (m.kind == "PushDownZModifier") {
+			// DE_CPushDownZModifier::Modify (0x400088d0): along the actor's X, Y or Z by the amount
+			// x the step's share of the particle's life (modes 3-5 also x the life left).
+			if (m.push_mode >= 0 && m.push_mode <= 5) {
+				int axis = m.push_mode % 3;
+				Vec ax{in.actor_rot[size_t(axis * 3)], in.actor_rot[size_t(axis * 3 + 1)], in.actor_rot[size_t(axis * 3 + 2)]};
+				for (auto &p : in.particles) {
+					float k = p.age_step * m.push_amount * (m.push_mode >= 3 ? 1 - p.age : 1);
+					p.pos = add(p.pos, mul(ax, k));
 				}
 			}
 		} else if (m.kind == "RandomBoxSpawner" && (m.wrap[0] || m.wrap[1] || m.wrap[2])) {
@@ -864,6 +1118,15 @@ void register_particle_natives(World &w) {
 	});
 	reg("CRandomEllipsoidSpawner::SetRadius(float)", [ctl](const NativeContext &c) {
 		if (auto *m = ctl(c)) m->radius = c.arg<float>(0);
+	});
+	// DE_CPointStreamer::Enable / Disable (Core 0x701d2500): the trail stops or starts adding points.
+	reg("CPointStreamer::Enable()", [](const NativeContext &c) { if (GameObject *o = c.self()) c.world.particles->set_trail_enabled(o, true); });
+	reg("CPointStreamer::Disable()", [](const NativeContext &c) { if (GameObject *o = c.self()) c.world.particles->set_trail_enabled(o, false); });
+	reg("CBeamSpawner::SetTotalLength(float)", [ctl](const NativeContext &c) {
+		if (auto *m = ctl(c)) m->beam_length = c.arg<float>(0);
+	});
+	reg("CBeamSpawner::SetInitialSpawnLength(float)", [ctl](const NativeContext &c) {
+		if (auto *m = ctl(c)) m->beam_start = c.arg<float>(0);
 	});
 	reg("CParticleModifier::Spawn(int)", [ctl](const NativeContext &c) {
 		if (auto *m = ctl(c)) m->burst += c.arg<int32_t>(0);

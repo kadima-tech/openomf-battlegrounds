@@ -432,6 +432,9 @@ public:
 	// Start the ClassExecutor objects among `properties` on `o` (each runs its entry up to its
 	// first wait, as DE_CClassExecutor::AssureActivated).
 	std::vector<Brain *> activate_executors(GameObject *o, const std::vector<de::ObjectRef> &properties, bool run = true);
+	// CActor::AddProperty of a ClassExecutor: it becomes one of the actor's properties, run when the
+	// actor is prepared into the scene, or at once if it already was.
+	void add_executor_property(GameObject *o, const de::ObjectRef &executor);
 	// DE_CAffector::OwnerActor (+0x118: set at run time, else from the data; the affector itself
 	// without one -- a fighter's own affectors fall back to the fighter).
 	GameObject *affector_owner(GameObject *a);
@@ -443,8 +446,12 @@ public:
 	// Run an attached brain's entry up to its first wait.
 	void start_brain(Brain *b);
 	// Put a branch in the scene, starting the executors of its actors (arena scripts, spawn
-	// points, ...) that are not running yet.
-	void enter_scene(GameObject *root);
+	// points, ...) that are not running yet. With `defer_start` (CScene::Add from a script) the
+	// executors are attached at once but their entries run at the end of the tick, after the
+	// calling script has finished setting the actor up (Jaguar's laser takes its length and
+	// creator after Scene().Add, and its entry reads them).
+	void enter_scene(GameObject *root, bool defer_start = false);
+	void start_pending_brains();
 	GameObject *resolve_passive_reference(GameObject *reference);
 	// An actor's properties (DE_CActor +0x20 list): its executors, state manager, ...
 	std::vector<de::ObjectRef> actor_properties(const de::ObjectRef &r) const;
@@ -606,6 +613,7 @@ private:
 	std::map<std::string, uint64_t> missing_;
 	std::unordered_map<uint32_t, std::string> instance_classes_;
 	std::set<const GameObject *> activated_;  // objects whose executors were started
+	std::vector<Brain *> pending_starts_;      // attached by a deferred enter_scene, not yet started
 	std::deque<std::unique_ptr<Brain>> brains_;
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;

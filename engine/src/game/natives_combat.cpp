@@ -518,6 +518,14 @@ void register_combat_natives(World &w) {
 		auto *v = c.arg_object(0);
 		c.ret_bool(v && add_potential_victim(c.world, a, g_attacks[a], v));
 	});
+	// AddPotentialVictimFromHitStreamCaller (OMF 0x350127e0): the stream's hit count goes into
+	// m_MaxNumberOfHits (+0xc0), then AddPotentialVictim.
+	reg("CObject::CAttackInfo::bool AddPotentialVictimFromHitStream(class CActor,int)", [=](const NativeContext &c) {
+		uint32_t a = info_of(c);
+		auto *v = c.arg_object(0);
+		if (a) c.world.memory().set<int32_t>(a + kMaxNumberOfHits, c.arg<int32_t>(1));
+		c.ret_bool(v && add_potential_victim(c.world, a, g_attacks[a], v));
+	});
 	auto connected_victim = [](uint32_t a) -> GameObject * {
 		auto it = g_attacks.find(a);
 		if (it == g_attacks.end()) return nullptr;
@@ -1026,6 +1034,8 @@ void register_combat_natives(World &w) {
 	reg("CConeAffector::SetPenumbra(float)", [](const NativeContext &c) { if (auto *o = c.self()) o->penumbra = c.arg<float>(0); });
 	reg("CConeAffector::SetNear(float)", [](const NativeContext &c) { if (auto *o = c.self()) o->near_begin = o->near_end = c.arg<float>(0), o->far_begin = std::max(o->far_begin, o->near_end); });
 	reg("CConeAffector::SetFar(float)", [](const NativeContext &c) { if (auto *o = c.self()) o->far_begin = o->far_end = c.arg<float>(0); });
+	// FarCaller (Core 0x7007fb50): +0x180, the far end.
+	reg("CConeAffector::float Far()", [](const NativeContext &c) { auto *o = c.self(); c.ret_f32(o ? o->far_end : 0); });
 
 	// --- Get-hit support (OMF Dampen*Caller, Core orientation) ----------------------------------
 	// IsStateAlterable folds into IsSimulating: true for a creature simulated here (the server).

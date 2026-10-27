@@ -111,6 +111,26 @@ std::vector<Brain *> World::activate_executors(GameObject *o, const std::vector<
 	return out;
 }
 
+void World::add_executor_property(GameObject *o, const de::ObjectRef &executor) {
+	if (!o || !executor) return;
+	for (auto &p : o->extra_properties) {
+		if (p.file == executor.file && p.index == executor.index) return;
+	}
+	o->extra_properties.push_back(executor);
+	static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
+	if (debug) fprintf(stderr, "[executor %u] %s gets %s%s\n", frame_, o->name.c_str(), executor.info().name.c_str(), activated_.count(o) ? " (running)" : "");
+	if (!activated_.count(o)) return;  // enter_scene attaches it
+	auto [cls, entry] = executor_class(data_, executor);
+	if (!cls) return;
+	try {
+		Brain *b = attach_brain(o, cls, entry);
+		b->started = true;
+		start_brain(b);
+	} catch (const std::exception &e) {
+		log.push_back(o->name + ": " + e.what());
+	}
+}
+
 void World::start_brain(Brain *b) {
 	try {
 		b->exec->pulse();  // the entry state's prologue suspends once (op 1)...
@@ -132,7 +152,13 @@ std::vector<de::ObjectRef> World::properties_of(const GameObject &o) const {
 	return out;
 }
 
-void World::enter_scene(GameObject *root) {
+void World::start_pending_brains() {
+	auto pending = std::move(pending_starts_);
+	pending_starts_.clear();
+	for (Brain *b : pending) start_brain(b);
+}
+
+void World::enter_scene(GameObject *root, bool defer_start) {
 	if (!root) return;
 	if (std::find(scene_roots.begin(), scene_roots.end(), root) == scene_roots.end()) scene_roots.push_back(root);
 	std::vector<GameObject *> branch = {root};
@@ -158,6 +184,10 @@ void World::enter_scene(GameObject *root) {
 			auto b = activate_executors(o, properties_of(*o), false);
 			started.insert(started.end(), b.begin(), b.end());
 		}
+	}
+	if (defer_start) {
+		pending_starts_.insert(pending_starts_.end(), started.begin(), started.end());
+		return;
 	}
 	for (Brain *b : started) start_brain(b);
 }
@@ -954,7 +984,7 @@ void register_session_natives(World &w) {
 		GameObject *o = c.arg_object(0);
 		if (o) o->removed = false;
 		if (o && !o->active) set_branch_active(o, true);  // a copy of a deactivated template comes to life
-		c.world.enter_scene(o);
+		c.world.enter_scene(o, true);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it
 	// lives as long as the scene; ours live until deleted anyway.

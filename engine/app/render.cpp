@@ -541,7 +541,9 @@ void set_vertex_lights(GLuint prog, const std::array<float, 3> &at, bool target_
 	std::vector<std::array<float, 3>> diffuse(g_lighting.lights.size());
 	for (size_t i = 0; i < g_lighting.lights.size(); ++i) {
 		const SceneLight &l = g_lighting.lights[i];
-		if (!(l.mask & 2) || (l.position_static && target_static) || !l.lights(owner)) continue;
+		// The static rule is in the reach list when there is one (per render affector); without one
+		// (the arena viewer) it falls back to the mesh's own position mode.
+		if (!(l.mask & 2) || (l.reaches_all && l.position_static && target_static) || !l.lights(owner)) continue;
 		float a = l.affector_intensity(at) * l.intensity;
 		if (a <= 0) continue;
 		for (int k = 0; k < 3; ++k) diffuse[i][size_t(k)] = l.colour[size_t(k)] * a;
@@ -685,7 +687,7 @@ void draw_splashes(GLuint prog, const std::vector<MeshBatch> &batches) {
 		// Row-major rotation rows are the local axes; GL takes columns, so pass it transposed.
 		glUniformMatrix3fv(glGetUniformLocation(prog, "splash_axes"), 1, GL_TRUE, l.frame.r.data());
 		for (auto &b : batches) {
-			if (b.lighting != 2 || (l.position_static && b.position_static) || !l.lights(b.light_owner)) continue;
+			if (b.lighting != 2 || (l.reaches_all && l.position_static && b.position_static) || !l.lights(b.light_owner)) continue;
 			bool overlaps = true;
 			for (int k = 0; k < 3; ++k) overlaps = overlaps && l.pos[size_t(k)] + l.outer >= b.bmin[k] && l.pos[size_t(k)] - l.outer <= b.bmax[k];
 			if (!overlaps) continue;

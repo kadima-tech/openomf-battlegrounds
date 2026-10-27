@@ -663,6 +663,7 @@ void register_ai_natives(World &w) {
 	float_op("CObject::FLOATPrimitive::float (opp +=)(float)", [](float a, float b) { return a + b; });
 	float_op("CObject::FLOATPrimitive::float (opp -)(float)", [](float a, float b) { return a - b; });
 	float_op("CObject::FLOATPrimitive::float (opp -=)(float)", [](float a, float b) { return a - b; });
+	float_op("CObject::FLOATPrimitive::float (opp /=)(float)", [](float a, float b) { return a / b; });
 	reg("CObject::CVector::(opp -)(class CVector)", [](const NativeContext &c) {  // EqualsSubtractOpperatorCaller
 		auto a = read_vec(c.mem(), c.self_handle()), b = read_vec(c.mem(), c.arg<uint32_t>(0));
 		write_vec(c.mem(), c.self_handle(), {a[0] - b[0], a[1] - b[1], a[2] - b[2]});

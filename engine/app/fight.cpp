@@ -911,7 +911,10 @@ int main(int argc, char **argv) {
 					l.mask = info.mask();
 					// DE_CStandardRenderLight::UpdateLitActors: its affector against the render affectors.
 					l.reaches_all = false;
+					// A static light skips a render affector that is position-static too: the affector's
+					// own IsPositionStatic (SetAffector +0x10c), not its meshes'.
 					for (auto &[ra, ow] : render_affectors) {
+						if (l.position_static && game::position_static(*ra)) continue;
 						if (game::touch(world, *ra, *aff) && std::find(l.reaches.begin(), l.reaches.end(), ow) == l.reaches.end()) l.reaches.push_back(ow);
 					}
 					l.has_image = bool(info.image);
@@ -933,6 +936,7 @@ int main(int argc, char **argv) {
 					for (auto &l : render::g_lighting.lights) {
 						fprintf(stderr, "  %s at %.0f %.0f %.0f r %.0f..%.0f colour %.2f %.2f %.2f x %.2f mask %x%s blend %d, reaches", l.shape ? "cone" : "sphere", l.pos[0], l.pos[1],
 						        l.pos[2], l.inner, l.outer, l.colour[0], l.colour[1], l.colour[2], l.intensity, l.mask, l.image ? " own image" : "", l.blend);
+						if (l.position_static) fprintf(stderr, " static");
 						for (const void *ow : l.reaches) fprintf(stderr, " %s", static_cast<const game::GameObject *>(ow)->name.c_str());
 						fprintf(stderr, "\n");
 					}

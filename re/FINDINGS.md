@@ -517,3 +517,53 @@ Evidence key: **[REA ev_…]** = REA evidence ID · **[ghidra]** = headless Ghid
    - **Indeo 5.** Single-band pictures, intra and inter frames, 4×4 chroma blocks.
    - **Decoding.** openindeo decodes all of them bit-exactly against FFmpeg's decoder.
    - **Padding chunk.** City's two `WaterFlow` videos carry a 101st chunk in the padding after the RIFF data. The stream header (and so `SetPhase`) counts 100 frames; FFmpeg's index-based reader picks the extra one up.
+114. **The remaining particle modifiers and renderers** [Particles module]:
+   - **Rotator** (0x40008f10 / Modify 0x40009150). v1: [mode][FLOAT curve][factor]. It works on the rotation channel (`Setup` enables channel 5):
+     - mode 1: += curve(age) × factor × dt;
+     - mode 3: the same × size;
+     - mode 4: = curve(age) + factor.
+   - **OriginMagnet** (0x40008210). A point moves from a particle's spawn position to the actor as the particle ages (actor + (spawn − actor) × (1 − age)). The particle is drawn towards that point by its remaining life.
+   - **PushDownZModifier** (0x400088d0).
+     - v2: [amount, default 20][mode]; v1 means mode 5.
+     - Each step a particle moves along the actor's X / Y / Z by amount × its age step.
+     - Modes 3-5 also multiply by 1 − age.
+   - **MiscellaneousNewParticleFunctions** (0x40004980). A new particle's orientation turns about its own X / Y / Z by a random angle within ± half the curve at its age, in degrees.
+   - **BeamSpawner** (0x4000a460).
+     - Once per instance it lays particles along the actor's local Z, from the start distance (`SetInitialSpawnLength`, +100) to the length (`SetTotalLength`, +0x60).
+     - The spacing is +0x68 plus up to +0x6c; each particle sits on a ring of radius +0x70 plus up to +0x74 at a random angle.
+     - Its `CommonSpawnerNewParticles` places nothing.
+     - Jaguar's laser sets the length from its collision tests (`BLaser::Pulse`).
+   - **LighteningSpawner** (0x4000bf40, `Bolt` 0x4000bd40).
+     - Each spawned particle sits at the actor. From it a bolt runs to every target (references v1): a start point, the bolt's subdivisions, and an end point at the target.
+     - Segments longer than +0x88 split at their middle, moved by up to ± jitter (+0x74) × length / 2.
+     - A point stores how far along its bolt it is (1 − t, where t counts down from 1); its size falls with t when tapered (+0x98).
+     - The end point clears particle flag 2, which ends the stream.
+     - With follow (+0x9c, v2) each step moves the points by the first target's movement × that fraction.
+   - **AutoExternalSpawner** (0x40001560). A new particle whose serial is a multiple of +0x6c, or one in +0x70 at random, has the external `ManualParticleSpawner` (references v1) spawn one at it: size × +0x74, life × +0x78.
+   - **StreamParticleRenderer** (0x40017050, Process 0x400172b0). v1: [RGBA][colour mode +0x70][texture mode +0x74][width +0x6c][texture scale +0x78][BOOL breaks +0x80][texture offset +0x7c][gap +0x84].
+     - Drawing: a strip through the live particles, two vertices per particle, half-width = size × width ÷ depth in screen space; each joint averages its segments.
+     - Colour modes: 0/3 constant, 1 × age, 2 × (1 − age), 4 the value at age, 5 × the intensity channel.
+     - Texture modes: 0 whole image, 2 a 4×4 frame by serial, 4 v = age × scale + offset.
+     - It draws PowerPlant's and the pickups' lightning, fighter attack streamers, Pyros's fire stream and FirePit's steam.
+   - **FourFaceTriangle** (0x40014320, Process 0x400145d0). v1: [RGBA][three corners][nine jitters][four floats, +0xc0 the texture scale][facing +200][texture plane +0xcc].
+     - Each new particle gets its triangle: corners + up to their jitter, × size, turned by its orientation in mode 0. Its texture coordinates are the corners projected on XY / XZ / YZ × scale at a random offset.
+     - It is drawn as three faces round a centre vertex at the particle. The centre takes the colour at age; the corners are black (additive) or transparent (alpha blend).
+     - It draws BladePit's and Canyon's clouds and Iceberg's fog.
+   - **Executors added as properties.** `CActor::AddProperty` of a `ClassExecutor` makes it one of the actor's properties. It runs when the actor is prepared into the scene; Jaguar's lasers get their `BLaser` behaviour this way.
+     - Before this the laser had no behaviour at all.
+     - `Scene().Add` attaches the branch's executors at once, but their entries run after the calling script continues. `BJaguar::Ground.FireLaser.Fire` calls `SetLength` and `SetAsProjectileCreator` after `Scene().Add`, and `BLaser::LeftStanding` reads both. Run at once, the laser cut itself short on Jaguar's own hit sphere and hit Jaguar.
+   - **Static lights, per render affector.** `SetAffector` stores `IsPositionStatic` of the render affector itself (+0x10c), so a static light skips everything a static render affector covers. BladePit's moving fighting surfaces sit under the static arena-wide `LightingAffector`, so the arena's static spotlights leave them alone.
+   - **Natives:**
+     - `CConeAffector::Far` (+0x180);
+     - `CActor::PointZ(CActor)` (Z towards the target's focal point);
+     - `AddPotentialVictimFromHitStream` (the stream's hit count into +0xc0, then `AddPotentialVictim`);
+     - the float `/=` operator.
+115. **Point streamer trails and per-renderer visibility** [Core `DE_CPointStreamer` 0x701d1520, `DE_CInstanceInfo::Process` 0x701d17f0, `Enable`/`Disable` 0x701d2500; `CameraActorCaller` 0x70183530, `SetRendered`/`SetUnrenderedCaller` 0x7008e420]:
+   - **Data.** `Mesh\PointStreamer` (after the mesh chunk). v2: [interval][life][start width][end width][start alpha][end alpha][texture length][int, cleared]; v3 adds [mode][rise]. Defaults: 50 ms, 2000 ms, 0.4, 2.5, 1, 0, 2000, mode 2, rise 0.006.
+   - **Points.** While enabled, a point is added at the actor every interval, carrying its time and v = time ÷ texture length. Points older than the life are dropped, and each rises by rise × dt.
+   - **Drawing.** A strip from the oldest point to the actor's current position:
+     - half-width = start + (end − start) × age ÷ life, and alpha likewise;
+     - the oldest point is transparent;
+     - mode 0/1 writes grey × alpha, mode 2 white with alpha.
+   - **Uses.** Fighter jet smoke, fireball trails, Pyros's exhaust smoke, Volcano's missile smoke and debris smoke.
+   - **Per-renderer visibility.** `BRenderActorIfCamInTree` / `BRenderIfCamIsParent` show an actor only to renderers whose camera actor (`CRenderer::CameraActor`) sits in the right tree. There is one renderer here, whose camera is the focused fighter's `CameraActor`.

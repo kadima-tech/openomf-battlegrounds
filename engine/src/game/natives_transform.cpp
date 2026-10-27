@@ -214,6 +214,14 @@ void register_transform_natives(World &w) {
 	reg("CActor::PointZByDirection(class CVector)", [](const NativeContext &c) {
 		if (GameObject *o = c.self(); o && c.arg<uint32_t>(0)) point_z(o, read_vec(c.mem(), c.arg<uint32_t>(0)));
 	});
+	// PointZCaller (Core 0x7008eeb0) -> DE_CActor::PointZ(point) (0x700911d0): Z towards the
+	// target's focal point (vtable +0x154).
+	reg("CActor::PointZ(class CActor)", [](const NativeContext &c) {
+		GameObject *o = c.self(), *t = c.arg_object(0);
+		if (!o || !t) return;
+		auto f = focal_point(*t), p = o->world().t;
+		point_z(o, {f[0] - p[0], f[1] - p[1], f[2] - p[2]});
+	});
 
 	// --- AnimationStreamPlayer paths (moving arena props, the cars, the environment camera) -----
 	reg("CAnimationStreamPlayer::SetTime(class CActor,float)", [](const NativeContext &c) {
@@ -454,6 +462,20 @@ void register_transform_natives(World &w) {
 	// it gives zeros, which the HUD treats as "behind the camera".
 	reg("CScene::class CRenderer CurrentRenderer()", [](const NativeContext &c) { c.ret_object(c.world.create("Renderer", "Renderer")); });
 	reg("CScene::int NumAttachedRenderer()", [](const NativeContext &c) { c.ret_u32(c.world.world_to_screen ? 1 : 0); });
+	reg("CScene::class CRenderer AttachedRenderer(int)", [](const NativeContext &c) {
+		c.ret_object(c.arg<int32_t>(0) == 0 ? c.world.create("Renderer", "Renderer") : nullptr);
+	});
+	// CameraActorCaller (Core 0x70183530): the actor the renderer views from. The app's view is the
+	// fight camera: the CameraActor under the focused fighter (BFighterCameraMover moves it).
+	reg("CRenderer::class CActor CameraActor()", [](const NativeContext &c) {
+		std::function<GameObject *(GameObject *)> find = [&](GameObject *o) -> GameObject * {
+			if (o->name == "CameraActor") return o;
+			for (GameObject *ch : o->children)
+				if (GameObject *f = find(ch)) return f;
+			return nullptr;
+		};
+		c.ret_object(c.world.focus ? find(const_cast<GameObject *>(c.world.focus)) : nullptr);
+	});
 	reg("CRenderer::ConvertFromWorldToScreen(class CVector)", [](const NativeContext &c) {
 		uint32_t v = c.arg<uint32_t>(0);
 		if (!v) return;

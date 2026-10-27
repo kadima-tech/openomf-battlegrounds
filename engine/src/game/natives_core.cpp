@@ -475,6 +475,13 @@ void register_core_natives(World &w) {
 			o->visible = false;
 		}
 	});
+	// SetRendered/SetUnrenderedCaller (Core 0x7008e420): for one renderer; there is only ours.
+	reg("CActor::SetRendered(class CRenderer)", [](const NativeContext &c) {
+		if (auto *o = c.self()) o->visible = true;
+	});
+	reg("CActor::SetUnrendered(class CRenderer)", [](const NativeContext &c) {
+		if (auto *o = c.self()) o->visible = false;
+	});
 	// UnitRolloverCaller: above 1 the fraction (x - (int)x); below 0, x + (int)x + 1.
 	reg("CObject::float UnitRollover(float)", [](const NativeContext &c) {
 		float x = c.arg<float>(0);

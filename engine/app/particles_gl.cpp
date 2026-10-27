@@ -146,11 +146,221 @@ void ParticleRenderer::ring(const game::ParticleInstance &in, const std::array<f
 	}
 }
 
+// DE_CStreamParticleRenderer::DE_CInstanceInfo::Process (0x400172b0): a ribbon through the live
+// particles in order, two vertices per particle either side of the path, size x width from it
+// (each joint averaging its two segments). The original builds it in screen space (half-width x
+// size / depth); ours faces the camera in world space, which projects the same. A segment from a
+// particle to the next is left out where the renderer breaks streams (+0x80): at a particle
+// without flag 2 (a lightning bolt's last point), or, with +0x84, where the two are more than
+// +0x84 ms of age apart.
+void ParticleRenderer::stream(const game::World &world, const game::ParticleInstance &in, const std::array<float, 3> &cam,
+                              std::map<std::pair<GLuint, bool>, Batch> &batches) {
+	const de::ParticleRendererDef &d = *in.def;
+	de::Transform at = in.actor->world();
+	const bool local = d.generator.local;
+	const float scale = len(row(at.r, 0));
+	const bool additive = d.blend != 2;
+	Batch &b = batches[{image(d.image), additive}];
+	b.tex = image(d.image);
+	b.additive = additive;
+	std::array<float, 4> base = d.color.rgba;
+	const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
+	if (set_rgb) base = {(*set_rgb)[0], (*set_rgb)[1], (*set_rgb)[2], (*set_rgb)[3] >= 0 ? (*set_rgb)[3] : base[3]};
+	const auto &ps = in.particles;
+	const size_t n = ps.size();
+	auto pos = [&](size_t i) { return local ? at.apply(ps[i].pos) : ps[i].pos; };
+	auto connected = [&](size_t i) {
+		if (i + 1 >= n) return false;
+		if (!d.stream_breaks) return true;
+		if (d.stream_max_gap != 0) {
+			float life = ps[i].inv_life != 0 ? 1 / ps[i].inv_life : 0;
+			return (ps[i].age - ps[i + 1].age) * life <= d.stream_max_gap;
+		}
+		return (ps[i].flags & 2) != 0;
+	};
+	auto colour = [&](const game::Particle &p) {
+		std::array<float, 4> c = base;
+		float age = std::clamp(p.age, 0.0f, 1.0f);
+		switch (d.stream_color_mode) {
+		case 1: for (auto &x : c) x *= age; break;
+		case 2: for (auto &x : c) x *= 1 - age; break;
+		case 4: c = set_rgb ? base : d.color.eval(age); c[3] = 1; break;
+		case 5: c = {c[0] * c[3] * p.intensity, c[1] * c[3] * p.intensity, c[2] * c[3] * p.intensity, 1}; break;
+		default: break;
+		}
+		if (additive) c = {c[0] * c[3], c[1] * c[3], c[2] * c[3], 1};
+		return c;
+	};
+	size_t i = 0;
+	while (i < n) {
+		// A run of connected particles: first .. last.
+		size_t first = i;
+		while (connected(i)) ++i;
+		size_t last = i++;
+		if (last == first) continue;
+		std::vector<Vec> left(last - first + 1), right(last - first + 1);
+		for (size_t k = first; k <= last; ++k) {
+			Vec c = pos(k);
+			Vec prev = pos(k > first ? k - 1 : k), next = pos(k < last ? k + 1 : k);
+			Vec tangent = norm(sub(next, prev));
+			Vec side = norm(cross(norm(sub(c, cam)), tangent));
+			float hw = ps[k].size * d.stream_width * scale;
+			left[k - first] = sub(c, mul(side, hw));
+			right[k - first] = add(c, mul(side, hw));
+		}
+		for (size_t k = first; k < last; ++k) {
+			const game::Particle &p0 = ps[k], &p1 = ps[k + 1];
+			float u0 = 0, u1 = 1, v0 = 0, v1 = 1;
+			if (d.stream_uv_mode == 2) {
+				int frame = p0.serial & 15;
+				u0 = float(frame & 3) * 0.25f;
+				v0 = float(frame >> 2 & 3) * 0.25f;
+				u1 = u0 + 0.25f;
+				v1 = v0 + 0.25f;
+			} else if (d.stream_uv_mode == 4) {
+				v0 = p0.age * d.stream_uv_scale + d.stream_uv_offset;
+				v1 = p1.age * d.stream_uv_scale + d.stream_uv_offset;
+			}
+			auto c0 = colour(p0), c1 = colour(p1);
+			size_t a = k - first;
+			Vec q[4] = {left[a], right[a], right[a + 1], left[a + 1]};
+			float uv[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
+			const std::array<float, 4> *cols[4] = {&c0, &c0, &c1, &c1};
+			for (int t : {0, 1, 2, 0, 2, 3}) {
+				Vertex v;
+				for (int j = 0; j < 3; ++j) v.pos[j] = q[t][size_t(j)];
+				v.uv[0] = uv[t][0];
+				v.uv[1] = uv[t][1];
+				for (int j = 0; j < 4; ++j) v.rgba[j] = (*cols[t])[size_t(j)];
+				b.v.push_back(v);
+			}
+		}
+	}
+}
+
+// DE_CFourFaceTriangleParticleRenderer::DE_CInstanceInfo::Process (0x400145d0): per particle its
+// triangle as three faces round a centre vertex at the particle (faces 0-3-2, 0-1-3, 1-2-3). The
+// centre takes the colour at the particle's age; the corners are black (additive blends) or the
+// colour with no alpha (alpha blend), so each puff fades out to its edges. In mode 0 the corners
+// are in the particle's frame (the actor's for a local generator); modes 1-3 turn them to face
+// the camera about its X, Y or Z axis.
+void ParticleRenderer::triangles(const game::World &world, const game::ParticleInstance &in, const float *view,
+                                 const std::array<float, 3> &cam, std::map<std::pair<GLuint, bool>, Batch> &batches) {
+	const de::ParticleRendererDef &d = *in.def;
+	de::Transform at = in.actor->world();
+	const bool local = d.generator.local;
+	const bool additive = d.blend != 2;
+	Batch &b = batches[{image(d.image), additive}];
+	b.tex = image(d.image);
+	b.additive = additive;
+	const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
+	const Vec cam_axis[3] = {{view[0], view[4], view[8]}, {view[1], view[5], view[9]}, {view[2], view[6], view[10]}};
+	for (const game::Particle &p : in.particles) {
+		Vec c = local ? at.apply(p.pos) : p.pos;
+		float age = std::clamp(p.age, 0.0f, 1.0f);
+		std::array<float, 4> col = set_rgb ? *set_rgb : d.color.eval(age);
+		if (set_rgb && col[3] < 0) col[3] = d.color.eval(age)[3];
+		std::array<float, 4> edge = {col[0], col[1], col[2], 0};
+		if (additive) {
+			col = {col[0] * col[3], col[1] * col[3], col[2] * col[3], 1};
+			edge = {0, 0, 0, 1};
+		}
+		Vec rx{1, 0, 0}, ry{0, 1, 0}, rz{0, 0, 1};
+		if (d.tri_facing >= 1 && d.tri_facing <= 3) {
+			Vec dir = norm(sub(c, cam));
+			Vec a = cam_axis[d.tri_facing - 1];
+			rx = norm(cross(dir, a));
+			ry = a;
+			rz = cross(rx, cam_axis[1]);
+		} else if (local) {
+			rx = row(at.r, 0);
+			ry = row(at.r, 1);
+			rz = row(at.r, 2);
+		}
+		Vec q[4];
+		for (int k = 0; k < 3; ++k) {
+			const float *v = &p.tri[size_t(k * 3)];
+			q[k] = add(c, add(add(mul(rx, v[0]), mul(ry, v[1])), mul(rz, v[2])));
+		}
+		q[3] = c;
+		for (int k : {0, 3, 2, 0, 1, 3, 1, 2, 3}) {
+			Vertex v;
+			for (int j = 0; j < 3; ++j) v.pos[j] = q[k][size_t(j)];
+			v.uv[0] = p.tri_uv[size_t(k * 2)];
+			v.uv[1] = p.tri_uv[size_t(k * 2 + 1)];
+			const auto &cc = k == 3 ? col : edge;
+			for (int j = 0; j < 4; ++j) v.rgba[j] = cc[size_t(j)];
+			b.v.push_back(v);
+		}
+	}
+}
+
+// DE_CPointStreamer::DE_CInstanceInfo::Process (Core 0x701d17f0): a ribbon from the oldest point to
+// the actor, half as wide as the start width + (end - start) x age / life, alpha likewise (the
+// oldest point transparent, the actor's end the start width and alpha); texture v the points'
+// time / texture length, u across. Mode 0/1 colour grey x alpha, mode 2 white with alpha. The
+// original builds it in screen space; ours faces the camera in world space.
+void ParticleRenderer::trail(const game::World &world, const game::Trail &t, const std::array<float, 3> &cam,
+                             std::map<std::pair<GLuint, bool>, Batch> &batches) {
+	const de::PointStreamerDef &d = *t.def;
+	if (t.points.empty()) return;
+	const bool additive = d.mode != 2;  // inferred from the colours it writes; the blend is its mesh material's
+	Batch &b = batches[{image(d.image), additive}];
+	b.tex = image(d.image);
+	b.additive = additive;
+	const float now = world.scene_ms();
+	const float base_v = d.texture_length != 0 ? std::floor(now / d.texture_length) : 0;
+	struct P {
+		Vec pos;
+		float half, alpha, v;
+	};
+	std::vector<P> pts;
+	for (size_t i = 0; i < t.points.size(); ++i) {
+		const auto &p = t.points[i];
+		float age = now - p.time;
+		float k = d.life != 0 ? age / d.life : 0;
+		pts.push_back({p.pos, d.width0 + (d.width1 - d.width0) * k, i == 0 ? 0 : d.alpha0 + (d.alpha1 - d.alpha0) * k, p.v - base_v});
+	}
+	pts.push_back({t.actor->world().t, d.width0, d.alpha0, d.texture_length != 0 ? now / d.texture_length - base_v : 0});
+	const size_t n = pts.size();
+	if (n < 2) return;
+	std::vector<Vec> left(n), right(n);
+	for (size_t k = 0; k < n; ++k) {
+		Vec prev = pts[k > 0 ? k - 1 : k].pos, next = pts[k + 1 < n ? k + 1 : k].pos;
+		Vec side = norm(cross(norm(sub(pts[k].pos, cam)), norm(sub(next, prev))));
+		left[k] = sub(pts[k].pos, mul(side, pts[k].half));
+		right[k] = add(pts[k].pos, mul(side, pts[k].half));
+	}
+	auto colour = [&](float a) {
+		a = std::clamp(a, 0.0f, 1.0f);
+		return additive ? std::array<float, 4>{a, a, a, 1} : std::array<float, 4>{1, 1, 1, a};
+	};
+	for (size_t k = 0; k + 1 < n; ++k) {
+		auto c0 = colour(pts[k].alpha), c1 = colour(pts[k + 1].alpha);
+		Vec q[4] = {left[k], right[k], right[k + 1], left[k + 1]};
+		float uv[4][2] = {{0, pts[k].v}, {1, pts[k].v}, {1, pts[k + 1].v}, {0, pts[k + 1].v}};
+		const std::array<float, 4> *cols[4] = {&c0, &c0, &c1, &c1};
+		for (int i : {0, 1, 2, 0, 2, 3}) {
+			Vertex v;
+			for (int j = 0; j < 3; ++j) v.pos[j] = q[i][size_t(j)];
+			v.uv[0] = uv[i][0];
+			v.uv[1] = uv[i][1];
+			for (int j = 0; j < 4; ++j) v.rgba[j] = (*cols[i])[size_t(j)];
+			b.v.push_back(v);
+		}
+	}
+}
+
 void ParticleRenderer::draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer) {
 	if (!prog_) return;
 	const Vec right{view[0], view[4], view[8]}, up{view[1], view[5], view[9]};
 	const Vec cam{eye[0], eye[1], eye[2]};
 	std::map<std::pair<GLuint, bool>, Batch> batches;
+	if (!glow_layer) {
+		for (auto &t : world.particles->trails()) {
+			if (t->stepped == world.frame() && !t->actor->meshes_disabled) trail(world, *t, cam, batches);
+		}
+	}
 	for (auto &inp : world.particles->instances()) {
 		const game::ParticleInstance &in = *inp;
 		if (in.particles.empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled) continue;
@@ -164,7 +374,17 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 			ring(in, right, up, batches);
 			continue;
 		}
-		if (d.kind != "BillboardedQuad") continue;  // StreamParticleRenderer and FourFaceTriangle are not drawn yet
+		if (d.kind == "StreamParticleRenderer") {
+			if (glow_layer) continue;
+			stream(world, in, cam, batches);
+			continue;
+		}
+		if (d.kind == "FourFaceTriangle") {
+			if (glow_layer) continue;
+			triangles(world, in, view, cam, batches);
+			continue;
+		}
+		if (d.kind != "BillboardedQuad") continue;
 		de::Transform at = in.actor->world();
 		const bool local = d.generator.local;
 		const float scale = len(row(at.r, 0));
