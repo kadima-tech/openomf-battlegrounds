@@ -303,12 +303,24 @@ std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 }
 
 // The segment a-b against one affector: where it first enters (0..1 along it), facing the start.
-static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b) {
+// The nearest touch; with `all`, every mesh face the segment crosses goes there too, in order
+// along it (DE_CMeshReference::IsTouchingConeAsLineSegment adds each crossed face).
+static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b,
+                                                            std::vector<std::pair<float, Contact>> *all = nullptr) {
 	Vec d = sub(b, a);
 	de::Transform t = target->world();
 	Vec la = t.inverse_rotate(sub(a, t.t)), ld = t.inverse_rotate(d);
 	std::optional<std::pair<float, Contact>> best;
 	auto take = [&](float tt, const Vec &local_normal, int face) {
+		if (all && face >= 0) {
+			Contact c;
+			c.touched = target;
+			c.point = add(a, mul(d, tt));
+			c.normal = c.face_normal = t.rotate(local_normal);
+			c.distance = tt * len(d);
+			c.face = face;
+			all->push_back({tt, c});
+		}
 		if (best && tt >= best->first) return;
 		Contact c;
 		c.touched = target;
@@ -383,7 +395,14 @@ std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t
 	std::vector<Contact> out;
 	for (GameObject *target : w.affectors()) {
 		if (!target->active || !(target->groups & groups)) continue;
-		if (auto h = segment_hit(target, a, b)) out.push_back(h->second);
+		std::vector<std::pair<float, Contact>> faces;
+		auto h = segment_hit(target, a, b, &faces);
+		if (!faces.empty()) {
+			std::stable_sort(faces.begin(), faces.end(), [](auto &x, auto &y) { return x.first < y.first; });
+			for (auto &f : faces) out.push_back(f.second);
+		} else if (h) {
+			out.push_back(h->second);
+		}
 	}
 	return out;
 }
@@ -646,12 +665,14 @@ void ForceSystem::process(GameObject &mo, GameObject &f, const Contact &c) {
 	}
 	if (!valid_surface(mo, c)) return;
 	uint32_t now = uint32_t(scene_time_ms(w_));
+	// DE_CMaterial::ProcessForce (Core 0x7020bb30): a material with a threshold has its own
+	// incident recorder (+0x68); a touch counts once per touched owner (the affector's +0x118,
+	// else itself) within the threshold.
 	if (m.threshold > 0) {
 		GameObject *who = c.touched->owner_actor ? c.touched->owner_actor : c.touched;
-		auto &last = incidents_[&mo];
-		auto it = last.find(who);
-		if (it != last.end() && now - it->second < uint32_t(m.threshold)) return;
-		last[who] = now;
+		auto &rec = incidents_[&mo];
+		rec.threshold = uint32_t(m.threshold);
+		if (!rec.add_if_absent(now, who->handle)) return;
 	}
 	if (m.common) {
 		if (!is_common_force(f) || !(m.mask & force(f).type)) return;
@@ -1207,6 +1228,7 @@ void register_force_natives(World &w) {
 		if (!o || !k || k == o) return;
 		GameObject *to = o;
 		de::Transform kw = k->world();
+		bool was = in_scene(*k);
 		if (o->fighter) {
 			for (GameObject *ch : o->children) {
 				if (ch->name == "Pelvis") to = ch;
@@ -1227,6 +1249,7 @@ void register_force_natives(World &w) {
 		k->parent = to;
 		to->children.push_back(k);
 		// It joins the scene with its new parent: prepare it (executors), not as a root.
+		c.world.parented(k, was);
 		c.world.enter_scene(k);
 		roots.erase(std::remove(roots.begin(), roots.end(), k), roots.end());
 	});

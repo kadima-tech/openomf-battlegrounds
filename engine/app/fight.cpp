@@ -86,7 +86,9 @@ Fighter &setup_fighter(game::World &world, const std::string &name, bool user, b
 	for (uint32_t i = 0; i < ff->objects().size(); ++i) {
 		auto &o = ff->objects()[i];
 		if (!fi.actor && o.class_path == "Actor\\Creature\\OMF2Fighter") {
-			fi.actor = world.object_for(ff, i);
+			// CFighterDescription::NewResource: the fighter is a copy of the file's robot (the
+			// file's own objects stay the template, as globals and copies refer to them).
+			if (game::GameObject *tpl = world.object_for(ff, i)) fi.actor = world.copy_tree(*tpl);
 		}
 		if (o.class_path == "AnimationSequenceGroup" && fi.bank.sequences.empty()) {
 			fi.bank = de::read_anim_bank(*ff, o);
@@ -357,22 +359,51 @@ int main(int argc, char **argv) {
 			std::vector<std::pair<std::string, std::string>> picks = {{name, pilot}};
 			if (opponent != "none") picks.push_back({opponent, opponent_pilot});
 			for (size_t i = 0; i < picks.size(); ++i) {
-				pick(i, "SessionSlotSelectCreature", find(picks[i].first, "Description\\Creature\\Fighter", picks[i].first));
+				// A robot's description may live in another file (Force's is in ForceModel1).
+				de::ObjectRef fd = find(picks[i].first, "Description\\Creature\\Fighter", picks[i].first);
+				if (!fd) fd = world.data().find("Description\\Creature\\Fighter", picks[i].first);
+				pick(i, "SessionSlotSelectCreature", fd);
 				pick(i, "SessionSlotSelectPilot", find("Pilots", "Description\\Pilot", picks[i].second));
 				game::add_client(world, i == 0, picks[i].second);
 			}
 			printf("session: %zu modifiers, %zu slots\n", ss.modifiers.size(), ss.slots.size());
 		} else {
+			// BCreatureAndPilotPicker::AttemptToCreatePilot: the pilot is its description's resource,
+			// the description goes under it, and the pilot under the creature (it starts with it).
+			// OPENBG_IDLE_AI=<robot> leaves that fighter without a pilot: a still target.
+			static const char *idle = getenv("OPENBG_IDLE_AI");
+			auto make_pilot = [&](Fighter &fi, const std::string &who) {
+				if (idle && fi.actor->name == idle) {
+					fi.actor->pilot = load_pilot(who);
+					return;
+				}
+				de::ObjectRef dref;
+				if (auto *pf = world.data().file("Pilots")) {
+					for (uint32_t i = 0; i < pf->objects().size(); ++i) {
+						if (pf->objects()[i].class_path == "Description\\Pilot" && pf->objects()[i].name == who) dref = {pf, i};
+					}
+				}
+				game::GameObject *tpl = dref ? world.global_object(dref) : nullptr;
+				game::GameObject *desc = tpl ? world.copy_tree(*tpl) : nullptr;
+				game::GameObject *p = desc ? game::new_resource(world, desc, nullptr) : nullptr;
+				if (!p) {
+					fprintf(stderr, "pilot %s not found; using neutral stats and no pilot\n", who.c_str());
+					return;
+				}
+				desc->parent = p;
+				p->children.push_back(desc);
+				p->parent = fi.actor;
+				fi.actor->children.push_back(p);
+				if (p->pilot) printf("pilot %s: power %.0f agility %.0f endurance %.0f focus %.0f\n", who.c_str(), p->pilot->stats.power,
+				                     p->pilot->stats.agility, p->pilot->stats.endurance, p->pilot->stats.focus);
+			};
 			Fighter &f = setup_fighter(world, name, true);
-			f.actor->pilot = load_pilot(pilot);
+			make_pilot(f, pilot);
 			player = &f;
 			fighters.push_back(&f);
 			if (opponent != "none") {
-				if (opponent == name) {
-					throw std::runtime_error("the opponent must be a different robot (one instance per fighter file)");
-				}
 				fighters.push_back(&setup_fighter(world, opponent, false));
-				fighters.back()->actor->pilot = load_pilot(opponent_pilot);
+				make_pilot(*fighters.back(), opponent_pilot);
 			}
 			// The arena itself, as the session's environment picker creates it (the description's
 			// resource, owned by the scene): its surfaces, pads, mines and lights.
@@ -380,6 +411,14 @@ int main(int argc, char **argv) {
 				game::GameObject *desc = world.global_object(world.data().by_guid(*g));
 				if (game::GameObject *env = desc ? game::new_resource(world, desc, nullptr) : nullptr) world.enter_scene(env);
 				else fprintf(stderr, "cannot create the %s environment\n", arena.c_str());
+			}
+			// Each fighter joins the scene as a slot's OwnCreature puts it there (its controller made,
+			// its update scheduled); the stats executor given by hand runs its entry.
+			for (auto *fi : fighters) {
+				bool user = fi->actor->user_controlled;
+				world.enter_scene(fi->actor);
+				world.set_user_controlled(*fi->actor, user ? 0 : -1);
+				if (fi->stats) world.start_brain(fi->stats);
 			}
 			for (auto *fi : fighters) {
 				printf("%s: brain %s, %zu methods; %zu moves%s\n", fi->actor->name.c_str(), fi->brain->cls.name.c_str(),
@@ -416,25 +455,8 @@ int main(int argc, char **argv) {
 		};
 		// Stand-in pilot (BStandardPilot::StateNormal -> FindAttackTarget(1) -> AttackBestEnemy):
 		// each computer fighter is kept on an attack command against its first enemy.
-		auto pilot_tick = [&]() {
-			if (session_mode) return;
-			// Debug: OPENBG_IDLE_AI=Katana gives that fighter no attack command (a still target).
-			static const char *idle = getenv("OPENBG_IDLE_AI");
-			for (auto *fi : fighters) {
-				if (idle && fi->actor->name == idle) continue;
-				if (!fi->actor->user_controlled && fi->actor->spawned) {
-					if (!fi->actor->commands.type_active(0x10)) {
-						game::GameObject::Command m;
-						m.type = 0x10;
-						auto enemies = world.enemies_of(*fi->actor);
-						if (enemies.empty()) continue;
-						m.target = enemies.front()->handle;
-						m.value = 1.1f;
-						world.issue_command(*fi->actor, m);
-					}
-				}
-			}
-		};
+		// --direct runs no session; each fighter's pilot drives it as in one (see make_pilot).
+		auto pilot_tick = [&]() {};
 		// BFighterStats::NormalizedHealth through the stats brain (0..1).
 		auto health_of = [&](Fighter &fi) -> float {
 			if (!fi.stats) {

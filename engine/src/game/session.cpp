@@ -184,6 +184,7 @@ void World::start_brain(Brain *b) {
 		log.push_back(b->owner->name + ": " + e.what());
 		b->inst.shut_down = true;
 	}
+	if (b->exec->running() && !b->inst.shut_down) register_brain(b);
 }
 
 std::vector<de::ObjectRef> World::actor_properties(const de::ObjectRef &r) const {
@@ -230,6 +231,7 @@ void World::enter_scene(GameObject *root, bool defer_start) {
 	}
 	// Every actor of the branch is prepared (its executors attached) before any entry runs, so
 	// that a script's Interface() calls find the behaviors of the actors around it.
+	register_branch(root);
 	number_affectors(root);
 	std::vector<Brain *> started;
 	for (GameObject *o : branch) {
@@ -847,14 +849,15 @@ void register_session_natives(World &w) {
 		auto *n = node(c);
 		GameObject *creature = c.arg_object(0);
 		if (!n || !creature) return;
+		// DE_CStandardSessionSlotModifier::AttachComponents (Session): a copy of each component
+		// becomes a component of the creature (CCreature::AddComponent, vtable +0x188), so the
+		// creature's brain list -- Interface(BFighterStats) -- reaches it.
 		for (auto &t : n->components) {
 			GameObject *tpl = c.world.global_object(t);
 			if (!tpl) continue;
-			bool present = false;
-			for (auto *ch : creature->children) present |= ch->file == tpl->file && ch->index == tpl->index;
-			if (present) continue;
 			GameObject *comp = c.world.copy_tree(*tpl);
 			comp->parent = creature;
+			comp->component_owner = creature;
 			creature->children.push_back(comp);
 			c.world.activate_executors(comp, c.world.actor_properties(t));
 		}
@@ -916,10 +919,11 @@ void register_session_natives(World &w) {
 		if (!sl) return;
 		sl->creature = c.arg_object(0);
 		if (sl->creature) {
-			sl->creature->user_controlled = sl->client && sl->client->user && !c.world.all_ai;
-			// The creature is in the scene now: its scripts (and its pilot's, HUD's...) start,
-			// the fighter's entry running at once as AssureActivated does.
+			// The creature is in the scene now (its controller made, its scripts -- and its
+			// pilot's, HUD's... -- started, the fighter's entry at once as AssureActivated does);
+			// then SetupCreatureControl binds the user's client's device to it.
 			c.world.enter_scene(sl->creature);
+			c.world.set_user_controlled(*sl->creature, sl->client && sl->client->user ? 0 : -1);
 			if (Brain *b = sl->creature->brain; b && !b->started) {
 				b->started = true;
 				b->exec->pulse();

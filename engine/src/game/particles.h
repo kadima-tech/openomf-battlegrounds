@@ -169,6 +169,9 @@ public:
 	ModifierControl &control(GameObject *modifier);
 	// Enable/DisableParticleSpawning: the instances drawn by this actor.
 	void set_spawning(GameObject *actor, bool on);
+	// A generator instance's own switch (DE_CParticleGeneratorInstance +0x58), by generator and
+	// actor: kept for instances not made yet.
+	void set_generator_spawning(const de::ObjectRef &generator, const GameObject *actor, bool on);
 	const de::ParticleRendererDef *renderer(const de::ObjectRef &r);
 	// A material's particles (DE_CParticleSpawningMaterial::ObjPrepare adds its renderer to the
 	// actor's properties): the request list of `spawner` in the actor's instance of `renderer`.
@@ -215,6 +218,7 @@ private:
 	std::vector<std::unique_ptr<ParticleInstance>> instances_;
 	std::map<const GameObject *, ModifierControl> controls_;
 	std::map<const GameObject *, bool> actor_spawning_;
+	std::map<std::pair<std::pair<const de::ObjectsFile *, uint32_t>, const GameObject *>, bool> generator_spawning_;
 	std::map<const GameObject *, std::array<AttackTrailer, 4>> trailers_;
 	std::map<const GameObject *, AttackTrailer *> trailer_objects_;
 	std::map<const GameObject *, LightState> lights_;

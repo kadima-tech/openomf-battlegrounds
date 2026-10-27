@@ -119,6 +119,14 @@ void ParticleSystem::set_spawning(GameObject *actor, bool on) {
 	}
 }
 
+void ParticleSystem::set_generator_spawning(const de::ObjectRef &generator, const GameObject *actor, bool on) {
+	generator_spawning_[{{generator.file, generator.index}, actor}] = on;
+	for (auto &in : instances_) {
+		const de::ObjectRef &g = in->def->generator.object;
+		if (in->actor == actor && g.file == generator.file && g.index == generator.index) in->spawning = on;
+	}
+}
+
 ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::ParticleRendererDef *def) {
 	for (auto &in : instances_) {
 		if (in->actor == actor && in->def == def) return *in;
@@ -130,6 +138,8 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 	in->actor = actor;
 	in->time = scene_time_ms(w_);
 	if (auto sp = actor_spawning_.find(actor); sp != actor_spawning_.end()) in->spawning = sp->second;
+	const de::ObjectRef &g = def->generator.object;
+	if (auto gs = generator_spawning_.find({{g.file, g.index}, actor}); gs != generator_spawning_.end()) in->spawning = gs->second;
 	// The actor's own copies of the generator's modifiers (where scripts reach them by name).
 	std::function<GameObject *(GameObject *, const de::ObjectRef &)> find = [&](GameObject *o, const de::ObjectRef &r) -> GameObject * {
 		if (o->file == r.file && o->index == r.index) return o;
@@ -1099,6 +1109,33 @@ void register_particle_natives(World &w) {
 		}
 		return &m;
 	};
+	// AssureInstanceCaller (Core 0x701d51e0) -> DE_CParticleGenerator::NewInstance(actor, time): the
+	// generator's instance for that actor (made if there is none yet). Its SpawningOff/On
+	// (InstanceSpawningOffCaller 0x701d5250: +0x58) switch that instance's spawning.
+	static std::map<uint32_t, std::pair<de::ObjectRef, GameObject *>> g_generator_instances;
+	reg("CParticleGenerator::class CInstance AssureInstance(class CActor,float)", [](const NativeContext &c) {
+		GameObject *g = c.self(), *a = c.arg_object(0);
+		if (!g || !g->file || !a) {
+			c.ret_u32(0);
+			return;
+		}
+		de::ObjectRef ref{g->file, g->index};
+		for (auto &[h, v] : g_generator_instances) {
+			if (v.first.file == ref.file && v.first.index == ref.index && v.second == a) {
+				c.ret_u32(h);
+				return;
+			}
+		}
+		uint32_t h = c.mem().alloc(8);
+		g_generator_instances[h] = {ref, a};
+		c.ret_u32(h);
+	});
+	for (auto [sig, on] : {std::pair{"CParticleGenerator::CInstance::SpawningOff()", false}, std::pair{"CParticleGenerator::CInstance::SpawningOn()", true}}) {
+		reg(sig, [on = on](const NativeContext &c) {
+			auto it = g_generator_instances.find(c.self_handle());
+			if (it != g_generator_instances.end()) c.world.particles->set_generator_spawning(it->second.first, it->second.second, on);
+		});
+	}
 	reg("CParticleModifier::SpawningOff()", [ctl](const NativeContext &c) {
 		if (auto *m = ctl(c)) m->spawning = false;
 	});

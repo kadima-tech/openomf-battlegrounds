@@ -160,7 +160,7 @@ private:
 	std::map<const GameObject *, GameObject *> owners_;
 	std::map<std::pair<const GameObject *, const GameObject *>, GameObject *> copies_;
 	std::map<const GameObject *, uint32_t> last_tick_;  // self-ticking forces: scene ms of the last tick
-	std::map<const GameObject *, std::map<const GameObject *, uint32_t>> incidents_;  // material -> touched -> ms
+	std::map<const GameObject *, World::IncidentRecorder> incidents_;  // each material's recorder (+0x68)
 	uint32_t vec_a_ = 0, vec_b_ = 0;  // hook argument blocks
 };
 

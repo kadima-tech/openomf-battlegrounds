@@ -367,6 +367,16 @@ void World::reset_attack_info(uint32_t a) {
 	mem_.set<uint8_t>(a + kFlags, 0);
 }
 
+void World::parented(GameObject *o, bool was_in_scene) {
+	if (!o || was_in_scene || !in_scene(*o)) return;
+	std::function<void(GameObject *)> clear = [&](GameObject *x) {
+		x->affector_seq = 0;
+		for (GameObject *c : x->children) clear(c);
+	};
+	clear(o);
+	number_affectors(o);
+}
+
 void World::number_affectors(GameObject *root) {
 	if (!root) return;
 	for (auto it = root->children.rbegin(); it != root->children.rend(); ++it) number_affectors(*it);

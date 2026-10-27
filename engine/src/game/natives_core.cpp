@@ -186,6 +186,7 @@ void register_core_natives(World &w) {
 		if (!o || o == p) {
 			return;
 		}
+		bool was = in_scene(*o);
 		if (o->parent) {
 			auto &v = o->parent->children;
 			v.erase(std::remove(v.begin(), v.end(), o), v.end());
@@ -194,6 +195,7 @@ void register_core_natives(World &w) {
 		if (p) {
 			p->children.push_back(o);
 		}
+		c.world.parented(o, was);
 	});
 	reg("CObject::SetNoParent()", [](const NativeContext &c) {
 		auto *o = c.self();

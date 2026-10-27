@@ -1089,10 +1089,27 @@ void World::register_temporals() {
 		input_registered_ = true;
 		add_temporal(16, {Temporal::Input, 0, nullptr});  // DE_CJoystickInputManager +0x10c
 	}
-	for (GameObject *o : scene_objects()) {
-		if (o->temporal_registered || !o->is("Actor\\Creature")) continue;
+	for (GameObject *o : scene_objects()) register_creature(o);
+	for (auto &bp : brains_) {
+		Brain *b = bp.get();
+		if (b->started) register_brain(b);
+	}
+}
+
+// DE_CCreature::ObjPrepare (Creature 0x15016050): a creature with a SceneTicksPerUpdate joins
+// its set.
+void World::register_creature(GameObject *o) {
+	// DE_CJoystickInputManager::ObjPrepare (Creature): each manager (a fighter's controller copy)
+	// is a temporal of its +0x10c (16 ms).
+	if (o->is("CreatureController\\JoystickInputManager") && !o->temporal_registered) {
+		o->temporal_registered = true;
+		add_temporal(16, {Temporal::Input, o->handle, nullptr});
+		return;
+	}
+	{
+		if (o->temporal_registered || !o->is("Actor\\Creature")) return;
 		uint32_t rate = creature_rate(o);
-		if (rate == 0) continue;
+		if (rate == 0) return;
 		o->temporal_registered = true;
 		add_temporal(rate, {Temporal::Creature, o->handle, nullptr});
 		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's
@@ -1107,14 +1124,30 @@ void World::register_temporals() {
 			}
 		}
 	}
-	for (auto &bp : brains_) {
-		Brain *b = bp.get();
-		if (b->temporal_registered || !b->started) continue;
-		b->temporal_registered = true;
-		// DE_CClassExecutor::ObjPrepare (0x70143840) always hands Setup a scene, so an executor with an interval
-		// joins its set even when it is also its creature's behaviour (+0x1a0), ticked by both.
-		add_temporal(b->interval, {Temporal::Brain, 0, b});
+}
+
+// DE_CClassExecutorInstance::Setup (0x70144df0): once its entry has run, an executor with an
+// interval joins its set. DE_CClassExecutor::ObjPrepare (0x70143840) always hands Setup a scene,
+// so it does so even when it is also its creature's behaviour (+0x1a0), ticked by both.
+void World::register_brain(Brain *b) {
+	if (b->temporal_registered) return;
+	b->temporal_registered = true;
+	add_temporal(b->interval, {Temporal::Brain, 0, b});
+}
+
+void World::set_user_controlled(GameObject &creature, int32_t device) {
+	creature.user_controlled = device != -1 && !all_ai;
+	for (GameObject *c : creature.children) {
+		if (c->class_path.rfind("CreatureController\\", 0) == 0) c->input_device = creature.user_controlled ? device : -1;
 	}
+}
+
+// DE_CScene::Add (Core 0x7006ed50) prepares an actor, then adds its children, the last first:
+// creatures join their sets in that order.
+void World::register_branch(GameObject *o) {
+	if (!o) return;
+	register_creature(o);
+	for (auto it = o->children.rbegin(); it != o->children.rend(); ++it) register_branch(*it);
 }
 
 static void pulse(World &w, Brain *b) {
@@ -1153,8 +1186,20 @@ void World::creature_tick(GameObject &o) {
 }
 
 // DE_CJoystickInputManager::Tick (Creature 0x150020c0): a record per input change; older records
-// age by one per tick.
-void World::input_tick() {
+// age by one per tick. Only the manager bound to a device records: the user's fighter's (the
+// others' have none). `manager` 0 is the stand-in for a user fighter without one.
+void World::input_tick(uint32_t manager) {
+	if (manager) {
+		GameObject *m = object(manager);
+		if (!m || m->input_device < 0) return;  // no device bound: nothing to record
+	} else {
+		for (auto &s : temporal_sets_) {
+			for (auto &e : s.elements) {
+				if (e.kind != Temporal::Input || !e.handle) continue;
+				if (GameObject *x = object(e.handle); x && x->input_device >= 0) return;  // the bound one records
+			}
+		}
+	}
 	++input_ticks_;
 	uint16_t buttons = uint16_t((input.left_punch ? 1 : 0) | (input.right_punch ? 2 : 0) | (input.left_kick ? 4 : 0) |
 	                            (input.right_kick ? 8 : 0) | (input.jump ? 0x10 : 0) | (input.duck_evade() ? 0x20 : 0));
@@ -1186,7 +1231,7 @@ void World::advance(TemporalSet &set) {
 			break;
 		case Temporal::Brain: pulse(*this, it->brain); break;
 		case Temporal::Tester: tick_collision_tester(*this, it->handle); break;
-		case Temporal::Input: input_tick(); break;
+		case Temporal::Input: input_tick(it->handle); break;
 		}
 	}
 }

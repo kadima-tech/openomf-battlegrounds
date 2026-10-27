@@ -40,6 +40,15 @@ public:
 	const ObjectsFile *file(const std::string &stem) const;
 	ObjectRef resolve(const ObjectsFile &from, const Reference &r) const;
 	ObjectRef by_guid(const Guid &g) const;
+	// The first object of that class and name in any file (stems in order).
+	ObjectRef find(const std::string &class_path, const std::string &name) const {
+		for (auto &[stem, f] : files_) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				if (f->objects()[i].class_path == class_path && f->objects()[i].name == name) return {f.get(), i};
+			}
+		}
+		return {};
+	}
 
 private:
 	void add(const std::string &stem, std::vector<uint8_t> data);

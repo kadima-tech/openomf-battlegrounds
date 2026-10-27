@@ -195,15 +195,7 @@ void register_creature_natives(World &w) {
 			GameObject *who = c.owner();
 			fprintf(stderr, "[incident %u] %s asks %u (type %u), %zu recorded\n", c.world.frame(), who ? who->name.c_str() : "?", t, type, r.incidents.size());
 		}
-		for (auto &[when, k] : r.incidents) {
-			uint32_t d = when < t ? t - when : when - t;
-			if (d <= r.threshold && k == type) {
-				c.ret_bool(false);
-				return;
-			}
-		}
-		r.incidents.push_back({t, type});
-		c.ret_bool(true);
+		c.ret_bool(r.add_if_absent(t, type));
 	});
 
 	// Arrays: [u32 data pointer][u32 length]...

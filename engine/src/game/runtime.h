@@ -205,6 +205,7 @@ struct GameObject {
 	std::vector<uint32_t> linked_fighters;  // fighter +0x334, filled pairwise by ObjPrepare
 	bool fighter_prepared = false;
 	bool reference_created = false;  // a PassiveObjectReference that has made its object
+	int32_t input_device = -1;       // a creature controller's bound device (+0x2c), -1 none
 	float move_multiplier = 1, turn_multiplier = 1;  // fighter +0x4bc / +0x4c0
 	float global_interest = 0;             // CActor::SetGlobalInterest (fighter +500)
 	uint32_t interest_time = 0;            // fighter +0x488: scene ms GlobalInterest was last worked out
@@ -483,6 +484,10 @@ public:
 		for (auto &b : brains_) v.push_back(b.get());
 		return v;
 	}
+	// DE_CCreature::SetAsUserControlled(device) (Creature 0x15016ca0, vtable +0x144), as
+	// SetupCreatureControl calls it for the user's client: the creature is controlled through
+	// `device` (-1: by the computer), each of its controllers bound to it (vtable +0x168).
+	void set_user_controlled(GameObject &creature, int32_t device);
 	// DE_COMF2Fighter::Tick's attack-range step (natives_ai.cpp).
 	void jitter_attack_range(GameObject &fighter);
 	GameObject *resolve_passive_reference(GameObject *reference);
@@ -541,6 +546,16 @@ public:
 	struct IncidentRecorder {
 		uint32_t threshold = 100, max_age = 300000;
 		std::vector<std::pair<uint32_t, uint32_t>> incidents;  // (time, type)
+		// AddIncidentIfAbsent: an incident of that type within the threshold of t (inclusive)
+		// counts as present; otherwise this one is recorded.
+		bool add_if_absent(uint32_t t, uint32_t type) {
+			for (auto &[when, k] : incidents) {
+				uint32_t d = when < t ? t - when : when - t;
+				if (d <= threshold && k == type) return false;
+			}
+			incidents.push_back({t, type});
+			return true;
+		}
 	};
 	std::map<const GameObject *, IncidentRecorder> incident_recorders;  // LocalOrientation() blocks -> actor
 	// Sounds the scripts started this frame (DE_CScene::PlayNoiseSphere/PlayNoiseAmbient); the
@@ -623,6 +638,9 @@ public:
 	std::vector<GameObject *> affectors();
 	// Number a branch's affectors that are not yet in the list, in that order.
 	void number_affectors(GameObject *root);
+	// DE_CActor::ObjSetParent (Core 0x7008afb0): a branch parented into the scene from outside it
+	// is added there and then (Scene().Add), joining the affector list at its end.
+	void parented(GameObject *o, bool was_in_scene);
 	std::vector<GameObject *> fighters();  // every fighter object
 	// A fighter's linked fighters (+0x334) still in the scene, in list order.
 	std::vector<GameObject *> linked_fighters(GameObject &f);
@@ -682,9 +700,14 @@ private:
 	TemporalSet &temporal_set(uint32_t rate);
 	void add_temporal(uint32_t rate, Temporal t);
 	void register_temporals();
+	void register_creature(GameObject *o);
+	void register_branch(GameObject *o);
+public:
+	void register_brain(Brain *b);
+private:
 	void advance(TemporalSet &set);
 	void creature_tick(GameObject &o);
-	void input_tick();
+	void input_tick(uint32_t manager);
 
 	friend void register_core_natives(World &);
 	friend void register_ai_natives(World &);
