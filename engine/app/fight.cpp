@@ -550,6 +550,9 @@ int main(int argc, char **argv) {
 					last = t.text;
 					if (!t.text.empty()) printf("frame %5d  [screen] %s\n", fr, t.text.c_str());
 				}
+				if (getenv("OPENBG_DEBUG_TEXT") && t.text.empty() && fr % 300 == 0 && !world.screen_space_meshes.count(t.mesh)) {
+					printf("frame %5d  [text] empty world primitive (kind %d) on %s\n", fr, int(t.kind), t.mesh->parent ? t.mesh->parent->name.c_str() : "-");
+				}
 				if (getenv("OPENBG_DEBUG_TEXT") && !t.text.empty() && fr % 30 == 0) {
 					printf("frame %5d  [text] \"%s\" at (%.2f %.2f) h %.3f rgba (%.2f %.2f %.2f %.2f)%s%s\n", fr, t.text.c_str(), t.x,
 					       t.y, t.height, t.rgba[0], t.rgba[1], t.rgba[2], t.rgba[3],
@@ -1040,6 +1043,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye);
+			overlay.draw_world(world, vp);
 			// The glow layer, added over the scene (OPENBG_NO_GLOW=1 leaves it out).
 			static const bool no_glow = getenv("OPENBG_NO_GLOW") != nullptr;
 			if (!no_glow) {

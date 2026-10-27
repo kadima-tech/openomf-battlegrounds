@@ -510,8 +510,8 @@ static int cmd_particles(const char *dir, const char *only) {
 				       p.tri_corners[8], p.tri_jitter[0], p.tri_jitter[1], p.tri_jitter[2], p.tri_jitter[3], p.tri_jitter[4], p.tri_jitter[5],
 				       p.tri_jitter[6], p.tri_jitter[7], p.tri_jitter[8], p.tri_b4[0], p.tri_b4[1], p.tri_b4[2], p.tri_b4[3], p.tri_facing, p.tri_uv_plane);
 			if (p.kind == "StreamParticleRenderer")
-				printf("    stream colour %d uv %d width %g uv x%g +%g breaks %d gap %g\n", p.stream_color_mode, p.stream_uv_mode, p.stream_width,
-				       p.stream_uv_scale, p.stream_uv_offset, p.stream_breaks, p.stream_max_gap);
+				printf("    stream texture %d colour %d width %g uv x%g +%g/ms breaks %d gap %g\n", p.stream_texture_mode, p.stream_color_mode,
+				       p.stream_width, p.stream_uv_scale, p.stream_uv_scroll, p.stream_breaks, p.stream_max_gap);
 			auto &g = p.generator;
 			printf("    generator %s local %d channels %d%d%d%d%d%d reset %d\n", g.object ? g.object.info().name.c_str() : "-",
 			       g.local, g.channels[0], g.channels[1], g.channels[2], g.channels[3], g.channels[4], g.channels[5],

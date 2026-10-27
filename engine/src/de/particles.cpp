@@ -379,12 +379,12 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 			Chunk b = begin_chunk(c);
 			if (b.version == 1) {
 				p.color = read_embedded_color(c);
+				p.stream_texture_mode = c.i32();
 				p.stream_color_mode = c.i32();
-				p.stream_uv_mode = c.i32();
 				p.stream_width = c.f32();
 				p.stream_uv_scale = c.f32();
 				p.stream_breaks = c.boolean();
-				p.stream_uv_offset = c.f32();
+				p.stream_uv_scroll = c.f32();
 				p.stream_max_gap = c.f32();
 			}
 			c.seek(b.end);

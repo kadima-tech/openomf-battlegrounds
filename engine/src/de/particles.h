@@ -155,8 +155,11 @@ struct ParticleRendererDef {
 	std::array<float, 9> tri_jitter{};
 	std::array<float, 4> tri_b4{0, 0, 1, 1};
 	int32_t tri_facing = 0, tri_uv_plane = 1;
-	int32_t stream_color_mode = 0, stream_uv_mode = 0;
-	float stream_width = 1, stream_uv_scale = 1, stream_uv_offset = 0, stream_max_gap = 0;
+	// StreamParticleRenderer: +0x70 texture mode (0 the whole image per segment, 2 a 4x4 flipbook
+	// frame by serial, 4 v = age x +0x78 + time (ms) x +0x7c), +0x74 colour mode (0/3 constant, 1
+	// x age, 2 x (1 - age), 4 the value at age premultiplied, 5 x alpha x intensity), +0x6c width.
+	int32_t stream_texture_mode = 0, stream_color_mode = 0;
+	float stream_width = 1, stream_uv_scale = 1, stream_uv_scroll = 0, stream_max_gap = 0;
 	bool stream_breaks = false;
 	ColorValue inner_color, outer_color;
 	int32_t ring_plane = 0, ring_dc = 0, ring_d4 = 0, ring_d8 = 0;

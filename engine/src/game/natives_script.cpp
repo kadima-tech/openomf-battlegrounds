@@ -175,6 +175,14 @@ void register_script_natives(World &w) {
 		}
 		c.world.send_event(t, e);
 	});
+	// ProcessEventCaller (Core 0x70046230): the object's own ProcessEvent (vtable +0x70). For an
+	// actor (DE_CActor::ProcessEvent 0x70090ed0) that is each property's in turn (the script
+	// relays among them), then DE_CObject::ProcessEvent, which only handles the editor's drag and
+	// drop events. DE_COMF2Fighter::ProcessEvent's own switch forwards OMF2 event types 1-10 to its
+	// recipient lists; the arena surface hit (type 0xb) the projectiles send is not among them.
+	reg("CObject::ProcessEvent(class CEvent)", [](const NativeContext &c) {
+		if (GameObject *o = c.self()) c.world.send_event(o, c.arg<uint32_t>(0));
+	});
 
 	// --- GUIDs ------------------------------------------------------------------------------------
 	reg("CObject::class CGUID GUID()", [](const NativeContext &c) {

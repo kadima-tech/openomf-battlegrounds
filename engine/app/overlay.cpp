@@ -18,6 +18,15 @@ void main() {
 	v_uv = uv;
 	gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
 })";
+const char *kVS3 = R"(#version 410
+layout(location = 0) in vec3 pos;  // world space
+layout(location = 1) in vec2 uv;
+uniform mat4 vp;
+out vec2 v_uv;
+void main() {
+	v_uv = uv;
+	gl_Position = vp * vec4(pos, 1.0);
+})";
 const char *kFS = R"(#version 410
 in vec2 v_uv;
 uniform sampler2D tex;
@@ -67,6 +76,15 @@ void OverlayRenderer::load(const de::World &world) {
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, nullptr);
 	glEnableVertexAttribArray(1);
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, reinterpret_cast<void *>(8));
+	prog3_ = glu::program(kVS3, kFS);
+	glGenVertexArrays(1, &vao3_);
+	glGenBuffers(1, &vbo3_);
+	glBindVertexArray(vao3_);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo3_);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, nullptr);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, reinterpret_cast<void *>(12));
 }
 
 GLuint OverlayRenderer::image(const game::GameObject *img) {
@@ -94,20 +112,21 @@ void OverlayRenderer::quad(float x0, float y0, float x1, float y1, float u0, flo
 	glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void OverlayRenderer::text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float dx, float dy) {
+std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::World::Primitive &t, float aspect, float dx,
+                                                  float dy) const {
+	std::vector<float> v;
 	const de::Font &font = f.font;
-	if (font.height <= 0 || t.text.empty()) return;
-	float scale = t.height / font.height;  // screen fractions (of the height) per font unit
+	if (font.height <= 0 || t.text.empty()) return v;
+	float scale = t.height / font.height;  // primitive units (of the height) per font unit
 	const float spacing = 0;               // DE_CFlatText3 +0x9c letter spacing (default 0): letters advance by their width
 	float total = 0;
 	for (unsigned char ch : t.text) {
 		auto &g = font.glyphs[ch];
 		total += (g.present ? g.x1 - g.x0 : 0.5f) + spacing;
 	}
-	// Widths are in height units: convert x by the aspect ratio.
-	float sx = scale / aspect_;
+	// Widths are in height units: in screen space convert x by the aspect ratio.
+	float sx = scale / aspect;
 	float x = t.x - (t.centered ? total * sx * 0.5f : t.snap_right ? total * sx : 0) + dx;
-	std::vector<float> v;
 	for (unsigned char ch : t.text) {
 		auto &g = font.glyphs[ch];
 		float w = g.present ? g.x1 - g.x0 : 0.5f;
@@ -120,11 +139,86 @@ void OverlayRenderer::text(const FontGL &f, const game::World::Primitive &t, con
 		}
 		x += (w + spacing) * sx;
 	}
+	return v;
+}
+
+void OverlayRenderer::text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float dx, float dy) {
+	std::vector<float> v = text_vertices(f, t, aspect_, dx, dy);
 	if (v.empty()) return;
 	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(float)), v.data(), GL_STREAM_DRAW);
 	glUniform4fv(glGetUniformLocation(prog_, "color"), 1, rgba);
 	glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 4));
+}
+
+const OverlayRenderer::FontGL *OverlayRenderer::font_for(const game::World::Primitive &t) const {
+	auto it = fonts_.find(t.in_game_font ? "Font_Metalic" : "Font_Ariel");
+	if (it == fonts_.end()) it = fonts_.begin();
+	return it == fonts_.end() ? nullptr : &it->second;
+}
+
+void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
+	if (!prog3_) return;
+	std::vector<const game::World::Primitive *> order;
+	for (auto &[obj, t] : world.texts) {
+		if (world.screen_space_meshes.count(t.mesh) || !t.mesh->parent || t.rgba[3] <= 0.01f) continue;
+		if (t.kind != game::World::Primitive::Quad && (t.kind != game::World::Primitive::Text || t.text.empty())) continue;
+		order.push_back(&t);
+	}
+	if (order.empty()) return;
+	std::stable_sort(order.begin(), order.end(), [](auto *a, auto *b) { return a->sort > b->sort; });
+	glEnable(GL_BLEND);
+	glDepthMask(GL_FALSE);
+	glUseProgram(prog3_);
+	glUniformMatrix4fv(glGetUniformLocation(prog3_, "vp"), 1, GL_FALSE, vp);
+	glUniform1i(glGetUniformLocation(prog3_, "tex"), 0);
+	glActiveTexture(GL_TEXTURE0);
+	glBindVertexArray(vao3_);
+	auto submit = [&](const game::World::Primitive &t, const std::vector<float> &v2, const float *rgba) {
+		// Local (x, y, z) -> world through the mesh's actor.
+		const de::Transform at = t.mesh->parent->world();
+		std::vector<float> v;
+		for (size_t i = 0; i + 3 < v2.size(); i += 4) {
+			auto w = at.apply({v2[i], v2[i + 1], t.z});
+			v.insert(v.end(), {w[0], w[1], w[2], v2[i + 2], v2[i + 3]});
+		}
+		if (v.empty()) return;
+		glBindBuffer(GL_ARRAY_BUFFER, vbo3_);
+		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(float)), v.data(), GL_STREAM_DRAW);
+		glUniform4fv(glGetUniformLocation(prog3_, "color"), 1, rgba);
+		glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 5));
+	};
+	for (auto *t : order) {
+		glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+		if (t->overlay) glDisable(GL_DEPTH_TEST);
+		else glEnable(GL_DEPTH_TEST);
+		auto mode = [&](int m) { glUniform1i(glGetUniformLocation(prog3_, "mode"), m); };
+		if (t->kind == game::World::Primitive::Text) {
+			const FontGL *f = font_for(*t);
+			if (!f) break;
+			glBindTexture(GL_TEXTURE_2D, f->tex);
+			mode(f->alpha ? 0 : 1);
+			if (t->shadow) {
+				float shadow[4] = {0, 0, 0, t->rgba[3] * 0.5f};
+				float off = 0.06f * t->height / std::max(1e-6f, f->font.height);
+				submit(*t, text_vertices(*f, *t, 1, off, -off), shadow);
+			}
+			submit(*t, text_vertices(*f, *t, 1, 0, 0), t->rgba);
+			continue;
+		}
+		GLuint tex = image(t->texture);
+		glBindTexture(GL_TEXTURE_2D, tex);
+		mode(tex ? 0 : 2);
+		const float *b = t->box;
+		const float *uv = t->uv;
+		submit(*t, {b[0], b[1], uv[0], uv[1], b[2], b[1], uv[2], uv[1], b[2], b[3], uv[2], uv[3],
+		            b[0], b[1], uv[0], uv[1], b[2], b[3], uv[2], uv[3], b[0], b[3], uv[0], uv[3]},
+		       t->rgba);
+	}
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_BLEND);
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_TRUE);
 }
 
 void OverlayRenderer::draw(const game::World &world, int width, int height, const game::GameObject *focus) {
@@ -151,18 +245,17 @@ void OverlayRenderer::draw(const game::World &world, int width, int height, cons
 	for (auto *t : order) {
 		glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 		if (t->kind == game::World::Primitive::Text) {
-			auto it = fonts_.find(t->in_game_font ? "Font_Metalic" : "Font_Ariel");
-			if (it == fonts_.end()) it = fonts_.begin();
-			if (it == fonts_.end()) break;
-			glBindTexture(GL_TEXTURE_2D, it->second.tex);
-			mode(it->second.alpha ? 0 : 1);
+			const FontGL *f = font_for(*t);
+			if (!f) break;
+			glBindTexture(GL_TEXTURE_2D, f->tex);
+			mode(f->alpha ? 0 : 1);
 			if (t->shadow) {
 				// TextSetShadowOnCaller: 0.06 font units right and down, black at half alpha.
 				float shadow[4] = {0, 0, 0, t->rgba[3] * 0.5f};
-				float off = 0.06f * t->height / std::max(1e-6f, it->second.font.height);
-				text(it->second, *t, shadow, off / aspect_, -off);
+				float off = 0.06f * t->height / std::max(1e-6f, f->font.height);
+				text(*f, *t, shadow, off / aspect_, -off);
 			}
-			text(it->second, *t, t->rgba, 0, 0);
+			text(*f, *t, t->rgba, 0, 0);
 			continue;
 		}
 		GLuint tex = image(t->texture);
