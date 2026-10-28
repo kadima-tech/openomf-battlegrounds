@@ -95,7 +95,7 @@ void register_music_natives(World &w) {
 		sp.playing = sp.active != nullptr;
 		sp.queued = false;
 		++sp.serial;
-		if (kDebug) fprintf(stderr, "[music %u] play %s (mood %d)\n", c.world.frame(), sp.active ? sp.active->name.c_str() : "-", sp.mood);
+		if (kDebug) fprintf(stderr, "[music %u] play %s/%s (mood %d)\n", c.world.frame(), sp.active && sp.active->file ? sp.active->file->master().name.c_str() : "-", sp.active ? sp.active->name.c_str() : "-", sp.mood);
 	});
 	reg("CSpeaker::Stop()", [](const NativeContext &c) {
 		GameObject *s = c.self();
