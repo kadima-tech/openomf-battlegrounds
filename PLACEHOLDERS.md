@@ -16,12 +16,14 @@ reverse engineering of its own. Small, self-contained fixes are not left here.
 
 ## Waiting on the front end (menus, options, single player)
 
+The launcher's own part is now known (FINDINGS 124): it creates the window and scene viewer, shows the splash, starts `MainMenuUIManager`, sends first-time players to `SinglePlayer\\Basic Training`, and hands each session's scene to the viewer with its audio player. The menus themselves are the UI managers in OMF and Core, driven by the `.DEObjects` UI descriptions.
+
 | What | Kind | Notes |
 |---|---|---|
 | Robot, pilot, arena and score-limit choices | Stand-in | Picked up front by `openbg-fight`, the way `BSinglePlayerSubSession` does, instead of through menus. |
 | Factions (teams' pilots) | Approximation | Ported for what Last Man Standing does (FINDINGS 112): a pilot's faction is null unless the picker sets one in a team game; `CPilot::Faction`/`SetFaction` and `CFaction::Photo` are ported. Team game modes (and with them `CFaction::TeamIndex`, faction vtable +0x180, and the session's team lists) are not run or decoded. |
 | UI managers (description selectors, choose-fighter UI) | Stand-in | A launched UI with a preset choice completes on the next update; without one it never completes. `IsUIManagerActive`/`IsActiveLocally`/`IsDisplayed` return false. |
-| Loading screen | Stand-in | `update_session` imitates the engine's loading screen (`SessionQuerryIsLoadingRequired` → `SessionLoadElements`, once per element). The real screen lives in OMFBG.exe, which stays unanalysed. |
+| Loading screen | Stand-in | `update_session` imitates the engine's loading screen (`SessionQuerryIsLoadingRequired` → `SessionLoadElements`, once per element). The launcher only fetches the splash image (`GH_GET_SPLASH_SCREEN_OBJECT`) and stamps its build on it (FINDINGS 124); the loading itself is the session's. |
 | Rules display | Stand-in | Created, shown nowhere, and authorised to continue at once. |
 | `CSession::EndAndDie` | Stub | The match ends in the script's EndingSession state and stays there: nothing to return to. |
 | `CImpulseRobot` (hotkeys), `GameDialog`, `SubSessionOwner` | Stub / fixed answer | No hotkeys, dialogs or sub-sessions until the front end and single player exist. |
