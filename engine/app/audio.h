@@ -1,10 +1,12 @@
 // Sound output: an SDL audio device mixing the sounds the scripts play (World::sound_requests)
-// as DE_CSpeaker would place them -- distance volume between hotspot and falloff, stereo pan from
-// the listener's orientation, the noise's own volume and (randomised) frequency.
+// as AudioPlayer's DirectSound speakers do: each sound is a speaker sphere whose volume and
+// head-relative position follow the listener every frame (DE_CDirectXSpeakerElement::Update),
+// with the noise's own volume and (randomised) frequency.
 #pragma once
 
 #include <SDL.h>
 
+#include <array>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -38,7 +40,15 @@ private:
 		const de::Sound *sound;
 		double pos = 0, step = 1;  // in source frames
 		float left = 1, right = 1;
+		// The speaker: its sphere (centre, hotspot, falloff), volume (+0x50) and update rate
+		// (+0xb0, +0xac).
+		std::array<float, 3> at{0, 0, 0};
+		float hotspot = 0, falloff = 0, volume = 1;
+		float rate = 1, due = 99999.0f;
 	};
+	// DE_CDirectXSpeakerElement::Update: the voice's gains, heard from `listener`, `ms` after the
+	// last update.
+	void update(Voice &v, const de::Transform &listener, float ms);
 	static void callback(void *self, Uint8 *stream, int len);
 public:
 	void mix(float *out, int frames);
@@ -54,6 +64,7 @@ private:
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::unique_ptr<de::Sound>> cache_;
 	std::mt19937 rng_{2097};
 	std::unique_ptr<MusicPlayer> music_;
+	float sfx_volume_ = 1.0f;  // DE_CSpeaker::GlobalSFXVolume (the registry default)
 	FILE *record_ = nullptr;  // OPENBG_RECORD_AUDIO: raw f32 stereo of everything mixed
 };
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -73,10 +74,14 @@ MusicPlayer::MusicPlayer(int rate) : rate_(rate) {
 		perf_ = nullptr;
 		return;
 	}
-	// DE_CDirectXSpeakerElement::Update sets the audiopath's volume to 2000 log10(the speaker's
-	// volume) (1/100 dB); the segments' volume is 1 (DE_CNoise contents), so the music plays at
-	// 0 dB, the synth's full scale.
-	DmPerformance_setVolume(perf_, 1.0f);
+	// DE_CDirectXSpeakerElement::Update sets the audiopath's volume to 10000 log10(1 - (1 - v s)^2)
+	// (1/100 dB), s being the speaker's volume (the segments' is 1) and v its noise volume: the
+	// global music volume (0.6, its registry default; only the options menu changes it) times s.
+	// That is -7.6 dB.
+	const float global = 0.6f, speaker = 1.0f;
+	float shaped = 1 - global * speaker * speaker;
+	shaped = 1 - shaped * shaped;
+	DmPerformance_setVolume(perf_, std::pow(10.0f, 10000.0f * std::log10(shaped) / 2000.0f));
 }
 
 MusicPlayer::~MusicPlayer() {

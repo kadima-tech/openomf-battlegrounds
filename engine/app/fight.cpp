@@ -583,11 +583,29 @@ int main(int argc, char **argv) {
 				}
 			}
 		};
+		// The frame's sounds are heard from the player's Listener (BFighterCameraMover moves it under
+		// the fighter), facing as the fight camera does.
+		auto ear_of_player = [&]() {
+			de::Transform ear;
+			if (!player) return ear;
+			std::function<game::GameObject *(game::GameObject *, const char *)> find = [&](game::GameObject *o, const char *n) -> game::GameObject * {
+				for (auto *ch : o->children) {
+					if (ch->name == n) return ch;
+					if (auto *r = find(ch, n)) return r;
+				}
+				return nullptr;
+			};
+			auto *cam = find(player->actor, "CameraActor");
+			auto *lis = find(player->actor, "Listener");
+			ear = cam ? cam->world() : player->actor->world();
+			if (lis) ear.t = lis->world().t;
+			return ear;
+		};
 		if (headless) {
 			const bool changes = getenv("OPENBG_CHANGES") != nullptr;  // print every state/anim change instead
 			const int every = getenv("OPENBG_EVERY") ? atoi(getenv("OPENBG_EVERY")) : 10;
 			// OPENBG_RECORD_AUDIO=<file>: the frames' sound and music, mixed offline (raw f32 stereo,
-			// 44100 Hz), heard from the player's fighter.
+			// 44100 Hz), heard as in a window.
 			std::unique_ptr<audio::Mixer> offline;
 			if (getenv("OPENBG_RECORD_AUDIO")) {
 				offline = std::make_unique<audio::Mixer>();
@@ -602,19 +620,18 @@ int main(int argc, char **argv) {
 				pilot_tick();
 				world.tick();
 				print_texts(fr);
+				if (getenv("OPENBG_DEBUG_SOUND")) {
+					for (auto &r : world.sound_requests) {
+						printf("frame %5d  [sound] %s vol %.2f%s\n", fr, r.noise->name.c_str(), r.volume, r.positional ? "" : " (ambient)");
+					}
+				}
 				if (offline) {
-					de::Transform ear = player ? player->actor->world() : de::Transform{};
-					offline->play_requests(world, ear);
+					offline->play_requests(world, ear_of_player());
 					offline->update_music(world);
 					audio_carry += 44100.0 * world.frame_ms() / 1000.0;
 					int n = int(audio_carry);
 					audio_carry -= n;
 					offline->pump(n);
-				}
-				if (getenv("OPENBG_DEBUG_SOUND")) {
-					for (auto &r : world.sound_requests) {
-						printf("frame %5d  [sound] %s vol %.2f%s\n", fr, r.noise->name.c_str(), r.volume, r.positional ? "" : " (ambient)");
-					}
 				}
 				world.sound_requests.clear();
 				// OPENBG_WATCH="RightPunchMediumHitDetector": print that actor's world position and
@@ -805,26 +822,8 @@ int main(int argc, char **argv) {
 				print_texts(fr);
 				++fr;
 			}
-			// The frame's sounds, heard from the player's Listener (BFighterCameraMover moves it under
-			// the fighter) facing as the fight camera does.
-			{
-				de::Transform ear;
-				if (player) {
-					std::function<game::GameObject *(game::GameObject *, const char *)> find = [&](game::GameObject *o, const char *n) -> game::GameObject * {
-						for (auto *ch : o->children) {
-							if (ch->name == n) return ch;
-							if (auto *r = find(ch, n)) return r;
-						}
-						return nullptr;
-					};
-					auto *cam = find(player->actor, "CameraActor");
-					auto *lis = find(player->actor, "Listener");
-					ear = cam ? cam->world() : player->actor->world();
-					if (lis) ear.t = lis->world().t;
-				}
-				mixer.play_requests(world, ear);
-				mixer.update_music(world);
-			}
+			mixer.play_requests(world, ear_of_player());
+			mixer.update_music(world);
 			// Scene render-tick hooks (camera mover, text fades, HUD) with the time since the last drawn frame.
 			if (!shot) {
 				static Uint64 last_render = SDL_GetPerformanceCounter();
