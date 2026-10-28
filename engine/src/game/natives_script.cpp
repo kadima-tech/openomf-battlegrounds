@@ -514,7 +514,6 @@ void register_script_natives(World &w) {
 					if (o.name != "MusicPlayer" || o.class_path.rfind("Actor", 0) != 0) continue;
 					if (GameObject *tpl = w.global_object({f, i})) {
 						w.music_player = w.copy_tree(*tpl);
-						set_branch_active(w.music_player, true);
 						w.enter_scene(w.music_player);
 					}
 					break;

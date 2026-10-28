@@ -122,7 +122,6 @@ uint32_t new_event(World &w, const std::string &handle);
 // An object's references as chunks of BOOL-terminated reference lists.
 std::vector<std::vector<std::vector<de::ObjectRef>>> reference_lists(const de::World &data, const de::ObjectRef &r);
 // CActor::Activate / Deactivate over a branch.
-void set_branch_active(GameObject *o, bool on);
 
 void register_session_natives(World &w);
 void register_script_natives(World &w);

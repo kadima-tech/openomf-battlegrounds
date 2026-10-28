@@ -247,8 +247,10 @@ std::vector<GameObject *> World::scene_objects() {
 	std::set<GameObject *> seen;
 	for (size_t i = 0; i < todo.size(); ++i) {
 		if (!todo[i] || !seen.insert(todo[i]).second || !by_handle_.count(todo[i]->handle)) continue;
-		// Out of the scene with its branch: removed (CScene::Remove) or not at this detail level.
+		// Out of the scene with its branch: removed (CScene::Remove), not at this detail level, or
+		// (below a root) parked inactive.
 		if (todo[i]->removed || (todo[i]->is_actor && !de::shown_at_detail(todo[i]->actor_flags))) continue;
+		if (todo[i]->parent && parked(*todo[i])) continue;
 		out.push_back(todo[i]);
 		todo.insert(todo.end(), todo[i]->children.begin(), todo[i]->children.end());
 	}
@@ -524,6 +526,7 @@ GameObject &World::make_object(const de::ObjectsFile *f, uint32_t i) {
 			g.local = a.local;
 			g.position_mode = a.position_mode;
 			g.actor_flags = a.flags;
+			g.active = (a.flags & 8) != 0;  // +0x110 bit 8: active (else parked under its parent)
 		} catch (const std::exception &) {
 		}
 	}
@@ -1147,11 +1150,14 @@ void World::set_user_controlled(GameObject &creature, int32_t device) {
 void World::register_branch(GameObject *o) {
 	if (!o) return;
 	register_creature(o);
-	for (auto it = o->children.rbegin(); it != o->children.rend(); ++it) register_branch(*it);
+	for (auto it = o->children.rbegin(); it != o->children.rend(); ++it) {
+		if (!parked(**it)) register_branch(*it);
+	}
 }
 
 static void pulse(World &w, Brain *b) {
 	if (!b || b->inst.shut_down || !b->exec->running()) return;
+	if (b->owner && b->owner->is_actor && !in_scene(*b->owner)) return;  // parked or removed: not ticked
 	try {
 		b->exec->pulse();
 	} catch (const std::exception &e) {
@@ -1227,7 +1233,7 @@ void World::advance(TemporalSet &set) {
 	for (auto it = elements.rbegin(); it != elements.rend(); ++it) {
 		switch (it->kind) {
 		case Temporal::Creature:
-			if (GameObject *o = object(it->handle); o && o->active) creature_tick(*o);
+			if (GameObject *o = object(it->handle); o && in_scene(*o)) creature_tick(*o);
 			break;
 		case Temporal::Brain: pulse(*this, it->brain); break;
 		case Temporal::Tester: tick_collision_tester(*this, it->handle); break;

@@ -141,14 +141,14 @@ void run_tester(World &w, Tester &t) {
 	}
 	GameObject *self = top_fighter(sources[0]);
 	for (GameObject *target : w.affectors()) {
-		if (!target->active || !(target->groups & t.groups) || target->shape == GameObject::Shape::Cone) {
+		if (!in_scene(*target) || !(target->groups & t.groups) || target->shape == GameObject::Shape::Cone) {
 			continue;
 		}
 		if (self && top_fighter(target) == self) {
 			continue;
 		}
 		for (GameObject *s : sources) {
-			if (s == target || !s->active) continue;
+			if (s == target || !in_scene(*s)) continue;
 			auto ct = touch(w, *s, *target);
 			if (!ct) continue;
 			Collision c;
@@ -379,7 +379,9 @@ void World::parented(GameObject *o, bool was_in_scene) {
 
 void World::number_affectors(GameObject *root) {
 	if (!root) return;
-	for (auto it = root->children.rbegin(); it != root->children.rend(); ++it) number_affectors(*it);
+	for (auto it = root->children.rbegin(); it != root->children.rend(); ++it) {
+		if (!parked(**it)) number_affectors(*it);
+	}
 	if (root->shape != GameObject::Shape::None && !root->affector_seq) root->affector_seq = ++affector_seq_;
 }
 
@@ -403,7 +405,7 @@ float World::danger_at(const std::array<float, 3> &p, const GameObject *ignore_o
 	float total = 0, best = 0;
 	GameObject *best_prop = nullptr;
 	for (auto &o : objects_) {
-		if (o.shape == GameObject::Shape::None || !o.active || !(o.groups & 0x1000) || !in_scene(o)) continue;
+		if (o.shape == GameObject::Shape::None || !(o.groups & 0x1000) || !in_scene(o)) continue;
 		GameObject *prop = danger_property(o);
 		if (!prop || prop->danger_level <= 0) continue;
 		if (ignore_owner && (o.owner_actor == ignore_owner || top_fighter(&o) == ignore_owner)) continue;
@@ -1058,7 +1060,17 @@ void register_combat_natives(World &w) {
 
 
 	// --- Affectors --------------------------------------------------------------------------------
-	reg("CActor::Activate()", [](const NativeContext &c) { if (auto *o = c.self()) o->active = true; });
+	// ActivateCaller (Core 0x7008e3e0) -> DE_CActor::SetActive (vtable +0x124, 0x700902f0): a parked
+	// actor rejoins its parent's children and the scene (Scene().Add: prepared, scheduled, its
+	// affectors at the list's end). Deactivate -> SetInnactive (0x700903e0): parked, out of the
+	// scene (Scene().Remove), keeping its own executors' state.
+	reg("CActor::Activate()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || o->active) return;
+		bool was = in_scene(*o);
+		o->active = true;
+		if (!was && in_scene(*o)) c.world.prepare_branch(o);
+	});
 	reg("CActor::Deactivate()", [](const NativeContext &c) { if (auto *o = c.self()) o->active = false; });
 	reg("CAffector::SetOwnerActor(class CActor)", [](const NativeContext &c) { if (auto *o = c.self()) o->owner_actor = c.arg_object(0); });
 	reg("CAffector::class CActor OwnerActor()", [](const NativeContext &c) {
@@ -1274,7 +1286,6 @@ void register_combat_natives(World &w) {
 			st.color = std::array<float, 3>{1, 0.7f, 0.3f};
 			st.intensity = b.light_intensity;
 		}
-		set_branch_active(copy, true);
 		w.enter_scene(copy);
 		w.particles->add_sparks(std::move(b));
 		return copy;

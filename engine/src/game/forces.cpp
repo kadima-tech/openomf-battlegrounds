@@ -290,7 +290,7 @@ std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 	std::vector<Contact> out;
 	GameObject *self = top_fighter(&source);
 	for (GameObject *target : w.affectors()) {
-		if (target == &source || !target->active || !(target->groups & groups)) continue;
+		if (target == &source || !in_scene(*target) || !(target->groups & groups)) continue;
 		if (self && top_fighter(target) == self) continue;
 		if (target->shape == GameObject::Shape::Mesh && source.shape == GameObject::Shape::Sphere) {
 			auto faces = touch_faces(w, source, *target);
@@ -394,7 +394,7 @@ static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, 
 std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t groups) {
 	std::vector<Contact> out;
 	for (GameObject *target : w.affectors()) {
-		if (!target->active || !(target->groups & groups)) continue;
+		if (!in_scene(*target) || !(target->groups & groups)) continue;
 		std::vector<std::pair<float, Contact>> faces;
 		auto h = segment_hit(target, a, b, &faces);
 		if (!faces.empty()) {
@@ -410,7 +410,7 @@ std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t
 std::optional<Contact> segment(World &w, const Vec &a, const Vec &b, uint32_t groups) {
 	std::optional<Contact> best;
 	for (GameObject *target : w.affectors()) {
-		if (!target->active || !(target->groups & groups)) continue;
+		if (!in_scene(*target) || !(target->groups & groups)) continue;
 		if (target->shape == GameObject::Shape::Sphere) continue;  // surfaces only
 		auto h = segment_hit(target, a, b);
 		if (h && (!best || h->second.distance < best->distance)) best = h->second;
@@ -841,7 +841,7 @@ void ForceSystem::tick() {
 		}
 	}
 	for (GameObject *a : w_.affectors()) {
-		if (!a->active) continue;
+		if (!in_scene(*a)) continue;
 		for (GameObject *c : a->children) {
 			// DE_CCommonForce::Tick: a self-ticking force tests its affector against group 0x200.
 			if (c->is("UniqueActorProperty\\Force\\Common")) {
@@ -1066,7 +1066,7 @@ bool ForceSystem::fighter_tick(GameObject &f) {
 	}
 	bool any = false;
 	for (GameObject *a : w_.affectors()) {
-		if (a->active && (a->groups & fs.groups) && top_fighter(a) != &f) {
+		if (in_scene(*a) && (a->groups & fs.groups) && top_fighter(a) != &f) {
 			any = true;
 			break;
 		}

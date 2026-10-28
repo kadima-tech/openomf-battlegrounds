@@ -227,7 +227,11 @@ void World::enter_scene(GameObject *root, bool defer_start) {
 			o->reference_created = true;
 			if (GameObject *n = create_object_reference(o)) branch.push_back(n);
 		}
-		branch.insert(branch.end(), o->children.begin(), o->children.end());
+		// DE_CScene::Add adds only the children that are not parked (inactive or not at this
+		// detail level); they join when SetActive brings them back.
+		for (GameObject *ch : o->children) {
+			if (!parked(*ch)) branch.push_back(ch);
+		}
 	}
 	// Every actor of the branch is prepared (its executors attached) before any entry runs, so
 	// that a script's Interface() calls find the behaviors of the actors around it.
@@ -247,10 +251,12 @@ void World::enter_scene(GameObject *root, bool defer_start) {
 	for (Brain *b : started) start_brain(b);
 }
 
-void set_branch_active(GameObject *o, bool on) {
+void World::prepare_branch(GameObject *o) {
 	if (!o) return;
-	o->active = on;
-	for (GameObject *c : o->children) set_branch_active(c, on);
+	parented(o, false);
+	bool root = std::find(scene_roots.begin(), scene_roots.end(), o) != scene_roots.end();
+	enter_scene(o);
+	if (!root && o->parent) scene_roots.erase(std::remove(scene_roots.begin(), scene_roots.end(), o), scene_roots.end());
 }
 
 // DE_CPassiveActorReference contents (Core 0x70092540), v7: [passive reference: BOOL, 0x20,
@@ -345,7 +351,7 @@ static GameObject *reference_target(World &w, GameObject *o, const ReferenceFlag
 	for (auto &p : w.actor_properties({o->file, o->index})) {
 		if (p) n->extra_properties.push_back(p);
 	}
-	if (flags.deactivate) set_branch_active(n, false);
+	if (flags.deactivate) n->active = false;  // vtable +0x128, SetInnactive: the created actor parked
 	static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
 	if (debug) {
 		fprintf(stderr, "[ref %u] %s -> %s (%s), %zu reference propert%s%s%s, placement %u\n", w.frame(), o->name.c_str(), n->name.c_str(), n->class_path.c_str(),
@@ -1129,7 +1135,6 @@ void register_session_natives(World &w) {
 	reg("CScene::Add(class CActor)", [](const NativeContext &c) {
 		GameObject *o = c.arg_object(0);
 		if (o) o->removed = false;
-		if (o && !o->active) set_branch_active(o, true);  // a copy of a deactivated template comes to life
 		c.world.enter_scene(o, true);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it

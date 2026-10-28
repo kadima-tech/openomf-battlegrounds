@@ -214,7 +214,7 @@ void ParticleSystem::set_trail_enabled(GameObject *mesh, bool on) {
 
 void ParticleSystem::step_trails(float now) {
 	for (GameObject *o : w_.scene_objects()) {
-		if (!o->is_actor || !o->file || !shown(o) || !o->active) continue;
+		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
 		auto it = actor_streamers_.find(o);
 		if (it == actor_streamers_.end()) {
 			std::vector<const de::PointStreamerDef *> list;
@@ -324,7 +324,7 @@ void ParticleSystem::step_sparks(float now) {
 void ParticleSystem::step() {
 	float now = scene_time_ms(w_);
 	for (GameObject *o : w_.scene_objects()) {
-		if (!o->is_actor || !o->file || !shown(o) || !o->active) continue;
+		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
 		for (auto *def : renderers_of(o)) {
 			if (!def->generator.object) continue;
 			step(instance(o, def), now);

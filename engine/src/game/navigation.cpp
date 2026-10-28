@@ -72,7 +72,7 @@ GameObject *Navigation::area_at(const Vec &p) {
 		GameObject *best = nullptr;
 		float best_d = 1e30f;
 		for (GameObject *a : areas_) {
-			if (!a->active) continue;
+			if (!in_scene(*a)) continue;
 			float d = dist(a->world().t, p) - radius(*a);
 			if (d <= r && d < best_d) best = a, best_d = d;
 		}

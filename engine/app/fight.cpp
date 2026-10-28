@@ -898,7 +898,7 @@ int main(int argc, char **argv) {
 			std::vector<std::pair<game::GameObject *, game::GameObject *>> render_affectors;
 			std::set<const game::GameObject *> light_owners;
 			for (game::GameObject *a : world.affectors()) {
-				if (!(a->groups & 0x20) || !a->active || !game::in_scene(*a)) continue;
+				if (!(a->groups & 0x20) || !game::in_scene(*a)) continue;
 				game::GameObject *ow = world.affector_owner(a);
 				if (!ow || ow == a) continue;
 				render_affectors.emplace_back(a, ow);
@@ -916,8 +916,7 @@ int main(int argc, char **argv) {
 				render::g_lighting.lights.clear();
 				for (game::GameObject *o : world.scene_objects()) {
 					if (o->class_path != "Light" || !o->file) continue;
-					bool live = true;
-					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->active;
+					bool live = game::in_scene(*o);
 					game::GameObject *aff = o->parent;
 					if (!live || !aff || (aff->shape != game::GameObject::Shape::Sphere && aff->shape != game::GameObject::Shape::Cone)) continue;
 					auto key = std::make_pair(o->file, o->index);
@@ -1021,8 +1020,8 @@ int main(int argc, char **argv) {
 					if (!o->copied || !o->is_actor || o->fighter || !o->file || o->meshes_disabled) continue;
 					// The arena's own actors are the static scene ArenaRenderer draws.
 					if (o->file == arena_file) continue;
-					bool live = true;
-					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible && p->active;
+					bool live = game::in_scene(*o);
+					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
 					if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
 						for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 					}

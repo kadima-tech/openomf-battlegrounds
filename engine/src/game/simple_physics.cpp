@@ -152,7 +152,7 @@ void SimplePhysicsSystem::step(GameObject &p, SimplePhysics &s, GameObject &acto
 	std::vector<Contact> &contacts = s.contacts;
 	contacts.clear();
 	for (GameObject *a : s.affectors) {
-		if (!s.groups || !a->active) continue;
+		if (!s.groups || !in_scene(*a)) continue;
 		auto c = touches(w_, *a, s.groups);
 		contacts.insert(contacts.end(), c.begin(), c.end());
 	}
@@ -212,7 +212,7 @@ void SimplePhysicsSystem::bounce(GameObject &, SimplePhysics &s, const std::vect
 void SimplePhysicsSystem::tick() {
 	uint32_t now = uint32_t(scene_time_ms(w_));
 	for (GameObject *actor : w_.scene_objects()) {
-		if (!actor->is_actor || actor->fighter || !actor->active) continue;
+		if (!actor->is_actor || actor->fighter || !in_scene(*actor)) continue;
 		for (GameObject *p : physics_of(*actor)) {
 			if (p->class_path != "Physics\\Simple") continue;
 			SimplePhysics &s = state(*p);

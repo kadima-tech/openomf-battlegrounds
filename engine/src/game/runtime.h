@@ -278,10 +278,15 @@ void read_affector(GameObject &g, const de::World &data, const de::ObjectsFile &
 std::array<float, 3> focal_point(const GameObject &o);
 // Not under a template kept outside the scene, nor left out at this detail level
 // (DE_CActor::ObjPrepare / UpdateForDetailLevel).
+// A child actor that is inactive (+0x110 bit 8 clear) or not shown at this detail level is parked
+// in its parent's inactive list (DE_CActor::ObjSetParent / SetInnactive, Core 0x7008afb0 /
+// 0x700903e0): it and its branch are out of the scene. A root added to the scene is in it whatever
+// its own flag.
+inline bool parked(const GameObject &o) { return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags)); }
 inline bool in_scene(const GameObject &o) {
 	const GameObject *r = &o;
 	for (; r->parent; r = r->parent) {
-		if (r->removed || (r->is_actor && !de::shown_at_detail(r->actor_flags))) return false;
+		if (r->removed || parked(*r)) return false;
 	}
 	return !r->detached && !r->removed && !(r->is_actor && !de::shown_at_detail(r->actor_flags));
 }
@@ -641,6 +646,9 @@ public:
 	// DE_CActor::ObjSetParent (Core 0x7008afb0): a branch parented into the scene from outside it
 	// is added there and then (Scene().Add), joining the affector list at its end.
 	void parented(GameObject *o, bool was_in_scene);
+	// SetActive's Scene().Add of a branch that has just come out of parking under its parent:
+	// prepared and numbered as enter_scene does, staying in its tree (not a root).
+	void prepare_branch(GameObject *o);
 	std::vector<GameObject *> fighters();  // every fighter object
 	// A fighter's linked fighters (+0x334) still in the scene, in list order.
 	std::vector<GameObject *> linked_fighters(GameObject &f);
