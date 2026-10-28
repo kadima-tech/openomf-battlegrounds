@@ -73,10 +73,10 @@ MusicPlayer::MusicPlayer(int rate) : rate_(rate) {
 		perf_ = nullptr;
 		return;
 	}
-	// The segments' own volume is 1 (DE_CNoise contents), and the data has no other level; at
-	// full scale dmusic's synth clips with the fight's sounds on top, so the music sits 6 dB
-	// down (chosen by ear and level meter, not from the original).
-	DmPerformance_setVolume(perf_, 0.5f);
+	// DE_CDirectXSpeakerElement::Update sets the audiopath's volume to 2000 log10(the speaker's
+	// volume) (1/100 dB); the segments' volume is 1 (DE_CNoise contents), so the music plays at
+	// 0 dB, the synth's full scale.
+	DmPerformance_setVolume(perf_, 1.0f);
 }
 
 MusicPlayer::~MusicPlayer() {

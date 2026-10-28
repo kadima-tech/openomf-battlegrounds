@@ -8,7 +8,6 @@
 #include "thread/Thread.h"
 #include "util/Array.h"
 
-#include <tsf.h>
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -456,27 +455,14 @@ typedef union DmMessage {
 
 DmArray_DEFINE(DmMessageList, DmMessage);
 
-typedef struct DmSynthFont {
-	DmDls* dls;
-	tsf* syn;
-} DmSynthFont;
+// A performance channel's state in the synthesizer (Synth.c).
+typedef struct DmSynthChannel DmSynthChannel;
 
-typedef struct DmSynthChannel {
-	DmSynthFont* font;
-	int32_t channel;
-	int32_t transpose;
-
-	float reset_volume;
-	float reset_pan;
-	int reset_pitch;
-} DmSynthChannel;
-
-DmArray_DEFINE(DmSynthFontArray, DmSynthFont);
-
+// The synthesizer: a port of the Microsoft DirectMusic software synthesizer (Synth.c).
 typedef struct DmSynth {
 	uint32_t rate;
 	float volume;
-	DmSynthFontArray fonts;
+	void* engine;
 
 	size_t channels_len;
 	DmSynthChannel* channels;
@@ -667,7 +653,6 @@ DMINT void DmSynth_free(DmSynth* slf);
 DMINT void DmSynth_reset(DmSynth* slf);
 
 DMINT void DmSynth_setVolume(DmSynth* slf, float vol);
-DMINT DmResult DmSynth_createTsfForDls(DmDls* dls, tsf** out);
 DMINT void DmSynth_sendBandUpdate(DmSynth* slf, DmBand* band);
 DMINT void DmSynth_sendControl(DmSynth* slf, uint32_t channel, uint8_t control, float value);
 DMINT void DmSynth_sendControlReset(DmSynth* slf, uint32_t channel, uint8_t control, float reset);

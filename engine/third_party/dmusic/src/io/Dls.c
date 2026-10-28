@@ -6,6 +6,7 @@ static int16_t ADPCM_ADAPT_COEFF1[7] = {256, 512, 0, 192, 240, 460, 392};
 static int16_t ADPCM_ADAPT_COEFF2[7] = {0, -256, 0, 64, 0, -208, -232};
 
 static void DmDls_parseWaveSample(DmDlsWaveSample* slf, DmRiff* rif) {
+	slf->present = true;
 	uint32_t size = 0;
 	DmRiff_readDword(rif, &size);
 	DmRiff_readWord(rif, &slf->unity_note);

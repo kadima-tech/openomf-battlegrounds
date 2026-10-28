@@ -28,6 +28,21 @@ bool Mixer::open() {
 	return true;
 }
 
+void Mixer::open_offline(int rate) {
+	rate_ = rate;
+	offline_ = true;
+	if (const char *rec = getenv("OPENBG_RECORD_AUDIO")) record_ = fopen(rec, "wb");
+	if (!getenv("OPENBG_NO_MUSIC")) {
+		music_ = std::make_unique<MusicPlayer>(rate_);
+		if (!music_->ok()) music_.reset();
+	}
+}
+
+void Mixer::pump(int frames) {
+	std::vector<float> buf(size_t(frames) * 2);
+	mix(buf.data(), frames);
+}
+
 Mixer::~Mixer() {
 	if (dev_) SDL_CloseAudioDevice(dev_);  // before the music player goes
 	if (record_) fclose(record_);
@@ -78,7 +93,7 @@ const de::Sound *Mixer::sound(const de::World &data, const de::ObjectRef &r) {
 void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 	auto requests = std::move(world.sound_requests);
 	world.sound_requests.clear();
-	if (!dev_) return;
+	if ((!dev_ && !offline_) || getenv("OPENBG_NO_SOUND")) return;
 	std::uniform_real_distribution<float> unit(0.0f, 1.0f);
 	for (auto &r : requests) {
 		if (!r.noise || !r.noise->file) continue;

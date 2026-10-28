@@ -15,11 +15,9 @@ add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-
 # songs. Built here as a static library; macOS has no C11 <threads.h>, so it uses its POSIX shim.
 file(GLOB DMUSIC_SOURCES third_party/dmusic/src/*.c third_party/dmusic/src/io/*.c)
 add_library(dmusic STATIC ${DMUSIC_SOURCES}
-	third_party/dmusic/src/util/Tsf.c
-	third_party/dmusic/src/thread/Thread.Posix.c
-	third_party/dmusic/vendor/TinySoundFont/tsf.c)
+	third_party/dmusic/src/thread/Thread.Posix.c)
 set_target_properties(dmusic PROPERTIES C_STANDARD 11)
-target_include_directories(dmusic PUBLIC third_party/dmusic/include PRIVATE third_party/dmusic/src third_party/dmusic/vendor/TinySoundFont)
+target_include_directories(dmusic PUBLIC third_party/dmusic/include PRIVATE third_party/dmusic/src)
 target_compile_definitions(dmusic PUBLIC DM_STATIC=1 PRIVATE DM_BUILD=1)
 target_compile_options(dmusic PRIVATE -w)
 

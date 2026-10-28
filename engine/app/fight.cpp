@@ -586,6 +586,14 @@ int main(int argc, char **argv) {
 		if (headless) {
 			const bool changes = getenv("OPENBG_CHANGES") != nullptr;  // print every state/anim change instead
 			const int every = getenv("OPENBG_EVERY") ? atoi(getenv("OPENBG_EVERY")) : 10;
+			// OPENBG_RECORD_AUDIO=<file>: the frames' sound and music, mixed offline (raw f32 stereo,
+			// 44100 Hz), heard from the player's fighter.
+			std::unique_ptr<audio::Mixer> offline;
+			if (getenv("OPENBG_RECORD_AUDIO")) {
+				offline = std::make_unique<audio::Mixer>();
+				offline->open_offline(44100);
+			}
+			double audio_carry = 0;
 			for (int fr = 0; fr < frames; ++fr) {
 				if (fr == spawn_frame) {
 					spawn_all(0);
@@ -594,6 +602,15 @@ int main(int argc, char **argv) {
 				pilot_tick();
 				world.tick();
 				print_texts(fr);
+				if (offline) {
+					de::Transform ear = player ? player->actor->world() : de::Transform{};
+					offline->play_requests(world, ear);
+					offline->update_music(world);
+					audio_carry += 44100.0 * world.frame_ms() / 1000.0;
+					int n = int(audio_carry);
+					audio_carry -= n;
+					offline->pump(n);
+				}
 				if (getenv("OPENBG_DEBUG_SOUND")) {
 					for (auto &r : world.sound_requests) {
 						printf("frame %5d  [sound] %s vol %.2f%s\n", fr, r.noise->name.c_str(), r.volume, r.positional ? "" : " (ambient)");

@@ -92,6 +92,7 @@ enum {
 };
 
 typedef struct DmDlsWaveSample {
+	bool present;  // a wsmp chunk was read (a region's overrides its wave's)
 	uint16_t unity_note;
 	uint16_t fine_tune;
 	int32_t gain;
