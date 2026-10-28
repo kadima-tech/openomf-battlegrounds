@@ -266,6 +266,19 @@ bool World::has_behavior_property(GameObject *o, uint32_t h) {
 	return false;
 }
 
+void World::clean_later(GameObject *o) {
+	if (o && std::find(to_clean_.begin(), to_clean_.end(), o->handle) == to_clean_.end()) to_clean_.push_back(o->handle);
+}
+
+// DE_GLOBAL::HouskeepingObjects: the queued objects are destroyed, the last queued first.
+void World::housekeeping() {
+	auto queued = std::move(to_clean_);
+	to_clean_.clear();
+	for (auto it = queued.rbegin(); it != queued.rend(); ++it) {
+		if (GameObject *o = object(*it)) destroy(o);
+	}
+}
+
 void World::destroy(GameObject *o) {
 	if (!o) return;
 	if (o->parent) {
@@ -1245,6 +1258,7 @@ void World::advance(TemporalSet &set) {
 void World::tick(uint32_t ms) {
 	++frame_;
 	frame_ms_ = ms;
+	housekeeping();
 	// OPENBG_CALLS="Katana@400-402" (or "*@..."): log the methods brains of that owner enter.
 	static const char *calls = getenv("OPENBG_CALLS");
 	if (calls) {
@@ -1281,6 +1295,7 @@ void World::tick(uint32_t ms) {
 	simple_physics->tick();
 	particles->step();
 	start_pending_brains();
+	housekeeping();
 }
 
 // Affector references: [object][actor properties][affector v4: BOOL owner actor, BOOL

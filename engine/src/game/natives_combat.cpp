@@ -736,11 +736,6 @@ void register_combat_natives(World &w) {
 		int32_t i = c.arg<int32_t>(0);
 		c.ret_object(t && i >= 0 && size_t(i) < t->results.size() ? t->results[size_t(i)].touched : nullptr);
 	});
-	reg("CCollisionEvent::class CAffector SourceAffector(int)", [=](const NativeContext &c) {
-		Tester *t = event_tester(c);
-		int32_t i = c.arg<int32_t>(0);
-		c.ret_object(t && i >= 0 && size_t(i) < t->results.size() ? t->results[size_t(i)].source : nullptr);
-	});
 	// AddTestAffectorsCaller (Core): the other tester's affectors are tested by this one too.
 	reg("CCollisionTester::AddTestAffectors(class CCollisionTester)", [](const NativeContext &c) {
 		uint32_t o = c.arg<uint32_t>(0);

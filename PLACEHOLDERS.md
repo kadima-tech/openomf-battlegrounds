@@ -79,28 +79,21 @@ reverse engineering of its own. Small, self-contained fixes are not left here.
 | Scene membership | Ported | `scene_roots` plus `enter_scene`, which prepares a branch the way `DE_CScene::Add` does (its affectors, temporals and executors in the original's order) before running any entry; parenting into the scene adds the branch then. Passive references follow `DE_CPassiveActorReference::Create` (placement 0 under the reference's parent, 1 parentless and in the scene only with +0x120; +0x124 deactivates; mode 2/3 hand over their children). Inactive and detail-hidden children are parked out of the scene with their branches, and `Activate` adds them back and prepares them (FINDINGS 119). |
 | Teams (`IsEnemy`, enemy list) | Approximation | `IsEnemy`, `NumEnemies`/`Enemy`, `GlobalInterest` and `CurrentTarget` are ported (FINDINGS 100, 106, 111). A fighter's team (+0x49c) comes from its pilot's faction's `TeamIndex`, and factions exist only in team games, which are not run; so no two fighters are allies, as in Last Man Standing. |
 | Collision result order | Ported | The scene's affector list (FINDINGS 117, 118): `DE_CScene::Add` adds a branch in post-order, last child first, also when an actor is parented into the scene; removal keeps the others' order. |
-| `CObject::Die` | Stand-in | Registered by OMFBG.exe (unanalysed); removes the object like `DeleteThis`. See "Natives registered by OMFBG.exe" below. |
 | Creature components (`AddComponent`) | Ported | The component becomes the creature's child and component (`Interface()` reaches its brains). Its creation-time alignment (+0x1d8, the owner's rounded down to its interval) only gates its first update, which no aligned time delays (both are at or before the present tick), so it is not modelled. |
 | Scene tests | Approximation | `TestSphere`, `TestSpherePath`, `TestCone` and `TestLineSegment` are ported (FINDINGS 102, 108, 117). A cone with a penumbra touches spheres only, as in the original. A line segment reports every mesh face it crosses, in order along it; the original takes them in octree-cell order and counts a face only when crossed from one side (its face frame's sign convention is not decoded), so ours also counts faces crossed from behind. |
 | Arena surface hits | Ported | `ProcessEvent` hands the event to the object's relays, as `DE_CActor::ProcessEvent` does with its properties (FINDINGS 116). No handler in the DLLs or scripts reacts to the surface-hit type (0xb); the fighter's own switch covers types 1-10. |
 | `IsDebuggingActive` | Fixed answer | False (the debug-only paths stay off). |
 
-## Natives registered by OMFBG.exe (guessed)
+## Natives once thought to be OMFBG.exe's
 
-No module DLL registers these: neither a `Caller` nor the name string exists in any of them, and
-OMFBG.exe, which presumably registers them, is SafeDisc-encrypted and stays unanalysed. Each is
-our reading of what the scripts expect from its name and use, so all count as approximations.
-Found by `OPENBG_LIST_NATIVES=<file>`, which lists every registered native, checked against the
-DLL dumps.
+OMFBG.exe registers no natives: it is the launcher (front end and session glue), and its whole
+engine import surface has no `DE_CClass` or registration entry point (FINDINGS 123, from the
+readable symbol and import tables in `source/omfbg-exe/REPORT.md`; its code stays encrypted and
+is not decrypted). What used to be listed here is settled:
 
-| Native | Kind | Our guess |
+| Native | Kind | Notes |
 |---|---|---|
-| `CObject::Die()` | Stand-in | Deletes the object like `DeleteThis` (projectiles call it once their explosion is over). |
-| `CCollisionEvent::SourceAffector(int)` | Approximation | The tester's affector that made collision i (the counterpart of `TouchAffector`). |
-| `COMF2Fighter::IsEvadeButtonDown()` | Approximation | The duck/evade button (one button, id 5), like `IsDuckButtonDown`. |
-| `CObject::NewGenericDescriptionSelector()`, `NewChooseFighterUIManager()`, `NewRulesDisplay()` | Stand-in | A runtime object of that UI class; the UI itself is the front end's (see above). |
-| `CTextPrimitive::SetShadowOff()` | Approximation | Draws the text without its drop shadow. |
-| `CSimplePhysics::SetGravity(float)` | Approximation | Sets the physics' gravity weight (+0x74). The field is confirmed: Core's own `CSimplePhysics::SetWeight` (`SetWeightCaller` 0x701d9f20) writes it; only the `SetGravity` name's registration is OMFBG.exe's. |
+| `CObject::NewGenericDescriptionSelector()`, `NewChooseFighterUIManager()`, `NewRulesDisplay()` | Stand-in | Real intrinsics; their classes are Core's (`DE_CGenericDescriptionSelector`) and OMF's (`DE_CChooseFighterUIManager`, `DE_CRulesDisplay`). They wait on the front end (see above). |
 
 `CStandardSessionSlot::IsCreatureActive` and `CStandardSessionModifier::RegisterUrgentState` have no
 registration in the DLLs either, but their methods are in Session.ModuleDLL and match ours

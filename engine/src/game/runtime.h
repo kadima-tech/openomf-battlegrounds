@@ -617,6 +617,10 @@ public:
 	bool render_ticks_per_frame = true;  // false when the app calls render_tick per drawn frame
 	// CObject::DeleteThis: unlinks the object (and its branch); handles to it go inactive.
 	void destroy(GameObject *o);
+	// DE_GLOBAL::AddObjectToClean (DeleteThisLater, Die): destroyed by the next housekeeping,
+	// which runs before and after the frame's updates (DE_GLOBAL::UpdateSystem).
+	void clean_later(GameObject *o);
+	void housekeeping();
 
 	// vm::Host
 	void intrinsic(vm::Executor &ex, uint32_t index, uint32_t args) override;
@@ -691,6 +695,7 @@ private:
 	std::map<uint32_t, Interface> interfaces_;                         // handle -> target
 	std::map<std::pair<const Brain *, uint32_t>, uint32_t> interface_handles_;  // kind -> bank (global_reference)
 	std::deque<de::AnimBank> banks_;
+	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
 	bool input_registered_ = false;
 	uint64_t affector_seq_ = 0;

@@ -340,7 +340,6 @@ void register_simple_physics_natives(World &w) {
 	reg("CSimplePhysics::SetMomentumLostOnBounce(float)", [S](const NativeContext &c) { if (auto *s = S(c)) s->lost_on_bounce = c.arg<float>(0); });
 	reg("CSimplePhysics::SetMomentumMultiplierOnBounce(float)", [S](const NativeContext &c) { if (auto *s = S(c)) s->multiplier_on_bounce = c.arg<float>(0); });
 	reg("CSimplePhysics::SetMomentumVariationOnBounce(float)", [S](const NativeContext &c) { if (auto *s = S(c)) s->variation_on_bounce = c.arg<float>(0); });
-	reg("CSimplePhysics::SetGravity(float)", [S](const NativeContext &c) { if (auto *s = S(c)) s->gravity = c.arg<float>(0); });
 	// SetWeightCaller (Core 0x701d9f20): +0x74, the gravity weight (the same field the data sets).
 	reg("CSimplePhysics::SetWeight(float)", [S](const NativeContext &c) { if (auto *s = S(c)) s->gravity = c.arg<float>(0); });
 	reg("CSimplePhysics::RegisterBounceHook(class CClassExecutorInstance,Method(float))", [S](const NativeContext &c) {

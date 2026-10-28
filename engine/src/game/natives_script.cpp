@@ -493,10 +493,13 @@ void register_script_natives(World &w) {
 		if (GameObject *o = c.self()) c.world.destroy(o);
 	};
 	reg("CObject::DeleteThis()", remove);
-	reg("CObject::DeleteThisLater()", remove);
-	// Die: registered by OMFBG.exe (not in any module), which stays unanalysed. The projectile
-	// scripts call it once their explosion has played out, so it stands in as DeleteThis.
-	reg("CObject::Die()", remove);
+	// DeleteThisLater and Die (Core registers both on DeleteThisLaterCaller): queued for the next
+	// housekeeping (DE_GLOBAL::AddObjectToClean).
+	auto later = [](const NativeContext &c) {
+		if (GameObject *o = c.self()) c.world.clean_later(o);
+	};
+	reg("CObject::DeleteThisLater()", later);
+	reg("CObject::Die()", later);
 	reg("CObject::class CSession SubSessionOwner()", [](const NativeContext &c) { c.ret_u32(0); });
 	stub("CImpulseRobot::SetDefaultHotkey(string,byte,bool,bool,bool)");
 	stub("CImpulseRobot::AttachToImpulse(string,class CReferenceTarget)");
@@ -696,7 +699,6 @@ void register_script_natives(World &w) {
 	reg(tp + "SetHeight(float)", [text](const NativeContext &c) { if (auto *t = text(c)) t->height = c.arg<float>(0); });
 	reg(tp + "SetAsOverlay()", [text](const NativeContext &c) { if (auto *t = text(c)) t->overlay = true; });
 	reg(tp + "SetShadowOn()", [text](const NativeContext &c) { if (auto *t = text(c)) t->shadow = true; });
-	reg(tp + "SetShadowOff()", [text](const NativeContext &c) { if (auto *t = text(c)) t->shadow = false; });
 	reg(tp + "SetInGameFont()", [text](const NativeContext &c) { if (auto *t = text(c)) t->in_game_font = true; });
 	reg(tp + "CenterHorizontal()", [text](const NativeContext &c) { if (auto *t = text(c)) t->centered = true; });
 	reg(tp + "SetColor(class CColorRGBA)", [text](const NativeContext &c) {

@@ -751,10 +751,8 @@ void register_core_natives(World &w) {
 			c.ret_bool(v);
 		});
 	}
-	// IsDuckButtonDownCaller and the evade query both read controller button 5.
-	for (const char *k : {"COMF2Fighter::bool IsDuckButtonDown()", "COMF2Fighter::bool IsEvadeButtonDown()"}) {
-		reg(k, [](const NativeContext &c) { c.ret_bool(c.input().duck_evade()); });
-	}
+	// IsDuckButtonDownCaller: controller button 5 (duck/evade).
+	reg("COMF2Fighter::bool IsDuckButtonDown()", [](const NativeContext &c) { c.ret_bool(c.input().duck_evade()); });
 	// Diagonals: both directions held.
 	const std::vector<std::tuple<const char *, bool Input::*, bool Input::*>> diagonals = {
 		{"COMF2Fighter::bool IsJoystickUpLeft()", &Input::up, &Input::left},
