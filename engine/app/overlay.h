@@ -24,6 +24,10 @@ public:
 	// vertices in the local frame of the mesh's actor (x along the text, y up, text heights in
 	// its units), depth-tested unless the primitive is an overlay.
 	void draw_world(const game::World &world, const float *vp);
+	// The front end's controls (game/ui.h), in screen fractions with y down: a filled rectangle,
+	// and a flat-text label (Font_Ariel) of `size` screen heights centred on (x, y).
+	void rect(float x0, float y0, float x1, float y1, const float *rgba, int width, int height);
+	void label(const std::string &text, float x, float y, float size, const float *rgba, int width, int height);
 
 private:
 	struct FontGL {
@@ -35,6 +39,8 @@ private:
 	// The text's glyph quads (x, y, u, v per vertex), x widths divided by `aspect`.
 	std::vector<float> text_vertices(const FontGL &f, const game::World::Primitive &t, float aspect, float dx, float dy) const;
 	const FontGL *font_for(const game::World::Primitive &t) const;
+	void begin_screen(int width, int height);
+	void end_screen();
 	void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const float *rgba);
 	GLuint image(const game::GameObject *img);
 	std::map<std::string, FontGL> fonts_;

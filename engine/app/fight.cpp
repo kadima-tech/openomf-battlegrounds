@@ -38,6 +38,7 @@
 #include "particles_gl.h"
 #include "render.h"
 #include "glow.h"
+#include "scene_lights.h"
 #include "de/lighting.h"
 
 namespace {
@@ -905,90 +906,10 @@ int main(int argc, char **argv) {
 					return std::array<float, 3>{(x / w + 1) / 2, (y / w + 1) / 2, w};
 				};
 			}
-			// The frame's lights: every active Light in the scene, at its sphere or cone affector,
-			// with the colour and intensity the scripts set, else its own.
-			// The lightable render affectors (collision group 0x20; DE_CStandardRenderAffector::
-			// SetAffector) and their owners (the affector's +0x118, else itself, whose render actor is
-			// lit: an affector that owns itself owns no meshes). A drawn actor's lighting owner is
-			// the nearest one up its tree; without one it takes no lights.
-			std::vector<std::pair<game::GameObject *, game::GameObject *>> render_affectors;
-			std::set<const game::GameObject *> light_owners;
-			for (game::GameObject *a : world.affectors()) {
-				if (!(a->groups & 0x20) || !game::in_scene(*a)) continue;
-				game::GameObject *ow = world.affector_owner(a);
-				if (!ow || ow == a) continue;
-				render_affectors.emplace_back(a, ow);
-				light_owners.insert(ow);
-			}
-			auto light_owner_of = [&](const game::GameObject *o) -> const void * {
-				for (; o; o = o->parent) {
-					if (light_owners.count(o)) return o;
-				}
-				return nullptr;
-			};
-			{
-				static std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::optional<de::LightInfo>> infos;
-				static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> light_images;
-				render::g_lighting.lights.clear();
-				for (game::GameObject *o : world.scene_objects()) {
-					if (o->class_path != "Light" || !o->file) continue;
-					bool live = game::in_scene(*o);
-					game::GameObject *aff = o->parent;
-					if (!live || !aff || (aff->shape != game::GameObject::Shape::Sphere && aff->shape != game::GameObject::Shape::Cone)) continue;
-					auto key = std::make_pair(o->file, o->index);
-					auto it = infos.find(key);
-					if (it == infos.end()) it = infos.emplace(key, de::read_light(world.data(), {o->file, o->index})).first;
-					if (!it->second) continue;
-					const de::LightInfo &info = *it->second;
-					render::SceneLight l;
-					l.frame = aff->world();
-					l.position_static = game::position_static(*aff);
-					l.pos = l.frame.t;
-					if (aff->shape == game::GameObject::Shape::Sphere) {
-						l.shape = render::SceneLight::kSphere;
-						l.inner = aff->hotspot, l.outer = aff->falloff;
-					} else {
-						l.shape = render::SceneLight::kCone;
-						l.inner = aff->far_begin, l.outer = aff->far_end, l.umbra = aff->umbra, l.penumbra = aff->penumbra;
-						l.near_begin = aff->near_begin;
-					}
-					auto col = info.colour.eval(world.scene_ms() / 1000.0f);
-					l.colour = {col[0], col[1], col[2]};
-					l.intensity = info.intensity;
-					l.mask = info.mask();
-					// DE_CStandardRenderLight::UpdateLitActors: its affector against the render affectors.
-					l.reaches_all = false;
-					// A static light skips a render affector that is position-static too: the affector's
-					// own IsPositionStatic (SetAffector +0x10c), not its meshes'.
-					for (auto &[ra, ow] : render_affectors) {
-						if (l.position_static && game::position_static(*ra)) continue;
-						if (game::touch(world, *ra, *aff) && std::find(l.reaches.begin(), l.reaches.end(), ow) == l.reaches.end()) l.reaches.push_back(ow);
-					}
-					l.has_image = bool(info.image);
-					if (info.image && info.image.info().class_path.rfind("Image", 0) == 0 && l.shape == render::SceneLight::kCone) {
-						l.image = render::texture_of(light_images, info.image);
-						l.blend = de::projector_blend(info);
-					}
-					if (const auto *st = world.particles->find_light(o)) {
-						if (st->intensity) l.intensity = *st->intensity;
-						if (st->color) l.colour = *st->color;
-					}
-					render::g_lighting.lights.push_back(l);
-				}
-				static const bool dbg = getenv("OPENBG_DEBUG_LIGHTS") != nullptr;
-				if (dbg && fr % 60 == 0) {
-					for (auto &[ra, ow] : render_affectors) fprintf(stderr, "  render affector %s owned by %s\n", ra->name.c_str(), ow->name.c_str());
-					fprintf(stderr, "[lights %d] ambient %.2f %.2f %.2f, %zu lights\n", fr, render::g_lighting.ambient[0], render::g_lighting.ambient[1],
-					        render::g_lighting.ambient[2], render::g_lighting.lights.size());
-					for (auto &l : render::g_lighting.lights) {
-						fprintf(stderr, "  %s at %.0f %.0f %.0f r %.0f..%.0f colour %.2f %.2f %.2f x %.2f mask %x%s blend %d, reaches", l.shape ? "cone" : "sphere", l.pos[0], l.pos[1],
-						        l.pos[2], l.inner, l.outer, l.colour[0], l.colour[1], l.colour[2], l.intensity, l.mask, l.image ? " own image" : "", l.blend);
-						if (l.position_static) fprintf(stderr, " static");
-						for (const void *ow : l.reaches) fprintf(stderr, " %s", static_cast<const game::GameObject *>(ow)->name.c_str());
-						fprintf(stderr, "\n");
-					}
-				}
-			}
+			// The frame's lights and their lighting owners (scene_lights.h).
+			render::FrameLights frame_lights = render::collect_lights(world, fr);
+			const auto &light_owners = frame_lights.owners;
+			auto light_owner_of = [&](const game::GameObject *o) { return frame_lights.owner_of(o); };
 			static const de::ObjectsFile *arena_file = world.data().file(arena);
 			// The arena's actors that paths move (trains, cars, ...): drawn live, not baked.
 			std::vector<render::ActorMeshRenderer::Item> moving_items;

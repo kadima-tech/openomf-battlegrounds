@@ -284,4 +284,54 @@ void OverlayRenderer::draw(const game::World &world, int width, int height, cons
 	glEnable(GL_DEPTH_TEST);
 }
 
+void OverlayRenderer::begin_screen(int width, int height) {
+	aspect_ = float(width) / float(std::max(1, height));
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glUseProgram(prog_);
+	glBindVertexArray(vao_);
+	glActiveTexture(GL_TEXTURE0);
+	glUniform1i(glGetUniformLocation(prog_, "tex"), 0);
+}
+
+void OverlayRenderer::end_screen() {
+	glDisable(GL_BLEND);
+	glEnable(GL_DEPTH_TEST);
+}
+
+void OverlayRenderer::rect(float x0, float y0, float x1, float y1, const float *rgba, int width, int height) {
+	if (!prog_) return;
+	begin_screen(width, height);
+	glUniform1i(glGetUniformLocation(prog_, "mode"), 2);
+	quad(x0, 1 - y1, x1, 1 - y0, 0, 0, 1, 1, rgba);
+	end_screen();
+}
+
+void OverlayRenderer::label(const std::string &str, float x, float y, float size, const float *rgba, int width, int height) {
+	if (!prog_ || str.empty()) return;
+	game::World::Primitive t;
+	t.text = str;
+	t.height = size;
+	t.centered = true;
+	t.x = x;
+	const FontGL *f = font_for(t);
+	if (!f) return;
+	begin_screen(width, height);
+	std::vector<float> v = text_vertices(*f, t, aspect_, 0, 0);
+	float lo = 1e9f, hi = -1e9f;
+	for (size_t i = 1; i < v.size(); i += 4) lo = std::min(lo, v[i]), hi = std::max(hi, v[i]);
+	if (!v.empty()) {
+		float dy = (1 - y) - (lo + hi) / 2;
+		for (size_t i = 1; i < v.size(); i += 4) v[i] += dy;
+		glBindTexture(GL_TEXTURE_2D, f->tex);
+		glUniform1i(glGetUniformLocation(prog_, "mode"), f->alpha ? 0 : 1);
+		glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(float)), v.data(), GL_STREAM_DRAW);
+		glUniform4fv(glGetUniformLocation(prog_, "color"), 1, rgba);
+		glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 4));
+	}
+	end_screen();
+}
+
 }  // namespace render

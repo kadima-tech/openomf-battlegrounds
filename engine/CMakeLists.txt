@@ -83,6 +83,7 @@ add_library(game STATIC
 	src/game/simple_physics.cpp
 	src/game/navigation.cpp
 	src/game/session.cpp
+	src/game/ui.cpp
 )
 target_link_libraries(game PUBLIC vm de)
 
@@ -108,5 +109,7 @@ add_executable(openbg-arena app/arena.cpp app/render.cpp app/glow.cpp)
 target_link_libraries(openbg-arena PRIVATE de SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg-brain tools/brain.cpp)
 target_link_libraries(openbg-brain PRIVATE vm)
-add_executable(openbg-fight app/fight.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
+add_executable(openbg-fight app/fight.cpp app/scene_lights.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg-fight PRIVATE game dmusic SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
+add_executable(openbg app/frontend.cpp app/scene_lights.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
+target_link_libraries(openbg PRIVATE game dmusic SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)

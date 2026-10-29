@@ -16,10 +16,17 @@ reverse engineering of its own. Small, self-contained fixes are not left here.
 
 ## Waiting on the front end (menus, options, single player)
 
-The launcher's own part is now known (FINDINGS 124): it creates the window and scene viewer, shows the splash, starts `MainMenuUIManager`, sends first-time players to `SinglePlayer\\Basic Training`, and hands each session's scene to the viewer with its audio player. The menus themselves are the UI managers in OMF and Core, driven by the `.DEObjects` UI descriptions.
+The launcher's own part is known (FINDINGS 124), and so are the UI managers' page flow, controls and single-player screens (FINDINGS 125–127). `openbg` runs the front end: the main menu and the Quit page are ported, on the GUI scene in OMFBGGUI with its own scripts (buttons, doors). The rest of the front end is below.
 
 | What | Kind | Notes |
 |---|---|---|
+| Launcher GUI wiring (`InitGUI`) | Approximation | Not readable. The app manager's main frame, transition and backdrop are `V.MainFrame`, `V.MainDoors` and `V.Backdrop` by their names; the UI parent is taken as the frame-control root actor (x 0..1 across the screen, y 0..0.75 up, a 60° camera looking down −Z), which the data's layout and the 4/3 in `SetupControlArea` agree with (FINDINGS 125, 126). |
+| GUI scene | Approximation | One `World` scene holds the GUI and the game: GUI roots are flagged (`GameObject::gui`) and drawn in their own pass with the GUI camera and lights. Scripts in the GUI see the game's `Scene()` singleton (they only use its clock, ambient sounds and render-tick hooks). |
+| Controls | Stand-in | Buttons are hit rectangles at the `PositionControl` rectangles with their labels drawn by the overlay, not `DE_CControl3d` meshes in a frame-control scene. Label colour is white (the colour every screen passes to `NewButtonControl`; the launcher's `ColorButtonText` override is not readable). The GUI is drawn 4:3, pillar- or letterboxed. |
+| Notifications (`NewUserInformation`) | Stand-in | Our own panel (title, wrapped text, OK; Enter, Esc or a click closes it), not `DE_CDialog3d::UserInformation`'s dialog. |
+| Registry | Stand-in | Values the menus keep (`SinglePlayerPlayed`, the main menu's last choice) live for the run only. |
+| Screens | Missing | Options, Help, Replays, Credits, Join (session browser) and the session chooser behind Single Player and Host (`MenuSelect`) say "not ported yet". The in-game menu, description selectors, choose-fighter and rules display are not ported. |
+| Main menu music | Missing | `GH_MUSIC_PLAYER_ASSURE_DEFAULT_MUSIC` to the music player is not sent. |
 | Robot, pilot, arena and score-limit choices | Stand-in | Picked up front by `openbg-fight`, the way `BSinglePlayerSubSession` does, instead of through menus. |
 | Factions (teams' pilots) | Approximation | Ported for what Last Man Standing does (FINDINGS 112): a pilot's faction is null unless the picker sets one in a team game; `CPilot::Faction`/`SetFaction` and `CFaction::Photo` are ported. Team game modes (and with them `CFaction::TeamIndex`, faction vtable +0x180, and the session's team lists) are not run or decoded. |
 | UI managers (description selectors, choose-fighter UI) | Stand-in | A launched UI with a preset choice completes on the next update; without one it never completes. `IsUIManagerActive`/`IsActiveLocally`/`IsDisplayed` return false. |

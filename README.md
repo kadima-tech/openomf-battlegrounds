@@ -4,7 +4,7 @@ A native macOS reimplementation of the "DE" engine behind *One Must Fall: Battle
 
 This repository holds only code and notes we wrote. **No game data is included**: you need your own copy of the game (the Windows CD or ISO).
 
-Status: fights run end to end (Last Man Standing sessions, every robot and arena, the computer opponent's AI, HUD, sound and music). There is no menu front end yet; robots, pilots and arenas are picked on the command line. `PLACEHOLDERS.md` lists everything that is still a stand-in, approximation or missing.
+Status: fights run end to end (Last Man Standing sessions, every robot and arena, the computer opponent's AI, HUD, sound and music). The menu front end is under way: `openbg` shows the game's main menu and Quit page; until single player is ported, robots, pilots and arenas are picked on the command line of `openbg-fight`. `PLACEHOLDERS.md` lists everything that is still a stand-in, approximation or missing.
 
 ## Setting up
 
@@ -62,6 +62,12 @@ Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space
 - `app/arena.cpp` (`openbg-arena`): native arena fly-through:
   `engine/build/openbg-arena source/extracted/App_Executables/Data Desert` (WASD/QE, drag to look), drawn with
   the fight's renderer (materials, the arena's lights, reflections, glow).
+- `app/frontend.cpp` (`openbg`): the front end, the game's own 3D menus from OMFBGGUI with their scripts
+  (buttons light up and click, the doors close and open between pages), driven by a port of the UI
+  managers' page flow (`src/game/ui.cpp`; FINDINGS 125-127):
+  `engine/build/openbg source/extracted/App_Executables/Data`. The main menu and the Quit page work; the
+  other screens say they are not ported yet. `--screenshot out.png --frames N` with
+  `MOUSE="0.5,0.93@50;down@52;up@54"` (fractions of the 4:3 menu area) scripts the mouse.
 - `app/fight.cpp` (`openbg-fight`): a match against a computer-controlled robot, run by the game's own
   Last Man Standing session scripts (countdown, READY/FIGHT, knockouts, rounds, winner), both robots
   driven by their own compiled script brains, in an arena:
