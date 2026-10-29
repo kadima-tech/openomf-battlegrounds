@@ -146,6 +146,75 @@ struct Cinepak {
 	}
 };
 
+// --- Indeo YVU9 -> RGB24, as Intel's codecs hand it to AVIStreamGetFrame -----------------------
+// AVIFIL32's GetFrame with a NULL format takes ICM_DECOMPRESS_GET_FORMAT's answer (avifil32
+// 0x73b5f73d), 24-bit BI_RGB from both codecs. Matched bit-exactly against ir41_32.ax and
+// ir50_32.dll (Windows XP SP3) under emulation, on every frame of the 18 shipped Indeo videos.
+
+uint8_t clamp8(int v) { return uint8_t(std::clamp(v, 0, 255)); }
+
+// Table converter: ir41_32.ax 0x580d9780 (its only RGB24 path), tables built by 0x580d95f0;
+// ir50_32.dll's non-MMX path (0x738d4cbd) uses identical tables. Chroma is one sample per 4x4
+// block; each output is a clamp table indexed by Y + chroma offset + a 4x4 ordered dither.
+void intel_rgb24_table(const oi_frame &f, uint8_t *dst) {
+	static const int dr[4][4] = {{0, 1, -1, 2}, {2, -1, 1, 0}, {1, 0, 2, -1}, {-1, 2, 0, 1}};
+	static const int dg[4][4] = {{-1, 3, -1, 3}, {2, 0, 0, 2}, {3, -1, 3, -1}, {0, 2, 2, 0}};
+	static const int db[4][4] = {{-1, 2, 0, 1}, {0, 1, -1, 2}, {2, -1, 1, 0}, {1, 0, 2, -1}};
+	auto rv = [](int i) { return ((int32_t(0xff507f00) + i * 0x15f02) >> 16) + 0xb3; };
+	auto gv = [](int i) { return ((0x596700 - i * 0xb2ce) >> 16) + 0x5d; };
+	auto gu = [](int i) { return ((0x2aff80 - i * 0x55ff) >> 16) + 0x2e; };
+	auto bu = [](int i) { return ((int32_t(0xff223300) + i * 0x1bb9a) >> 16) + 0xe1; };
+	auto lut = [](int32_t start, int j) { return clamp8((start + j * 0x12b40) >> 16); };
+	for (int y = 0; y < f.height; ++y) {
+		const uint8_t *yr = f.y + size_t(y) * size_t(f.y_stride);
+		const uint8_t *ur = f.u + size_t(y >> 2) * size_t(f.uv_stride), *vr = f.v + size_t(y >> 2) * size_t(f.uv_stride);
+		uint8_t *o = dst + size_t(y) * size_t(f.width) * 3;
+		for (int x = 0; x < f.width; ++x, o += 3) {
+			int u = ur[x >> 2], v = vr[x >> 2], r = rv(v), b = bu(u);
+			// The green offset is summed from packed 9-bit fields, so red + blue can carry into it.
+			int g = gv(v) + gu(u) + ((r + b) >> 9);
+			o[0] = lut(int32_t(0xff1c0e40), yr[x] + r + dr[y & 3][x & 3]);
+			o[1] = lut(int32_t(0xff4ad040), yr[x] + g + dg[y & 3][x & 3]);
+			o[2] = lut(int32_t(0xfee648c0), yr[x] + b + db[y & 3][x & 3]);
+		}
+	}
+}
+
+// MMX converter: ir50_32.dll 0x738d41a0, taken when the CPU has MMX and the width is a multiple
+// of 8 (0x738d4910). Chroma is interpolated per 2x2 pixels: within a 4x4 block the left/top
+// pair uses the block's sample, the right/bottom pair the floor average with the next block's
+// (the last row and column repeat). Fixed point in 1/128 with saturating 16-bit arithmetic and
+// a per-pixel 4x4 bias table (constants set at 0x738d4a09..0x738d4b40).
+void intel_rgb24_mmx(const oi_frame &f, uint8_t *dst) {
+	static const uint16_t kr[4][4] = {{0x668c, 0x6428, 0x65c0, 0x64f4}, {0x64f4, 0x65c0, 0x6428, 0x668c},
+	                                  {0x6428, 0x668c, 0x64f4, 0x65c0}, {0x65c0, 0x64f4, 0x668c, 0x6428}};
+	static const uint16_t kg[4][4] = {{0x4da8, 0x4c3e, 0x4d72, 0x4c74}, {0x4d0a, 0x4cdc, 0x4c70, 0x4d76},
+	                                  {0x4c3e, 0x4da8, 0x4c74, 0x4d72}, {0x4cdc, 0x4d0a, 0x4d76, 0x4c70}};
+	static const uint16_t kb[4][4] = {{0x80c0, 0x7fbe, 0x81c2, 0x7ebc}, {0x81c2, 0x7ebc, 0x80c0, 0x7fbe},
+	                                  {0x7fbe, 0x80c0, 0x7ebc, 0x81c2}, {0x7ebc, 0x81c2, 0x7fbe, 0x80c0}};
+	auto sample = [&](const uint8_t *plane, int x, int y) {
+		auto h = [&](int row) {
+			const uint8_t *p = plane + size_t(std::min(row, f.chroma_height - 1)) * size_t(f.uv_stride);
+			int i = x >> 2;
+			return (x & 2) ? (p[i] + p[std::min(i + 1, f.chroma_width - 1)]) >> 1 : p[i];
+		};
+		int j = y >> 2;
+		return (y & 2) ? (h(j) + h(j + 1)) >> 1 : h(j);
+	};
+	auto out = [](int v) { return uint8_t(std::min(std::max(v, 0) >> 7, 255)); };
+	for (int y = 0; y < f.height; ++y) {
+		const uint8_t *yr = f.y + size_t(y) * size_t(f.y_stride);
+		uint8_t *o = dst + size_t(y) * size_t(f.width) * 3;
+		for (int x = 0; x < f.width; ++x, o += 3) {
+			int u = sample(f.u, x, y), v = sample(f.v, x, y);
+			int ys = std::max(yr[x] - 16, 0) * 149;
+			o[0] = out(std::min(ys + 204 * v, 0xffff) - kr[y & 3][x & 3]);
+			o[1] = out(std::min(ys + kg[y & 3][x & 3], 0xffff) - std::min(50 * u + 104 * v, 0x7fff));
+			o[2] = out(std::min(ys + std::min(258 * u, 0xffff), 0xffff) - kb[y & 3][x & 3]);
+		}
+	}
+}
+
 }  // namespace
 
 std::vector<uint8_t> avi_of_image(const std::vector<uint8_t> &contents) {
@@ -224,11 +293,12 @@ AviVideo decode_avi(const std::vector<uint8_t> &riff) {
 		}
 	} else if (oi_decoder *dec = oi_create(OI_FOURCC(v.codec[0], v.codec[1], v.codec[2], v.codec[3]))) {
 		// Indeo 4/5 through openindeo; an undecodable chunk repeats the last picture.
+		bool mmx = v.codec != "iv41" && v.codec != "IV41" && v.width % 8 == 0;
 		std::vector<uint8_t> last(n, 0);
 		for (auto [o, size] : chunks) {
 			oi_frame f;
 			if (oi_decode(dec, base + o, size, &f) == OI_OK && f.width == v.width && f.height == v.height) {
-				oi_to_rgb24(&f, last.data(), v.width * 3);
+				mmx ? intel_rgb24_mmx(f, last.data()) : intel_rgb24_table(f, last.data());
 			}
 			v.frames.push_back(last);
 		}

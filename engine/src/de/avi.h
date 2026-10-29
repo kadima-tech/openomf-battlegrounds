@@ -7,8 +7,8 @@
 // frame 0 otherwise. Its pixels are the frame's red, green and blue (no alpha).
 //
 // The shipped videos are uncompressed 24-bit DIBs, Cinepak ("cvid") or Indeo 4/5 ("iv41",
-// "iv50"); Indeo goes through openindeo (../../openindeo), converted to RGB as BT.601 studio
-// range with each chroma sample covering its 4x4 pixels.
+// "iv50"); Indeo goes through openindeo (../../openindeo), converted to RGB the way Intel's
+// codecs did it (ir41_32.ax's dithered tables, ir50_32.dll's MMX path).
 #pragma once
 
 #include <cstdint>
