@@ -107,22 +107,21 @@ struct NeedSystem {
 		auto *ex = w.object_value(n.object, "Exclusive");
 		GameObject *exclusive = ex && !ex->objects.empty() ? w.object(ex->objects[0]) : nullptr;
 		if (exclusive && exclusive != creature) return 0;
-		if (top_of(n.holder) == creature && !exclusive) return 0;
-		if (n.holder == creature) return 0;
+		// UniqueActorProperty::Owner: the affector's owner actor (+0x118), else the affector.
+		GameObject *owner = n.holder->shape != GameObject::Shape::None ? w.affector_owner(n.holder) : n.holder;
+		if (!owner) owner = n.holder;
+		if (top_of(owner) == creature && !exclusive) return 0;
+		if (owner == creature) return 0;
 		float area = 1, team = 1;
 		auto *av = w.object_value(n.object, "Area");
-		if (n.holder->shape == GameObject::Shape::Sphere && av && av->bits) {
-			// The sphere's falloff weight at the creature (1 inside the hotspot).
-			float d = dist(n.holder->world().t, creature->world().t);
-			float hot = n.holder->hotspot, fall = std::max(n.holder->falloff, hot);
-			area = d <= hot ? 1 : d >= fall ? 0 : (fall - d) / std::max(fall - hot, 1e-3f);
-			// TeamIndex (the need's, else its holder's, else -1) against the fighter's: no teams
-			// in play, every fighter is -1.
+		if (n.holder->shape != GameObject::Shape::None && av && av->bits) {
+			area = affector_intensity_at(w, *n.holder, creature->world().t);
+			// ObjPrepare's TeamIndex (the need's, else its owner's, else -1) against the fighter's.
 			auto *t = w.object_value(n.object, "TeamIndex");
-			if (!t) t = w.object_value(n.holder, "TeamIndex");
+			if (!t) t = w.object_value(owner, "TeamIndex");
 			int32_t need_team = -1;
 			if (t) memcpy(&need_team, &t->bits, 4);
-			if (creature->fighter && need_team != -1) team = 0;
+			if (creature->fighter && creature->team != need_team) team = 0;
 		}
 		const Pilot *p = creature->fighter ? pilot_of(creature) : nullptr;
 		if (!p) return 0;
@@ -137,10 +136,9 @@ struct NeedSystem {
 			out = std::max(out, p->stat(0x5c8, now) * area * k.w58);
 			out = std::max(out, p->stat(0x5c8, now) * area * k.w50);
 		}
-		// The holder's fighter (a fighter's own NeedAffector belongs to it) and an enemy: every other
-		// fighter, there being no teams.
-		GameObject *holder = n.holder->shape != GameObject::Shape::None ? w.affector_owner(n.holder) : n.holder;
-		if ((flags & 4) && holder && holder->fighter && holder != creature) out += k.w60 * 1.5f;
+		// The owner a fighter (a fighter's own NeedAffector) to which the creature is an enemy
+		// (DE_COMF2Fighter::IsEnemy: IsEnemyFighter for a fighter).
+		if ((flags & 4) && owner->fighter && owner != creature && World::enemy_fighter(*owner, *creature)) out += k.w60 * 1.5f;
 		return out;
 	}
 

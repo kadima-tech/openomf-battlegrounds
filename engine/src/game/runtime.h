@@ -618,6 +618,10 @@ public:
 	// every object under them.
 	std::vector<GameObject *> scene_roots;
 	std::vector<GameObject *> scene_objects();
+	// The session whose scene (DE_CStandardSession +0x16c, made by Begin) each root is in: set
+	// before enter_scene, else the current session's; null is the application's.
+	std::map<const GameObject *, GameObject *> root_session;
+	GameObject *scene_session_of(const GameObject *o) const;
 	bool has_behavior_property(GameObject *o, uint32_t class_handle);
 	// CPrimitiveGeneratorMesh primitives (text, quads, status bars), by primitive object: what
 	// the HUD and on-screen messages are made of. Positions are mesh space; in a screen-space
