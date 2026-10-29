@@ -40,6 +40,10 @@ to present that data, and the few places where the look is our own.
 - **VCR panel (replays, V).** `F.VCR` along the bottom; in its middle 60%: the Play/Pause, frame
   advance, rewind and fast-forward images (a cyan underline marks the running fast mode), the speed
   labels, a seek slider (pale blue track, cyan knob) and Observer / Snapshot labels.
+- **Single-player loading screen** (the rules display). No main frame; the match name (19 px,
+  pale yellow), commentary (14 px, pink), next match (16 px, grey) and progress text in the
+  page's markers; the match snapshot (a 256 × 256 capture from the observer's camera) fills the
+  MatchScreenShot box once the player has been knocked out or landed a kill.
 - **Notifications** (`DE_CDialog3d::UserInformation`, measured from a screenshot of the
   original). A centred box 0.737 screen heights wide with a light grey bevelled frame, a navy
   title bar shading from (0, 0, 0.08) on the left to (0, 0, 0.68) on the right with the title in
