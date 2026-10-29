@@ -589,15 +589,10 @@ static void DmMsVoice_newVolume(DmMsEngine* e, DmMsVoice* v, STIME t, VREL* left
 	if (pan > 127) pan = 127;
 	*left = vol + DmMs_PAN_TO_VREL[127 - pan];
 	*right = r + DmMs_PAN_TO_VREL[pan];
-	// A stereo wave's half sounds on its own side only, at full level from centre (pan balances).
-	if (v->region && v->region->side == 1) {
-		VREL b = DmMs_PAN_TO_VREL[127 - pan] - DmMs_PAN_TO_VREL[63];
-		*left = vol + (b < 0 ? b : 0);
-		*right = DmMs_MIN_VOLUME;
-	} else if (v->region && v->region->side == 2) {
-		VREL b = DmMs_PAN_TO_VREL[pan] - DmMs_PAN_TO_VREL[64];
-		*right = r + (b < 0 ? b : 0);
-		*left = DmMs_MIN_VOLUME;
+	// A stereo wave's half sounds on its own side only, at full level and unpanned (dmsynth).
+	if (v->region && v->region->side) {
+		*left = v->region->side == 1 ? vol : DmMs_MIN_VOLUME;
+		*right = v->region->side == 2 ? r : DmMs_MIN_VOLUME;
 	}
 }
 
