@@ -20,6 +20,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 
 typedef int64_t STIME;
@@ -71,6 +72,7 @@ typedef struct DmMsArticulation {  // CSourceArticulation
 typedef struct DmMsRegion {  // CSourceRegion + CSourceSample
 	uint8_t key_low, key_high, group;
 	uint8_t vel_low, vel_high;  // DLS2 velocity range (rgnh RangeVelocity)
+	uint8_t side;               // a stereo wave's half (wlnk channel): 1 left, 2 right, 0 both
 	bool allow_overlap;
 	VREL attenuation;
 	PREL fine_tune;
@@ -585,6 +587,16 @@ static void DmMsVoice_newVolume(DmMsEngine* e, DmMsVoice* v, STIME t, VREL* left
 	if (pan > 127) pan = 127;
 	*left = vol + DmMs_PAN_TO_VREL[127 - pan];
 	*right = r + DmMs_PAN_TO_VREL[pan];
+	// A stereo wave's half sounds on its own side only, at full level from centre (pan balances).
+	if (v->region && v->region->side == 1) {
+		VREL b = DmMs_PAN_TO_VREL[127 - pan] - DmMs_PAN_TO_VREL[63];
+		*left = vol + (b < 0 ? b : 0);
+		*right = DmMs_MIN_VOLUME;
+	} else if (v->region && v->region->side == 2) {
+		VREL b = DmMs_PAN_TO_VREL[pan] - DmMs_PAN_TO_VREL[64];
+		*right = r + (b < 0 ? b : 0);
+		*left = DmMs_MIN_VOLUME;
+	}
 }
 
 // CVoice::GetNewPitch
@@ -877,6 +889,7 @@ static DmMsInstrument* DmMsEngine_instrument(DmMsEngine* e, DmDls* dls, DmDlsIns
 		r->vel_high = (uint8_t) (src->velocity_high ? src->velocity_high : 127);
 		r->allow_overlap = src->nonexclusive;
 		r->group = (uint8_t) src->key_group;
+		if (src->link_multi_channel && (src->link_channel == 1 || src->link_channel == 2)) r->side = (uint8_t) src->link_channel;
 		DmMsArticulation_init(&r->art);
 		if (src->articulator_count) {
 			DmMsArticulation_load(&r->art, src->articulators, src->articulator_count);
@@ -1211,8 +1224,8 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 			DmMsEngine_queue(e, v);
 		}
 		static int dbg = -2;
-		if (dbg == -2) dbg = getenv("OPENBG_DEBUG_NOTES") ? atoi(getenv("OPENBG_DEBUG_NOTES")) : -1;
-		if (dbg >= 0 && (int) channel == dbg) {
+		if (dbg == -2) dbg = !getenv("OPENBG_DEBUG_NOTES") ? -1 : strcmp(getenv("OPENBG_DEBUG_NOTES"), "all") == 0 ? -3 : atoi(getenv("OPENBG_DEBUG_NOTES"));
+		if (dbg == -3 || (dbg >= 0 && (int) channel == dbg)) {
 			fprintf(stderr, "[note %lld] ch %u key %d vel %d root %d rate %u len %u loop %u-%u one_shot %d pitch %d\n", (long long) e->time, channel, key, velocity,
 			        r->root_key, r->wave_rate, r->length, r->loop_start, r->loop_end, r->one_shot, v->base_pitch);
 		}

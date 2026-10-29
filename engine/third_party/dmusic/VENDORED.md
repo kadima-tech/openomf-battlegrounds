@@ -32,4 +32,7 @@ Local changes:
 - `OPENBG_NO_LFO=1` turns the voices' LFO pitch modulation off (debugging).
 - A band instrument finds its DLS instrument by program, bank LSB, bank MSB and drum flag (upstream
   compared only program and bank LSB, so the theme's drum kit resolved to a melodic instrument).
-  `OPENBG_DEBUG_NOTES=<pchannel>` prints each note-on's key, velocity, region root and wave (debugging).
+  `OPENBG_DEBUG_NOTES=<pchannel>` prints each note-on's key, velocity, region root and wave (debugging). `OPENBG_DEBUG_NOTES=all` prints every channel's.
+- A stereo wave's regions (DLS2 `wlnk` multi-channel, channel 1 left or 2 right) each sound on their
+  own side, at full level from centre, the channel's pan acting as a balance (DDKSynth, DLS1, has
+  no stereo waves; the theme's strings and some drums use them).
