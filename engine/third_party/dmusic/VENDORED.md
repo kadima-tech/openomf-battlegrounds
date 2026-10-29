@@ -35,4 +35,7 @@ Local changes:
   `OPENBG_DEBUG_NOTES=<pchannel>` prints each note-on's key, velocity, region root and wave (debugging). `OPENBG_DEBUG_NOTES=all` prints every channel's.
 - A stereo wave's regions (DLS2 `wlnk` multi-channel, channel 1 left or 2 right) each sound on their
   own side, at full level from centre, the channel's pan acting as a balance (DDKSynth, DLS1, has
-  no stereo waves; the theme's strings and some drums use them).
+  no stereo waves; the theme's strings and some drums use them). dmsynth skips pan for them
+  entirely (re/FINDINGS 135); the balance is ours.
+- Note-off releases every layer of the note-on it stops, as dmsynth does (each voice carries its
+  note-on's serial); DDKSynth stopped one voice per note-off, leaving the other layers sounding.

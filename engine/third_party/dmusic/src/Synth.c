@@ -239,6 +239,7 @@ typedef struct DmMsVoice {
 	DmMsRegion const* region;
 	uint8_t key;
 	uint32_t priority, group;
+	uint32_t note;  // the note-on that started it: its layers share it
 	DmMsInstrument const* program;
 	STIME start, stop, last_mix, mix_time;
 	VREL volume;  // pre-LFO volume, for the end-of-release test
@@ -265,6 +266,7 @@ typedef struct DmMsEngine {
 	DmMsVoice* in_use;  // priority order, lowest first (QueueVoice)
 	STIME time;
 	STIME max_span;     // 50 ms
+	uint32_t notes;     // note-ons so far
 
 	// Instruments and waves made from the DLS collections in use.
 	size_t instrument_count;
@@ -1165,11 +1167,13 @@ void DmSynth_sendPitchBendReset(DmSynth* slf, uint32_t channel, int reset) {
 
 static void DmSynth_noteOff(DmSynth* slf, struct DmSynthChannel* c, int key) {
 	DmMsEngine* e = engine_of(slf);
+	// dmsynth's note-off: the first playing voice of the key and every other layer of its note-on.
+	uint32_t note = 0;
 	for (DmMsVoice* v = e->in_use; v; v = v->next) {
-		if (v->note_on && !v->sustain_on && v->key == key && v->channel == c) {
+		if (v->note_on && !v->sustain_on && v->key == key && v->channel == c && (note == 0 || v->note == note)) {
+			note = v->note;
 			if (c->sustain) v->sustain_on = true;
 			else DmMsVoice_stop(v, e->time);
-			break;
 		}
 	}
 }
@@ -1195,6 +1199,7 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 	DmMsRegion const* layers[16];
 	uint32_t count = DmMsInstrument_regions(c->instrument, key, velocity, layers, 16);
 	if (count == 0) return;
+	uint32_t serial = ++e->notes ? e->notes : ++e->notes;
 	bool exclusive = false;
 	for (uint32_t i = 0; i < count; ++i) exclusive = exclusive || !layers[i]->allow_overlap;
 	if (exclusive) {
@@ -1219,6 +1224,7 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 		v->channel = c;
 		v->program = c->instrument;
 		v->priority = c->priority;
+		v->note = serial;
 		if (DmMsVoice_start(e, v, r, e->time, key, velocity, pitch)) {
 			v->in_use = true;
 			DmMsEngine_queue(e, v);
@@ -1226,7 +1232,7 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 		static int dbg = -2;
 		if (dbg == -2) dbg = !getenv("OPENBG_DEBUG_NOTES") ? -1 : strcmp(getenv("OPENBG_DEBUG_NOTES"), "all") == 0 ? -3 : atoi(getenv("OPENBG_DEBUG_NOTES"));
 		if (dbg == -3 || (dbg >= 0 && (int) channel == dbg)) {
-			fprintf(stderr, "[note %lld] ch %u key %d vel %d root %d rate %u len %u loop %u-%u one_shot %d pitch %d\n", (long long) e->time, channel, key, velocity,
+			fprintf(stderr, "[note %lld] ch %u vol %d expr %d pan %d key %d vel %d root %d rate %u len %u loop %u-%u one_shot %d pitch %d\n", (long long) e->time, channel, c->volume, c->expression, c->pan, key, velocity,
 			        r->root_key, r->wave_rate, r->length, r->loop_start, r->loop_end, r->one_shot, v->base_pitch);
 		}
 	}

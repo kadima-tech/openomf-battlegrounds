@@ -48,7 +48,7 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | What | Kind | Notes |
 |---|---|---|
 | `CSession::IsSinglePlayer` | Fixed answer | Always true; the original reads the session info's +0xdc (FINDINGS 127). Matters only for multiplayer. |
-| Main menu theme's sound | Approximation | Compared with a recording of the shipped game: velocity-selected samples, the band's pitch-bend ranges, the per-note volume curves and DirectMusic's default chord (the pad was an octave low), the drum kit and the stereo strings and drums are now played (FINDINGS 133). The strings that enter at 1:58 still lift the whole mix about 2 dB more than in the recording. Our mix is still somewhat darker than the recording (about 4-8 dB less from 800 Hz up relative to the bass); the cause is not found yet (candidates: the DLS2 synth's velocity/volume curves, its reverb on the shared stereo+reverb path, the 22050 Hz synth rate). |
+| Main menu theme's sound | Approximation | Compared with a recording of the shipped game: velocity-selected samples, the band's pitch-bend ranges, the per-note volume curves and DirectMusic's default chord (the pad was an octave low), the drum kit and the stereo strings and drums are now played (FINDINGS 133). Layered and stereo notes now end together (FINDINGS 135): the strings from 1:58 lift the mix as in the recording, within about 0.5 dB. Our mix is still somewhat darker than the recording (about 4-8 dB less from 800 Hz up relative to the bass); the cause is not found yet (candidates: the DLS2 synth's velocity/volume curves, its reverb on the shared stereo+reverb path, the 22050 Hz synth rate). |
 
 ## Waiting on networking (out of scope unless LAN play is wanted)
 
