@@ -60,6 +60,9 @@ struct AnimBank {
 	// use their rest transform). The root channel "Body" carries the move's placement in the
 	// animator's scene (root motion); with root_motion = false it is held at the origin.
 	std::vector<Transform> pose(const AnimSequence &seq, float t, bool root_motion = false) const;
+	// A channel's parent-relative transform at t when the sequence has a stream for it (its rest
+	// position or rotation where the stream has no keys of that kind).
+	bool local(const AnimSequence &seq, size_t channel, float t, Transform &out) const;
 };
 
 AnimBank read_anim_bank(const ObjectsFile &f, const ObjectInfo &o);

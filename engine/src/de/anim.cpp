@@ -105,6 +105,22 @@ int AnimBank::channel(const std::string &n) const {
 	return -1;
 }
 
+bool AnimBank::local(const AnimSequence &seq, size_t ch, float t, Transform &out) const {
+	if (ch >= channels.size()) return false;
+	for (auto &s : seq.streams) {
+		if (s.channel != ch) continue;
+		std::array<float, 3> pos = channels[ch].rest_pos;
+		Quat rot = channels[ch].rest_rot;
+		sample(s.pos, t, [&](auto &a, auto &b, float u) {
+			for (int k = 0; k < 3; ++k) pos[k] = a.p[k] + (b.p[k] - a.p[k]) * u;
+		});
+		sample(s.rot, t, [&](auto &a, auto &b, float u) { rot = slerp(a.q, b.q, u); });
+		out = transform_from(pos, rot);
+		return true;
+	}
+	return false;
+}
+
 std::vector<Transform> AnimBank::pose(const AnimSequence &seq, float t, bool root_motion) const {
 	std::vector<std::array<float, 3>> pos(channels.size());
 	std::vector<Quat> rot(channels.size());

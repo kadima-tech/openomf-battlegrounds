@@ -420,10 +420,19 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 				if (game::GameObject *r = find(a)) {
 					for (auto *ch : r->children) {
 						if (ch->class_path == "AnimationSequenceManager") {
-							as = {ch->sequence, ch->anim_time, ch->prelude, ch->prelude_time, ch->activations};
+							as = {ch->sequence, ch->anim_time, ch->prelude, ch->prelude_time, ch->activations, {}};
 							break;
 						}
 					}
+					std::function<void(game::GameObject *, const de::Transform &)> gather = [&](game::GameObject *o, const de::Transform &t) {
+						for (auto *ch : o->children) {
+							if (!ch->is_actor) continue;
+							de::Transform m = t.then(ch->local);
+							as.actors.push_back({ch->name, m});
+							gather(ch, m);
+						}
+					};
+					gather(r, r->local);
 				}
 				st.attachments.push_back(as);
 			}

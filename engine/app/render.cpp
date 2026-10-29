@@ -1491,7 +1491,14 @@ void FighterRenderer::draw_attachments(const float *vp, const float *eye, const 
 		if (at.parent_channel < 0 || size_t(at.parent_channel) >= body.size()) continue;
 		AnimState::Attachment st = i < a.attachments.size() ? a.attachments[i] : AnimState::Attachment{};
 		std::vector<de::Transform> pose;
-		if (st.sequence >= 0 && size_t(st.sequence) < at.bank.sequences.size()) {
+		if (!st.actors.empty()) {
+			de::AnimSequence none;
+			pose = at.bank.pose(none, 0, true);
+			for (auto &[name, t] : st.actors) {
+				int ch = at.bank.channel(name);
+				if (ch >= 0) pose[size_t(ch)] = t;
+			}
+		} else if (st.sequence >= 0 && size_t(st.sequence) < at.bank.sequences.size()) {
 			const auto &seq = at.bank.sequences[size_t(st.sequence)];
 			if (st.activations != at.seen_activations) {
 				at.seen_activations = st.activations;

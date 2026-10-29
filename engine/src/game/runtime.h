@@ -270,6 +270,13 @@ struct GameObject {
 	float danger_level = 0, danger_delay = 0;             // a CDanger property on this affector
 	bool has_danger = false;
 	int channel = -2;  // animation channel driving this bone actor (-1 none, -2 not looked up)
+	// A separate AnimationSequenceManager (Gargoyle's wings, DE_CAnimationSequenceManager): its
+	// bank, its channels' actors, and a prelude's per-channel start and end locals. `managed`
+	// marks a bone actor such a manager drives: the body's pose then writes it only from a stream.
+	const de::AnimBank *manager_bank = nullptr;
+	std::vector<GameObject *> manager_actors;
+	std::vector<de::Transform> manager_initial, manager_final;
+	bool managed = false;
 
 	uint32_t vec_world_pos = 0;  // arena CVector returned by WorldPosition()
 	uint32_t vec_local_pos = 0;
@@ -389,6 +396,13 @@ class World : public vm::Host {
 public:
 	void physics_step(GameObject &o);
 	Brain *brain_of(vm::Executor &ex) const;
+	// The animation bank a script's sequence references index: its creature's own, else the
+	// bank among its behavior's globals (BWings' WingAnimationBank).
+	const de::AnimBank *script_bank(vm::Executor &ex);
+	// DE_CAnimationSequenceManager on its own actors (Core Activate 0x701c0070, SetTime
+	// 0x701bfdd0, ActivatePrelude 0x701bff50).
+	void manager_activate(GameObject &mgr, const de::AnimBank *bank, int sequence, bool prelude, float t);
+	void manager_set_time(GameObject &mgr, float t);
 	// A stable global ID for a Behavior object (BGlobalID; DE_CPCode::GlobalID).
 	uint32_t behavior_id(const de::ObjectRef &behavior);
 	std::vector<de::ObjectRef> referenced_behaviors(const de::ObjectRef &behavior) const;

@@ -208,6 +208,9 @@ public:
 			bool prelude = false;
 			float prelude_time = 0;
 			uint32_t activations = 0;
+			// The game's bone actors under the root, relative to the body bone it hangs from: drawn
+			// as they stand when given (the wing actors carry both managers' writes).
+			std::vector<std::pair<std::string, de::Transform>> actors;
 		};
 		std::vector<Attachment> attachments;
 	};

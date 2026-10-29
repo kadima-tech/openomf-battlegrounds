@@ -563,11 +563,18 @@ void register_core_natives(World &w) {
 	});
 	// A separate CAnimationSequenceManager (Core: ActivateCaller, ActivatePrelude(Time)Caller,
 	// SetTimeCaller) keeps the same state on the manager object: Gargoyle's wings.
-	reg("CAnimationSequenceManager::Activate(class CSequence)", [=](const NativeContext &c) { activate(c, false, 0); });
-	reg("CAnimationSequenceManager::ActivatePrelude(class CSequence)", [=](const NativeContext &c) { activate(c, true, 0); });
-	reg("CAnimationSequenceManager::ActivatePrelude(class CSequence,float)", [=](const NativeContext &c) { activate(c, true, c.arg<float>(1)); });
+	// Gargoyle's wings: it writes its channels' actors at once, so a body AnimSetTime earlier in the
+	// frame is what a prelude captures.
+	auto manager = [](const NativeContext &c, bool prelude, float t) {
+		GameObject *o = c.self();
+		uint32_t seq = c.arg<uint32_t>(0);
+		if (o && seq) c.world.manager_activate(*o, c.world.script_bank(c.ex), c.mem().get<int32_t>(seq), prelude, t);
+	};
+	reg("CAnimationSequenceManager::Activate(class CSequence)", [=](const NativeContext &c) { manager(c, false, 0); });
+	reg("CAnimationSequenceManager::ActivatePrelude(class CSequence)", [=](const NativeContext &c) { manager(c, true, 0); });
+	reg("CAnimationSequenceManager::ActivatePrelude(class CSequence,float)", [=](const NativeContext &c) { manager(c, true, c.arg<float>(1)); });
 	reg("CAnimationSequenceManager::SetTime(float)", [](const NativeContext &c) {
-		if (auto *o = c.self()) o->anim_time = c.arg<float>(0);
+		if (auto *o = c.self()) c.world.manager_set_time(*o, c.arg<float>(0));
 	});
 	reg("CCreature::AnimReset()", [](const NativeContext &c) {
 		if (auto *o = c.self()) {

@@ -457,6 +457,16 @@ void World::pose_skeleton(GameObject &f) {
 		pose = bank.pose(bank.sequences[size_t(f.sequence)], f.prelude ? f.prelude_time : f.anim_time);
 	}
 	f.pose_now = pose;
+	// A bone actor another manager also drives takes the body's pose only from a stream of the
+	// sequence the body is moving to (DE_CAnimationSequenceManager::SetTime leaves the rest).
+	const int target = f.captured_blend ? f.capture_final.sequence : f.sequence;
+	auto streamed = [&](int ch) {
+		if (!valid(target)) return false;
+		for (auto &s : bank.sequences[size_t(target)].streams) {
+			if (s.channel == ch) return true;
+		}
+		return false;
+	};
 	// Walk the fighter's actor tree in its model space; bone actors take their channel's pose,
 	// everything else (hit detectors, effect anchors) keeps its offset from its parent.
 	std::function<void(GameObject &, const de::Transform &)> walk = [&](GameObject &o, const de::Transform &parent) {
@@ -468,7 +478,7 @@ void World::pose_skeleton(GameObject &f) {
 				ch->channel = bank.channel(ch->name);
 			}
 			de::Transform model;
-			if (ch->channel >= 0 && size_t(ch->channel) < pose.size()) {
+			if (ch->channel >= 0 && size_t(ch->channel) < pose.size() && (!ch->managed || streamed(ch->channel))) {
 				model = pose[size_t(ch->channel)];
 				ch->local = parent.inverse().then(model);
 			} else {
@@ -478,6 +488,80 @@ void World::pose_skeleton(GameObject &f) {
 		}
 	};
 	walk(f, de::Transform{});
+}
+
+const de::AnimBank *World::script_bank(vm::Executor &ex) {
+	Brain *b = brain_of(ex);
+	if (!b) return nullptr;
+	if (b->owner->bank) return b->owner->bank;
+	for (auto &gr : b->globals) {
+		if (!gr || gr.info().class_path != "AnimationSequenceGroup") continue;
+		auto &slot = global_banks_[{gr.file, gr.index}];
+		if (!slot) {
+			try {
+				slot = std::make_unique<de::AnimBank>(de::read_anim_bank(*gr.file, gr.info()));
+			} catch (const std::exception &) {
+				slot = std::make_unique<de::AnimBank>();
+			}
+		}
+		return slot.get();
+	}
+	return nullptr;
+}
+
+void World::manager_activate(GameObject &m, const de::AnimBank *bank, int sequence, bool prelude, float t) {
+	if (bank && bank != m.manager_bank) {
+		// Each channel's actor, by name under the manager's parent (its references' actor lists).
+		m.manager_bank = bank;
+		m.manager_actors.assign(bank->channels.size(), nullptr);
+		std::function<GameObject *(GameObject *, const std::string &)> find = [&](GameObject *o, const std::string &n) -> GameObject * {
+			for (GameObject *c : o->children) {
+				if (c->is_actor && c->name == n) return c;
+				if (GameObject *r = find(c, n)) return r;
+			}
+			return nullptr;
+		};
+		for (size_t i = 0; i < bank->channels.size() && m.parent; ++i) {
+			if ((m.manager_actors[i] = find(m.parent, bank->channels[i].name))) m.manager_actors[i]->managed = true;
+		}
+	}
+	++m.activations;
+	m.anim_time = 0;
+	m.prelude = false;
+	m.sequence = sequence;
+	if (!prelude) return;
+	// The channels' current locals, the sequence's at t over them, then no active sequence.
+	auto locals = [&] {
+		std::vector<de::Transform> v(m.manager_actors.size());
+		for (size_t i = 0; i < v.size(); ++i) {
+			if (m.manager_actors[i]) v[i] = m.manager_actors[i]->local;
+		}
+		return v;
+	};
+	m.manager_initial = locals();
+	manager_set_time(m, t);
+	m.manager_final = locals();
+	m.sequence = -1;
+	m.prelude = true;
+}
+
+void World::manager_set_time(GameObject &m, float t) {
+	m.anim_time = t;
+	if (!m.manager_bank) return;
+	const de::AnimBank &bank = *m.manager_bank;
+	if (m.sequence >= 0 && size_t(m.sequence) < bank.sequences.size()) {
+		// Only channels with a stream are written; the others keep their locals.
+		for (size_t i = 0; i < m.manager_actors.size(); ++i) {
+			de::Transform local;
+			if (m.manager_actors[i] && bank.local(bank.sequences[size_t(m.sequence)], i, t, local)) m.manager_actors[i]->local = local;
+		}
+	} else if (m.prelude && m.manager_initial.size() == m.manager_actors.size()) {
+		// SetEmptyTime: each channel from its initial to its final local, t unclamped.
+		auto now = de::blend_poses(m.manager_initial, m.manager_final, t);
+		for (size_t i = 0; i < m.manager_actors.size(); ++i) {
+			if (m.manager_actors[i]) m.manager_actors[i]->local = now[i];
+		}
+	}
 }
 
 void World::validate_animation(GameObject &f) {
@@ -1733,24 +1817,7 @@ uint32_t World::global_reference(vm::Executor &ex, uint32_t index) {
 	// Each kind is classified once by which bank holds most of its names.
 	GameObject *o = b->owner;
 	const auto &fighter_bank = o->inputs ? *o->inputs : fighter_inputs;
-	// A creature's own bank; for other owners the bank among the behavior's globals (BWings
-	// names its WingAnimationBank so: its sequences are that bank's).
-	const de::AnimBank *anim = o->bank;
-	if (!anim) {
-		for (auto &gr : b->globals) {
-			if (!gr || gr.info().class_path != "AnimationSequenceGroup") continue;
-			auto &slot = global_banks_[{gr.file, gr.index}];
-			if (!slot) {
-				try {
-					slot = std::make_unique<de::AnimBank>(de::read_anim_bank(*gr.file, gr.info()));
-				} catch (const std::exception &) {
-					slot = std::make_unique<de::AnimBank>();
-				}
-			}
-			anim = slot.get();
-			break;
-		}
-	}
+	const de::AnimBank *anim = script_bank(ex);
 	auto &kinds = ref_kinds_[&b->cls];
 	auto kt = kinds.find(g.kind);
 	if (kt == kinds.end()) {
