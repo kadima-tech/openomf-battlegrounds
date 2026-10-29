@@ -25,7 +25,8 @@ to present that data, and the few places where the look is our own.
   locked entries grey. No title above the list.
 - **Pilot panel.** The name centred at the top; the photo (to 0.58 across) in a pale frame; beside it
   four stat rows (icon tinted (0.5, 1, 1), name, a teal well filled cyan) and "Colors" over the
-  pilot's three colour swatches; the biography centred below.
+  pilot's three colour swatches; the biography centred below, then "RECON DATA" and the unlocked
+  "Observed Preferences" ("<stat>: <level>"). Text that overflows scrolls with the mouse wheel.
 - **Model picker (Choose Creature's View).** The page's own 3D scene, `LoadScene`'s hangar
   (`ChooseFighterModelPickerEnvironment`), fills the 4:3 field through its `EnvironmentCamera`, the
   robot on `RobotPedistal` in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:

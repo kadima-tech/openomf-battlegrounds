@@ -26,11 +26,11 @@ struct DescriptionInfo {
 };
 DescriptionInfo read_description(const de::World &data, const de::ObjectRef &description);
 
-// DE_CDescription::IsLocked(0) (Core 0x701f2640): locked by default and not unlocked since.
-// Unlock (0x70010aa0 -> UnlockAndNotify) writes the description's DLock record; ours is the
-// registry value "DLock <guid>".
-bool description_locked(const World &w, const de::ObjectRef &description);
-void unlock_description(World &w, const de::ObjectRef &description);
+// DE_CDescription::IsLocked(id) (Core 0x701f2640): id 0 is locked when locked by default and not
+// unlocked since; any other id is locked until unlocked. Unlock (0x70010aa0) adds the id to the
+// description's DLock record; ours is the registry value "DLock <guid>" (id 0) or "DLock <guid> <id>".
+bool description_locked(const World &w, const de::ObjectRef &description, uint32_t id = 0);
+void unlock_description(World &w, const de::ObjectRef &description, uint32_t id = 0);
 
 // DE_CEnvironmentDescription::ObjProcessContents (Creature 0x1500aa20): after the description's
 // chunk, v1 [i32 minimum recommended players +0xdc][i32 maximum +0xe0].

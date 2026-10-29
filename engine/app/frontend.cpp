@@ -10,7 +10,7 @@
 // it launches pick those (testing); --headless N runs N frames without a window and lists the
 // natives still missing.
 //
-// MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;..." scripts the mouse (and Enter, Esc, a character key) in screenshot runs (x, y fractions
+// MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
 // of the 4:3 GUI area, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
 
@@ -139,6 +139,7 @@ int main(int argc, char **argv) {
 			else if (sscanf(item.c_str(), "key@%d", &f) == 1) mouse_script.push_back({f, 3, 0, 0});
 			else if (sscanf(item.c_str(), "esc@%d", &f) == 1) mouse_script.push_back({f, 4, 0, 0});
 			else if (char ch; sscanf(item.c_str(), "char %c@%d", &ch, &f) == 2) mouse_script.push_back({f, 5, float(ch), 0});
+			else if (int dy; sscanf(item.c_str(), "wheel %d@%d", &dy, &f) == 2) mouse_script.push_back({f, 6, float(dy), 0});
 			if (q == std::string::npos) break;
 			p = q + 1;
 		}
@@ -408,6 +409,7 @@ int main(int argc, char **argv) {
 				else if (m.kind == 3) app.key(13);
 				else if (m.kind == 4) app.key(27);
 				else if (m.kind == 5) app.key(int(m.x));
+				else if (m.kind == 6) app.wheel(int(m.x));
 				else app.mouse_button(m.kind == 1);
 			}
 			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI. On a first run

@@ -158,7 +158,25 @@ void register_script_natives(World &w) {
 	reg("CObject::float MouseScreenPositionY()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_y); });
 	reg("CObject::float ScreenAspectRatio()", [](const NativeContext &c) { c.ret_f32(c.world.screen_aspect); });
 	reg("CDescription::Unlock(dword)", [](const NativeContext &c) {
-		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index});
+		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, c.arg<uint32_t>(0));
+	});
+	// DE_CPilotDescription::UnlockStatDescriptions (OMF 0x35050cf0): shuffles the 22 stat ids with
+	// the CRT's rand() and unlocks the first `n` still locked, walking from the end.
+	reg("CPilotDescription::UnlockStatDescriptions(int)", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || !o->file) return;
+		static uint32_t seed = 1;
+		auto crt_rand = [] { seed = seed * 214013u + 2531011u; return int((seed >> 16) & 0x7fff); };
+		int ids[22];
+		for (int k = 0; k < 22; ++k) ids[k] = k;
+		for (int k = 21; k >= 0; --k) std::swap(ids[crt_rand() % 22], ids[k]);
+		int n = int(c.arg<uint32_t>(0));
+		de::ObjectRef d{o->file, o->index};
+		for (int k = 21; k >= 0 && n > 0; --k) {
+			if (!description_locked(c.world, d, uint32_t(ids[k] + 100))) continue;
+			unlock_description(c.world, d, uint32_t(ids[k] + 100));
+			--n;
+		}
 	});
 	// IsUserSelectionValidCaller (Core 0x701f11d0): description vtable +0x130, true but for match
 	// descriptions (DE_CMatchDescription::IsUserSelectionValid), which no shipped list gathers.

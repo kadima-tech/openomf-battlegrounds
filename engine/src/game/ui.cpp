@@ -1079,7 +1079,7 @@ int DescriptionSelector::visible_rows() const {
 // The list control (DE_CListControl3dEx) scrolls to keep the selection in view.
 void DescriptionSelector::select(AppManager &app, int i) {
 	if (i < 0 || i >= int(entries_.size())) return;
-	selected_ = i;
+	selected_ = i, bio_scroll_ = 0;
 	int rows = visible_rows();
 	if (rows > 0) {
 		if (i < scroll_) scroll_ = i;
@@ -1249,17 +1249,36 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 			}
 		}
 		// GetPilotDescriptionText (OMF 0x35050870): its PilotDescription value ("BIO UNNAVAILABLE"
-		// when empty), centred from 0.66 down.
+		// when empty), then under RECON DATA each AI stat whose descriptor is unlocked (id 100 + k,
+		// UnlockStatDescriptions) by its level; centred from 0.66 down.
 		std::string bio;
 		if (GameObject *g = app.world.global_object(d)) {
 			if (auto *v = app.world.object_value(g, "PilotDescription")) bio = v->text;
 		}
 		if (bio.empty()) bio = "BIO UNNAVAILABLE";
+		if (pl) {
+			static const char *stat_names[22] = {"Light Attacks", "Heavy Attacks", "Punches", "Kicks", "Special Moves", "Melee Attacks",
+			                                     "Preimptive Attacks", "Back Attacks", "Counter Attacks", "Jumping", "Grappls",
+			                                     "Carryable Weapons", "Powerups", "Super Moves", "Left Attacks", "Right Attacks",
+			                                     "Movement Urgency", "Evasion", "Mercy", "Attack Range", "Attack Variation", "Defend Objective"};
+			// DE_CPilot::StatByIndex (OMF 0x35051330).
+			static const uint32_t stat_offsets[22] = {0x428, 0x448, 0x468, 0x488, 0x4a8, 0x4e8, 0x508, 0x528, 0x548, 0x568, 0x588,
+			                                          0x5a8, 0x5c8, 0x4c8, 0x3e8, 0x408, 0x628, 0x648, 0x668, 0x5e8, 0x608, 0x688};
+			static const char *levels[9] = {"None", "Abysimal", "Low", "Below Average", "Average", "Above Average", "High", "Huge", "Massive"};
+			bool header = false;
+			for (int k = 0; k < 22; ++k) {
+				if (description_locked(app.world, d, uint32_t(100 + k))) continue;
+				if (!header) bio += "\n\nRECON DATA\n\nObserved Preferences:\n\n", header = true;
+				auto it = pl->ai.find(stat_offsets[k]);
+				uint32_t level = it == pl->ai.end() ? 4 : it->second.level;
+				bio += std::string(stat_names[k]) + ": " + (level < 9 ? levels[level] : "") + "\n";
+			}
+		}
 		float bx0 = wx0 + 0.013f * w, bx1 = wx1 - 0.013f * w, size = kListText;
 		std::vector<std::string> lines;
 		std::string line;
 		for (size_t p = 0; p <= bio.size();) {
-			size_t q = bio.find(' ', p);
+			size_t q = bio.find_first_of(" \n", p);
 			std::string word = bio.substr(p, q == std::string::npos ? std::string::npos : q - p);
 			std::string test = line.empty() ? word : line + " " + word;
 			if (!line.empty() && app.text_width && app.text_width(test, size) > bx1 - bx0) {
@@ -1269,13 +1288,18 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 				line = test;
 			}
 			if (q == std::string::npos) break;
+			if (bio[q] == '\n') lines.push_back(line), line.clear();
 			p = q + 1;
 		}
 		if (!line.empty()) lines.push_back(line);
-		for (size_t i = 0; i < lines.size(); ++i) {
+		while (!lines.empty() && lines.back().empty()) lines.pop_back();
+		bio_lines_ = int(lines.size());
+		bio_rows_ = std::max(1, int((wy1 - size - (wy0 + 0.69f * h)) / (size * 1.45f)) + 1);
+		bio_scroll_ = std::clamp(bio_scroll_, 0, std::max(0, bio_lines_ - bio_rows_));
+		for (int i = 0; i < bio_rows_ && bio_scroll_ + i < bio_lines_; ++i) {
 			DrawItem t;
 			t.kind = DrawItem::Text;
-			t.x0 = (bx0 + bx1) / 2, t.y0 = wy0 + 0.69f * h + float(i) * size * 1.45f, t.size = size, t.text = lines[i], t.centered = true;
+			t.x0 = (bx0 + bx1) / 2, t.y0 = wy0 + 0.69f * h + float(i) * size * 1.45f, t.size = size, t.text = lines[size_t(bio_scroll_ + i)], t.centered = true;
 			out.push_back(t);
 		}
 	} else if (selected_ >= 0) {
@@ -1303,7 +1327,12 @@ bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
 	return true;
 }
 
-void DescriptionSelector::wheel(AppManager &, int dy) {
+void DescriptionSelector::wheel(AppManager &app, int dy) {
+	// Over the pilot text when it overflows: scroll it (a stand-in for the text display's page viewer).
+	if (window_ && window_->contains(app.mouse_x(), app.mouse_y()) && bio_lines_ > bio_rows_) {
+		bio_scroll_ = std::clamp(bio_scroll_ - dy, 0, bio_lines_ - bio_rows_);
+		return;
+	}
 	int rows = visible_rows();
 	scroll_ = std::clamp(scroll_ - dy, 0, std::max(0, int(entries_.size()) - rows));
 }

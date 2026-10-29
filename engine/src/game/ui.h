@@ -168,6 +168,7 @@ private:
 	std::shared_ptr<ModelPicker> picker_;  // +0x154
 	int selected_ = -1;
 	int scroll_ = 0;  // the first entry shown
+	int bio_scroll_ = 0, bio_lines_ = 0, bio_rows_ = 0;  // the pilot text's first line shown, its lines, those that fit
 	Control *list_ = nullptr, *window_ = nullptr, *next_ = nullptr, *back_ = nullptr;
 };
 
@@ -294,6 +295,12 @@ private:
 
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
+
+public:
+	float mouse_x() const { return mouse_x_; }
+	float mouse_y() const { return mouse_y_; }
+
+private:
 	bool notification_press_ = false;
 	bool first_ui_ = true;
 	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_;

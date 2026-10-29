@@ -79,12 +79,19 @@ std::vector<de::ObjectRef> fighter_models(const de::World &data, const de::Objec
 	return out;
 }
 
-bool description_locked(const World &w, const de::ObjectRef &d) {
-	return read_description(w.data(), d).locked_by_default && w.registry_string("DLock " + d.info().guid.str()).empty();
+namespace {
+std::string lock_key(const de::ObjectRef &d, uint32_t id) {
+	return "DLock " + d.info().guid.str() + (id ? " " + std::to_string(id) : std::string());
+}
+}  // namespace
+
+bool description_locked(const World &w, const de::ObjectRef &d, uint32_t id) {
+	if (id == 0 && !read_description(w.data(), d).locked_by_default) return false;
+	return w.registry_string(lock_key(d, id)).empty();
 }
 
-void unlock_description(World &w, const de::ObjectRef &d) {
-	if (d) w.registry["DLock " + d.info().guid.str()] = "1";
+void unlock_description(World &w, const de::ObjectRef &d, uint32_t id) {
+	if (d) w.registry[lock_key(d, id)] = "1";
 }
 
 std::string read_string_value(const de::ObjectRef &v) {
