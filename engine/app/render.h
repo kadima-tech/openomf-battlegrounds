@@ -28,6 +28,16 @@ struct BatchVertex {
 // One pass of a TextureProcess\MultiStage material over the faces its first stage covers: up to
 // four stacked texture stages combined in the shader (DE_CShader::CStage::Setup), blended into the
 // frame by the pass's element mode (DE_CGenericShader::AddStage).
+// The transparent layer (DE_CClipVolume layer 8): while a sink is set, meshes' blended first
+// passes are not drawn but handed to it, each with where its actor is and a call that draws it as
+// it would have been; the particle renderer draws them in the layer's sorted order.
+struct DeferredDraw {
+	const void *id;
+	std::array<float, 3> origin;
+	std::function<void()> draw;
+};
+void set_transparent_sink(std::vector<DeferredDraw> *sink);
+
 struct MeshBatch {
 	GLuint vao = 0, vbo = 0;
 	GLsizei count = 0;

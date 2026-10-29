@@ -427,7 +427,8 @@ void ParticleRenderer::trail(const game::World &world, const game::Trail &t, con
 	}
 }
 
-void ParticleRenderer::draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer) {
+void ParticleRenderer::draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer,
+                            const std::vector<DeferredDraw> *meshes) {
 	if (!prog_) return;
 	const Vec right{view[0], view[4], view[8]}, up{view[1], view[5], view[9]};
 	// The render area's focal length in pixels (DE_CStandardRenderer::SetupCameraView:
@@ -455,6 +456,15 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 		e.seen = world.frame();
 		return per_element[id];
 	};
+	if (meshes) {
+		// Mesh shaders' static key is their shader index (no group: only particle renderers have one).
+		for (const DeferredDraw &m : *meshes) {
+			element(m.id, nullptr, false);
+			Element &e = elements_[m.id];
+			e.origin = m.origin;
+			e.mesh = m.draw;
+		}
+	}
 	if (!glow_layer) {
 		for (auto &t : world.particles->trails()) {
 			if (t->stepped == world.frame() && !t->actor->meshes_disabled && (!only || only(t->actor))) trail(world, *t, view, element(t.get(), t->actor, false));
@@ -771,8 +781,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	if (!glow_layer) {
 		for (auto &[id, batches] : per_element) {
 			Element &e = elements_[id];
-			if (!e.actor) continue;
-			auto t = const_cast<game::GameObject *>(e.actor)->world().t;
+			auto t = e.actor ? const_cast<game::GameObject *>(e.actor)->world().t : e.origin;
 			e.z = view[2] * t[0] + view[6] * t[1] + view[10] * t[2] + view[14];
 		}
 		// Elements gone for a while leave the layer (the original keeps a destroyed element's slot
@@ -786,19 +795,28 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 		}
 	}
 	if (per_element.empty()) return;
-	glUseProgram(prog_);
-	glUniformMatrix4fv(glGetUniformLocation(prog_, "vp"), 1, GL_FALSE, vp);
-	glUniform1i(glGetUniformLocation(prog_, "tex"), 0);
-	glBindVertexArray(vao_);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-	glEnable(GL_BLEND);
-	glEnable(GL_DEPTH_TEST);
-	glDepthMask(GL_FALSE);
-	glDisable(GL_CULL_FACE);
-	glActiveTexture(GL_TEXTURE0);
+	auto bind = [&] {
+		glUseProgram(prog_);
+		glUniformMatrix4fv(glGetUniformLocation(prog_, "vp"), 1, GL_FALSE, vp);
+		glUniform1i(glGetUniformLocation(prog_, "tex"), 0);
+		glBindVertexArray(vao_);
+		glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+		glEnable(GL_BLEND);
+		glEnable(GL_DEPTH_TEST);
+		glDepthMask(GL_FALSE);
+		glDisable(GL_CULL_FACE);
+		glActiveTexture(GL_TEXTURE0);
+	};
+	bind();
 	for (const void *id : order_) {
 		auto it = per_element.find(id);
 		if (it == per_element.end()) continue;
+		if (Element &e = elements_[id]; e.mesh && meshes) {
+			e.mesh();
+			e.mesh = nullptr;
+			bind();
+			continue;
+		}
 		for (auto &[key, b] : it->second) {
 			if (b.v.empty()) continue;
 			glBlendFunc(b.additive ? GL_ONE : GL_SRC_ALPHA, b.additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);

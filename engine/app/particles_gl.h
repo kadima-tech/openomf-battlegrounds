@@ -10,6 +10,7 @@
 
 #include "game/particles.h"
 #include "gl_util.h"
+#include "render.h"
 
 namespace render {
 
@@ -18,7 +19,9 @@ public:
 	void load();
 	// `view` is the camera's view matrix (its rows give the screen axes), `eye` its position.
 	// With `glow_layer`, only the renderers that glow, for the glow target.
-	void draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer = false);
+	// `meshes`: the frame's deferred blended mesh passes, drawn among the effects in the layer's order.
+	void draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer = false,
+	          const std::vector<DeferredDraw> *meshes = nullptr);
 	// When set, only the effects of actors it accepts are drawn.
 	std::function<bool(const game::GameObject *)> only;
 
@@ -50,6 +53,8 @@ private:
 		float key = 0, z = 0;
 		const game::GameObject *actor = nullptr;
 		uint32_t seen = 0;
+		std::array<float, 3> origin{0, 0, 0};  // a mesh pass: where its actor is
+		std::function<void()> mesh;           // a mesh pass: draws it
 	};
 	std::map<const void *, Element> elements_;
 	std::vector<const void *> order_;

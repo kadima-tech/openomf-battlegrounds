@@ -658,14 +658,54 @@ void set_cull(bool two_sided) {
 	glFrontFace(flip ? GL_CW : GL_CCW);
 }
 
+std::vector<DeferredDraw> *g_sink = nullptr;
+float g_vp[16], g_eye[3];
+
+void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches, int phase, const std::array<float, 3> *at, const void *owner);
+
 void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase, const std::array<float, 3> *at = nullptr,
                   const void *owner = nullptr) {
+	std::vector<const MeshBatch *> list;
+	for (auto &b : batches) {
+		if (phase >= 0 && b.late != (phase == 1)) continue;
+		if (g_sink && b.late) {
+			// A blended first pass joins the transparent layer, drawn later in its sorted order
+			// with the state it would have had now.
+			float model[16];
+			glGetUniformfv(prog, glGetUniformLocation(prog, "model"), model);
+			std::array<float, 16> m, vp;
+			std::array<float, 3> eye{g_eye[0], g_eye[1], g_eye[2]};
+			std::copy(model, model + 16, m.begin());
+			std::copy(g_vp, g_vp + 16, vp.begin());
+			std::optional<std::array<float, 3>> where;
+			if (at) where = *at;
+			std::array<float, 3> origin = at ? *at
+			                                 : std::array<float, 3>{(b.bmin[0] + b.bmax[0]) / 2, (b.bmin[1] + b.bmax[1]) / 2, (b.bmin[2] + b.bmax[2]) / 2};
+			const MeshBatch *pb = &b;
+			g_sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb] {
+				                   glUseProgram(prog);
+				                   glUniform1f(glGetUniformLocation(prog, "out_scale"), 1);
+				                   glUniform1f(glGetUniformLocation(prog, "fog_density"), 0);
+				                   glUniformMatrix4fv(glGetUniformLocation(prog, "vp"), 1, GL_FALSE, vp.data());
+				                   glUniform3fv(glGetUniformLocation(prog, "eye"), 1, eye.data());
+				                   glUniformMatrix4fv(glGetUniformLocation(prog, "model"), 1, GL_FALSE, m.data());
+				                   draw_batch_list(prog, {pb}, -1, where ? &*where : nullptr, owner);
+			                   }});
+			continue;
+		}
+		list.push_back(&b);
+	}
+	draw_batch_list(prog, list, -1, at, owner);
+}
+
+void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches, int phase, const std::array<float, 3> *at, const void *owner) {
 	if (at) set_vertex_lights(prog, *at, false, owner);
 	else glUniform3fv(glGetUniformLocation(prog, "ambient"), 1, g_lighting.ambient.data());
 	static const char *tex_names[4] = {"tex0", "tex1", "tex2", "tex3"};
 	for (int i = 0; i < 4; ++i) glUniform1i(glGetUniformLocation(prog, tex_names[i]), i);
 	glUniform1i(glGetUniformLocation(prog, "env"), 4);
-	for (auto &b : batches) {
+	for (const MeshBatch *bp : batches) {
+		const MeshBatch &b = *bp;
 		if (phase >= 0 && b.late != (phase == 1)) continue;
 		GLuint cube = g_specular_pass ? (b.specular_cube ? b.specular_cube : g_specular) : (b.cube ? b.cube : g_environment);
 		glActiveTexture(GL_TEXTURE4);
@@ -780,6 +820,8 @@ void draw_splashes(GLuint prog, const std::vector<MeshBatch> &batches) {
 }
 
 void use_mesh_program(GLuint prog, const float *vp, const float *eye) {
+	std::copy(vp, vp + 16, g_vp);
+	std::copy(eye, eye + 3, g_eye);
 	glUseProgram(prog);
 	glUniform1f(glGetUniformLocation(prog, "out_scale"), 1);
 	glUniform1f(glGetUniformLocation(prog, "fog_density"), 0);
@@ -788,6 +830,8 @@ void use_mesh_program(GLuint prog, const float *vp, const float *eye) {
 }
 
 }  // namespace
+
+void set_transparent_sink(std::vector<DeferredDraw> *sink) { g_sink = sink; }
 
 // DE_CEnvironment::ObjProcessReferences (Creature 0x1500b7f0) v5, the last references chunk:
 // [RGBA advanced reference][seven BOOL + image slots: +0x320, +0x338, +0x32c, +0x308, +0x314,

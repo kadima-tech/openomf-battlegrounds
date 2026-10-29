@@ -372,6 +372,10 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		}
 	}
 	render::update_animated_textures(world.image_phases);
+	// Blended first passes go to the transparent layer, drawn with the effects after the opaque scene
+	// (OPENBG_NO_DEFER=1 draws them in their meshes' passes instead, debugging).
+	std::vector<render::DeferredDraw> transparent;
+	render::set_transparent_sink(getenv("OPENBG_NO_DEFER") ? nullptr : &transparent);
 	arena_r.draw(vp, eye);
 	// Actors made at run time (pickups, jets, spawned props), where they are now: shown,
 	// active, and not a fighter's own body.
@@ -439,6 +443,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (const game::Pilot *pl = game::pilot_of(a)) fi->renderer.set_paint(pl->colours);
 			fi->renderer.draw(vp, eye, body, st);
 		}
+		render::set_transparent_sink(nullptr);
 		// The robots' shadows from this frame's poses (they project in the next frame's light passes).
 		std::vector<render::ShadowRenderer::Caster> casters;
 		if (shadow_type > 0) {
@@ -460,7 +465,9 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		shadows_r.update(shadow_type, casters, render::g_lighting, view, 70.5f);
 	}
 	if (!capture_camera) world.particles->process_trailers();
-	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye);
+	render::set_transparent_sink(nullptr);
+	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, false, &transparent);
+	else for (auto &t : transparent) t.draw();
 	overlay.draw_world(world, vp);
 	// The glow layer, added over the scene (OPENBG_NO_GLOW=1 leaves it out).
 	static const bool no_glow = getenv("OPENBG_NO_GLOW") != nullptr;
