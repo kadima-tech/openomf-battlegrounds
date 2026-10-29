@@ -38,6 +38,7 @@ public:
 	explicit World(const std::filesystem::path &data_dir);
 
 	const ObjectsFile *file(const std::string &stem) const;
+	const std::map<std::string, std::unique_ptr<ObjectsFile>> &files() const { return files_; }
 	ObjectRef resolve(const ObjectsFile &from, const Reference &r) const;
 	ObjectRef by_guid(const Guid &g) const;
 	// The first object of that class and name in any file (stems in order).

@@ -4,8 +4,10 @@
 #include <cctype>
 #include <cstdio>
 
+#include "de/image.h"
 #include "de/mesh.h"
 #include "de/scene.h"
+#include "game/descriptions.h"
 #include "game/runtime.h"
 #include "game/session.h"
 
@@ -13,7 +15,7 @@ namespace game::ui {
 
 namespace {
 
-constexpr int kKeyReturn = 13, kKeyEscape = 27;  // as SDL's keycodes
+constexpr int kKeyReturn = 13, kKeyEscape = 27, kKeyUp = (1 << 30) | 82, kKeyDown = (1 << 30) | 81;  // SDL keycodes
 
 std::string upper(std::string s) {
 	for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -51,6 +53,86 @@ bool display_rect(World &w, GameObject *area, Control &c) {
 	c.top = 1 - (py + sy) * 4 / 3;
 	c.bottom = 1 - py * 4 / 3;
 	return true;
+}
+
+// A ControlCreator's layout (FINDINGS 127) flowed into a panel `width` wide from (x, y): text
+// word-wrapped in its height, images at their size in 800 x 600 virtual pixels (scaled down to
+// fit), groups stacked downwards or across. Returns the height used.
+float flow(AppManager &app, const ControlLayout &l, float x, float y, float width, float bottom, std::vector<DrawItem> &out) {
+	const float white[4] = {1, 1, 1, 1};
+	if (l.kind == ControlLayout::Text) {
+		float size = float(l.text_height) / 600.0f, line_h = size * 1.15f;
+		std::vector<std::string> lines;
+		size_t p = 0;
+		const std::string &t = l.text;
+		while (p <= t.size()) {
+			size_t nl = t.find_first_of("\r\n", p);
+			std::string para = t.substr(p, nl == std::string::npos ? std::string::npos : nl - p);
+			std::string line;
+			size_t q = 0;
+			while (q < para.size()) {
+				size_t sp = para.find(' ', q);
+				std::string word = para.substr(q, sp == std::string::npos ? std::string::npos : sp - q);
+				std::string tryline = line.empty() ? word : line + " " + word;
+				if (l.wrap && !line.empty() && app.text_width && app.text_width(tryline, size) > width) {
+					lines.push_back(line);
+					line = word;
+				} else {
+					line = tryline;
+				}
+				if (sp == std::string::npos) break;
+				q = sp + 1;
+			}
+			lines.push_back(line);
+			if (nl == std::string::npos) break;
+			p = nl + (t.compare(nl, 2, "\r\n") == 0 ? 2 : 1);
+		}
+		float h = 0;
+		for (auto &ln : lines) {
+			if (y + h + line_h <= bottom && !ln.empty()) {
+				DrawItem d;
+				d.kind = DrawItem::Text;
+				d.x0 = x, d.y0 = y + h + line_h / 2, d.size = size, d.text = ln;
+				std::copy(white, white + 4, d.rgba);
+				out.push_back(d);
+			}
+			h += line_h;
+		}
+		return h;
+	}
+	if (l.kind == ControlLayout::Image) {
+		de::Image im;
+		try {
+			im = de::read_image_header(l.image.file->object_data(l.image.info()).contents);
+		} catch (const std::exception &) {
+			return 0;
+		}
+		float w = float(im.width) / 800.0f, h = float(im.height) / 600.0f;
+		if (w > width && w > 0) h *= width / w, w = width;
+		if (y + h <= bottom) {
+			DrawItem d;
+			d.kind = DrawItem::Image;
+			d.x0 = x, d.y0 = y, d.x1 = x + w, d.y1 = y + h, d.image = l.image;
+			out.push_back(d);
+		}
+		return h;
+	}
+	float used = 0, cx = x;
+	for (auto &it : l.items) {
+		if (l.across) {
+			float h = flow(app, it, cx, y, width - (cx - x), bottom, out);
+			used = std::max(used, h);
+			if (it.kind == ControlLayout::Image) {
+				try {
+					cx += float(de::read_image_header(it.image.file->object_data(it.image.info()).contents).width) / 800.0f;
+				} catch (const std::exception &) {
+				}
+			}
+		} else {
+			used += flow(app, it, x, y + used, width, bottom, out);
+		}
+	}
+	return used;
 }
 
 class MainMenu : public UIManager {
@@ -134,6 +216,126 @@ private:
 };
 
 }  // namespace
+
+bool DescriptionSelector::begin(AppManager &app) {
+	UIManager::begin(app);
+	chosen = {};
+	// GetAvailableDescriptions (0x701e4790): listed, and not hidden by a lock; sorted by name.
+	entries_.clear();
+	for (const de::ObjectRef &d : pool) {
+		DescriptionInfo info = read_description(app.world.data(), d);
+		if (!info.listed || (app.is_locked(d) && !info.visible_when_locked)) continue;
+		entries_.push_back(d);
+	}
+	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
+	selected_ = entries_.empty() ? -1 : 0;
+	// Begin (0x701e4d40): a pool of one is chosen without showing; backing out passes through.
+	if (pool.size() == 1) {
+		choose(app, pool[0]);
+		return false;
+	}
+	if (app.last && app.last->backed_out) {
+		backed_out = true;
+		app.set_last();
+		return false;
+	}
+	return true;
+}
+
+void DescriptionSelector::setup_controls(AppManager &app) {
+	list_ = button(app, "", "ListWindow");
+	window_ = button(app, "", "Window");
+	next_ = button(app, "Next", "NEXT");
+	next_->keys = {kKeyReturn};
+	back_ = button(app, "Back", "BACK");
+	back_->keys = {kKeyEscape};
+	select(app, selected_);
+}
+
+// The robot's ProcessSelectedObjects (0x701e5370): Next reads "Locked" for a locked one.
+void DescriptionSelector::select(AppManager &app, int i) {
+	if (i < 0 || i >= int(entries_.size())) return;
+	selected_ = i;
+	if (next_) next_->text = app.is_locked(entries_[size_t(i)]) ? "Locked" : "Next";
+}
+
+void DescriptionSelector::choose(AppManager &app, const de::ObjectRef &d) {
+	chosen = d;
+	complete(app);
+	if (on_complete) on_complete(app, *this);
+}
+
+// ProcessButtonClickEvent (0x701e5130).
+void DescriptionSelector::click(AppManager &app, Control &c) {
+	if (&c == back_) {
+		backed_out = true;
+		app.set_last();
+	} else if (&c == next_ && selected_ >= 0) {
+		const de::ObjectRef &d = entries_[size_t(selected_)];
+		if (app.is_locked(d)) app.notify("Selection Locked", d.info().name + " is currently locked and cannot be selected.");
+		else choose(app, d);
+	}
+}
+
+namespace {
+constexpr float kRow = 20.0f / 600.0f, kListText = 16.0f / 600.0f;  // DE_CListControl3dEx entry height 0x14
+}
+
+void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
+	if (!list_ || !window_) return;
+	const float white[4] = {1, 1, 1, 1}, hilite[4] = {0.55f, 0.75f, 0.9f, 0.35f};
+	float pad = 0.01f;
+	DrawItem t;
+	t.kind = DrawItem::Text;
+	t.x0 = (list_->left + list_->right) / 2, t.y0 = list_->top + pad + kRow / 2, t.size = kListText * 1.15f, t.centered = true, t.text = title;
+	std::copy(white, white + 4, t.rgba);
+	out.push_back(t);
+	for (size_t i = 0; i < entries_.size(); ++i) {
+		float y = list_->top + pad + kRow * float(i + 1.5f);
+		if (y + kRow > list_->bottom) break;
+		if (int(i) == selected_) {
+			DrawItem r;
+			r.x0 = list_->left + pad, r.x1 = list_->right - pad, r.y0 = y, r.y1 = y + kRow;
+			std::copy(hilite, hilite + 4, r.rgba);
+			out.push_back(r);
+		}
+		DrawItem e;
+		e.kind = DrawItem::Text;
+		e.x0 = list_->left + 2 * pad, e.y0 = y + kRow / 2, e.size = kListText, e.text = entries_[i].info().name;
+		std::copy(white, white + 4, e.rgba);
+		if (app.is_locked(entries_[i])) e.rgba[0] = e.rgba[1] = e.rgba[2] = 0.6f;
+		out.push_back(e);
+	}
+	// NewLargeRepresentation (description vtable +0x120): the ControlCreator in the Window.
+	if (selected_ >= 0) {
+		DescriptionInfo info = read_description(app.world.data(), entries_[size_t(selected_)]);
+		if (info.large && info.large.info().class_path == "ControlCreator") {
+			flow(app, read_control_creator(app.world.data(), info.large), window_->left + 2 * pad, window_->top + 2 * pad,
+			     window_->right - window_->left - 4 * pad, window_->bottom - pad, out);
+		}
+	}
+}
+
+bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
+	if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
+	float pad = 0.01f;
+	int row = int(std::floor((y - list_->top - pad) / kRow - 1.5f));
+	if (row < 0 || row >= int(entries_.size())) return true;
+	select(app, row);
+	if (what == 3 && next_) click(app, *next_);
+	return true;
+}
+
+bool DescriptionSelector::key(AppManager &app, int sym) {
+	if (sym == kKeyUp) select(app, selected_ - 1);
+	else if (sym == kKeyDown) select(app, selected_ + 1);
+	else return false;
+	return true;
+}
+
+bool AppManager::is_locked(const de::ObjectRef &d) const {
+	return read_description(world.data(), d).locked_by_default && !registry_bool("Unlocked " + d.info().guid.str());
+}
 
 bool UIManager::begin(AppManager &) {
 	begun = true;
@@ -385,13 +587,36 @@ void AppManager::update() {
 	if (!(has_local_session && has_local_session()) && !current && !next && transition_state == 0) set_next(main_menu(), true);
 }
 
+// DE_COMF2Manager::MenuSelect (OMF 0x350151d0).
 void AppManager::menu_select(int id) {
-	switch (id) {
-	case 3: not_ported("Single Player"); break;
-	case 2: not_ported("Host Game"); break;
-	case 10: not_ported("Join Game"); break;
-	default: break;
+	if (id >= 2 && id <= 5) {
+		auto sel = std::make_shared<DescriptionSelector>("ChooseSesssionType");
+		sel->title = "Choose Match";
+		sel->autoselect_key = "Session Master";
+		auto_select_mode = id == 4;
+		de::ObjectRef cast;
+		if (id == 2 || id == 3) cast = world.data().find("Description\\Cast", id == 3 ? "SinglePlayerCast" : "MultiPlayerCast");
+		for (const auto &[stem, f] : world.data().files()) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				if (f->objects()[i].class_path != "Description\\SessionMaster") continue;
+				de::ObjectRef d{f.get(), i};
+				if (cast) {
+					DescriptionInfo info = read_description(world.data(), d);
+					bool member = std::any_of(info.casts.begin(), info.casts.end(), [&](auto &c) { return c.info().guid.str() == cast.info().guid.str(); });
+					if (!member || !(info.visible_when_locked || !is_locked(d))) continue;
+				}
+				sel->pool.push_back(d);
+			}
+		}
+		bool single = id == 3;
+		sel->on_complete = [single](AppManager &app, DescriptionSelector &s) {
+			if (app.launch_session) app.launch_session(s.chosen, single);
+			else app.not_ported("Sessions");
+		};
+		set_next(sel, true);
+		return;
 	}
+	if (id == 10) not_ported("Join Game");
 }
 
 void AppManager::notify(const std::string &title, const std::string &text) { notifications.push_back({title, text}); }
@@ -403,6 +628,7 @@ void AppManager::not_ported(const std::string &what) { notify(what, "This screen
 void AppManager::mouse_move(float x, float y) {
 	mouse_x_ = x, mouse_y_ = y;
 	if (!current || !current->activated) return;
+	if (notifications.empty()) current->mouse(*this, x, y, 0);
 	for (Control &c : current->controls) {
 		bool over = notifications.empty() && c.contains(x, y);
 		if (over && !c.hovered && c.enabled) {
@@ -417,12 +643,19 @@ void AppManager::mouse_move(float x, float y) {
 
 // DE_CButtonRobot: a button clicks when released over itself; the actor robot sends GUISelect
 // (ProcessButtonClick 0x701ed640) and the page's robot acts on it.
-void AppManager::mouse_button(bool down) {
+void AppManager::mouse_button(bool down, int clicks) {
 	if (!notifications.empty()) {
 		if (!down) notifications.erase(notifications.begin());
 		return;
 	}
 	if (!current || !current->activated) return;
+	{
+		UIPtr page = current;
+		if (page->mouse(*this, mouse_x_, mouse_y_, down ? (clicks >= 2 ? 3 : 1) : 2)) {
+			pressed_ = nullptr;
+			return;
+		}
+	}
 	Control *hit = nullptr;
 	for (Control &c : current->controls) {
 		if (c.contains(mouse_x_, mouse_y_)) hit = &c;
@@ -445,6 +678,7 @@ void AppManager::key(int sym) {
 		return;
 	}
 	if (!current || !current->activated) return;
+	if (UIPtr page = current; page->key(*this, sym)) return;
 	for (Control &c : current->controls) {
 		if (std::find(c.keys.begin(), c.keys.end(), sym) == c.keys.end() || !c.enabled) continue;
 		UIPtr page = current;

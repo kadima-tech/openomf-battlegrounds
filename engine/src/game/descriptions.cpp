@@ -1,0 +1,98 @@
+#include "game/descriptions.h"
+
+#include "de/contents.h"
+#include "game/session.h"
+
+namespace game {
+
+DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) {
+	DescriptionInfo out;
+	if (!d) return out;
+	try {
+		de::Contents c(d.file->object_data(d.info()).contents);
+		de::Chunk ch = de::begin_chunk(c);
+		c.string();
+		if (c.u8()) c.skip(c.u8());  // the resource's passive reference: BOOL, size, {file, object} GUIDs
+		if (ch.version >= 2 && c.pos() < ch.end) out.listed = c.boolean();
+		if (ch.version >= 3 && c.pos() + 6 <= ch.end) {
+			c.f32();
+			out.locked_by_default = c.boolean();
+			out.visible_when_locked = c.boolean();
+		}
+	} catch (const std::exception &) {
+	}
+	try {
+		de::Contents c(d.file->object_data(d.info()).references);
+		c.seek(de::begin_chunk(c).end);  // DE_CObject's
+		if (c.remaining() >= 2) {
+			de::Chunk ch = de::begin_chunk(c);
+			if (ch.version == 6) {
+				while (c.pos() < ch.end && c.boolean()) {
+					if (de::ObjectRef r = data.resolve(*d.file, de::Reference::read(c))) out.casts.push_back(r);
+				}
+				if (c.pos() < ch.end && c.boolean()) de::Reference::read(c);  // icon
+				if (c.pos() < ch.end && c.boolean()) out.large = data.resolve(*d.file, de::Reference::read(c));
+			}
+		}
+	} catch (const std::exception &) {
+	}
+	return out;
+}
+
+std::string read_string_value(const de::ObjectRef &v) {
+	if (!v) return {};
+	try {
+		de::Contents c(v.file->object_data(v.info()).contents);
+		c.seek(de::begin_chunk(c).end);
+		de::begin_chunk(c);
+		uint32_t n = c.u32();
+		auto b = c.bytes(n);
+		std::string s(b.begin(), b.end());
+		while (!s.empty() && s.back() == 0) s.pop_back();
+		return s;
+	} catch (const std::exception &) {
+		return {};
+	}
+}
+
+ControlLayout read_control_creator(const de::World &data, const de::ObjectRef &cc) {
+	ControlLayout out;
+	if (!cc) return out;
+	int layout = 0;
+	try {
+		de::Contents c(cc.file->object_data(cc.info()).contents);
+		de::Chunk ch = de::begin_chunk(c);
+		c.string();
+		if (ch.version == 1) {
+			layout = c.i32();
+			out.wrap = c.i32() != 0;
+			out.text_height = c.i32();
+		}
+	} catch (const std::exception &) {
+	}
+	out.across = layout == 1 || layout == 3;
+	auto lists = reference_lists(data, cc);
+	if (lists.size() < 2 || lists[1].empty()) return out;
+	for (const de::ObjectRef &r : lists[1][0]) {
+		if (!r) continue;
+		const std::string &cls = r.info().class_path;
+		ControlLayout item;
+		if (cls == "Value\\String") {
+			item.kind = ControlLayout::Text;
+			item.text = read_string_value(r);
+			item.text_height = out.text_height;
+			item.wrap = out.wrap;
+		} else if (cls.rfind("Image", 0) == 0) {
+			item.kind = ControlLayout::Image;
+			item.image = r;
+		} else if (cls == "ControlCreator") {
+			item = read_control_creator(data, r);
+		} else {
+			continue;
+		}
+		out.items.push_back(std::move(item));
+	}
+	return out;
+}
+
+}  // namespace game

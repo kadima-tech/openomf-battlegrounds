@@ -154,6 +154,8 @@ int main(int argc, char **argv) {
 		if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
 		world.render_ticks_per_frame = shot != nullptr;
 		auto gui_only = [](const game::GameObject *o) { return game::in_gui(*o); };
+		Viewport vpt = gui_viewport(W, H);
+		app.text_width = [&](const std::string &t, float size) { return overlay.text_width(t, size, vpt.w, vpt.h); };
 
 		// The UI parent frame: local x 0..1 across the width and y 0..0.75 up, one unit from the
 		// 60-degree frame-control camera, which looks down -Z (DE_CTopControl3d::AdjustRootActor,
@@ -166,7 +168,6 @@ int main(int argc, char **argv) {
 		bool running = true, ui_begun = false;
 		double accum = 0;
 		Uint64 last = SDL_GetPerformanceCounter(), last_render = last;
-		Viewport vpt = gui_viewport(W, H);
 		for (int fr = 0; running;) {
 			SDL_Event e;
 			while (SDL_PollEvent(&e)) {
@@ -178,7 +179,7 @@ int main(int argc, char **argv) {
 					float px = float(e.motion.x) * float(dw) / float(ww), py = float(e.motion.y) * float(dh) / float(wh);
 					app.mouse_move((px - float(vpt.x)) / float(vpt.w), (py - float(dh - vpt.y - vpt.h)) / float(vpt.h));
 				}
-				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true);
+				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
 				if (e.type == SDL_KEYDOWN) app.key(int(e.key.keysym.sym));
 			}
@@ -251,6 +252,13 @@ int main(int argc, char **argv) {
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};
 			if (app.current && app.current->activated) {
+				std::vector<game::ui::DrawItem> items;
+				app.current->draw(app, items);
+				for (auto &d : items) {
+					if (d.kind == game::ui::DrawItem::Rect) overlay.rect(d.x0, d.y0, d.x1, d.y1, d.rgba, vpt.w, vpt.h);
+					else if (d.kind == game::ui::DrawItem::Image) overlay.image_rect(d.image, d.x0, d.y0, d.x1, d.y1, vpt.w, vpt.h);
+					else overlay.label(d.text, d.x0, d.y0, d.size, d.rgba, vpt.w, vpt.h, d.centered);
+				}
 				for (auto &c : app.current->controls) {
 					overlay.label(c.text, (c.left + c.right) / 2, (c.top + c.bottom) / 2, 16.0f / 600.0f, white, vpt.w, vpt.h);
 				}

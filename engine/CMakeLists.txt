@@ -84,6 +84,7 @@ add_library(game STATIC
 	src/game/navigation.cpp
 	src/game/session.cpp
 	src/game/ui.cpp
+	src/game/descriptions.cpp
 )
 target_link_libraries(game PUBLIC vm de)
 

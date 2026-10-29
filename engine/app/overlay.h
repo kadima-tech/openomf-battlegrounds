@@ -27,7 +27,11 @@ public:
 	// The front end's controls (game/ui.h), in screen fractions with y down: a filled rectangle,
 	// and a flat-text label (Font_Ariel) of `size` screen heights centred on (x, y).
 	void rect(float x0, float y0, float x1, float y1, const float *rgba, int width, int height);
-	void label(const std::string &text, float x, float y, float size, const float *rgba, int width, int height);
+	// centred on x, or starting there.
+	void label(const std::string &text, float x, float y, float size, const float *rgba, int width, int height, bool centered = true);
+	void image_rect(const de::ObjectRef &image, float x0, float y0, float x1, float y1, int width, int height);
+	// The width of a label, in screen widths.
+	float text_width(const std::string &text, float size, int width, int height);
 
 private:
 	struct FontGL {
@@ -43,6 +47,7 @@ private:
 	void end_screen();
 	void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const float *rgba);
 	GLuint image(const game::GameObject *img);
+	GLuint image(const de::ObjectsFile *file, uint32_t index);
 	std::map<std::string, FontGL> fonts_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> images_;
 	float aspect_ = 16.0f / 9;

@@ -89,11 +89,15 @@ void OverlayRenderer::load(const de::World &world) {
 
 GLuint OverlayRenderer::image(const game::GameObject *img) {
 	if (!img || !img->file) return 0;
-	auto key = std::make_pair(img->file, img->index);
+	return image(img->file, img->index);
+}
+
+GLuint OverlayRenderer::image(const de::ObjectsFile *file, uint32_t index) {
+	auto key = std::make_pair(file, index);
 	if (auto it = images_.find(key); it != images_.end()) return it->second;
 	GLuint t = 0;
 	try {
-		auto im = de::read_image(*img->file, img->file->objects()[img->index]);
+		auto im = de::read_image(*file, file->objects()[index]);
 		if (!im.channels.empty()) {
 			auto px = im.rgba();
 			t = glu::texture_rgba(im.width, im.height, px.data());
@@ -308,12 +312,12 @@ void OverlayRenderer::rect(float x0, float y0, float x1, float y1, const float *
 	end_screen();
 }
 
-void OverlayRenderer::label(const std::string &str, float x, float y, float size, const float *rgba, int width, int height) {
+void OverlayRenderer::label(const std::string &str, float x, float y, float size, const float *rgba, int width, int height, bool centered) {
 	if (!prog_ || str.empty()) return;
 	game::World::Primitive t;
 	t.text = str;
 	t.height = size;
-	t.centered = true;
+	t.centered = centered;
 	t.x = x;
 	const FontGL *f = font_for(t);
 	if (!f) return;
@@ -332,6 +336,30 @@ void OverlayRenderer::label(const std::string &str, float x, float y, float size
 		glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 4));
 	}
 	end_screen();
+}
+
+void OverlayRenderer::image_rect(const de::ObjectRef &img, float x0, float y0, float x1, float y1, int width, int height) {
+	if (!prog_ || !img) return;
+	GLuint tex = image(img.file, img.index);
+	if (!tex) return;
+	begin_screen(width, height);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glUniform1i(glGetUniformLocation(prog_, "mode"), 0);
+	const float white[4] = {1, 1, 1, 1};
+	quad(x0, 1 - y1, x1, 1 - y0, 0, 1, 1, 0, white);
+	end_screen();
+}
+
+float OverlayRenderer::text_width(const std::string &str, float size, int width, int height) {
+	game::World::Primitive t;
+	t.text = str;
+	t.height = size;
+	const FontGL *f = font_for(t);
+	if (!f) return 0;
+	std::vector<float> v = text_vertices(*f, t, float(width) / float(std::max(1, height)), 0, 0);
+	float lo = 1e9f, hi = -1e9f;
+	for (size_t i = 0; i < v.size(); i += 4) lo = std::min(lo, v[i]), hi = std::max(hi, v[i]);
+	return v.empty() ? 0 : hi - lo;
 }
 
 }  // namespace render

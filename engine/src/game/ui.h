@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "de/scene.h"
+
 namespace game {
 
 class World;
@@ -30,6 +32,18 @@ struct Control {
 	bool enabled = true;          // robot +0x74
 	std::vector<int> keys;        // DE_CButtonClickOnKey: SDL keycodes that click it
 	bool contains(float x, float y) const { return x >= left && x < right && y >= top && y < bottom; }
+};
+
+// What a page draws besides its button labels, in screen fractions (y down). A text item is
+// anchored at (x0, y0): its left edge, or its centre when centred, and its vertical middle.
+struct DrawItem {
+	enum Kind { Rect, Text, Image } kind = Rect;
+	float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+	float rgba[4] = {1, 1, 1, 1};
+	std::string text;
+	float size = 0;  // text height, screen heights
+	bool centered = false;
+	de::ObjectRef image;
 };
 
 class UIManager {
@@ -61,6 +75,10 @@ public:
 	virtual void setup_controls(AppManager &) {}
 	// The screen robot's ProcessButtonClickEvent.
 	virtual void click(AppManager &, Control &) {}
+	virtual void draw(AppManager &, std::vector<DrawItem> &) {}
+	// Input the page takes before its buttons: `what` 0 move, 1 press, 2 release, 3 double click.
+	virtual bool mouse(AppManager &, float, float, int) { return false; }
+	virtual bool key(AppManager &, int) { return false; }
 
 	void activate(AppManager &app);
 	void deactivate(AppManager &app);
@@ -76,6 +94,35 @@ private:
 	std::vector<GameObject *> ve_actors_;  // SetupFolderControls' VE list
 };
 using UIPtr = std::shared_ptr<UIManager>;
+
+// DE_CGenericDescriptionSelector (Core 0x701e46c0..0x701e5370; FINDINGS 127): a name-sorted list
+// of the pool's listed descriptions, the highlighted one's large representation beside it, Next
+// (Enter, double click) to choose and Back (Esc).
+class DescriptionSelector : public UIManager {
+public:
+	explicit DescriptionSelector(std::string name) : UIManager(std::move(name), "ChooserListNextBack") {}
+
+	std::string title = "Choose";  // +0x64
+	std::string autoselect_key;     // +0x138
+	std::vector<de::ObjectRef> pool;
+	de::ObjectRef chosen;           // +0x128 (ChosenDescription)
+	std::function<void(AppManager &, DescriptionSelector &)> on_complete;
+
+	bool begin(AppManager &app) override;
+	void setup_controls(AppManager &app) override;
+	void click(AppManager &app, Control &c) override;
+	void draw(AppManager &app, std::vector<DrawItem> &out) override;
+	bool mouse(AppManager &app, float x, float y, int what) override;
+	bool key(AppManager &app, int sym) override;
+
+private:
+	void choose(AppManager &app, const de::ObjectRef &d);
+	void select(AppManager &app, int i);
+
+	std::vector<de::ObjectRef> entries_;
+	int selected_ = -1;
+	Control *list_ = nullptr, *window_ = nullptr, *next_ = nullptr, *back_ = nullptr;
+};
 
 class AppManager {
 public:
@@ -132,12 +179,20 @@ public:
 	void set_registry_string(const std::string &name, const std::string &v) { registry[name] = v; }
 	void set_registry_bool(const std::string &name, bool v) { registry[name] = v ? "1" : "0"; }
 
+	// DE_CDescription::IsLocked(0): locked by default and not unlocked since (the registry's
+	// DLock records; here the run's registry).
+	bool is_locked(const de::ObjectRef &description) const;
+	// The app's text measure (screen widths for a text `size` screen heights high).
+	std::function<float(const std::string &, float)> text_width;
+	// DE_COMF2Manager::ProcessEvent on the session chooser's Complete: start the chosen session.
+	std::function<void(const de::ObjectRef &master_description, bool single_player)> launch_session;
+
 	// One app update (DE_CAppManager::ObjUpdate before the sessions): UpdateUI.
 	void update();
 
 	// Input, in screen fractions (y down).
 	void mouse_move(float x, float y);
-	void mouse_button(bool down);
+	void mouse_button(bool down, int clicks = 1);
 	void key(int sym);
 
 private:
