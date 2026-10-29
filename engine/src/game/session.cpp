@@ -216,6 +216,7 @@ void World::start_pending_brains() {
 void World::enter_scene(GameObject *root, bool defer_start) {
 	if (!root) return;
 	if (std::find(scene_roots.begin(), scene_roots.end(), root) == scene_roots.end()) scene_roots.push_back(root);
+	root_session.try_emplace(root, session ? session->obj : nullptr);
 	std::vector<GameObject *> branch = {root};
 	for (size_t i = 0; i < branch.size(); ++i) {
 		GameObject *o = branch[i];
@@ -258,6 +259,12 @@ void World::enter_scene(GameObject *root, bool defer_start) {
 		return;
 	}
 	for (Brain *b : started) start_brain(b);
+}
+
+GameObject *World::scene_session_of(const GameObject *o) const {
+	while (o && o->parent) o = o->parent;
+	auto it = o ? root_session.find(o) : root_session.end();
+	return it == root_session.end() ? nullptr : it->second;
 }
 
 void World::prepare_branch(GameObject *o) {
@@ -399,7 +406,10 @@ GameObject *World::resolve_passive_reference(GameObject *o) {
 	if (object_for(o->file, o->index) == o) by_source_[{o->file, o->index}] = n;
 	destroy(o);
 	// Not under the reference's parent: in the scene only when the reference adds it.
-	if (flags.place != 0 && flags.add && !flags.deactivate) enter_scene(n);
+	if (flags.place != 0 && flags.add && !flags.deactivate) {
+		root_session.try_emplace(n, scene_session_of(o));
+		enter_scene(n);
+	}
 	return flags.place == 0 ? n : nullptr;
 }
 
@@ -420,7 +430,10 @@ GameObject *World::create_from_reference(GameObject *o) {
 		for (const GameObject *p = o; p && !in_scene; p = p->parent) {
 			in_scene = std::find(scene_roots.begin(), scene_roots.end(), p) != scene_roots.end();
 		}
-		if (in_scene) enter_scene(n);
+		if (in_scene) {
+			if (!n->parent) root_session.try_emplace(n, scene_session_of(o));
+			enter_scene(n);
+		}
 	}
 	return n;
 }
@@ -601,18 +614,19 @@ SessionState *session_of(World &w, const GameObject *o) {
 	return nullptr;
 }
 
-// DE_CSession::End deletes the session's scene (+0x6c): here every game-scene root (not the
-// GUI's, not the application's music player) goes when the session that owns the scene -- the
-// one with the environment -- ends.
+// DE_CStandardSession::End deletes the session's own scene (+0x16c), whose destruction
+// (DE_CScene::ObjDestroyContents, Core 0x7006ea60) destroys its actors and owned trees.
 static void end_scene_of(World &w, SessionState &s) {
-	if (!s.environment) return;
+	size_t n = 0;
 	for (GameObject *r : std::vector<GameObject *>(w.scene_roots)) {
-		if (r && !r->gui && r != w.music_player) w.clean_later(r);
+		if (r && !r->gui && w.scene_session_of(r) == s.obj) w.clean_later(r), ++n;
 	}
+	if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] %s: %zu of %zu scene roots go with its scene\n", w.frame(), s.obj->name.c_str(), n, w.scene_roots.size());
 }
 
-// DE_CSession::End (0x701f9400): every client destroyed, the modifiers, scene and environment
-// deleted; DE_CStandardSession::End also its slots, whose owned creatures go with them.
+// DE_CSession::End (0x701f9400): every client destroyed, the attached modifier descriptions,
+// master modifier (+0x6c) and master description (+0x60) deleted; DE_CStandardSession::End
+// (Session 0x4500ef40) also its scene and slots, whose owned creatures go with them.
 void end_session(World &w, SessionState &s) {
 	if (s.ended) return;
 	if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] end %s (environment %s)\n", w.frame(), s.obj->name.c_str(), s.environment ? s.environment->name.c_str() : "-");
@@ -629,8 +643,8 @@ void end_session(World &w, SessionState &s) {
 	w.clean_later(s.obj);
 }
 
-// A session deleted outright (BSubSessionLauncher::SubSessionDestroySubSession's DeleteThisLater)
-// ends as EndAndDie does.
+// DE_CSession::ObjDestroyContents (0x701f7f20) calls End (vtable +0x174): a deleted session
+// ends when housekeeping destroys it.
 void end_session_object(World &w, GameObject *o) {
 	for (auto &s : w.sessions) {
 		if (s->obj == o) end_session(w, *s);
@@ -942,6 +956,7 @@ void register_session_natives(World &w) {
 		if (auto *s = S(c)) {
 			s->environment = c.arg_object(0);
 			if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] %s owns environment %s\n", c.world.frame(), s->obj->name.c_str(), s->environment ? s->environment->name.c_str() : "-");
+			if (s->environment) c.world.root_session[s->environment] = s->obj;
 			c.world.enter_scene(s->environment);
 		}
 	});
@@ -1062,11 +1077,12 @@ void register_session_natives(World &w) {
 	});
 	// OwnCreature: the slot takes the creature; its client decides who controls it
 	// (SetupCreatureControl: the user's client, or the computer).
-	reg("CStandardSessionSlot::OwnCreature(class CCreature)", [slot](const NativeContext &c) {
+	reg("CStandardSessionSlot::OwnCreature(class CCreature)", [slot, S](const NativeContext &c) {
 		auto *sl = slot(c);
 		if (!sl) return;
 		sl->creature = c.arg_object(0);
 		if (sl->creature) {
+			if (SessionState *s = S(c); s && !sl->creature->parent) c.world.root_session[sl->creature] = s->obj;
 			// The creature is in the scene now (its controller made, its scripts -- and its
 			// pilot's, HUD's... -- started, the fighter's entry at once as AssureActivated does);
 			// then SetupCreatureControl binds the user's client's device to it.
@@ -1453,16 +1469,29 @@ void register_session_natives(World &w) {
 		c.ret_object(new_resource(c.world, c.self(), set ? &guid : nullptr));
 	});
 	// --- The scene's actor list (DE_CScene::NumActors/Actor/Add) ----------------------------------
-	reg("CScene::int NumActors()", [](const NativeContext &c) {
+	// The scene a script's Scene() names: its actor's (+0x10), else its session's.
+	auto caller_scene = [S](const NativeContext &c) -> GameObject * {
+		Brain *b = c.world.brain_of(c.ex);
+		if (b && b->owner && !session_of(c.world, b->owner)) {
+			const GameObject *r = b->owner;
+			while (r->parent) r = r->parent;
+			if (c.world.root_session.count(r)) return c.world.root_session[r];
+		}
+		SessionState *s = S(c);
+		return s ? s->obj : nullptr;
+	};
+	reg("CScene::int NumActors()", [caller_scene](const NativeContext &c) {
 		uint32_t n = 0;
-		for (auto *o : c.world.scene_objects()) n += o->is_actor ? 1 : 0;
+		GameObject *scene = caller_scene(c);
+		for (auto *o : c.world.scene_objects()) n += o->is_actor && c.world.scene_session_of(o) == scene ? 1 : 0;
 		c.ret_u32(n);
 	});
-	reg("CScene::class CActor Actor(int)", [](const NativeContext &c) {
+	reg("CScene::class CActor Actor(int)", [caller_scene](const NativeContext &c) {
 		int i = c.arg<int32_t>(0), k = 0;
 		GameObject *found = nullptr;
+		GameObject *scene = caller_scene(c);
 		for (auto *o : c.world.scene_objects()) {
-			if (o->is_actor && k++ == i) {
+			if (o->is_actor && c.world.scene_session_of(o) == scene && k++ == i) {
 				found = o;
 				break;
 			}
@@ -1474,9 +1503,10 @@ void register_session_natives(World &w) {
 	reg("CScene::Remove(class CActor)", [](const NativeContext &c) {
 		if (GameObject *o = c.arg_object(0)) o->removed = true;
 	});
-	reg("CScene::Add(class CActor)", [](const NativeContext &c) {
+	reg("CScene::Add(class CActor)", [caller_scene](const NativeContext &c) {
 		GameObject *o = c.arg_object(0);
 		if (o) o->removed = false;
+		if (o && !o->parent) c.world.root_session.try_emplace(o, caller_scene(c));
 		c.world.enter_scene(o, true);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it

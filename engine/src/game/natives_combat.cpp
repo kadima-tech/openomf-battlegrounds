@@ -1052,7 +1052,7 @@ void register_combat_natives(World &w) {
 			return;
 		}
 		t->results.clear();
-		for (auto &ct : segment_hits(c.world, a, b, t->groups)) {
+		for (auto &ct : segment_hits(c.world, a, b, t->groups, t->no_repeat_owners)) {
 			Collision col;
 			col.touched = ct.touched;
 			col.owner = c.world.affector_owner(ct.touched);

@@ -302,57 +302,50 @@ std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 	return out;
 }
 
-// The segment a-b against one affector: where it first enters (0..1 along it), facing the start.
-// The nearest touch; with `all`, every mesh face the segment crosses goes there too, in order
-// along it (DE_CMeshReference::IsTouchingConeAsLineSegment adds each crossed face).
+// The segment a-b against one affector: where it first enters (0..1 along it). With `all`, every
+// mesh face it crosses goes there too, in face order (DE_COctree::GetPotentialLineSegmentCollisions
+// merges the cells' sorted face ids, so the candidates come in face order).
 static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b,
                                                             std::vector<std::pair<float, Contact>> *all = nullptr) {
 	Vec d = sub(b, a);
 	de::Transform t = target->world();
 	Vec la = t.inverse_rotate(sub(a, t.t)), ld = t.inverse_rotate(d);
 	std::optional<std::pair<float, Contact>> best;
-	auto take = [&](float tt, const Vec &local_normal, int face) {
-		if (all && face >= 0) {
-			Contact c;
-			c.touched = target;
-			c.point = add(a, mul(d, tt));
-			c.normal = c.face_normal = t.rotate(local_normal);
-			c.distance = tt * len(d);
-			c.face = face;
-			all->push_back({tt, c});
-		}
-		if (best && tt >= best->first) return;
+	auto take = [&](float tt, const Vec &local_normal, int face, float depth = 0) {
 		Contact c;
 		c.touched = target;
 		c.point = add(a, mul(d, tt));
 		c.normal = c.face_normal = t.rotate(local_normal);
 		c.distance = tt * len(d);
+		c.depth = depth;
 		c.face = face;
-		best = std::make_pair(tt, c);
+		if (all && face >= 0) all->push_back({tt, c});
+		if (!best || tt < best->first) best = std::make_pair(tt, c);
 	};
 	if (target->shape == GameObject::Shape::Mesh) {
 		const MeshShape *m = mesh_shape(target->mesh);
 		if (!m) return best;
+		// DE_CMeshReference::IsTouchingConeAsLineSegment (Core 0x700854e0): a face counts only when
+		// the start is behind or on its plane and the end in front or on it, along the face normal
+		// DE_CStandardMesh gives it, (V0 - V1) x (V2 - V1) (into the solid for arena surfaces);
+		// ReverseResults (DE_CConeAffector::IsTouchingMesh) turns that normal back at the start.
 		for (size_t i = 0; i < m->tris.size(); ++i) {
 			auto &tri = m->tris[i];
-			// Moller-Trumbore, either side.
 			Vec e1 = sub(tri[1], tri[0]), e2 = sub(tri[2], tri[0]);
-			Vec p = cross(ld, e2);
-			float det = dot(e1, p);
-			if (std::fabs(det) < 1e-9f) continue;
-			float inv = 1 / det;
-			Vec s0 = sub(la, tri[0]);
-			float u = dot(s0, p) * inv;
-			if (u < 0 || u > 1) continue;
-			Vec q = cross(s0, e1);
-			float v = dot(ld, q) * inv;
-			if (v < 0 || u + v > 1) continue;
-			float tt = dot(e2, q) * inv;
-			if (tt < 0 || tt > 1) continue;
-			Vec fn = cross(e1, e2);
-			fn = mul(fn, 1 / std::max(len(fn), 1e-9f));
-			if (dot(fn, ld) > 0) fn = mul(fn, -1);  // facing the segment's start
-			take(tt, fn, int(i));
+			Vec fn = cross(e2, e1);
+			float fl = len(fn);
+			if (fl < 1e-12f) continue;
+			fn = mul(fn, 1 / fl);
+			float z0 = dot(sub(la, tri[0]), fn), z1 = dot(sub(add(la, ld), tri[0]), fn);
+			if (z1 == z0 || z0 > 0 || (z0 < 0 && z1 < 0)) continue;
+			float tt = z0 / (z0 - z1);
+			Vec p = sub(add(la, mul(ld, tt)), tri[0]);
+			float d11 = dot(e1, e1), d12 = dot(e1, e2), d22 = dot(e2, e2), p1 = dot(p, e1), p2 = dot(p, e2);
+			float den = d11 * d22 - d12 * d12;
+			if (std::fabs(den) < 1e-18f) continue;
+			float u = (d22 * p1 - d12 * p2) / den, v = (d11 * p2 - d12 * p1) / den;
+			if (u < 0 || v < 0 || u + v > 1) continue;
+			take(tt, mul(fn, -1), int(i), z0 >= 0 ? -z1 : -z0);
 		}
 	} else if (target->shape == GameObject::Shape::Box) {
 		float t0 = 0, t1 = 1;
@@ -391,14 +384,15 @@ static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, 
 	return best;
 }
 
-std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t groups) {
+std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t groups, bool one_per_mesh) {
 	std::vector<Contact> out;
 	for (GameObject *target : w.affectors()) {
 		if (!in_scene(*target) || !(target->groups & groups)) continue;
 		std::vector<std::pair<float, Contact>> faces;
 		auto h = segment_hit(target, a, b, &faces);
 		if (!faces.empty()) {
-			std::stable_sort(faces.begin(), faces.end(), [](auto &x, auto &y) { return x.first < y.first; });
+			// NoRepeatOwners keeps the face with the least +0x38, which a line segment leaves zero.
+			if (one_per_mesh) faces.resize(1);
 			for (auto &f : faces) out.push_back(f.second);
 		} else if (h) {
 			out.push_back(h->second);

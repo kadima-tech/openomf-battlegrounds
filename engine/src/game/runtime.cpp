@@ -287,6 +287,7 @@ void World::housekeeping() {
 
 void World::destroy(GameObject *o) {
 	if (!o) return;
+	end_session_object(*this, o);
 	if (o->parent) {
 		auto &v = o->parent->children;
 		v.erase(std::remove(v.begin(), v.end(), o), v.end());
@@ -301,6 +302,7 @@ void World::destroy(GameObject *o) {
 	for (GameObject *b : branch) {
 		by_handle_.erase(b->handle);
 		relays.erase(b);
+		root_session.erase(b);
 		b->spawned = false;
 		b->active = false;
 		if (b->brain) b->brain->inst.shut_down = true;

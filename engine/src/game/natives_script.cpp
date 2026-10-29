@@ -129,6 +129,7 @@ GameObject *World::music_player_actor() {
 				if (o.name != "MusicPlayer" || o.class_path.rfind("Actor", 0) != 0) continue;
 				if (GameObject *tpl = global_object({f, i})) {
 					music_player = copy_tree(*tpl);
+					root_session[music_player] = nullptr;
 					enter_scene(music_player);
 				}
 				break;
@@ -391,12 +392,12 @@ void register_script_natives(World &w) {
 		assign(c.mem(), a, e);
 	});
 	// SingleDimensionReferenceShuffleCaller (Core 0x7014d220): from the last element down, each
-	// swapped with one picked at random from the whole array.
+	// swapped with one picked by the CRT rand() stream from the whole array.
 	reg(ra + "Shuffle()", [](const NativeContext &c) {
 		uint32_t a = c.self_handle();
 		if (!a) return;
 		auto e = elements(c.mem(), a);
-		for (int i = int(e.size()) - 1; i >= 0; --i) std::swap(e[size_t(i)], e[size_t(rand() % int(e.size()))]);
+		for (int i = int(e.size()) - 1; i >= 0; --i) std::swap(e[size_t(i)], e[size_t(crt_rand() % int(e.size()))]);
 		assign(c.mem(), a, e);
 	});
 	reg(ra + "bool IsPresent(class CReferenceTarget)", [](const NativeContext &c) {
@@ -607,12 +608,7 @@ void register_script_natives(World &w) {
 	reg("CObject::DeleteThis()", remove);
 	// DeleteThisLater and Die (Core registers both on DeleteThisLaterCaller): queued for the next
 	// housekeeping (DE_GLOBAL::AddObjectToClean).
-	auto later = [](const NativeContext &c) {
-		if (GameObject *o = c.self()) {
-			end_session_object(c.world, o);
-			c.world.clean_later(o);
-		}
-	};
+	auto later = [](const NativeContext &c) { c.world.clean_later(c.self()); };
 	reg("CObject::DeleteThisLater()", later);
 	reg("CObject::Die()", later);
 	reg("CImpulseRobot::SetDefaultHotkey(string,byte,bool,bool,bool)", [](const NativeContext &c) {

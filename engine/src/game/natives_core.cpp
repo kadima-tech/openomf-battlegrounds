@@ -202,9 +202,11 @@ void register_core_natives(World &w) {
 	reg("CObject::SetNoParent()", [](const NativeContext &c) {
 		auto *o = c.self();
 		if (!o || !o->parent) return;
+		GameObject *scene = c.world.scene_session_of(o);
 		auto &v = o->parent->children;
 		v.erase(std::remove(v.begin(), v.end(), o), v.end());
 		o->parent = nullptr;
+		c.world.root_session[o] = scene;
 		if (std::find(c.world.scene_roots.begin(), c.world.scene_roots.end(), o) == c.world.scene_roots.end()) c.world.scene_roots.push_back(o);
 	});
 	reg("CObject::class CObject NewCopy()", [](const NativeContext &c) {
@@ -409,6 +411,7 @@ void register_core_natives(World &w) {
 			if (o->fighter && !o->spawned && c.world.session) {
 				o->spawned = true;
 				if (std::find(c.world.scene_roots.begin(), c.world.scene_roots.end(), o) == c.world.scene_roots.end()) {
+					c.world.root_session.try_emplace(o, c.world.session->obj);
 					c.world.scene_roots.push_back(o);
 				}
 			}
@@ -450,6 +453,7 @@ void register_core_natives(World &w) {
 		if (!o || !p) return;
 		GameObject *copy = c.world.copy_tree(*p);
 		copy->local = o->world().then(p->local);
+		c.world.root_session[copy] = c.world.scene_session_of(o);
 		c.world.enter_scene(copy);
 	});
 	// Enable/DisableAllMeshPropertiesCaller (0x7008f1b0, 0x7008f230): every mesh property of the
