@@ -82,6 +82,8 @@ public:
 	virtual void wheel(AppManager &, int) {}
 	virtual void text(AppManager &, const std::string &) {}
 	virtual void deactivated(AppManager &) {}
+	// Once per app update while it is the current page (DE_GLOBAL::AddUpdateObject).
+	virtual void update(AppManager &) {}
 
 	void activate(AppManager &app);
 	void deactivate(AppManager &app);
@@ -202,6 +204,9 @@ public:
 	UIPtr help_menu();
 	UIPtr options_menu();
 	UIPtr recordings_menu();
+	UIPtr vcr_controls();
+	// TakeScreenShot: the app saves the next drawn frame.
+	bool snapshot_requested = false;
 	// DE_CSessionRecord::Replay: play the recording saved at `path`.
 	std::function<bool(const std::string &path)> launch_replay;
 	// The in-game menu's Esc impulse; true when it acted.
@@ -280,7 +285,7 @@ private:
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
 	bool first_ui_ = true;
-	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_;
+	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_;
 };
 
 }  // namespace ui

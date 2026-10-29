@@ -1282,6 +1282,28 @@ void World::advance(TemporalSet &set) {
 	}
 }
 
+uint32_t World::scene_step(float real_ms) {
+	scene_carry_ += double(real_ms) * time_scale + passed_ms;
+	passed_ms = 0;
+	if (scene_carry_ < 0) {
+		uint32_t back = uint32_t(std::min<double>(-scene_carry_, scene_ms_));
+		scene_ms_ -= back;
+		for (auto &s : temporal_sets_) s.next -= back;
+		// What measures time since it last ran must not have run in the future.
+		simple_physics->clock_back(scene_ms_);
+		for (auto &o : objects_) {
+			o.interest_time = std::min(o.interest_time, scene_ms_);
+			o.target_checked = std::min(o.target_checked, scene_ms_);
+			o.target_chosen = std::min(o.target_chosen, scene_ms_);
+		}
+		scene_carry_ = 0;
+		return 0;
+	}
+	uint32_t ms = uint32_t(scene_carry_);
+	scene_carry_ -= ms;
+	return ms;
+}
+
 uint32_t World::scene_ms_of(const GameObject *o) const {
 	return o && in_gui(*o) && gui_view(*o) == 1 ? uint32_t(view_scene_ms) : scene_ms_;
 }

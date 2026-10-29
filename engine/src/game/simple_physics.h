@@ -1,6 +1,8 @@
 // Simple physics for actors that aren't fighters (see simple_physics.cpp).
 #pragma once
 
+#include <algorithm>
+
 #include <array>
 #include <map>
 #include <vector>
@@ -41,6 +43,10 @@ public:
 	void tick();
 	// DE_CSimplePhysics::DeltaTick (Core 0x701dc060): a step over the scene time since its last.
 	void delta_tick(GameObject &physics);
+	// The scene clock went back to `now`: nothing has run after it.
+	void clock_back(uint32_t now) {
+		for (auto &[o, s] : states_) s.last_ms = std::min(s.last_ms, now);
+	}
 
 private:
 	void step(GameObject &p, SimplePhysics &s, GameObject &actor, float scale, bool delta);

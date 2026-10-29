@@ -450,6 +450,13 @@ public:
 	// A fighter's update rate (SceneTicksPerUpdate, +0x1dc): 62.5 updates a second.
 	static constexpr float kTickMs = 16;
 	float scene_ms() const { return float(scene_ms_); }
+	// DE_CTemporalMasterScene (TemporalMoveToScale / TemporalPassTime, Core 0x700788b0 / 0x70078bb0):
+	// real time runs the scene at `time_scale`; passed time is added on the next frame, and a
+	// negative amount moves the clock back.
+	float time_scale = 1;
+	double passed_ms = 0;
+	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
+	uint32_t scene_step(float real_ms);
 	// A GUI scene viewer's own scene (GameObject::view 1, the model picker's): its clock, passed
 	// by the app while its page is up (the robot's idle event, DE_CScene vtable +0x148).
 	double view_scene_ms = 0;
@@ -754,6 +761,7 @@ private:
 	std::deque<de::AnimBank> banks_;
 	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
+	double scene_carry_ = 0;
 	bool input_registered_ = false;
 	uint64_t affector_seq_ = 0;
 	// DE_CScene's temporal sets (TemporalElementSetForRate 0x70072230), in creation order.

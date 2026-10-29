@@ -486,6 +486,10 @@ std::shared_ptr<SessionRecord> read_record(const std::string &path, bool states)
 
 void forget(World &w) {
 	auto &R = rw(w);
+	if (R.record && !R.record->recording) {
+		w.time_scale = 1;  // the VCR's scale goes with the replay
+		w.passed_ms = 0;
+	}
 	R.managers.clear();
 	R.record.reset();
 	R.session = nullptr;

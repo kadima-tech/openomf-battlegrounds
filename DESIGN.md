@@ -25,6 +25,14 @@ to present that data, and the few places where the look is our own.
   robot on `RobotPedistal` in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:
   the model's name (top 30%), the `VCRFastBackward` / `VCRFastForward` images as arrows, Back and
   Next along the bottom 30%. No main frame or backdrop.
+- **Replays screen.** `F.MatchBrowser`: the "Recordings Browser" list (Name, Type, Date, Time, Length
+  columns, the selected row highlighted) at ListWindow; the selected recording's game type (18
+  virtual pixels), name, date, time and length in the Window, with Delete and Rename in a column
+  from 0.6 across; Play (disabled until a selection) and Back. Our own: the delete question and its
+  Yes / No, and the rename field, drawn in the Window.
+- **VCR panel (replays, V).** `F.VCR` along the bottom; in its middle 60%: the Play/Pause, frame
+  advance, rewind and fast-forward images (a cyan underline marks the running fast mode), the speed
+  labels, a seek slider (pale blue track, cyan knob) and Observer / Snapshot labels.
 - **Notifications (our own look).** A centred panel, dark blue-grey (0.05, 0.08, 0.12) at 90%
   opacity inside a pale blue (0.55, 0.75, 0.9) edge; the title at 0.035 screen heights, the text
   wrapped at about 52 characters at 0.026, and "OK" in the edge colour. The original's dialog is

@@ -10,7 +10,7 @@
 // it launches pick those (testing); --headless N runs N frames without a window and lists the
 // natives still missing.
 //
-// MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;..." scripts the mouse (and Enter, Esc) in screenshot runs (x, y fractions
+// MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;..." scripts the mouse (and Enter, Esc, a character key) in screenshot runs (x, y fractions
 // of the 4:3 GUI area, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
 
@@ -190,6 +190,7 @@ int main(int argc, char **argv) {
 			else if (sscanf(item.c_str(), "up@%d", &f) == 1) mouse_script.push_back({f, 2, 0, 0});
 			else if (sscanf(item.c_str(), "key@%d", &f) == 1) mouse_script.push_back({f, 3, 0, 0});
 			else if (sscanf(item.c_str(), "esc@%d", &f) == 1) mouse_script.push_back({f, 4, 0, 0});
+			else if (char ch; sscanf(item.c_str(), "char %c@%d", &ch, &f) == 2) mouse_script.push_back({f, 5, float(ch), 0});
 			if (q == std::string::npos) break;
 			p = q + 1;
 		}
@@ -292,6 +293,10 @@ int main(int argc, char **argv) {
 		world.close_ui_stack = [&] {
 			if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] close stack (current %s, next %s, state %d)\n", world.frame(), app.current ? app.current->name.c_str() : "-", app.next ? app.next->name.c_str() : "-", app.transition_state);
 			app.close_stack();
+			// A rules display whose page was closed before it came up is not shown any more either.
+			for (auto &[rules, page] : rules_pages) {
+				if (page && page != app.current && page != app.next) world.rules_displays[rules].shown = false;
+			}
 		};
 		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
 		app.has_local_session = [&] { return world.session != nullptr; };
@@ -453,6 +458,7 @@ int main(int argc, char **argv) {
 				}
 				else if (m.kind == 3) app.key(13);
 				else if (m.kind == 4) app.key(27);
+				else if (m.kind == 5) app.key(int(m.x));
 				else app.mouse_button(m.kind == 1);
 			}
 			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI. On a first run
@@ -484,7 +490,7 @@ int main(int argc, char **argv) {
 			app.update();
 			// Autopause: the scene passes no time while a page that autopauses is up (the
 			// sessions still update).
-			world.tick(app.autopaused() && world.session ? 0 : frame_ms);
+			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
 			++fr;
 			mixer.play_requests(world, view.player ? view.ear() : listener);
 			mixer.update_music(world);
@@ -636,6 +642,19 @@ int main(int argc, char **argv) {
 				overlay.label("OK", 0.5f, y0 + h - 0.025f, 0.026f, edge, vpt.w, vpt.h);
 			}
 			glViewport(0, 0, dw, dh);
+			// The VCR's Snapshot (TakeScreenShot): the drawn frame, saved to the Pictures folder.
+			if (app.snapshot_requested) {
+				app.snapshot_requested = false;
+				std::vector<uint8_t> px(size_t(dw) * dh * 4);
+				glReadPixels(0, 0, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+				char name[96];
+				time_t now = time(nullptr);
+				strftime(name, sizeof name, "OMFBG Snapshot %Y-%m-%d %H-%M-%S.png", localtime(&now));
+				const char *home = getenv("HOME");
+				std::string out = std::string(home ? home : ".") + "/Pictures/" + name;
+				glu::write_png(out.c_str(), dw, dh, px);
+				printf("snapshot %s\n", out.c_str());
+			}
 			if (shot) {
 				auto save = [&](const std::string &out) {
 					std::vector<uint8_t> px(size_t(W) * H * 4);

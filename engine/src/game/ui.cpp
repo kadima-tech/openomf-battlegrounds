@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -802,6 +803,176 @@ private:
 	        *yes_ = nullptr, *no_ = nullptr;
 };
 
+// DE_CVCRControls (OMF ObjInitContents 0x35064de0, SetupControls 0x350654a0, ObjUpdate 0x35064ff0;
+// DE_CVCRRobot 0x35065760) on F.VCR: a replay's transport over the running game (no doors, frame,
+// backdrop or autopause). In the VCR rectangle's middle 60%: Play/Pause, frame advance, rewind and
+// fast forward; the slow (1/2..1/8) and fast (2X..16X) speeds; a seek slider over the recorded
+// length; the observer choice and Snapshot. It only moves the scene clock: the replayed objects
+// follow from their recorded states.
+class VCRControls : public UIManager {
+public:
+	VCRControls() : UIManager("VCRControls", "VCR") {
+		uses_transition = false;
+		show_main_frame = false;
+		show_backdrop = false;
+		autopause = false;
+		input_off = false;
+		show_overlay = false;
+		autodestroy = false;
+	}
+
+	void setup_controls(AppManager &app) override {
+		Control f = *button(app, "", "VCR");
+		controls.pop_back();
+		// Panel P: 0.2..0.8 down the VCR rectangle.
+		float w = f.right - f.left, h = (f.bottom - f.top) * 0.6f, top = f.top + 0.2f * (f.bottom - f.top);
+		auto sub = [&](const std::string &text, float l, float t, float r, float b) {
+			Control &c = controls.emplace_back();
+			c.text = text;
+			c.left = f.left + l * w, c.right = f.left + r * w, c.top = top + t * h, c.bottom = top + b * h;
+			return &c;
+		};
+		// The buttons row (DE_CAutoStackHorizontalRobot, spacing 0.1) across 0..0.35.
+		const float bw = 0.35f / (4 + 3 * 0.1f);
+		for (int k = 0; k < 4; ++k) buttons_[k] = sub("", k * bw * 1.1f, 0, k * bw * 1.1f + bw, 0.5f);
+		slow_ = sub("", 0.35f * 0.04f, 0.6f, 0.35f * 0.46f, 1);
+		fast_ = sub("", 0.35f * 0.54f, 0.6f, 0.35f * 0.96f, 1);
+		seek_ = sub("", 0.4f, 0, 1, 0.3f);
+		observer_ = sub("", 0.6f, 0.7f, 0.88f, 1);
+		snap_ = sub("Snapshot", 0.9f, 0.7f, 1, 1);
+		if (const de::ObjectsFile *gui = app.world.data().file("OMFBGGUI")) {
+			for (uint32_t i = 0; i < gui->objects().size(); ++i) {
+				const de::ObjectInfo &o = gui->objects()[i];
+				if (o.class_path != "Image\\Standard") continue;
+				for (auto &[name, ref] : std::initializer_list<std::pair<const char *, de::ObjectRef *>>{
+				         {"VCRPlay", &play_img_}, {"VCRPause", &pause_img_}, {"VCRAdvanceFrame", &step_img_},
+				         {"VCRFastBackward", &rewind_img_}, {"VCRFastForward", &ff_img_}}) {
+					if (o.name == name) *ref = {gui, i};
+				}
+			}
+		}
+		last_ = std::chrono::steady_clock::now();
+		labels();
+	}
+	void click(AppManager &app, Control &c) override {
+		if (&c == buttons_[0]) paused_ = !paused_;
+		else if (&c == buttons_[1]) step_ = true;
+		else if (&c == buttons_[2]) rewind_ = true;
+		else if (&c == buttons_[3]) ff_ = true;
+		else if (&c == slow_) slow_index_ = (slow_index_ + 1) % 4;
+		else if (&c == fast_) fast_index_ = (fast_index_ + 1) % 4;
+		else if (&c == observer_) observer_mode_ ^= 1;
+		else if (&c == snap_) snapshot_ = true;
+		labels();
+		(void)app;
+	}
+	bool mouse(AppManager &, float x, float y, int what) override {
+		if (!seek_ || !seek_->contains(x, y) || (what != 1 && what != 0) || (what == 0 && !dragging_)) {
+			if (what == 2) dragging_ = false;
+			return false;
+		}
+		dragging_ = what == 1 || dragging_;
+		slider_ = std::clamp((x - seek_->left) / (seek_->right - seek_->left), 0.0f, 1.0f);
+		return true;
+	}
+	// ObjUpdate.
+	void update(AppManager &app) override {
+		World &w = app.world;
+		auto now = std::chrono::steady_clock::now();
+		float dt = std::chrono::duration<float, std::milli>(now - last_).count();
+		last_ = now;
+		// Snapshot: the panel slides away, the shot is taken, it slides back.
+		if (snapshot_) {
+			if (hide_ <= 1) hide_ += 0.2f;
+			else {
+				snapshot_ = false;
+				app.snapshot_requested = true;
+				hide_ = 1;
+			}
+		}
+		if (hide_ > 0) hide_ = std::max(0.0f, hide_ - 0.1f);
+		if (hide_ > 0) return;
+		float end = float(replay_end_ms(w));
+		if (end <= 0) return;
+		if (slider_ != last_slider_) w.passed_ms += double(end * slider_ - w.scene_ms());  // seek
+		slider_ = std::clamp(w.scene_ms() / end, 0.0f, 1.0f);
+		if (ff_) ff_ = false, mode_ = mode_ != 1 ? 1 : 0;
+		if (rewind_) rewind_ = false, mode_ = mode_ != 2 ? 2 : 0;
+		if (paused_ != last_paused_) mode_ = 0;
+		float speed = 1;
+		bool run = true;
+		if (mode_ == 0) {
+			speed = std::array<float, 4>{1, 0.5f, 0.25f, 0.125f}[size_t(slow_index_)];
+			run = !paused_;
+		} else {
+			speed = std::array<float, 4>{2, 4, 8, 16}[size_t(fast_index_)];
+			if (mode_ == 2) speed = -speed;
+		}
+		if (step_) step_ = false, w.passed_ms += 50;
+		if (!run) {
+			w.time_scale = 0;
+		} else if (speed < 0) {
+			w.time_scale = 1;
+			w.passed_ms += (prev_dt_ + dt) * speed;
+		} else {
+			w.time_scale = speed;
+		}
+		last_slider_ = slider_;
+		last_paused_ = paused_;
+		prev_dt_ = dt;
+		labels();
+	}
+	void draw(AppManager &, std::vector<DrawItem> &out) override {
+		if (hide_ > 0) return;
+		const float edge[4] = {0.55f, 0.75f, 0.9f, 0.9f}, back[4] = {0.05f, 0.08f, 0.12f, 0.8f}, fill[4] = {0.5f, 1, 1, 1};
+		de::ObjectRef imgs[4] = {paused_ ? play_img_ : pause_img_, step_img_, rewind_img_, ff_img_};
+		for (int k = 0; k < 4; ++k) {
+			if (!buttons_[k] || !imgs[k]) continue;
+			DrawItem d;
+			d.kind = DrawItem::Image;
+			d.x0 = buttons_[k]->left, d.x1 = buttons_[k]->right, d.y0 = buttons_[k]->top, d.y1 = buttons_[k]->bottom, d.image = imgs[k];
+			if ((k == 2 && mode_ == 2) || (k == 3 && mode_ == 1)) {
+				DrawItem r;
+				r.x0 = d.x0, r.x1 = d.x1, r.y0 = d.y1 - 0.004f, r.y1 = d.y1;
+				std::copy(fill, fill + 4, r.rgba);
+				out.push_back(r);
+			}
+			out.push_back(d);
+		}
+		if (seek_) {
+			float cy = (seek_->top + seek_->bottom) / 2;
+			DrawItem track, well, knob;
+			track.x0 = seek_->left, track.x1 = seek_->right, track.y0 = cy - 0.006f, track.y1 = cy + 0.006f;
+			std::copy(edge, edge + 4, track.rgba);
+			well = track;
+			well.x0 += 0.002f, well.x1 -= 0.002f, well.y0 += 0.002f, well.y1 -= 0.002f;
+			std::copy(back, back + 4, well.rgba);
+			float kx = seek_->left + slider_ * (seek_->right - seek_->left);
+			knob.x0 = kx - 0.006f, knob.x1 = kx + 0.006f, knob.y0 = seek_->top, knob.y1 = seek_->bottom;
+			std::copy(fill, fill + 4, knob.rgba);
+			out.push_back(track);
+			out.push_back(well);
+			out.push_back(knob);
+		}
+	}
+
+private:
+	void labels() {
+		static const char *slow[4] = {"Normal", "1/2", "1/4", "1/8"}, *fast[4] = {"2X", "4X", "8X", "16X"};
+		if (slow_) slow_->text = slow[slow_index_];
+		if (fast_) fast_->text = fast[fast_index_];
+		if (observer_) observer_->text = observer_mode_ ? "Manual Observer" : "Auto Observer";
+	}
+
+	Control *buttons_[4] = {}, *slow_ = nullptr, *fast_ = nullptr, *seek_ = nullptr, *observer_ = nullptr, *snap_ = nullptr;
+	de::ObjectRef play_img_, pause_img_, step_img_, rewind_img_, ff_img_;
+	bool paused_ = true, last_paused_ = true;  // +0x130 (paused at first), +0x134
+	bool step_ = false, ff_ = false, rewind_ = false, snapshot_ = false, dragging_ = false;
+	float slider_ = 0, last_slider_ = 0, hide_ = 0, prev_dt_ = 0;
+	int mode_ = 0, slow_index_ = 0, fast_index_ = 0, observer_mode_ = 0;
+	std::chrono::steady_clock::time_point last_;
+};
+
 // DE_CQuitMenuUIManager (OMF 0x350611d0, 0x35061210, 0x35061610).
 class QuitMenu : public UIManager {
 public:
@@ -1358,6 +1529,11 @@ UIPtr AppManager::recordings_menu() {
 	return recordings_menu_;
 }
 
+UIPtr AppManager::vcr_controls() {
+	if (!vcr_) vcr_ = std::make_shared<VCRControls>();
+	return vcr_;
+}
+
 UIPtr AppManager::quit_menu() {
 	if (!quit_menu_) quit_menu_ = std::make_shared<QuitMenu>();
 	return quit_menu_;
@@ -1523,6 +1699,7 @@ void AppManager::update() {
 	bool under_session = session_scene_rendering && session_scene_rendering();
 	set_active(session_overlay, current && under_session && current->show_overlay);
 	if (transition_state != 0 || (current && page_finished) || next || page_finished) transition_ui();
+	if (current && current->activated) current->update(*this);
 	if (!next || next->begun) {
 		if (current) {
 			if (!current->activated && current->begun && !page_finished) current->activate(*this);
@@ -1637,6 +1814,15 @@ void AppManager::key(int sym, int scancode) {
 		return;
 	}
 	if (sym == kKeyEscape && in_game_menu_impulse()) return;
+	// BVCRControls (Session, slot 0 in replays): the "VCR Controls" impulse, V, toggles the panel.
+	if (sym == 'v' && replaying(world) && (!current || current == vcr_controls())) {
+		if (current == vcr_controls()) {
+			set_last();
+		} else {
+			set_next(vcr_controls(), true);
+		}
+		return;
+	}
 	if (!current || !current->activated) return;
 	if (UIPtr page = current; page->key(*this, sym)) return;
 	for (Control &c : current->controls) {
