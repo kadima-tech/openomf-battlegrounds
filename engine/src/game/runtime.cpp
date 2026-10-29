@@ -1159,6 +1159,13 @@ void World::register_creature(GameObject *o) {
 		// order, joins this one's list (+0x334), and this one joins theirs.
 		if (o->fighter && !o->fighter_prepared) {
 			o->fighter_prepared = true;
+			// DE_COMF2Fighter::ObjPrepare: a pilot with a faction gives the team.
+			for (GameObject *ch : o->children) {
+				if (ch->is("Actor\\Creature\\Pilot") && ch->faction) {
+					o->team = faction_team(ch->faction);
+					break;
+				}
+			}
 			o->spawned = true;  // in play from here: physics, commands, pushes, drawing
 			for (GameObject *g : fighters()) {
 				if (g == o || !g->fighter_prepared || !in_scene(*g)) continue;

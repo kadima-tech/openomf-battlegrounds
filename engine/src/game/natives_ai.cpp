@@ -330,8 +330,7 @@ void reassign_commands(GameObject &o) {
 // look command, the alternates' hooks run too (an acting attack or aquire command excludes them).
 // DE_COMF2Fighter::NumEnemies / Enemy (0x3502a3a0 / 0x3502a3e0): the fighters this one was
 // linked with (+0x334: every other fighter prepared in the scene) that take it as an enemy
-// (IsEnemyFighter 0x3502a740: not itself, and not on its team, +0x49c >= 0). Fighters carry no
-// team here (their pilots' factions are not decoded), so that is every other fighter.
+// (IsEnemyFighter 0x3502a740: not itself, and not on its team, +0x49c >= 0).
 std::vector<GameObject *> World::linked_fighters(GameObject &f) {
 	std::vector<GameObject *> out;
 	for (uint32_t h : f.linked_fighters) {
@@ -340,7 +339,19 @@ std::vector<GameObject *> World::linked_fighters(GameObject &f) {
 	return out;
 }
 
-std::vector<GameObject *> World::enemies_of(GameObject &f) { return linked_fighters(f); }
+std::vector<GameObject *> World::enemies_of(GameObject &f) {
+	std::vector<GameObject *> out;
+	for (GameObject *e : linked_fighters(f)) {
+		if (enemy_fighter(*e, f)) out.push_back(e);
+	}
+	return out;
+}
+
+int32_t World::faction_team(uint32_t faction) {
+	GameObject *f = object(faction);
+	ObjectValue *v = f ? object_value(f, "TeamIndex") : nullptr;
+	return v ? int32_t(v->bits) : 0;
+}
 
 // DE_COMF2Fighter::GlobalInterest (0x3502ae40): recomputed when more than 300 ms of scene time
 // have passed since the last time (+0x488): its own interest (+500) times (900 - d + 1) for every
@@ -629,16 +640,23 @@ void register_ai_natives(World &w) {
 	// IsEnemy (vtable +0x178): a plain creature has no enemies (Creature 0x15008350); a pilot asks
 	// its controlled creature (DE_CPilot::IsEnemy 0x3504c9a0, +0x320); a fighter (0x3502a6f0)
 	// takes everything but itself as an enemy, except a fighter on its own team (IsEnemyFighter
-	// 0x3502a740: TeamIndex +0x49c, -1 for none; nobody has a team yet).
-	reg("CCreature::bool IsEnemy(class CActor)", [](const NativeContext &c) {
+	// 0x3502a740: TeamIndex +0x49c, -1 for none).
+	auto fighter_is_enemy = [](GameObject *a, GameObject *b) {
+		if (!a || !a->fighter || b == a) return false;
+		return !(b && b->fighter) || World::enemy_fighter(*a, *b);
+	};
+	reg("CCreature::bool IsEnemy(class CActor)", [fighter_is_enemy](const NativeContext &c) {
 		GameObject *a = c.self(), *b = c.arg_object(0);
 		if (a && a->is("Actor\\Creature\\Pilot")) a = fighter_of(a->parent);
-		c.ret_bool(a && a->fighter && b != a);
+		c.ret_bool(fighter_is_enemy(a, b));
 	});
-	reg("CPilot::bool IsEnemy(class CActor)", [](const NativeContext &c) {
+	reg("CPilot::bool IsEnemy(class CActor)", [fighter_is_enemy](const NativeContext &c) {
 		GameObject *a = c.self(), *b = c.arg_object(0);
-		a = a ? fighter_of(a->parent) : nullptr;
-		c.ret_bool(a && a->fighter && b != a);
+		c.ret_bool(fighter_is_enemy(a ? fighter_of(a->parent) : nullptr, b));
+	});
+	reg("CFaction::int TeamIndex()", [](const NativeContext &c) {
+		GameObject *f = c.self();
+		c.ret_u32(uint32_t(f ? c.world.faction_team(f->handle) : 0));
 	});
 	// Line of sight between the two actors' focal points against the arena collision mesh.
 	reg("CCreature::bool TestLineOfSight(class CActor)", [](const NativeContext &c) {

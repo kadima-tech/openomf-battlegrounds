@@ -211,6 +211,7 @@ struct GameObject {
 	uint32_t interest_time = 0;            // fighter +0x488: scene ms GlobalInterest was last worked out
 	float interest_cached = 1;             // fighter +0x48c
 	uint32_t faction = 0;                  // pilot +0x32c (a handle): CPilot::SetFaction (team games)
+	int32_t team = -1;                     // fighter +0x49c: its pilot's faction's TeamIndex when prepared
 	std::array<float, 4> analog_axis{0, 0, 0, 0};  // a creature controller's analog movement (+0x90)
 	uint32_t current_target = 0;           // fighter +0x30c (a handle): CurrentTarget's pick
 	uint32_t target_checked = 0;           // +0x4a4: scene ms the pick was last reconsidered
@@ -417,6 +418,12 @@ public:
 	GameObject *create_child(GameObject *parent, const std::string &name, const std::string &class_path);
 	// DE_COMF2Fighter::NumEnemies/Enemy and GlobalInterest (natives_ai.cpp).
 	std::vector<GameObject *> enemies_of(GameObject &fighter);
+	// DE_COMF2Fighter::IsEnemyFighter (OMF 0x3502a740): not itself, nor on its team.
+	static bool enemy_fighter(const GameObject &f, const GameObject &other) {
+		return &other != &f && !(other.team >= 0 && other.team == f.team);
+	}
+	// DE_CFaction::TeamIndex (OMF 0x35052130): its INT value "TeamIndex".
+	int32_t faction_team(uint32_t faction);
 	float global_interest_of(GameObject *o);
 	// DE_COMF2Fighter::CurrentTarget (OMF 0x3502a8b0): the fighter it is facing up to.
 	GameObject *current_target_of(GameObject &f);

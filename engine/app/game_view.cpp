@@ -133,7 +133,7 @@ void GameView::wire_session() {
 			if (fi->actor == c && slot == 0) player = fi;
 		}
 		if (player) world.focus = player->actor;
-		printf("slot %d: %s%s\n", slot, c->name.c_str(), c->user_controlled ? " (player)" : " (computer)");
+		printf("slot %d: %s%s%s\n", slot, c->name.c_str(), c->user_controlled ? " (player)" : " (computer)", c->team >= 0 ? (", team " + std::to_string(c->team)).c_str() : "");
 	};
 }
 
