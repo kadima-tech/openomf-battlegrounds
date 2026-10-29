@@ -758,33 +758,9 @@ static void update_one(World &w, SessionState &s) {
 		for (auto &[o, n] : s.nodes) nodes.push_back(n.get());
 		for (auto *n : nodes) call_hook(w, n->ui_complete, ui->handle, true);
 	}
-	// The loading screen (the engine shows it): while anything reports it needs loading
-	// (SessionQuerryIsLoadingRequired counts them in INT1), every slot's choices are made and
-	// nothing halts loading, SessionLoadElements goes to the session and its slots once per
-	// element with INT1 = 1; the first loader still waiting takes it and decrements INT1.
-	if (!s.slots.empty()) {
-		auto ask = [&](const char *handle, int32_t initial) {
-			uint32_t e = new_event(w, handle);
-			w.memory().set<int32_t>(e + 4, initial);
-			static const bool dbg = getenv("OPENBG_DEBUG_LOADING") != nullptr;
-			w.send_event(s.obj, e);
-			if (dbg && w.memory().get<int32_t>(e + 4) != initial) fprintf(stderr, "[loading %u] %s: session %d -> %d\n", w.frame(), handle, initial, w.memory().get<int32_t>(e + 4));
-			for (size_t k = 0; k < s.slots.size(); ++k) {
-				int32_t before = w.memory().get<int32_t>(e + 4);
-				w.send_event(s.slots[k]->obj, e);
-				if (dbg && w.memory().get<int32_t>(e + 4) != before) fprintf(stderr, "[loading %u] %s: slot %zu (client %d) %d -> %d\n", w.frame(), handle, k, s.slots[k]->client != nullptr, before, w.memory().get<int32_t>(e + 4));
-			}
-			return w.memory().get<int32_t>(e + 4);
-		};
-		// The slots that have a client (empty ones are not waited for).
-		bool clients = s.replaying;  // a replay's slots have no clients, their picks come from the record
-		for (auto &sl : s.slots) clients |= sl->client != nullptr;
-		int32_t required = clients ? ask("SessionQuerryIsLoadingRequired", 0) : 0;
-		if (required > 0 && ask("SlotQuerryUserChoicesComplete", 1) && ask("SessionQuerryIsReadyToLoad", 1)) {
-			for (int32_t k = 0; k < required; ++k) ask("SessionLoadElements", 1);
-			s.loaded = true;
-		}
-	}
+	// Loading is the match sub-session's BRulesDisplay behaviour (Session.DEObjects): it asks
+	// SessionQuerryIsLoadingRequired and sends one SessionLoadElements per 6 session updates,
+	// showing "Loading <name>" on the rules display; the engine itself loads nothing.
 	for (size_t i = 0; i < s.modifiers.size(); ++i) {
 		call_hook(w, s.node(s.modifiers[i])->update);
 	}

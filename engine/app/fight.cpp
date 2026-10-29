@@ -194,6 +194,11 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
 		if (const char *seed = getenv("OPENBG_SEED")) game::crt_srand(uint32_t(strtoul(seed, nullptr, 0)));
+		// No front end: a match's rules display (which drives its loading) is up and authorised at once.
+		world.show_rules = [&world](game::GameObject *rules) {
+			auto &r = world.rules_displays[rules];
+			r.shown = r.authorized = true;
+		};
 		world.all_ai = watch;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
 		static std::deque<game::Pilot> pilots;

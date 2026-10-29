@@ -88,7 +88,6 @@ struct SessionState {
 	};
 	std::map<const GameObject *, UiManager> ui;
 	std::map<std::string, de::Guid> ui_choices;  // "Choose Environment" -> description GUID
-	bool loaded = false;  // the loading screen's SessionLoadElements has gone out
 	std::shared_ptr<struct SessionRecord> record;  // +0x128: recording or replaying (replay.h)
 	bool replaying = false;                        // +0xa0
 

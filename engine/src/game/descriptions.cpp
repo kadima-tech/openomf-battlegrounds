@@ -34,8 +34,13 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) 
 				while (c.pos() < ch.end && c.boolean()) {
 					if (de::ObjectRef r = data.resolve(*d.file, de::Reference::read(c))) out.casts.push_back(r);
 				}
-				if (c.pos() < ch.end && c.boolean()) de::Reference::read(c);  // icon
+				if (c.pos() < ch.end && c.boolean()) out.icon = data.resolve(*d.file, de::Reference::read(c));
 				if (c.pos() < ch.end && c.boolean()) out.large = data.resolve(*d.file, de::Reference::read(c));
+				// Resource components, then replacement objects, then the medium representation.
+				for (int list = 0; list < 2; ++list) {
+					while (c.pos() < ch.end && c.boolean()) de::Reference::read(c);
+				}
+				if (c.pos() < ch.end && c.boolean()) out.medium = data.resolve(*d.file, de::Reference::read(c));
 			}
 		}
 	} catch (const std::exception &) {
@@ -80,18 +85,73 @@ std::vector<de::ObjectRef> fighter_models(const de::World &data, const de::Objec
 }
 
 namespace {
-std::string lock_key(const de::ObjectRef &d, uint32_t id) {
-	return "DLock " + d.info().guid.str() + (id ? " " + std::to_string(id) : std::string());
+
+// DE_CGUID::Get (Core 0x7001eee0): lower-case hex, 8-4-4-16.
+std::string guid_key(const std::string &dashed) {
+	std::string s;
+	int dashes = 0;
+	for (char ch : dashed) {
+		if (ch == '-' && ++dashes == 4) continue;
+		s += char(std::tolower(static_cast<unsigned char>(ch)));
+	}
+	return s;
 }
+
+// GetResourceRegistryPrefix (Core 0x70041160) + "\DLock": the description's list of unlocked ids,
+// kept here as decimal ids separated by spaces in list order.
+std::string lock_key(const de::ObjectRef &d) { return "ObjectInfo\\" + guid_key(d.info().guid.str()) + "\\DLock"; }
+
+std::vector<uint32_t> unlocked_ids(const World &w, const de::ObjectRef &d) {
+	std::vector<uint32_t> ids;
+	std::string v = w.registry_string(lock_key(d));
+	for (size_t p = 0; p < v.size();) {
+		size_t q = v.find(' ', p);
+		std::string t = v.substr(p, q == std::string::npos ? std::string::npos : q - p);
+		if (!t.empty()) ids.push_back(uint32_t(std::stoul(t)));
+		if (q == std::string::npos) break;
+		p = q + 1;
+	}
+	return ids;
+}
+
 }  // namespace
 
 bool description_locked(const World &w, const de::ObjectRef &d, uint32_t id) {
 	if (id == 0 && !read_description(w.data(), d).locked_by_default) return false;
-	return w.registry_string(lock_key(d, id)).empty();
+	auto ids = unlocked_ids(w, d);
+	return std::find(ids.begin(), ids.end(), id) == ids.end();
 }
 
-void unlock_description(World &w, const de::ObjectRef &d, uint32_t id) {
-	if (d) w.registry[lock_key(d, id)] = "1";
+// DE_CDescription::Lock(id, add) (Core 0x701f2460): the id leaves the list and, when added
+// (Unlock), goes back at its end.
+void lock_description(World &w, const de::ObjectRef &d, uint32_t id, bool unlock) {
+	if (!d) return;
+	auto ids = unlocked_ids(w, d);
+	ids.erase(std::remove(ids.begin(), ids.end(), id), ids.end());
+	if (unlock) ids.push_back(id);
+	std::string v;
+	for (uint32_t i : ids) v += (v.empty() ? "" : " ") + std::to_string(i);
+	w.registry[lock_key(d)] = v;
+}
+
+void unlock_description(World &w, const de::ObjectRef &d, uint32_t id) { lock_description(w, d, id, true); }
+
+void migrate_lock_records(std::map<std::string, std::string> &reg) {
+	std::map<std::string, std::string> add;
+	for (auto it = reg.begin(); it != reg.end();) {
+		if (it->first.rfind("DLock ", 0) != 0) {
+			++it;
+			continue;
+		}
+		std::string rest = it->first.substr(6);
+		size_t sp = rest.find(' ');
+		std::string key = "ObjectInfo\\" + guid_key(rest.substr(0, sp)) + "\\DLock";
+		std::string id = sp == std::string::npos ? "0" : rest.substr(sp + 1);
+		std::string &v = add.count(key) ? add[key] : (add[key] = reg.count(key) ? reg[key] : "");
+		v += (v.empty() ? "" : " ") + id;
+		it = reg.erase(it);
+	}
+	for (auto &[k, v] : add) reg[k] = v;
 }
 
 std::string read_string_value(const de::ObjectRef &v) {

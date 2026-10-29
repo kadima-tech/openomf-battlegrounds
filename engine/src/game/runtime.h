@@ -591,6 +591,7 @@ public:
 	std::function<void(GameObject *rules)> show_rules;
 	// BVCRControls' UI manager (NewVCRControls): SetNextUIManager shows the app's VCR panel; it is
 	// active locally while the panel is up, and deleting it closes the panel.
+	bool scene_paused = false;  // DE_CScene::PassTime passes none: a page autopauses (the app sets it)
 	GameObject *vcr_ui = nullptr;
 	uint32_t vcr_handle = 0;
 	bool vcr_shown = false;

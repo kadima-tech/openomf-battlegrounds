@@ -715,6 +715,9 @@ void register_script_natives(World &w) {
 		c.ret_bool(o && o->visible);
 	});
 	reg("CActor::class CScene TemporalMasterScene()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
+	// The scene is its own temporal master; it is paused while a page autopauses it.
+	reg("CScene::class CScene TemporalMaster()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
+	reg("CScene::bool IsPaused()", [](const NativeContext &c) { c.ret_bool(c.world.scene_paused); });
 	reg("CScene::RegisterRenderTickHook(class CClassExecutorInstance,Method(float))", [](const NativeContext &c) {
 		c.world.render_tick_hooks.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 	});

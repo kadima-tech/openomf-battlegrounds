@@ -2,6 +2,8 @@
 // their large representation (a ControlCreator, the panel a chooser shows for the highlighted one).
 #pragma once
 
+#include <map>
+
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,7 +20,7 @@ class World;
 // casts +0x34][BOOL icon][BOOL large representation][components][replacements][BOOL medium].
 struct DescriptionInfo {
 	std::vector<de::ObjectRef> casts;
-	de::ObjectRef large;
+	de::ObjectRef icon, large, medium;
 	bool listed = true;
 	bool locked_by_default = false;
 	bool visible_when_locked = false;
@@ -28,9 +30,12 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &des
 
 // DE_CDescription::IsLocked(id) (Core 0x701f2640): id 0 is locked when locked by default and not
 // unlocked since; any other id is locked until unlocked. Unlock (0x70010aa0) adds the id to the
-// description's DLock record; ours is the registry value "DLock <guid>" (id 0) or "DLock <guid> <id>".
+// description's registry value ObjectInfo\<guid>\DLock, the list of unlocked ids.
 bool description_locked(const World &w, const de::ObjectRef &description, uint32_t id = 0);
 void unlock_description(World &w, const de::ObjectRef &description, uint32_t id = 0);
+void lock_description(World &w, const de::ObjectRef &description, uint32_t id, bool unlock);
+// Older registry files kept a "DLock <guid> [id]" value per unlocked id.
+void migrate_lock_records(std::map<std::string, std::string> &registry);
 
 // DE_CEnvironmentDescription::ObjProcessContents (Creature 0x1500aa20): after the description's
 // chunk, v1 [i32 minimum recommended players +0xdc][i32 maximum +0xe0].
