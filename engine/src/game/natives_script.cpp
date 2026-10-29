@@ -707,12 +707,9 @@ void register_script_natives(World &w) {
 	});
 
 	// --- Creature control (DE_CCreature::SetAsUserControlled / SetAsAIControlled) ----------------
-	reg("CCreature::SetAsUserControlled(int)", [](const NativeContext &c) { if (GameObject *o = c.self()) o->user_controlled = true; });
-	reg("CCreature::SetAsAIControlled()", [](const NativeContext &c) { if (GameObject *o = c.self()) o->user_controlled = false; });
+	reg("CCreature::SetAsUserControlled(int)", [](const NativeContext &c) { if (GameObject *o = c.self()) c.world.set_user_controlled(*o, c.arg<int32_t>(0)); });
+	reg("CCreature::SetAsAIControlled()", [](const NativeContext &c) { if (GameObject *o = c.self()) c.world.set_user_controlled(*o, -1); });
 	stub("CCreature::SetCreationTime(int)");
-	stub("CCreature::CommandObserveInterestingCreatures(float)");
-	stub("CCreature::CommandObserve(class CCreature)");
-	reg("CCreature::class CActor Camera(int)", [](const NativeContext &c) { c.ret_u32(0); });
 
 	// --- Rules display (the "how to play / loading" screen before a match): shown and dismissed
 	// at once until there is a front end.

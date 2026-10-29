@@ -14,6 +14,7 @@
 #include "de/scene.h"
 #include "game/descriptions.h"
 #include "game/music.h"
+#include "game/observer.h"
 #include "game/replay.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -881,6 +882,18 @@ public:
 		auto now = std::chrono::steady_clock::now();
 		float dt = std::chrono::duration<float, std::milli>(now - last_).count();
 		last_ = now;
+		// The observer (+0x128, the session's StandardSessionAssureObserver): Manual flies it from
+		// the keys and the relative mouse, Auto gives it back to its observe command.
+		if (GameObject *cam = w.observers->current()) {
+			if (observer_mode_) {
+				if (!cam->user_controlled) w.set_user_controlled(*cam, 0);
+				w.relative_mouse = true;
+			} else {
+				w.relative_mouse = false;
+				w.mouse_motion = {0, 0};
+				if (cam->user_controlled) w.set_user_controlled(*cam, -1);
+			}
+		}
 		// Snapshot: the panel slides away, the shot is taken, it slides back.
 		if (snapshot_) {
 			if (hide_ <= 1) hide_ += 0.2f;

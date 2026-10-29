@@ -48,4 +48,8 @@ to present that data, and the few places where the look is our own.
 
 - **HUD and messages.** Drawn from the scripts' screen-space primitives (text in `Font_Ariel` or the
   in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them.
-- **Camera.** The game's fight camera (the player's `CameraActor`, 70.5° horizontal at 4:3).
+- **Camera.** The game's fight camera (the player's `CameraActor`, 70.5° horizontal at 4:3) while the
+  player fights. Before and between rounds, after the player's fighter is beaten, and through a whole
+  replay the view is the observer camera, which cuts between the arena's vantage points, orbits and
+  follows the fighters, its field of view easing with the framing (Manual Observer in the VCR panel
+  flies it from the keys and mouse at 60°).

@@ -34,6 +34,13 @@ struct Fighter {
 // PFighterStats under it). Fighters live as long as the program.
 Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats = true);
 
+// A Camera property's lens (DE_CCamera contents v3/v4: field of view in degrees, near, far), with
+// the field of view set at run time (the observer's) when there is one.
+struct CameraLens {
+	float fov = 80, near = 10, far = 100000;
+};
+CameraLens camera_lens(const game::GameObject *actor);
+
 class GameView {
 public:
 	explicit GameView(game::World &world);
@@ -68,6 +75,8 @@ public:
 	render::ActorMeshRenderer actors_r;
 
 private:
+	game::GameObject *scene_camera() const;
+	Fighter *viewed_fighter() const;
 	void load_renderers();
 	std::string find_arena() const;
 

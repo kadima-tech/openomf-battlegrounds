@@ -16,6 +16,7 @@
 #include "de/contents.h"
 #include "game/replay.h"
 #include "game/navigation.h"
+#include "game/observer.h"
 #include "game/runtime.h"
 
 namespace game {
@@ -748,12 +749,13 @@ void register_ai_natives(World &w) {
 	});
 	// DE_CCreatureController::RetrieveAndClearAnalogAxisMovement (0x150019a0): the axis's
 	// accumulated movement, cleared. A mouse controller bound to a device (+0x2c != -1) reads
-	// the mouse instead; none is bound here, so it returns what its command executors left.
+	// the relative mouse instead (DE_CMouseAxisController 0x15028260).
 	reg("CCreatureController::float RetrieveAndClearAnalogAxisMovement(int)", [](const NativeContext &c) {
 		GameObject *o = c.self();
 		int axis = c.arg<int32_t>(0);
 		float v = 0;
-		if (o && axis >= 0 && axis < 4) std::swap(v, o->analog_axis[size_t(axis)]);
+		if (o && o->input_device >= 0 && o->is("CreatureController\\MouseAxis") && axis >= 0 && axis < 2) std::swap(v, c.world.mouse_motion[size_t(axis)]);
+		else if (o && axis >= 0 && axis < 4) std::swap(v, o->analog_axis[size_t(axis)]);
 		c.ret_f32(v);
 	});
 	reg("CCreature::class CCreatureController Controller(int)", [controllers](const NativeContext &c) {
@@ -836,7 +838,7 @@ void register_ai_natives(World &w) {
 	// Is2DOrientationRight/LeftCaller (0x15026cf0, 0x15026cc0) ask for exactly 2 / 6.
 	auto orientation = [](const NativeContext &c) -> int {
 		auto *f = fighter_of(c.self());
-		if (!f) return 8;
+		if (!f) return controller_orientation(c.world, c.self());
 		if (f->user_controlled) return c.world.orientation();
 		const Input &in = f->ai_input;
 		int v = in.up && !in.down ? 1 : in.down && !in.up ? -1 : 0;
@@ -847,6 +849,12 @@ void register_ai_natives(World &w) {
 	reg("CCreatureController::byte Get2DOrientation(int)", [orientation](const NativeContext &c) { c.ret_u32(uint32_t(orientation(c))); });
 	reg("CCreatureController::bool Is2DOrientationRight(int)", [orientation](const NativeContext &c) { c.ret_bool(orientation(c) == 2); });
 	reg("CCreatureController::bool Is2DOrientationLeft(int)", [orientation](const NativeContext &c) { c.ret_bool(orientation(c) == 6); });
+	// Is2DOrientationUp/UpRight/DownRight/DownLeft/UpLeftCaller: exactly that orientation (only the
+	// observer's and the trophy room's pads ask).
+	for (auto [name, v] : {std::pair<const char *, int>{"Up", 0}, {"UpRight", 1}, {"DownRight", 3}, {"DownLeft", 5}, {"UpLeft", 7}}) {
+		int want = v;
+		reg(std::string("CCreatureController::bool Is2DOrientation") + name + "(int)", [orientation, want](const NativeContext &c) { c.ret_bool(orientation(c) == want); });
+	}
 	reg("CCreatureController::bool Is2DOrientationTowardsRight(int)", [](const NativeContext &c) {
 		auto *f = fighter_of(c.self());
 		c.ret_bool(f && f->ai_input.right);
@@ -859,9 +867,13 @@ void register_ai_natives(World &w) {
 		auto *f = fighter_of(c.self());
 		c.ret_bool(f && f->ai_input.down);
 	});
-	reg("CCreatureController::bool Is2DOrientationDown(int)", [](const NativeContext &c) {
+	reg("CCreatureController::bool Is2DOrientationDown(int)", [orientation](const NativeContext &c) {
 		auto *f = fighter_of(c.self());
-		c.ret_bool(f && f->ai_input.down && !f->ai_input.left && !f->ai_input.right);
+		if (!f) {
+			c.ret_bool(orientation(c) == 4);
+			return;
+		}
+		c.ret_bool(f->ai_input.down && !f->ai_input.left && !f->ai_input.right);
 	});
 
 	// --- Pilot control (DE_CPilot +800 controlled creature; AttackBestEnemy 0x3504d370) ----------

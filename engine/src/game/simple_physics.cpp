@@ -308,12 +308,14 @@ void register_simple_physics_natives(World &w) {
 		auto *s = S(c);
 		c.ret_f32(s ? len(s->momentum) : 0);
 	});
-	// IncrementMomentum(v): the speed grows by v along the current direction.
+	// IncrementMomentumFLOATCaller (Core 0x701d9f90): the speed grows by v along the current
+	// direction, stopping at zero.
 	reg("CSimplePhysics::IncrementMomentum(float)", [S](const NativeContext &c) {
 		auto *s = S(c);
 		if (!s) return;
-		float l = len(s->momentum);
-		if (l > 0) s->momentum = mul(s->momentum, (l + c.arg<float>(0)) / l);
+		float l = len(s->momentum), n = l + c.arg<float>(0);
+		if (n <= 0) s->momentum = {0, 0, 0};
+		else if (l > 0) s->momentum = mul(s->momentum, n / l);
 	});
 	reg("CSimplePhysics::IncrementMomentum(class CVector)", [S](const NativeContext &c) {
 		if (auto *s = S(c)) s->momentum = add(s->momentum, read_vec(c.mem(), c.arg<uint32_t>(0)));

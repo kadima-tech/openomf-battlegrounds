@@ -9,6 +9,7 @@
 #include <set>
 #include <stdexcept>
 
+#include "de/contents.h"
 #include "de/lighting.h"
 #include "game/session.h"
 #include "gl_util.h"
@@ -97,7 +98,52 @@ Fighter &setup_fighter(game::World &world, const std::string &name, bool user, b
 	return fi;
 }
 
+// DE_CCamera::ObjProcessContents (Core 0x70187a70): v3 [name][field of view], v4 adds near and
+// far; ObjInitContents's 80 degrees, 10 and 100000 otherwise. The actor's first Camera child
+// (DE_CCamera::FindCamera).
+CameraLens camera_lens(const game::GameObject *actor) {
+	CameraLens l;
+	for (const game::GameObject *c : actor ? actor->children : std::vector<game::GameObject *>{}) {
+		if (c->class_path != "Camera" || !c->file) continue;
+		try {
+			de::Contents in(c->file->object_data(c->file->objects()[c->index]).contents);
+			de::Chunk ch = de::begin_chunk(in);
+			if (ch.version >= 3) {
+				in.bytes(in.u32());
+				l.fov = in.f32();
+				if (ch.version >= 4) l.near = in.f32(), l.far = in.f32();
+			}
+		} catch (const std::exception &) {
+		}
+		if (c->camera_fov > 0) l.fov = c->camera_fov;
+		break;
+	}
+	return l;
+}
+
 GameView::GameView(game::World &w) : world(w) {}
+
+// The renderer's camera when it is not a fighter's (the observer, an environment camera).
+game::GameObject *GameView::scene_camera() const {
+	if (free_camera) return nullptr;
+	game::GameObject *c = world.renderer_camera_actor();
+	for (game::GameObject *p = c; p; p = p->parent) {
+		if (p->fighter) return nullptr;
+	}
+	return c;
+}
+
+// The fighter whose fight camera the renderer views from: the renderer camera's, else the player.
+Fighter *GameView::viewed_fighter() const {
+	game::GameObject *c = world.renderer_camera_actor();
+	for (game::GameObject *p = c; p; p = p->parent) {
+		if (!p->fighter) continue;
+		for (Fighter *f : fighters) {
+			if (f->actor == p) return f;
+		}
+	}
+	return player;
+}
 
 void GameView::init_gl() {
 	overlay.load(world.data());
@@ -172,7 +218,9 @@ void GameView::load_renderers() {
 
 de::Transform GameView::ear() const {
 	de::Transform e;
-	if (!player) return e;
+	if (game::GameObject *sc = scene_camera()) return sc->world();
+	Fighter *f = viewed_fighter();
+	if (!f) return e;
 	std::function<game::GameObject *(game::GameObject *, const char *)> find = [&](game::GameObject *o, const char *n) -> game::GameObject * {
 		for (auto *ch : o->children) {
 			if (ch->name == n) return ch;
@@ -180,9 +228,9 @@ de::Transform GameView::ear() const {
 		}
 		return nullptr;
 	};
-	auto *cam = find(player->actor, "CameraActor");
-	auto *lis = find(player->actor, "Listener");
-	e = cam ? cam->world() : player->actor->world();
+	auto *cam = find(f->actor, "CameraActor");
+	auto *lis = find(f->actor, "Listener");
+	e = cam ? cam->world() : f->actor->world();
 	if (lis) e.t = lis->world().t;
 	return e;
 }
@@ -229,7 +277,9 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	// (BFighterCameraMover places it), with the Camera's 70.5 degree field of view (4:3
 	// horizontal; the vertical angle is kept on wider screens).
 	game::GameObject *cam = nullptr;
-	if (!free_camera && player) {
+	Fighter *viewed = viewed_fighter();
+	game::GameObject *scene_cam = scene_camera();
+	if (!free_camera && viewed && !scene_cam) {
 		std::function<game::GameObject *(game::GameObject *)> find = [&](game::GameObject *o) -> game::GameObject * {
 			for (auto *ch : o->children) {
 				if (ch->name == "CameraActor") return ch;
@@ -237,9 +287,20 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			}
 			return nullptr;
 		};
-		cam = find(player->actor);
+		cam = find(viewed->actor);
 	}
-	if (cam && player->actor->spawned) {
+	if (scene_cam) {
+		// The session's camera (the observer, BObserverCamera; the environment's cameras): its own
+		// lens, the field of view horizontal at 4:3 as the fight camera's.
+		CameraLens lens = camera_lens(scene_cam);
+		auto ct = scene_cam->world();
+		auto f = ct.rotate({0, 0, 1}), up = ct.rotate({0, 1, 0});
+		float vfov = 2.0f * std::atan(std::tan(0.5f * lens.fov * 0.017453292f) * 0.75f) / 0.017453292f;
+		glu::perspective(proj, vfov, float(dw) / float(dh), lens.near, lens.far);
+		float ceye[3] = {ct.t[0], ct.t[1], ct.t[2]};
+		glu::look_view(view, ceye, f.data(), up.data());
+		memcpy(eye, ceye, sizeof ceye);
+	} else if (cam && viewed->actor->spawned) {
 		auto ct = cam->world();
 		auto f = ct.rotate({0, 0, 1});
 		float vfov = 2.0f * std::atan(std::tan(0.5f * 70.5f * 0.017453292f) * 0.75f) / 0.017453292f;

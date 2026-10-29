@@ -213,6 +213,8 @@ struct GameObject {
 	uint32_t faction = 0;                  // pilot +0x32c (a handle): CPilot::SetFaction (team games)
 	int32_t team = -1;                     // fighter +0x49c: its pilot's faction's TeamIndex when prepared
 	std::array<float, 4> analog_axis{0, 0, 0, 0};  // a creature controller's analog movement (+0x90)
+	uint8_t pad_orientation = 8;           // a non-fighter pad's default 2D orientation (SetDefault2DOrientation)
+	float camera_fov = 0;                  // DE_CCamera +0x2c set at run time (0: the data's)
 	uint32_t current_target = 0;           // fighter +0x30c (a handle): CurrentTarget's pick
 	uint32_t target_checked = 0;           // +0x4a4: scene ms the pick was last reconsidered
 	uint32_t target_chosen = 0;            // +0x4a8: scene ms it was chosen
@@ -653,6 +655,20 @@ public:
 	std::shared_ptr<class MusicSystem> music;
 	// Simple physics of actors that aren't fighters (pickups, projectiles, force applicators).
 	std::shared_ptr<class SimplePhysicsSystem> simple_physics;
+	// The observer camera's command executors (observer.h).
+	std::shared_ptr<class ObserverSystem> observers;
+	// The renderer's camera actor (CRenderer::SetCamera, through CSession::SetCamera); null until set.
+	GameObject *renderer_camera = nullptr;
+	GameObject *renderer_camera_actor() const {
+		GameObject *c = renderer_camera;
+		return c && object(c->handle) == c && in_scene(*c) ? c : nullptr;
+	}
+	// The relative mouse (x right, y down) gathered while relative_mouse is on: what a mouse-axis
+	// controller bound to the user reads (the VCR's Manual Observer turns it on).
+	std::array<float, 2> mouse_motion{0, 0};
+	bool relative_mouse = false;
+	// CGenericEvent::Add lists (DE_CGenericEvent +0x4c/+0x50), by event block.
+	std::map<uint32_t, std::vector<uint32_t>> event_actors;
 	// DE_CCreature::AssureNeedInfoUpdated: the actors owning a creature's known needs, each with
 	// its need's DesireLevel(4, creature) (set by register_need_natives).
 	std::function<std::vector<std::pair<GameObject *, float>>(GameObject *)> need_owners;

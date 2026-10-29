@@ -1,5 +1,6 @@
 // Session, slots, modifiers and clients (see session.h), and descriptions (DE_CDescription:
 // what the creature and pilot pickers build fighters and pilots from).
+#include "game/observer.h"
 #include "game/session.h"
 #include "game/replay.h"
 
@@ -982,6 +983,7 @@ void register_session_natives(World &w) {
 	reg("CStandardSessionModifier::class CStandardSessionSlot Slot(int)", [slot_at](const NativeContext &c) { c.ret_object(slot_at(c, c.arg<int32_t>(0))); });
 	reg("CStandardSessionModifier::SetCamera(class CActor)", [S](const NativeContext &c) {
 		if (auto *s = S(c)) s->camera = c.arg_object(0);
+		set_renderer_camera(c.world, c.arg_object(0));
 	});
 
 	// --- Slot modifiers -------------------------------------------------------------------------
@@ -1235,7 +1237,11 @@ void register_session_natives(World &w) {
 	});
 	reg("CSession::int NumClients()", [S](const NativeContext &c) { c.ret_u32(S(c) ? uint32_t(S(c)->clients.size()) : 0); });
 	reg("CSession::int NumPlayersAfterPopulation()", [S](const NativeContext &c) { c.ret_u32(S(c) ? uint32_t(S(c)->clients.size()) : 0); });
-	reg("CSession::SetCamera(class CActor)", [S](const NativeContext &c) { if (auto *s = S(c)) s->camera = c.arg_object(0); });
+	// DE_CStandardSession::SetCamera (0x4500f400): stored, and the renderer's camera.
+	reg("CSession::SetCamera(class CActor)", [S](const NativeContext &c) {
+		if (auto *s = S(c)) s->camera = c.arg_object(0);
+		set_renderer_camera(c.world, c.arg_object(0));
+	});
 	reg("CSession::class CActor Camera()", [S](const NativeContext &c) { c.ret_object(S(c) ? S(c)->camera : nullptr); });
 	for (const char *k : {"CStandardSession::class CStandardSessionModifier Master()", "CSession::class CSessionModifier Master()"}) {
 		reg(k, [S](const NativeContext &c) {

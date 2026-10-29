@@ -112,31 +112,6 @@ std::vector<std::string> wrap(const std::string &text, size_t width) {
 	return lines;
 }
 
-// DE_CCamera::ObjProcessContents (Core 0x70187a70): v3 [name][field of view], v4 adds near and
-// far; ObjInitContents's 80 degrees, 10 and 100000 otherwise. The actor's first Camera child
-// (DE_CCamera::FindCamera).
-struct CameraLens {
-	float fov = 80, near = 10, far = 100000;
-};
-CameraLens camera_lens(const game::GameObject *actor) {
-	CameraLens l;
-	for (const game::GameObject *c : actor ? actor->children : std::vector<game::GameObject *>{}) {
-		if (c->class_path != "Camera" || !c->file) continue;
-		try {
-			de::Contents in(c->file->object_data(c->file->objects()[c->index]).contents);
-			de::Chunk ch = de::begin_chunk(in);
-			if (ch.version >= 3) {
-				in.bytes(in.u32());
-				l.fov = in.f32();
-				if (ch.version >= 4) l.near = in.f32(), l.far = in.f32();
-			}
-		} catch (const std::exception &) {
-		}
-		break;
-	}
-	return l;
-}
-
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -423,6 +398,7 @@ int main(int argc, char **argv) {
 					app.mouse_move(mx, my);
 					world.mouse_x = mx;
 					world.mouse_y = 1 - my;
+					if (world.relative_mouse) world.mouse_motion[0] += float(e.motion.xrel), world.mouse_motion[1] += float(e.motion.yrel);
 				}
 				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
@@ -555,7 +531,7 @@ int main(int argc, char **argv) {
 			auto *picker = dynamic_cast<game::ui::ModelPicker *>(app.current.get());
 			if (picker && picker->activated && picker->camera) {
 				glClear(GL_DEPTH_BUFFER_BIT);
-				CameraLens lens = camera_lens(picker->camera);
+				app::CameraLens lens = app::camera_lens(picker->camera);
 				de::Transform ct = picker->camera->world();
 				auto f = ct.rotate({0, 0, 1}), up = ct.rotate({0, 1, 0});
 				float ceye[3] = {ct.t[0], ct.t[1], ct.t[2]}, pproj[16], pview[16], pvp[16];

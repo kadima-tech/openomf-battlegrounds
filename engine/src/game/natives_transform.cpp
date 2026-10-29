@@ -465,9 +465,13 @@ void register_transform_natives(World &w) {
 	reg("CScene::class CRenderer AttachedRenderer(int)", [](const NativeContext &c) {
 		c.ret_object(c.arg<int32_t>(0) == 0 ? c.world.create("Renderer", "Renderer") : nullptr);
 	});
-	// CameraActorCaller (Core 0x70183530): the actor the renderer views from. The app's view is the
-	// fight camera: the CameraActor under the focused fighter (BFighterCameraMover moves it).
+	// CameraActorCaller (Core 0x70183530): the actor the renderer views from (CRenderer::SetCamera);
+	// before any, the CameraActor under the focused fighter (BFighterCameraMover moves it).
 	reg("CRenderer::class CActor CameraActor()", [](const NativeContext &c) {
+		if (GameObject *cam = c.world.renderer_camera_actor()) {
+			c.ret_object(cam);
+			return;
+		}
 		std::function<GameObject *(GameObject *)> find = [&](GameObject *o) -> GameObject * {
 			if (o->name == "CameraActor") return o;
 			for (GameObject *ch : o->children)
