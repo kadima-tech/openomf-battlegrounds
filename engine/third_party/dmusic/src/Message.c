@@ -273,6 +273,26 @@ void DmMessageQueue_pop(DmMessageQueue* slf) {
 	DmMessageQueue_heapRemove(slf);
 }
 
+void DmMessageQueue_keepNoteOffs(DmMessageQueue* slf) {
+	if (slf == NULL || slf->queue_length == 0) {
+		return;
+	}
+
+	size_t n = slf->queue_length;
+	slf->queue_length = 0;
+	for (size_t i = 0; i < n; ++i) {
+		DmMessageQueueItem* itm = slf->queue[i];
+		if (itm->data.type == DmMessage_NOTE && !itm->data.note.on) {
+			slf->queue[slf->queue_length++] = itm;
+			DmMessageQueue_heapInsert(slf);
+		} else {
+			DmMessage_free(&itm->data);
+			itm->next = slf->free;
+			slf->free = itm;
+		}
+	}
+}
+
 void DmMessageQueue_clear(DmMessageQueue* slf) {
 	if (slf == NULL || slf->queue_length == 0) {
 		return;

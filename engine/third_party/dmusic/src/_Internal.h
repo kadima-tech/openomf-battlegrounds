@@ -621,6 +621,7 @@ DMINT DmResult DmMessageQueue_add(DmMessageQueue* slf, DmMessage* msg, uint32_t 
 DMINT bool DmMessageQueue_get(DmMessageQueue* slf, DmMessage* msg);
 DMINT void DmMessageQueue_pop(DmMessageQueue* slf);
 DMINT void DmMessageQueue_clear(DmMessageQueue* slf);
+DMINT void DmMessageQueue_keepNoteOffs(DmMessageQueue* slf);
 
 DMINT DmResult DmBand_create(DmBand** slf);
 DMINT DmBand* DmBand_retain(DmBand* slf);

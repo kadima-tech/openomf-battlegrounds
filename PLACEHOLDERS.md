@@ -40,6 +40,12 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | `CDescription::IsMemberOf` | Approximation | The description's own cast list (FINDINGS 127); a session master description's master modifier's casts are not merged in (`DE_CSessionMasterDescription::Update`). |
 | AI difficulty | Approximation | The original reads it from the registry (default 0, Rookie, which we use); `--difficulty` stands in for the options screen. |
 
+## Open questions
+
+| What | Kind | Notes |
+|---|---|---|
+| Main menu theme's lead timbre | Open | Reported as choppy / a different instrument sound than in the game, with the right notes. Checked and faithful: the band (every channel a DLS instrument from "!theme dls", none falling back to GM), the instruments' loops and articulations, voice allocation (no steals; 29 voices at most), the synth's 22050 Hz default (InitAudio passes no audio parameters), the mix loop, LFO routing, tempo (135 BPM) and note scheduling. The soundtrack MP3s are studio mixes, so they cannot settle timbre; a recording of the original game's menu would. |
+
 ## Waiting on networking (out of scope unless LAN play is wanted)
 
 | What | Kind | Notes |

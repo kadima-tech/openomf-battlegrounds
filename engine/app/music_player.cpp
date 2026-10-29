@@ -67,7 +67,7 @@ std::string form_name(const uint8_t *p, size_t n) {
 }  // namespace
 
 MusicPlayer::MusicPlayer(int rate) : rate_(rate) {
-	Dm_setLoggerDefault(kDebug ? DmLogLevel_INFO : DmLogLevel_FATAL);
+	Dm_setLoggerDefault(kDebug ? (getenv("OPENBG_DEBUG_MUSIC")[0] == '2' ? DmLogLevel_DEBUG : DmLogLevel_INFO) : DmLogLevel_FATAL);
 	if (DmLoader_create(&loader_, DmLoader_DOWNLOAD) != DmResult_SUCCESS) return;
 	DmLoader_addResolver(loader_, &MusicPlayer::resolve, this);
 	if (DmPerformance_create(&perf_, uint32_t(rate)) != DmResult_SUCCESS) {

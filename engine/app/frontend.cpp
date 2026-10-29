@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -205,9 +206,26 @@ int main(int argc, char **argv) {
 			app.set_next(app.main_menu(), true);
 		}
 		if (headless) {
+			// OPENBG_RECORD_AUDIO=<file>: what is heard, mixed offline (raw f32 stereo, 44100 Hz).
+			std::unique_ptr<audio::Mixer> offline;
+			if (getenv("OPENBG_RECORD_AUDIO")) {
+				offline = std::make_unique<audio::Mixer>();
+				offline->open_offline(44100);
+			}
+			double audio_carry = 0;
+			de::Transform ear;
+			ear.t = {0.5f, 0.375f, 0.866f};
 			for (int fr = 0; fr < frames; ++fr) {
 				app.update();
 				world.tick();
+				if (offline) {
+					offline->play_requests(world, view.player ? view.ear() : ear);
+					offline->update_music(world);
+					audio_carry += 44100.0 * world.frame_ms() / 1000.0;
+					int n = int(audio_carry);
+					audio_carry -= n;
+					offline->pump(n);
+				}
 				for (auto &[obj, t] : world.texts) {
 					static std::map<const game::GameObject *, std::string> shown;
 					if (t.text != shown[obj] && !t.text.empty()) printf("frame %5d  [screen] %s\n", fr, t.text.c_str());

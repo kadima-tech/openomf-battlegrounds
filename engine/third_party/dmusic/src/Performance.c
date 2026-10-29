@@ -371,21 +371,25 @@ static DmResult DmPattern_generateNoteMessages(DmPart* part,
 			continue;
 		}
 
-		uint32_t offset = Dm_getTimeOffset(note.grid_start, note.time_offset, part->time_signature);
-
+		// bTimeRange, bDurRange and bVelRange randomise the start, duration and velocity by up to
+		// half the range either way.
+		int64_t start = (int64_t) Dm_getTimeOffset(note.grid_start, note.time_offset, part->time_signature);
 		if (note.time_range != 0) {
-			offset += Dm_randRange(note.time_range);
+			start += (int64_t) (Dm_rand() % note.time_range) - (int64_t) (note.time_range / 2);
 		}
+		uint32_t offset = (uint32_t) (start < 0 ? 0 : start);
 
-		uint32_t duration = note.duration;
+		int64_t dur = note.duration;
 		if (note.duration_range != 0) {
-			offset += Dm_randRange(note.duration_range);
+			dur += (int64_t) (Dm_rand() % note.duration_range) - (int64_t) (note.duration_range / 2);
 		}
+		uint32_t duration = (uint32_t) (dur < 1 ? 1 : dur);
 
-		uint32_t velocity = note.velocity;
+		int32_t vel = note.velocity;
 		if (note.velocity_range != 0) {
-			offset += Dm_randRange(note.velocity_range);
+			vel += (int32_t) (Dm_rand() % note.velocity_range) - (int32_t) (note.velocity_range / 2);
 		}
+		uint32_t velocity = (uint32_t) clamp_s32(vel, 1, 127);
 
 		DmMessage msg;
 		msg.type = DmMessage_NOTE;
@@ -625,10 +629,9 @@ static DmResult DmPerformance_playPattern(DmPerformance* slf, DmPattern* pttn) {
 	          slf->time / Dm_getMeasureLength(slf->time_signature) + 1,
 	          pttn->length_measures);
 
-	// Stop any already playing pattern.
-	DmMessageQueue_clear(&slf->music_queue);
-	DmSynth_sendNoteOffEverything(&slf->synth);
-	DmSynth_reset(&slf->synth);
+	// The playing pattern stops starting notes (and its pending pattern change goes), but the notes
+	// it has started play on to their own ends, as DirectMusic's do across pattern boundaries.
+	DmMessageQueue_keepNoteOffs(&slf->music_queue);
 
 	// Generate the new pattern's messages
 	DmResult rv =

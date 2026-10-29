@@ -11,3 +11,9 @@ Local changes:
   synth, so `src/util/Tsf.c` and `vendor/TinySoundFont` are removed.
 - `DmDlsWaveSample` records whether a `wsmp` chunk was present (`present`), so a region without
   one uses its wave's.
+- `DmPerformance_playPattern` no longer cuts every sounding note and resets the synth when a pattern
+  starts: the old pattern's pending note-ons and pattern change go (`DmMessageQueue_keepNoteOffs`),
+  its note-offs stay, so notes that cross a pattern boundary play to their own ends, as DirectMusic's
+  do.
+- Style notes' `bTimeRange`, `bDurRange` and `bVelRange` randomise the start, duration and velocity
+  by up to half the range either way (upstream added all three to the start time, always later).
