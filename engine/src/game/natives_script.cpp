@@ -608,7 +608,10 @@ void register_script_natives(World &w) {
 	// DeleteThisLater and Die (Core registers both on DeleteThisLaterCaller): queued for the next
 	// housekeeping (DE_GLOBAL::AddObjectToClean).
 	auto later = [](const NativeContext &c) {
-		if (GameObject *o = c.self()) c.world.clean_later(o);
+		if (GameObject *o = c.self()) {
+			end_session_object(c.world, o);
+			c.world.clean_later(o);
+		}
 	};
 	reg("CObject::DeleteThisLater()", later);
 	reg("CObject::Die()", later);

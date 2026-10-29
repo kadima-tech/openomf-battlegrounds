@@ -506,7 +506,7 @@ int main(int argc, char **argv) {
 			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
 			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
 				for (game::GameObject *o : world.scene_objects()) {
-					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1);
+					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1), o->autoplayed = true;
 				}
 			}
 			// OPENBG_KO=<frame>[,<frame>...]: every computer fighter loses all its health then (testing

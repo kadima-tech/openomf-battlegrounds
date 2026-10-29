@@ -144,6 +144,7 @@ struct GameObject {
 	bool fighter = false;  // has FighterStats and is moved by World::tick's physics step
 	bool spawned = false;  // a fighter prepared into the scene (DE_CFighterPhysics +0x1a8): in play
 	bool user_controlled = false;  // reads World::input; otherwise driven by AI commands
+	bool autoplayed = false;       // OPENBG_AUTOPLAY: AI-driven, but still the user's to the scripts
 	const Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
 	const std::map<std::string, std::vector<struct InputRequirement>> *inputs = nullptr;  // kind 24 bank
 

@@ -114,6 +114,8 @@ struct SessionState {
 SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifiers);
 // DE_CAppManager::DestroyAllLocalSessions (Core 0x7019bf00): every session ends and is deleted.
 void destroy_all_sessions(World &w);
+void end_session(World &w, SessionState &s);
+void end_session_object(World &w, GameObject *o);
 // The session an object belongs to (a session, its modifiers, slots and clients), if any.
 SessionState *session_of(World &w, const GameObject *o);
 // DE_CDescription::NewResource: the description's resource (fighter, pilot, environment,

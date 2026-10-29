@@ -611,22 +611,34 @@ static void end_scene_of(World &w, SessionState &s) {
 	}
 }
 
-void destroy_all_sessions(World &w) {
-	for (auto &sp : w.sessions) {
-		SessionState &s = *sp;
-		if (s.ended) continue;
-		replay_session_ended(w, s);
-		s.ended = true;
-		for (auto &cl : s.clients) w.clean_later(cl->obj);
-		for (auto &sl : s.slots) {
-			if (sl->creature) w.clean_later(sl->creature);
-			w.clean_later(sl->obj);
-		}
-		if (s.environment) w.clean_later(s.environment);
-		end_scene_of(w, s);
-		for (GameObject *m : s.modifiers) w.clean_later(m);
-		w.clean_later(s.obj);
+// DE_CSession::End (0x701f9400): every client destroyed, the modifiers, scene and environment
+// deleted; DE_CStandardSession::End also its slots, whose owned creatures go with them.
+void end_session(World &w, SessionState &s) {
+	if (s.ended) return;
+	if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] end %s (environment %s)\n", w.frame(), s.obj->name.c_str(), s.environment ? s.environment->name.c_str() : "-");
+	replay_session_ended(w, s);
+	s.ended = true;
+	for (auto &cl : s.clients) w.clean_later(cl->obj);
+	for (auto &sl : s.slots) {
+		if (sl->creature) w.clean_later(sl->creature);
+		w.clean_later(sl->obj);
 	}
+	if (s.environment) w.clean_later(s.environment);
+	end_scene_of(w, s);
+	for (GameObject *m : s.modifiers) w.clean_later(m);
+	w.clean_later(s.obj);
+}
+
+// A session deleted outright (BSubSessionLauncher::SubSessionDestroySubSession's DeleteThisLater)
+// ends as EndAndDie does.
+void end_session_object(World &w, GameObject *o) {
+	for (auto &s : w.sessions) {
+		if (s->obj == o) end_session(w, *s);
+	}
+}
+
+void destroy_all_sessions(World &w) {
+	for (auto &sp : std::vector<std::shared_ptr<SessionState>>(w.sessions)) end_session(w, *sp);
 }
 
 void add_session_modifier(World &w, GameObject *m) {
@@ -929,6 +941,7 @@ void register_session_natives(World &w) {
 	reg("CStandardSessionModifier::OwnEnvironment(class CEnvironment)", [S](const NativeContext &c) {
 		if (auto *s = S(c)) {
 			s->environment = c.arg_object(0);
+			if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] %s owns environment %s\n", c.world.frame(), s->obj->name.c_str(), s->environment ? s->environment->name.c_str() : "-");
 			c.world.enter_scene(s->environment);
 		}
 	});
@@ -1102,24 +1115,11 @@ void register_session_natives(World &w) {
 	// every client destroyed, the modifiers, scene and environment deleted; DE_CStandardSession::End
 	// also its slots, whose owned creatures go with them.
 	reg("CSession::EndAndDie()", [S](const NativeContext &c) {
-		SessionState *s = S(c);
-		if (!s || s->ended) return;
-		replay_session_ended(c.world, *s);
-		s->ended = true;
-		World &w = c.world;
-		for (auto &cl : s->clients) w.clean_later(cl->obj);
-		for (auto &sl : s->slots) {
-			if (sl->creature) w.clean_later(sl->creature);
-			w.clean_later(sl->obj);
-		}
-		if (s->environment) w.clean_later(s->environment);
-		end_scene_of(w, *s);
-		for (GameObject *m : s->modifiers) w.clean_later(m);
-		w.clean_later(s->obj);
+		if (SessionState *s = S(c)) end_session(c.world, *s);
 	});
 	// NewSubSessionCaller: a standard session made by this one (its SubSessionOwner), with no
 	// modifiers until OwnMasterDescription; the id is the caller's.
-	reg("CObject::class CStandardSession NewSubSession(word)", [S, shared](const NativeContext &c) {
+	reg("CObject::class CStandardSession NewSubSession(word)", [S](const NativeContext &c) {
 		SessionState *owner = S(c);
 		auto sub = new_session(c.world, "SubSession");
 		sub->owner = owner;

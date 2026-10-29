@@ -374,7 +374,7 @@ void register_core_natives(World &w) {
 	reg("CCreature::SetInstanceNumber(int)", [](const NativeContext &) {});
 	reg("CCreature::bool IsUserControlled()", [](const NativeContext &c) {
 		auto *o = c.self();
-		c.ret_bool(o && o->user_controlled);
+		c.ret_bool(o && (o->user_controlled || o->autoplayed));
 	});
 
 	// --- Actor transforms ---------------------------------------------------------------------

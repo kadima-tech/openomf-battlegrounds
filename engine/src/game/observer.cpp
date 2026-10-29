@@ -212,6 +212,12 @@ struct ObserveCommand : Command {
 			else near.push_back(c);
 		}
 		watched = near;
+		static const bool debug = getenv("OPENBG_DEBUG_OBSERVER") != nullptr;
+		if (debug) {
+			fprintf(stderr, "[observer %u] evaluate:", w->frame());
+			for (GameObject *c : watched) fprintf(stderr, " %s#%x %.0f", c->name.c_str(), c->handle, interest_of(c));
+			fprintf(stderr, "\n");
+		}
 		evaluate_timer = 10000;
 		major_timer = -3000;
 	}
@@ -518,6 +524,8 @@ ObserverSystem::Manager &ObserverSystem::manager(GameObject &creature) {
 }
 
 void ObserverSystem::observe_interesting(GameObject &creature, float threshold) {
+	static const bool debug = getenv("OPENBG_DEBUG_OBSERVER") != nullptr;
+	if (debug) fprintf(stderr, "[observe %u] interesting creatures over %.2f\n", w_.frame(), threshold);
 	Manager &m = manager(creature);
 	m.forget_all();
 	auto c = std::make_unique<ObserveCommand>();
@@ -668,6 +676,13 @@ void register_observer_natives(World &w) {
 		if (GameObject *o = c.self()) c.world.observers->observe(*o, {c.arg_object(0)});
 	});
 	reg("CCreature::CommandObserve(class CCreature,class CCreature)", [](const NativeContext &c) {
+		static const bool debug = getenv("OPENBG_DEBUG_OBSERVER") != nullptr;
+		if (debug) {
+			Brain *b = c.world.brain_of(c.ex);
+			auto *m = b && b->exec ? b->exec->current_method() : nullptr;
+			GameObject *a = c.arg_object(0), *z = c.arg_object(1);
+			fprintf(stderr, "[observe %u] %s#%x, %s#%x (%s)\n", c.world.frame(), a ? a->name.c_str() : "-", a ? a->handle : 0, z ? z->name.c_str() : "-", z ? z->handle : 0, m ? m->cm->signature.c_str() : "-");
+		}
 		if (GameObject *o = c.self()) c.world.observers->observe(*o, {c.arg_object(0), c.arg_object(1)});
 	});
 	// DE_CCreature::DeltaTick (0x15016700): only BObserverCamera::Tick and the sub-session
