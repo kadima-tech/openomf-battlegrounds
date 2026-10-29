@@ -63,7 +63,8 @@ struct Tester {
 	std::vector<std::pair<Brain *, uint32_t>> notify;   // AddNotify(instance, method)
 	GameObject *force = nullptr;                        // SetAttachedForce: applied to what it touches
 	uint32_t event = 0;                                 // the CCollisionEvent handed to them
-	std::vector<GameObject *> sources;  // branch roots
+	std::vector<GameObject *> sources;  // branch roots (AddSourceBranch)
+	std::vector<GameObject *> singles;  // lone affectors (AddSource)
 	std::vector<Collision> results;
 	uint32_t results_handle = 0;
 };
@@ -136,6 +137,9 @@ void run_tester(World &w, Tester &t) {
 	for (GameObject *b : t.sources) {
 		collect_affectors(b, sources);
 	}
+	for (GameObject *a : t.singles) {
+		if (a->shape != GameObject::Shape::None) sources.push_back(a);
+	}
 	if (sources.empty()) {
 		return;
 	}
@@ -151,6 +155,11 @@ void run_tester(World &w, Tester &t) {
 			if (s == target || !in_scene(*s)) continue;
 			auto ct = touch(w, *s, *target);
 			if (!ct) continue;
+			static const bool dbg = getenv("OPENBG_DEBUG_TESTERS") != nullptr;
+			if (dbg && s->shape == GameObject::Shape::Mesh) {
+				auto sw = s->world(), tw = target->world();
+				fprintf(stderr, "[tester] %s (%s) at %.0f %.0f %.0f touches %s under %s at %.0f %.0f %.0f, point %.0f %.0f %.0f\n", s->name.c_str(), s->mesh ? s->mesh.info().name.c_str() : "-", sw.t[0], sw.t[1], sw.t[2], target->name.c_str(), target->parent ? target->parent->name.c_str() : "-", tw.t[0], tw.t[1], tw.t[2], ct->point[0], ct->point[1], ct->point[2]);
+			}
 			Collision c;
 			c.source = s;
 			c.touched = target;
@@ -697,8 +706,9 @@ void register_combat_natives(World &w) {
 	reg("CCollisionTester::AddSourceBranch(class CActor)", [](const NativeContext &c) {
 		if (auto *a = c.arg_object(0)) g_testers[c.self_handle()].sources.push_back(a);
 	});
+	// DE_CCollisionTester::AddSource (Core 0x7006a090): that affector alone, not its branch.
 	reg("CCollisionTester::AddSource(class CAffector)", [](const NativeContext &c) {
-		if (auto *a = c.arg_object(0)) g_testers[c.self_handle()].sources.push_back(a);
+		if (auto *a = c.arg_object(0)) g_testers[c.self_handle()].singles.push_back(a);
 	});
 	reg("CCollisionTester::AddNotify(class CClassExecutorInstance,Method(class CCollisionEvent))", [](const NativeContext &c) {
 		g_testers[c.self_handle()].notify.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
@@ -742,6 +752,7 @@ void register_combat_natives(World &w) {
 		if (!o || !g_testers.count(o)) return;
 		Tester &t = g_testers[c.self_handle()];
 		for (GameObject *b : g_testers[o].sources) t.sources.push_back(b);
+		for (GameObject *a : g_testers[o].singles) t.singles.push_back(a);
 	});
 	// NeedPushBackNormal / NeedSurfaceNormal only ask for what every test here computes anyway.
 	reg("CCollisionTester::NeedPushBackNormal()", [](const NativeContext &) {});
@@ -766,8 +777,8 @@ void register_combat_natives(World &w) {
 		static const bool debug = getenv("OPENBG_DEBUG_TESTER") != nullptr;
 		if (debug) {
 			GameObject *who = c.owner();
-			fprintf(stderr, "[tester %u] %s: %zu source branch(es) %s, groups %#x -> %zu\n", c.world.frame(), who ? who->name.c_str() : "?", t.sources.size(),
-			        t.sources.empty() ? "-" : t.sources[0]->name.c_str(), t.groups, t.results.size());
+			fprintf(stderr, "[tester %u] %s: %zu source branch(es) %s, groups %#x -> %zu\n", c.world.frame(), who ? who->name.c_str() : "?", t.sources.size() + t.singles.size(),
+			        !t.sources.empty() ? t.sources[0]->name.c_str() : !t.singles.empty() ? t.singles[0]->name.c_str() : "-", t.groups, t.results.size());
 			for (auto &r : t.results) {
 				fprintf(stderr, "[tester %u]   touched %s (owner %s, parent %s)\n", c.world.frame(), r.touched ? r.touched->name.c_str() : "-",
 				        r.owner ? r.owner->name.c_str() : "-", r.owner && r.owner->parent ? r.owner->parent->name.c_str() : "-");
