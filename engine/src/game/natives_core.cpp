@@ -10,6 +10,7 @@
 #include <functional>
 #include <tuple>
 
+#include "game/replay.h"
 #include "game/forces.h"
 #include "game/particles.h"
 #include "game/runtime.h"
@@ -1017,13 +1018,17 @@ void register_core_natives(World &w) {
 	// Pilot natives live in natives_ai.cpp (each fighter has its own pilot).
 
 	// --- Registrations and hooks the scripts set up; accepted and ignored for now ---------------
-	for (const char *k : {"CCreature::RegisterStandardState()", "CCreature::RegisterLastStateNoReplicate()",
-	                      "CCreature::RegisterLastStateAsRequiredCorrection()", "CCreature::RegisterHighSignificanceState()",
-	                      "CCreature::RegisterLowSignificanceState()", "COMF2Fighter::RegisterGetHitState()",
+	// Register*State (DE_CCreature::RegisterExecutorState, Creature 0x15015650): a state for the
+	// session record; the RegisterLastState* flags only concern network replication.
+	for (const char *k : {"CCreature::RegisterStandardState()", "CCreature::RegisterHighSignificanceState()",
+	                      "CCreature::RegisterLowSignificanceState()", "CCreature::RegisterMediumSignificanceState()",
+	                      "CCreature::RegisterGuaranteedSignificanceState()", "COMF2Fighter::RegisterGetHitState()",
+	                      "COMF2Fighter::RegisterStandardAttack()", "COMF2Fighter::RegisterRecoveryState()"}) {
+		reg(k, [](const NativeContext &c) { register_state(c.world, c.self()); });
+	}
+	for (const char *k : {"CCreature::RegisterLastStateNoReplicate()", "CCreature::RegisterLastStateAsRequiredCorrection()",
 	                      "CCreature::RegisterLastStateNoInterrupt()", "CCreature::RegisterLastStateAsCorrection()",
-	                      "COMF2Fighter::RegisterStandardAttack()", "COMF2Fighter::ResetCurrentHitList()",
-	                      "COMF2Fighter::RegisterRecoveryState()",
-	                      "CScene::PreCacheObject(class CObject)"}) {
+	                      "COMF2Fighter::ResetCurrentHitList()", "CScene::PreCacheObject(class CObject)"}) {
 		stub(k);
 	}
 }

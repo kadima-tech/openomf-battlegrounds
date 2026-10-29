@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "de/contents.h"
+#include "game/replay.h"
 #include "game/navigation.h"
 #include "game/runtime.h"
 
@@ -405,6 +406,9 @@ GameObject *World::current_target_of(GameObject &f) {
 
 void World::run_commands(GameObject &o) {
 	auto &m = o.commands;
+	// A replayed creature's actions come from its recorded states, not from AI commands (ours would
+	// drive even a replayed player's fighter, which has no controlling client).
+	if (replay_driven(*this, &o)) return;
 	if (m.reassign) reassign_commands(o);
 	if (m.list.empty()) return;
 	std::array<float, 3> me = o.world().t;

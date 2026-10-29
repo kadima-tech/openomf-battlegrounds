@@ -26,6 +26,7 @@
 
 #include "de/contents.h"
 #include "de/lighting.h"
+#include "game/replay.h"
 #include "game/runtime.h"
 #include "game/session.h"
 #include "game/descriptions.h"
@@ -147,6 +148,7 @@ int main(int argc, char **argv) {
 	const char *shot = nullptr;
 	std::string launch;
 	bool simulate_fullscreen = false;  // the launcher's "simulatefullscreen" switch
+	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
 	bool headless = false;
 	int frames = 60;
@@ -154,6 +156,7 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
+		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) simulate_fullscreen = true;
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
@@ -198,6 +201,16 @@ int main(int argc, char **argv) {
 		// DE_GLOBAL::FirstRun: Core's DE_CRegistry found no registry yet.
 		bool first_run = false;
 		if (!shot && !headless) first_run = !load_registry(world.registry);
+		// OPENBG_SET="name=value;..." sets registry values for this run (testing).
+		if (const char *set = getenv("OPENBG_SET")) {
+			std::string l = set;
+			for (size_t p = 0; p < l.size();) {
+				size_t q = l.find(';', p), e = l.find('=', p);
+				if (q == std::string::npos) q = l.size();
+				if (e != std::string::npos && e < q) world.registry[l.substr(p, e - p)] = l.substr(e + 1, q - e - 1);
+				p = q + 1;
+			}
+		}
 		app.apply_settings();
 		auto saved_registry = world.registry;
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
@@ -280,6 +293,7 @@ int main(int argc, char **argv) {
 			if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] close stack (current %s, next %s, state %d)\n", world.frame(), app.current ? app.current->name.c_str() : "-", app.next ? app.next->name.c_str() : "-", app.transition_state);
 			app.close_stack();
 		};
+		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
 		app.has_local_session = [&] { return world.session != nullptr; };
 		app.session_fully_sequenced = [] { return true; };
 		app.session_scene_rendering = [&] { return world.session != nullptr && view.has_arena(); };
@@ -290,6 +304,11 @@ int main(int argc, char **argv) {
 				return 1;
 			}
 			app.launch_session(d, true);
+		} else if (!replay_path.empty()) {
+			if (!game::start_replay(world, game::load_recording(replay_path))) {
+				fprintf(stderr, "cannot replay %s\n", replay_path.c_str());
+				return 1;
+			}
 		} else {
 			// DE_CGameLauncherWindow::ObjInitContents: the main menu is the first UI manager.
 			app.set_next(app.main_menu(), true);

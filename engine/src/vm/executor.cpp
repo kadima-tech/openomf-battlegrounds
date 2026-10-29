@@ -620,4 +620,47 @@ int Executor::continue_execution() {
 	}
 }
 
+
+std::vector<Executor::StatusFrame> Executor::status() const {
+	std::vector<StatusFrame> out;
+	for (size_t i = 0; i < frames_.size(); ++i) {
+		const Frame &f = frames_[i];
+		bool live = i + 1 == frames_.size();
+		uint32_t pc = live ? pc_ : f.pc;
+		out.push_back({f.method, pc - f.method->code_addr, stack_ + f.base, &f.local_refs});
+	}
+	return out;
+}
+
+void Executor::restore(const std::vector<RestoreFrame> &frames,
+                       const std::function<void(ScriptMethod &, uint32_t, std::vector<uint32_t> &)> &fill) {
+	++generation_;
+	frames_.clear();
+	base_ = 0;
+	pc_ = 0;
+	uint32_t base = 0;
+	for (const RestoreFrame &rf : frames) {
+		ScriptMethod &m = *rf.method;
+		if (base + m.frame_size() > stack_size_) break;
+		memset(mem_.ptr(stack_ + base, m.frame_size() ? m.frame_size() : 1), 0, m.frame_size());
+		base_ = base;
+		method_ = &m;
+		cls_ = m.cls;
+		for (auto &ci : m.cm->instances) {
+			if (!ci.flag && ci.value + 4 <= m.frame_size()) set<uint32_t>(ci.value, host_.new_instance(*this, ci.class_index, ci.count));
+		}
+		frames_.push_back({base, m.code_addr + rf.ip, &m, false, {}});
+		fill(m, stack_ + base, frames_.back().local_refs);
+		base += m.frame_size();
+	}
+	if (frames_.empty()) return;
+	Frame &cur = frames_.back();
+	base_ = cur.base;
+	method_ = cur.method;
+	cls_ = method_->cls;
+	frame_size_ = method_->frame_size();
+	pc_ = cur.pc;
+	end_ = method_->code_addr + method_->code_size;
+}
+
 }  // namespace vm

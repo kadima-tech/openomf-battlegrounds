@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <optional>
 
 #include "de/image.h"
@@ -12,6 +13,7 @@
 #include "de/scene.h"
 #include "game/descriptions.h"
 #include "game/music.h"
+#include "game/replay.h"
 #include "game/runtime.h"
 #include "game/session.h"
 
@@ -199,7 +201,7 @@ public:
 		} else if (&c == options_) {
 			app.set_next(app.options_menu(), true);
 		} else if (&c == replays_) {
-			app.not_ported(c.text);
+			app.set_next(app.recordings_menu(), true);
 		}
 	}
 
@@ -605,6 +607,199 @@ private:
 	std::vector<std::pair<float, float>> rows_;
 	int focus_ = -1;
 	bool editing_ = false, assigning_ = false;
+};
+
+// DE_CRecordingListUIManager (OMF ObjInitContents 0x350619e0, Begin 0x35062040, SetupControls
+// 0x35061c10; its robot's RefreshList 0x350625d0, SetCurrentRecord 0x35062610, ProcessButtonClickEvent
+// 0x35062530) on F.MatchBrowser: the recordings in a list (Name, Type, Date, Time, Length); the
+// selected one's session info in the Window with Delete and Rename (DE_CSessionInfoInGameRobot,
+// OMF 0x3501aae0 / 0x3501b500); Play replays it, Back returns.
+class RecordingList : public UIManager {
+public:
+	RecordingList() : UIManager("Select Recording", "MatchBrowser") {}
+
+	bool begin(AppManager &app) override {
+		UIManager::begin(app);
+		records_ = list_recordings();
+		std::stable_sort(records_.begin(), records_.end(), [](auto &a, auto &b) { return a->name < b->name; });  // UseSortByName
+		selected_ = -1;
+		confirm_ = renaming_ = false;
+		return true;
+	}
+	void setup_controls(AppManager &app) override {
+		list_ = button(app, "", "ListWindow");
+		window_ = button(app, "", "Window");
+		play_ = button(app, "Play", "NEXT");
+		play_->enabled = false;  // ReadOnlyOn until a record is selected
+		play_->keys = {kKeyReturn};
+		back_ = button(app, "Back", "BACK");
+		back_->keys = {kKeyEscape};
+		float l = window_->left + 0.6f * (window_->right - window_->left), r = window_->right - 0.01f;
+		float t = window_->top, h = window_->bottom - window_->top;
+		delete_ = &controls.emplace_back();
+		delete_->text = "Delete", delete_->left = l, delete_->right = r, delete_->top = t + 0.02f * h, delete_->bottom = t + 0.25f * h;
+		rename_ = &controls.emplace_back();
+		rename_->text = "Rename", rename_->left = l, rename_->right = r, rename_->top = t + 0.375f * h, rename_->bottom = t + 0.625f * h;
+		yes_ = &controls.emplace_back();
+		no_ = &controls.emplace_back();
+		yes_->text = "Yes", no_->text = "No";
+		yes_->left = window_->left + 0.1f * (window_->right - window_->left), yes_->right = window_->left + 0.4f * (window_->right - window_->left);
+		no_->left = window_->left + 0.6f * (window_->right - window_->left), no_->right = window_->left + 0.9f * (window_->right - window_->left);
+		yes_->top = no_->top = t + 0.7f * h, yes_->bottom = no_->bottom = t + 0.85f * h;
+		select(-1);
+	}
+	void click(AppManager &app, Control &c) override {
+		if (&c == back_) {
+			backed_out = true;
+			app.set_last();
+		} else if (&c == play_ && c.enabled && current()) {
+			// SetDescriptionChosen completes the page; then Replay.
+			std::string path = current()->path;
+			complete(app);
+			if (app.launch_replay) app.launch_replay(path);
+		} else if (&c == delete_ && current()) {
+			confirm_ = true;
+			renaming_ = false;
+			yes_->text = "Yes", no_->text = "No";
+			yes_->enabled = no_->enabled = true;
+		} else if (&c == yes_ && confirm_) {
+			// DeleteMasterObject, then DestroyResource deletes the file.
+			delete_recording(*current());
+			records_.erase(records_.begin() + selected_);
+			confirm_ = false;
+			select(-1);
+		} else if (&c == no_ && confirm_) {
+			confirm_ = false;
+			yes_->text = no_->text = "";
+			yes_->enabled = no_->enabled = false;
+		} else if (&c == rename_ && current()) {
+			// UserModalGetString("Enter New Name"), pre-filled with the name.
+			renaming_ = true;
+			confirm_ = false;
+			edit_ = current()->name;
+		}
+	}
+	bool key(AppManager &app, int sym) override {
+		if (renaming_) {
+			if (sym == kKeyReturn) {
+				if (!edit_.empty()) rename_recording(*current(), edit_);
+				renaming_ = false;
+			} else if (sym == kKeyEscape) {
+				renaming_ = false;
+			} else if (sym == 8 && !edit_.empty()) {
+				edit_.pop_back();
+			}
+			return true;
+		}
+		if (sym == kKeyUp) select(std::max(0, selected_ - 1));
+		else if (sym == kKeyDown) select(std::min(int(records_.size()) - 1, selected_ + 1));
+		else return false;
+		return true;
+	}
+	void text(AppManager &, const std::string &t) override {
+		if (renaming_) edit_ += t;
+	}
+	bool mouse(AppManager &app, float x, float y, int what) override {
+		if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
+		int row = int(std::floor((y - list_->top - kPad) / kRow - 2.5f));
+		if (row >= 0 && row < int(records_.size())) {
+			select(row);
+			if (what == 3) click(app, *play_);  // DE_CCloseListOnDoubleClickRobot
+		}
+		return true;
+	}
+	void draw(AppManager &, std::vector<DrawItem> &out) override {
+		if (!list_ || !window_) return;
+		const float white[4] = {1, 1, 1, 1}, dim[4] = {0.75f, 0.8f, 0.85f, 1}, hilite[4] = {0.55f, 0.75f, 0.9f, 0.35f};
+		auto text = [&](float x, float y, const std::string &s, float size, const float *c, bool centred = false) {
+			DrawItem t;
+			t.kind = DrawItem::Text;
+			t.x0 = x, t.y0 = y, t.size = size, t.text = s, t.centered = centred;
+			std::copy(c, c + 4, t.rgba);
+			out.push_back(t);
+		};
+		float lw = list_->right - list_->left - 2 * kPad, x0 = list_->left + kPad;
+		text((list_->left + list_->right) / 2, list_->top + kPad + kRow / 2, "Recordings Browser", kText * 1.15f, white, true);
+		const char *heads[5] = {"Name", "Type", "Date", "Time", "Length"};
+		const float cols[6] = {0, 0.35f, 0.55f, 0.7f, 0.85f, 1};
+		float hy = list_->top + kPad + kRow * 2;
+		for (int k = 0; k < 5; ++k) text(x0 + cols[k] * lw + kPad, hy, heads[k], kText * 0.9f, dim);
+		for (size_t i = 0; i < records_.size(); ++i) {
+			float y = list_->top + kPad + kRow * (float(i) + 2.5f);
+			if (y + kRow > list_->bottom) break;
+			if (int(i) == selected_) {
+				DrawItem r;
+				r.x0 = x0, r.x1 = list_->right - kPad, r.y0 = y, r.y1 = y + kRow;
+				std::copy(hilite, hilite + 4, r.rgba);
+				out.push_back(r);
+			}
+			auto cells = cells_of(*records_[i]);
+			for (int k = 0; k < 5; ++k) text(x0 + cols[k] * lw + kPad, y + kRow / 2, cells[size_t(k)], kText * 0.9f, white);
+		}
+		// The session info (DE_CSessionInfoInGameRobot): the game type and the record's details.
+		if (SessionRecord *r = current()) {
+			float wx = window_->left + 0.03f * (window_->right - window_->left), wy = window_->top, h = window_->bottom - window_->top;
+			auto cells = cells_of(*r);
+			text(wx, wy + 0.08f * h, cells[1], 18.0f / 600.0f, white);
+			text(wx, wy + 0.2f * h, cells[0], kText, dim);
+			text(wx, wy + 0.3f * h, cells[2] + "  " + cells[3] + "  (" + cells[4] + ")", kText, dim);
+			if (!r->player.empty()) text(wx, wy + 0.4f * h, r->player, kText, dim);
+			if (renaming_) {
+				text(wx, wy + 0.55f * h, "Enter New Name", kText, white);
+				text(wx, wy + 0.63f * h, edit_ + "_", kText, white);
+			}
+			if (confirm_) {
+				text((window_->left + window_->right) / 2, wy + 0.55f * h, "Are you sure you want to delete this replay?", kText, white, true);
+			}
+		}
+	}
+
+private:
+	static constexpr float kRow = 20.0f / 600.0f, kText = 16.0f / 600.0f, kPad = 0.01f;
+
+	SessionRecord *current() const { return selected_ >= 0 && size_t(selected_) < records_.size() ? records_[size_t(selected_)].get() : nullptr; }
+	void select(int i) {
+		selected_ = i >= 0 && size_t(i) < records_.size() ? i : -1;
+		if (play_) play_->enabled = current() != nullptr;
+		bool on = current() != nullptr;
+		if (delete_) delete_->text = on ? "Delete" : "", delete_->enabled = on;
+		if (rename_) rename_->text = on ? "Rename" : "", rename_->enabled = on;
+		if (yes_) yes_->text = "", yes_->enabled = false;
+		if (no_) no_->text = "", no_->enabled = false;
+		confirm_ = renaming_ = false;
+	}
+	// DE_CSessionRecord::ProcessEvent's cells (Core 0x70203280): Date "%#d/%#m/%y", Time
+	// "%#I:%#M%p", Length gFormatTimeStringFromSeconds (0x70202f70), Type the master description.
+	std::array<std::string, 5> cells_of(const SessionRecord &r) const {
+		std::array<std::string, 5> c;
+		c[0] = r.name;
+		if (type_of_) c[1] = type_of_(r.master);
+		time_t t = time_t(r.date);
+		struct tm tm = *localtime(&t);
+		char buf[64];
+		snprintf(buf, sizeof buf, "%d/%d/%02d", tm.tm_mday, tm.tm_mon + 1, tm.tm_year % 100);
+		c[2] = buf;
+		int hr = tm.tm_hour % 12 == 0 ? 12 : tm.tm_hour % 12;
+		snprintf(buf, sizeof buf, "%d:%d%s", hr, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
+		c[3] = buf;
+		int s = int(r.length);
+		if (s < 60) snprintf(buf, sizeof buf, "0:%d", s);
+		else if (s < 3600) snprintf(buf, sizeof buf, "%d:%d", s / 60, s % 60);
+		else snprintf(buf, sizeof buf, "%d:%d:%d", s / 3600, s / 60 % 60, s % 60);
+		c[4] = buf;
+		return c;
+	}
+
+public:
+	std::function<std::string(const de::Guid &)> type_of_;
+
+private:
+	std::vector<std::shared_ptr<SessionRecord>> records_;
+	int selected_ = -1;
+	bool confirm_ = false, renaming_ = false;
+	std::string edit_;
+	Control *list_ = nullptr, *window_ = nullptr, *play_ = nullptr, *back_ = nullptr, *delete_ = nullptr, *rename_ = nullptr,
+	        *yes_ = nullptr, *no_ = nullptr;
 };
 
 // DE_CQuitMenuUIManager (OMF 0x350611d0, 0x35061210, 0x35061610).
@@ -1148,6 +1343,19 @@ void AppManager::apply_settings() {
 	world.lighting_enabled = b("Preferences\\Renderer\\Lighting Enabled", true);
 	// DE_COMF2Manager::Activate: registry "AI Difficulty" (default 0, Rookie).
 	world.ai_difficulty = int(f("AI Difficulty", 0));
+}
+
+UIPtr AppManager::recordings_menu() {
+	if (!recordings_menu_) {
+		auto r = std::make_shared<RecordingList>();
+		r->persistent = true;
+		r->type_of_ = [this](const de::Guid &g) {
+			de::ObjectRef d = world.data().by_guid(g);
+			return d ? d.info().name : std::string();
+		};
+		recordings_menu_ = r;
+	}
+	return recordings_menu_;
 }
 
 UIPtr AppManager::quit_menu() {

@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -112,6 +113,24 @@ public:
 	uint32_t sp() const { return stack_ + base_; }  // address of the current frame
 
 	uint64_t instructions_executed() const { return executed_; }
+
+	// GenerateStatus / ProcessStatus (DE_CClassExecutorInstance, Core 0x70145930 / 0x70145b50): the
+	// call stack as (method, IP offset) per frame, outermost first, each with its frame's address
+	// and local references.
+	struct StatusFrame {
+		ScriptMethod *method;
+		uint32_t ip;
+		uint32_t addr;
+		const std::vector<uint32_t> *local_refs;
+	};
+	std::vector<StatusFrame> status() const;
+	// Rebuilds the stack from such frames: each frame cleared and set up after the previous one,
+	// `fill` then writing its replicated locals; execution resumes in the last at its IP.
+	struct RestoreFrame {
+		ScriptMethod *method;
+		uint32_t ip;
+	};
+	void restore(const std::vector<RestoreFrame> &frames, const std::function<void(ScriptMethod &, uint32_t addr, std::vector<uint32_t> &local_refs)> &fill);
 
 private:
 	struct Frame {

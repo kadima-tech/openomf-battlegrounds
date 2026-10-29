@@ -1,6 +1,7 @@
 // Session, slots, modifiers and clients (see session.h), and descriptions (DE_CDescription:
 // what the creature and pilot pickers build fighters and pilots from).
 #include "game/session.h"
+#include "game/replay.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -613,6 +614,7 @@ void destroy_all_sessions(World &w) {
 	for (auto &sp : w.sessions) {
 		SessionState &s = *sp;
 		if (s.ended) continue;
+		replay_session_ended(w, s);
 		s.ended = true;
 		for (auto &cl : s.clients) w.clean_later(cl->obj);
 		for (auto &sl : s.slots) {
@@ -686,6 +688,7 @@ void begin(World &w, SessionState &s) {
 		}
 	}
 	s.begun = true;
+	replay_session_begun(w, s);
 }
 
 }  // namespace
@@ -773,7 +776,7 @@ static void update_one(World &w, SessionState &s) {
 			return w.memory().get<int32_t>(e + 4);
 		};
 		// The slots that have a client (empty ones are not waited for).
-		bool clients = false;
+		bool clients = s.replaying;  // a replay's slots have no clients, their picks come from the record
 		for (auto &sl : s.slots) clients |= sl->client != nullptr;
 		int32_t required = clients ? ask("SessionQuerryIsLoadingRequired", 0) : 0;
 		if (required > 0 && ask("SlotQuerryUserChoicesComplete", 1) && ask("SessionQuerryIsReadyToLoad", 1)) {
@@ -839,6 +842,7 @@ void update_session(World &w) {
 			if (o->owner == sp.get()) o->owner = nullptr;
 		}
 	}
+	replay_update(w);
 	auto current = w.session;
 	auto all = w.sessions;
 	for (auto &sp : all) {
@@ -909,7 +913,7 @@ void register_session_natives(World &w) {
 		reg(std::string(cls) + "UnregisterUpdateHook(class CClassExecutorInstance,Method())", [node](const NativeContext &c) {
 			if (auto *n = node(c); n && n->update.brain == c.world.brain_of(c.ex)) n->update = {};
 		});
-		stub((std::string(cls) + "RegisterState()").c_str());
+		reg(std::string(cls) + "RegisterState()", [](const NativeContext &c) { register_state(c.world, c.self()); });
 		stub((std::string(cls) + "RegisterUrgentState()").c_str());
 		reg(std::string(cls) + "class CStandardSession Session()", [S](const NativeContext &c) {
 			auto *s = S(c);
@@ -1106,7 +1110,10 @@ void register_session_natives(World &w) {
 		while (s && s->owner) s = s->owner;
 		c.ret_u32(s ? uint32_t(s->max_player_clients) : 2);
 	});
-	reg("CSession::bool IsReplaying()", [](const NativeContext &c) { c.ret_bool(false); });
+	reg("CSession::bool IsReplaying()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		c.ret_bool(s ? s->replaying : replaying(c.world));
+	});
 	reg("CSession::bool IsLocal()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsReadyToLoad()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsFullySequenced()", [](const NativeContext &c) { c.ret_bool(true); });
@@ -1119,6 +1126,7 @@ void register_session_natives(World &w) {
 	reg("CSession::EndAndDie()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		if (!s || s->ended) return;
+		replay_session_ended(c.world, *s);
 		s->ended = true;
 		World &w = c.world;
 		for (auto &cl : s->clients) w.clean_later(cl->obj);

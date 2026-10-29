@@ -201,6 +201,9 @@ public:
 	UIPtr quit_menu();
 	UIPtr help_menu();
 	UIPtr options_menu();
+	UIPtr recordings_menu();
+	// DE_CSessionRecord::Replay: play the recording saved at `path`.
+	std::function<bool(const std::string &path)> launch_replay;
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 
@@ -277,7 +280,7 @@ private:
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
 	bool first_ui_ = true;
-	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_;
+	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_;
 };
 
 }  // namespace ui

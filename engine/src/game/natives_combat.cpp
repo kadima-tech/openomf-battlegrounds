@@ -17,6 +17,7 @@
 #include <tuple>
 
 #include "de/image.h"
+#include "game/replay.h"
 #include "game/forces.h"
 #include "game/particles.h"
 #include "game/runtime.h"
@@ -1101,7 +1102,7 @@ void register_combat_natives(World &w) {
 
 	// --- Get-hit support (OMF Dampen*Caller, Core orientation) ----------------------------------
 	// IsStateAlterable folds into IsSimulating: true for a creature simulated here (the server).
-	reg("CObject::bool IsStateAlterable()", [](const NativeContext &c) { c.ret_bool(true); });
+	reg("CObject::bool IsStateAlterable()", [](const NativeContext &c) { c.ret_bool(!replay_driven(c.world, c.self())); });
 	// IsAirStateCaller -> IsJumpingState (0x35029c60): the running state inherits the "Air" state.
 	reg("COMF2Fighter::bool IsAirState()", [](const NativeContext &c) {
 		auto *o = c.self();
