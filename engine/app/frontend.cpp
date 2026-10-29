@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "de/contents.h"
 #include "de/lighting.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -108,6 +109,31 @@ std::vector<std::string> wrap(const std::string &text, size_t width) {
 		p = nl + 1;
 	}
 	return lines;
+}
+
+// DE_CCamera::ObjProcessContents (Core 0x70187a70): v3 [name][field of view], v4 adds near and
+// far; ObjInitContents's 80 degrees, 10 and 100000 otherwise. The actor's first Camera child
+// (DE_CCamera::FindCamera).
+struct CameraLens {
+	float fov = 80, near = 10, far = 100000;
+};
+CameraLens camera_lens(const game::GameObject *actor) {
+	CameraLens l;
+	for (const game::GameObject *c : actor ? actor->children : std::vector<game::GameObject *>{}) {
+		if (c->class_path != "Camera" || !c->file) continue;
+		try {
+			de::Contents in(c->file->object_data(c->file->objects()[c->index]).contents);
+			de::Chunk ch = de::begin_chunk(in);
+			if (ch.version >= 3) {
+				in.bytes(in.u32());
+				l.fov = in.f32();
+				if (ch.version >= 4) l.near = in.f32(), l.far = in.f32();
+			}
+		} catch (const std::exception &) {
+		}
+		break;
+	}
+	return l;
 }
 
 }  // namespace
@@ -232,6 +258,7 @@ int main(int argc, char **argv) {
 			for (auto &d : sel->pool) {
 				if (std::find(choose.begin(), choose.end(), d.info().name) != choose.end()) {
 					printf("UI \"%s\": chose %s\n", u.description.c_str(), d.info().name.c_str());
+					if (d.info().class_path == "Description\\Pilot") app.last_pilot = d;
 					game::complete_ui(world, ui, d.info().guid);
 					return;
 				}
@@ -339,7 +366,10 @@ int main(int argc, char **argv) {
 		if (!shot && !mixer.open()) fprintf(stderr, "no audio device: %s\n", SDL_GetError());
 		// Render ticks pass real time even while the scene is autopaused (the renderer's clock).
 		world.render_ticks_per_frame = false;
-		auto gui_only = [](const game::GameObject *o) { return game::in_gui(*o); };
+		auto gui_only = [](const game::GameObject *o) { return game::in_gui(*o) && game::gui_view(*o) == 0; };
+		auto picker_only = [](const game::GameObject *o) { return game::in_gui(*o) && game::gui_view(*o) == 1; };
+		render::FighterRenderer picker_model;
+		de::ObjectRef picker_model_shown, picker_pilot_shown;
 		Viewport vpt = gui_viewport(W, H);
 		app.text_width = [&](const std::string &t, float size) { return overlay.text_width(t, size, vpt.w, vpt.h); };
 
@@ -473,7 +503,7 @@ int main(int argc, char **argv) {
 			render::FrameLights lights = render::collect_lights(world, fr, gui_only);
 			std::vector<render::ActorMeshRenderer::Item> items, doors;
 			for (game::GameObject *o : world.scene_objects()) {
-				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !game::in_gui(*o)) continue;
+				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !gui_only(o)) continue;
 				bool live = true;
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
 				if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
@@ -490,14 +520,70 @@ int main(int argc, char **argv) {
 				for (const game::GameObject *p = o; p && !door; p = p->parent) door = p == app.transition;
 				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o)});
 			}
+			auto draw_picker = [&] {
+				render::Lighting gui_lighting = render::g_lighting;
+			// The model picker's scene viewer (DE_CSceneViewerControl3d over the UI area): its own
+			// scene through EnvironmentCamera, lit by its own lights, the model on RobotPedistal.
+			auto *picker = dynamic_cast<game::ui::ModelPicker *>(app.current.get());
+			if (picker && picker->activated && picker->camera) {
+				glClear(GL_DEPTH_BUFFER_BIT);
+				CameraLens lens = camera_lens(picker->camera);
+				de::Transform ct = picker->camera->world();
+				auto f = ct.rotate({0, 0, 1}), up = ct.rotate({0, 1, 0});
+				float ceye[3] = {ct.t[0], ct.t[1], ct.t[2]}, pproj[16], pview[16], pvp[16];
+				float pvfov = 2.0f * std::atan(std::tan(0.5f * lens.fov * 0.017453292f) * 0.75f) / 0.017453292f;
+				glu::perspective(pproj, pvfov, aspect, lens.near, lens.far);
+				glu::look_view(pview, ceye, f.data(), up.data());
+				glu::mul(pvp, pproj, pview);
+				if (auto *lf = world.data().file("LoadScene")) render::g_lighting.ambient = de::read_ambient(world.data(), *lf);
+				render::FrameLights plights = render::collect_lights(world, fr, picker_only);
+				std::vector<render::ActorMeshRenderer::Item> pitems;
+				for (game::GameObject *o : world.scene_objects()) {
+					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;
+					bool live = true;
+					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
+					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o)});
+				}
+				actors_r.draw(world.data(), pitems, pvp, ceye);
+				// NewStrippedFighterModel (OMF 0x35038940): the model description's model; painted by
+				// the last selected pilot (FighterTemplate's image filter).
+				de::ObjectRef m = picker->model();
+				auto res = m ? game::passive_references(world.data(), m) : std::vector<de::ObjectRef>{};
+				if (!res.empty() && picker->pedestal) {
+					if (m.file != picker_model_shown.file || m.index != picker_model_shown.index) {
+						std::string stem = res[0].file->master().name;
+						std::string robot = stem.size() > 6 && stem.compare(stem.size() - 6, 6, "Model1") == 0 ? stem.substr(0, stem.size() - 6) : stem;
+						picker_model = render::FighterRenderer();
+						picker_model.load(world.data(), *res[0].file, world.data().file(robot));
+						picker_model_shown = m;
+						picker_pilot_shown = {};
+					}
+					if (picker->pilot.file != picker_pilot_shown.file || picker->pilot.index != picker_pilot_shown.index) {
+						auto pres = picker->pilot ? game::passive_references(world.data(), picker->pilot) : std::vector<de::ObjectRef>{};
+						if (!pres.empty()) {
+							if (auto pl = game::read_pilot(*pres[0].file, pres[0].info(), 0)) picker_model.set_paint(pl->colours);
+						}
+						picker_pilot_shown = picker->pilot;
+					}
+					picker_model.draw(pvp, ceye, picker->pedestal->world(), -1, 0);
+				}
+				particles_r.only = picker_only;
+				particles_r.draw(world, pvp, pview, ceye);
+				particles_r.only = nullptr;
+				render::g_lighting = gui_lighting;
+			}
+			};
 			render::update_animated_textures(world.image_phases);
 			actors_r.texture_version = world.texture_override_version;
 			actors_r.draw(world.data(), items, vp, eye);
+			particles_r.only = gui_only;
 			particles_r.draw(world, vp, view, eye);
+			particles_r.only = nullptr;
 			if (!game_shown) {
 				overlay.draw_world(world, vp);
 				overlay.draw(world, vpt.w, vpt.h, nullptr);
 			}
+			draw_picker();
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};

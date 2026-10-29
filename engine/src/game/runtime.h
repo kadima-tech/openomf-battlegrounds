@@ -245,6 +245,7 @@ struct GameObject {
 	bool detached = false;  // a global entry's template: outside the scene (no hits, no danger)
 	bool removed = false;   // CScene::Remove: out of the scene until CScene::Add brings it back
 	bool gui = false;       // a root of the front end's GUI scene (ui.h), drawn with its own camera
+	int view = 0;           // a GUI root's scene: 0 the GUI's own, 1 a scene viewer control's
 	float hotspot = 0, falloff = 0;                       // sphere radii
 	float near_begin = 0, near_end = 0, far_begin = 0, far_end = 0, umbra = 0, penumbra = 0;  // cone
 	GameObject *owner_actor = nullptr;                    // CAffector::SetOwnerActor (+0x118)
@@ -296,6 +297,12 @@ inline bool in_gui(const GameObject &o) {
 	const GameObject *r = &o;
 	while (r->parent) r = r->parent;
 	return r->gui;
+}
+// The scene a GUI object is in (GameObject::view of its root).
+inline int gui_view(const GameObject &o) {
+	const GameObject *r = &o;
+	while (r->parent) r = r->parent;
+	return r->view;
 }
 // DE_CActor::IsPositionStatic (Core 0x700917c0): the nearest set position mode up the tree is 1.
 inline bool position_static(const GameObject &o) {

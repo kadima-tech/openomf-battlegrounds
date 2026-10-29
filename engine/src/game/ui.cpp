@@ -632,6 +632,14 @@ constexpr float kRow = 20.0f / 600.0f, kListText = 16.0f / 600.0f;  // DE_CListC
 
 bool DescriptionSelector::begin(AppManager &app) {
 	UIManager::begin(app);
+	// DE_CChooseFighterUIManager::Begin (0x35056b20): back from the model picker with Next, the
+	// highlighted fighter is chosen without showing the page again.
+	if (picker_ && picker_->result && selected_ >= 0 && size_t(selected_) < entries_.size()) {
+		picker_->result = false;
+		uses_transition = false;
+		choose(app, entries_[size_t(selected_)]);
+		return false;
+	}
 	chosen = {};
 	// GetAvailableDescriptions (0x701e4790): listed, and not hidden by a lock; sorted by name.
 	entries_.clear();
@@ -665,6 +673,17 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 	}
 	back_ = button(app, "Back", "BACK");
 	back_->keys = {kKeyEscape};
+	view_ = nullptr;
+	// SetupControls (0x35056720): under the Window, a strip from 0.93 down holding the Model choice
+	// (to 0.7 across) and View (0.73 to 0.97).
+	if (choose_fighter && window_) {
+		float h = window_->bottom - window_->top, w = window_->right - window_->left;
+		Control &v = controls.emplace_back();
+		v.text = "View";
+		v.top = window_->top + 0.93f * h, v.bottom = window_->bottom;
+		v.left = window_->left + 0.73f * w, v.right = window_->left + 0.97f * w;
+		view_ = &v;
+	}
 	select(app, selected_);
 }
 
@@ -696,6 +715,7 @@ void DescriptionSelector::select(AppManager &app, int i) {
 
 void DescriptionSelector::choose(AppManager &app, const de::ObjectRef &d) {
 	chosen = d;
+	if (d && d.info().class_path == "Description\\Pilot") app.last_pilot = d;
 	chosen_model = choose_fighter && model_ >= 0 && size_t(model_) < models_.size() ? models_[size_t(model_)] : de::ObjectRef{};
 	complete(app);
 	if (on_complete) on_complete(app, *this);
@@ -706,6 +726,11 @@ void DescriptionSelector::click(AppManager &app, Control &c) {
 	if (&c == back_) {
 		backed_out = true;
 		app.set_last();
+	} else if (&c == view_ && !models_.empty()) {
+		// ProcessButtonClickEvent (0x35057270): the picker, over this page.
+		if (!picker_) picker_ = std::make_shared<ModelPicker>(this);
+		begun = false;
+		app.set_next(picker_, true);
 	} else if (&c == next_ && selected_ >= 0) {
 		const de::ObjectRef &d = entries_[size_t(selected_)];
 		if (app.is_locked(d)) app.notify("Selection Locked", d.info().name + " is currently locked and cannot be selected.");
@@ -739,15 +764,17 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 		if (app.is_locked(entries_[i])) e.rgba[0] = e.rgba[1] = e.rgba[2] = 0.6f;
 		out.push_back(e);
 	}
-	// The Model strip along the Window's bottom (SetupControls 0x35056720).
+	// The Model choice in the strip under the Window (SetupControls 0x35056720): its label on the
+	// left half of the first 0.7, the model on the right half.
 	if (choose_fighter && !models_.empty()) {
-		float y = window_->bottom - 0.05f;
+		float h = window_->bottom - window_->top, w = window_->right - window_->left;
+		float y = window_->top + 0.965f * h;
 		DrawItem l;
 		l.kind = DrawItem::Text;
-		l.x0 = window_->left + 0.03f, l.y0 = y, l.size = kListText, l.text = "Model";
+		l.x0 = window_->left + 0.02f * w, l.y0 = y, l.size = kListText, l.text = "Model";
 		out.push_back(l);
 		DrawItem m = l;
-		m.x0 = (window_->left + window_->right) / 2, m.centered = true, m.text = models_[size_t(model_)].info().name;
+		m.x0 = window_->left + 0.525f * w, m.centered = true, m.text = models_[size_t(model_)].info().name;
 		const float c[4] = {0.55f, 0.75f, 0.9f, 1};
 		std::copy(c, c + 4, m.rgba);
 		out.push_back(m);
@@ -832,7 +859,8 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 
 bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
 	// The Model choice: a click steps to the next model.
-	if (choose_fighter && window_ && what == 1 && !models_.empty() && window_->contains(x, y) && y > window_->bottom - 0.08f) {
+	if (choose_fighter && window_ && what == 1 && !models_.empty() && window_->contains(x, y) &&
+	    y > window_->top + 0.93f * (window_->bottom - window_->top) && x < window_->left + 0.7f * (window_->right - window_->left)) {
 		model_ = (model_ + 1) % int(models_.size());
 		return true;
 	}
@@ -855,6 +883,100 @@ bool DescriptionSelector::key(AppManager &app, int sym) {
 	else if (sym == kKeyDown) select(app, selected_ + 1);
 	else return false;
 	return true;
+}
+
+ModelPicker::ModelPicker(DescriptionSelector *chooser) : UIManager("ChooseFighterModelPicker", "LoadFrame"), chooser_(chooser) {
+	// ObjInitContents (0x35053fb0).
+	uses_transition = true;
+	show_main_frame = false;
+	show_backdrop = false;
+	autodestroy = false;
+}
+
+de::ObjectRef ModelPicker::model() const {
+	if (!chooser_ || chooser_->models_.empty()) return {};
+	return chooser_->models_[size_t(std::clamp(chooser_->model_, 0, int(chooser_->models_.size()) - 1))];
+}
+
+namespace {
+GameObject *descendant_named(GameObject *o, const std::string &name) {
+	for (GameObject *c : o->children) {
+		if (c->name == name) return c;
+		if (GameObject *d = descendant_named(c, name)) return d;
+	}
+	return nullptr;
+}
+}  // namespace
+
+// The robot's constructor (0x350551b0): the controls by fractions of the LoadFrame rectangle, and
+// the scene.
+void ModelPicker::setup_controls(AppManager &app) {
+	result = false;
+	pilot = app.last_pilot;
+	Control frame = *button(app, "", "LoadFrame");
+	controls.pop_back();
+	auto sub = [&](const std::string &text, float l, float t, float r, float b) {
+		Control &c = controls.emplace_back();
+		c.text = text;
+		float w = frame.right - frame.left, h = frame.bottom - frame.top;
+		c.left = frame.left + l * w, c.right = frame.left + r * w, c.top = frame.top + t * h, c.bottom = frame.top + b * h;
+		return &c;
+	};
+	name_ = sub(model() ? model().info().name : "", 0.05f, 0, 0.95f, 0.3f);
+	name_->enabled = false;
+	prev_ = sub("", 0.25f, 0.35f, 0.45f, 0.65f);
+	next_ = sub("", 0.55f, 0.35f, 0.75f, 0.65f);
+	back_ = sub("Back", 0.05f, 0.7f, 0.45f, 1);
+	back_->keys = {kKeyEscape};
+	done_ = sub("Next", 0.55f, 0.7f, 0.95f, 1);
+	done_->keys = {kKeyReturn};
+	if (const de::ObjectsFile *gui = app.world.data().file("OMFBGGUI")) {
+		for (uint32_t i = 0; i < gui->objects().size(); ++i) {
+			const de::ObjectInfo &o = gui->objects()[i];
+			if (o.class_path != "Image\\Standard") continue;
+			if (o.name == "VCRFastBackward") prev_image_ = {gui, i};
+			if (o.name == "VCRFastForward") next_image_ = {gui, i};
+		}
+	}
+	environment = app.construct("LoadScene\\ChooseFighterModelPickerEnvironment");
+	pedestal = camera = nullptr;
+	if (environment) {
+		environment->gui = true;
+		environment->view = 1;
+		app.world.enter_scene(environment);
+		pedestal = descendant_named(environment, "RobotPedistal");
+		camera = descendant_named(environment, "EnvironmentCamera");
+	}
+}
+
+// ProcessButtonClickEvent (0x35055890): the arrows step the chooser's model, wrapping.
+void ModelPicker::click(AppManager &app, Control &c) {
+	if (&c == done_) {
+		result = true;
+		app.set_last();
+	} else if (&c == back_) {
+		result = false;
+		app.set_last();
+	} else if ((&c == next_ || &c == prev_) && chooser_ && !chooser_->models_.empty()) {
+		int n = int(chooser_->models_.size());
+		chooser_->model_ = (chooser_->model_ + (&c == next_ ? 1 : n - 1)) % n;
+		name_->text = model().info().name;
+	}
+}
+
+void ModelPicker::draw(AppManager &, std::vector<DrawItem> &out) {
+	for (auto [c, img] : {std::pair{prev_, prev_image_}, std::pair{next_, next_image_}}) {
+		if (!c || !img) continue;
+		DrawItem d;
+		d.kind = DrawItem::Image;
+		d.x0 = c->left, d.x1 = c->right, d.y0 = c->top, d.y1 = c->bottom, d.image = img;
+		out.push_back(d);
+	}
+}
+
+void ModelPicker::deactivated(AppManager &app) {
+	if (environment) app.world.clean_later(environment);
+	environment = pedestal = camera = nullptr;
 }
 
 bool AppManager::is_locked(const de::ObjectRef &d) const {
@@ -1033,8 +1155,13 @@ UIPtr AppManager::quit_menu() {
 	return quit_menu_;
 }
 
-GameObject *AppManager::construct(const std::string &name) {
-	const de::ObjectsFile *f = world.data().file(transfer_agent);
+GameObject *AppManager::construct(const std::string &path) {
+	std::string stem = transfer_agent, name = path;
+	if (size_t k = path.find('\\'); k != std::string::npos && world.data().file(path.substr(0, k))) {
+		stem = path.substr(0, k);
+		name = path.substr(k + 1);
+	}
+	const de::ObjectsFile *f = world.data().file(stem);
 	if (!f) return nullptr;
 	auto parents = f->parents();
 	for (uint32_t i = 0; i < f->objects().size(); ++i) {
@@ -1045,7 +1172,7 @@ GameObject *AppManager::construct(const std::string &name) {
 		GameObject *tpl = world.global_object({f, i});
 		return tpl ? world.copy_tree(*tpl) : nullptr;
 	}
-	fprintf(stderr, "%s has no %s\n", transfer_agent.c_str(), name.c_str());
+	fprintf(stderr, "%s has no %s\n", stem.c_str(), name.c_str());
 	return nullptr;
 }
 

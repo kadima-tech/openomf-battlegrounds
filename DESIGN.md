@@ -20,6 +20,11 @@ to present that data, and the few places where the look is our own.
   and they slide open (500 ms). The main frame shows on every page except the main menu and in-game
   menus. The doors cover everything on the page, its text, images and bars included; only
   notifications draw over them.
+- **Model picker (Choose Creature's View).** The page's own 3D scene, `LoadScene`'s hangar
+  (`ChooseFighterModelPickerEnvironment`), fills the 4:3 field through its `EnvironmentCamera`, the
+  robot on `RobotPedistal` in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:
+  the model's name (top 30%), the `VCRFastBackward` / `VCRFastForward` images as arrows, Back and
+  Next along the bottom 30%. No main frame or backdrop.
 - **Notifications (our own look).** A centred panel, dark blue-grey (0.05, 0.08, 0.12) at 90%
   opacity inside a pale blue (0.55, 0.75, 0.9) edge; the title at 0.035 screen heights, the text
   wrapped at about 52 characters at 0.026, and "OK" in the edge colour. The original's dialog is

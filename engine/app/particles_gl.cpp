@@ -423,12 +423,12 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	std::map<std::pair<GLuint, bool>, Batch> batches;
 	if (!glow_layer) {
 		for (auto &t : world.particles->trails()) {
-			if (t->stepped == world.frame() && !t->actor->meshes_disabled) trail(world, *t, view, batches);
+			if (t->stepped == world.frame() && !t->actor->meshes_disabled && (!only || only(t->actor))) trail(world, *t, view, batches);
 		}
 	}
 	for (auto &inp : world.particles->instances()) {
 		const game::ParticleInstance &in = *inp;
-		if (in.particles.empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled) continue;
+		if (in.particles.empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled || (only && !only(in.actor))) continue;
 		const de::ParticleRendererDef &d = *in.def;
 		// The glow layer: only renderers with a GlowFactor, scaled by a quarter of it (clamped to 1),
 		// in black exponential fog (density 0.0007; DE_CGenericShader::ActivateAndDrawPatches flag

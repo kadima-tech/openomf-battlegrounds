@@ -98,6 +98,34 @@ private:
 };
 using UIPtr = std::shared_ptr<UIManager>;
 
+class DescriptionSelector;
+
+// DE_CChooseFighterModelPickerUIManager (OMF 0x35053fb0, 0x35054070; its robot 0x350551b0..
+// 0x35055a10): Choose Creature's View. Its own scene, LoadScene\ChooseFighterModelPickerEnvironment,
+// fills the screen through the environment's EnvironmentCamera, with the chooser's model on
+// RobotPedistal painted with the last selected pilot's colours; in the LoadFrame rectangle the
+// model's name, arrows that step the chooser's model, Back (Esc) and Next (Enter).
+class ModelPicker : public UIManager {
+public:
+	explicit ModelPicker(DescriptionSelector *chooser);
+	bool result = false;  // +0x118: left with Next
+
+	void setup_controls(AppManager &app) override;
+	void click(AppManager &app, Control &c) override;
+	void draw(AppManager &app, std::vector<DrawItem> &out) override;
+	void deactivated(AppManager &app) override;
+
+	// What the scene viewer control shows.
+	GameObject *environment = nullptr, *pedestal = nullptr, *camera = nullptr;
+	de::ObjectRef model() const;  // the chooser's current FighterModelDescription
+	de::ObjectRef pilot;          // DE_CPilotDescription::LastSelectedPilot when the page opened
+
+private:
+	DescriptionSelector *chooser_;
+	Control *name_ = nullptr, *prev_ = nullptr, *next_ = nullptr, *back_ = nullptr, *done_ = nullptr;
+	de::ObjectRef prev_image_, next_image_;
+};
+
 // DE_CGenericDescriptionSelector (Core 0x701e46c0..0x701e5370; FINDINGS 127): a name-sorted list
 // of the pool's listed descriptions, the highlighted one's large representation beside it, Next
 // (Enter, double click) to choose and Back (Esc).
@@ -129,10 +157,13 @@ private:
 	void select(AppManager &app, int i);
 	int visible_rows() const;
 
+	friend class ModelPicker;
 	std::vector<de::ObjectRef> entries_;
 	std::vector<de::ObjectRef> models_;
 	int model_ = 0;  // +0x184
 	Control *model_box_ = nullptr;
+	Control *view_ = nullptr;
+	std::shared_ptr<ModelPicker> picker_;  // +0x154
 	int selected_ = -1;
 	int scroll_ = 0;  // the first entry shown
 	Control *list_ = nullptr, *window_ = nullptr, *next_ = nullptr, *back_ = nullptr;
@@ -173,8 +204,11 @@ public:
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 
-	// <transfer agent>\<name>: a new copy (GetObjectByValueString / ConstructObject).
+	// <transfer agent>\<name>, or <file>\<name>: a new copy (GetObjectByValueString /
+	// ConstructObject).
 	GameObject *construct(const std::string &name);
+	// DE_CPilotDescription::LastSelectedPilot.
+	de::ObjectRef last_pilot;
 	// DE_CActor::SetActive / SetInnactive for a scene root.
 	void set_active(GameObject *actor, bool on);
 	static bool is_active(const GameObject *actor);

@@ -4,6 +4,7 @@
 // NormalizeAlpha does); blend 2 alpha-blends.
 #pragma once
 
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -18,6 +19,8 @@ public:
 	// `view` is the camera's view matrix (its rows give the screen axes), `eye` its position.
 	// With `glow_layer`, only the renderers that glow, for the glow target.
 	void draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer = false);
+	// When set, only the effects of actors it accepts are drawn.
+	std::function<bool(const game::GameObject *)> only;
 
 private:
 	struct Vertex {
