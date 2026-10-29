@@ -1282,6 +1282,10 @@ void World::advance(TemporalSet &set) {
 	}
 }
 
+uint32_t World::scene_ms_of(const GameObject *o) const {
+	return o && in_gui(*o) && gui_view(*o) == 1 ? uint32_t(view_scene_ms) : scene_ms_;
+}
+
 void World::tick(uint32_t ms) {
 	++frame_;
 	frame_ms_ = ms;

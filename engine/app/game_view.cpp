@@ -158,7 +158,13 @@ std::string GameView::find_arena() const {
 void GameView::load_renderers() {
 	for (auto *fi : fighters) {
 		if (!fi->renderer_loaded) {
-			fi->renderer.load(world.data(), *world.data().file(fi->name + "Model1"), world.data().file(fi->name));
+			// The fighter's model (NewResource's chosen or default FighterModel child): its paint.
+			const de::ObjectsFile *mf = world.data().file(fi->name + "Model1");
+			size_t model = SIZE_MAX;
+			for (game::GameObject *ch : fi->actor->children) {
+				if (ch->class_path == "FighterModel" && ch->file == mf) model = ch->index;
+			}
+			fi->renderer.load(world.data(), *mf, world.data().file(fi->name), model);
 			fi->renderer_loaded = true;
 		}
 	}

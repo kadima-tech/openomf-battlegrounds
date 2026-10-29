@@ -1078,10 +1078,10 @@ de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint,
 
 }  // namespace
 
-void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, const de::ObjectsFile *fighter) {
+void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, const de::ObjectsFile *fighter, size_t model) {
 	const auto &objs = f.objects();
-	size_t model = SIZE_MAX;
-	for (size_t i = 0; i < objs.size(); ++i) {
+	if (model >= objs.size() || objs[model].class_path != "FighterModel") model = SIZE_MAX;
+	for (size_t i = 0; i < objs.size() && model == SIZE_MAX; ++i) {
 		if (objs[i].class_path == "FighterModel") {
 			model = i;
 			break;

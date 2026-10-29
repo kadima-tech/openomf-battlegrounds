@@ -450,6 +450,11 @@ public:
 	// A fighter's update rate (SceneTicksPerUpdate, +0x1dc): 62.5 updates a second.
 	static constexpr float kTickMs = 16;
 	float scene_ms() const { return float(scene_ms_); }
+	// A GUI scene viewer's own scene (GameObject::view 1, the model picker's): its clock, passed
+	// by the app while its page is up (the robot's idle event, DE_CScene vtable +0x148).
+	double view_scene_ms = 0;
+	// The clock of the scene `o` is in.
+	uint32_t scene_ms_of(const GameObject *o) const;
 	// The input manager's ticks (DE_CJoystickInputManager, 16 ms): input records age in these.
 	uint32_t input_ticks() const { return input_ticks_; }
 

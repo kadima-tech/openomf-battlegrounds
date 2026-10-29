@@ -359,7 +359,7 @@ void register_core_natives(World &w) {
 	reg("CCreature::class CCreature Environment()",
 	    [](const NativeContext &c) { c.ret_object(singleton(c.world, "Environment", "Actor\\Creature\\Environment")); });
 	// Scene time is in milliseconds (scripts wait e.g. 200 between navigation commands); 60 frames/s.
-	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(uint32_t(c.world.scene_ms())); });
+	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(c.world.scene_ms_of(c.owner())); });
 	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CActor::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });

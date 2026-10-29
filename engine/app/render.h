@@ -174,7 +174,8 @@ private:
 class FighterRenderer {
 public:
 	using Paint = std::array<std::array<float, 3>, 3>;
-	void load(const de::World &world, const de::ObjectsFile &model_file, const de::ObjectsFile *fighter_file);
+	// The FighterModel at `model` in `model_file` (a paint), else the file's first.
+	void load(const de::World &world, const de::ObjectsFile &model_file, const de::ObjectsFile *fighter_file, size_t model = SIZE_MAX);
 	// The pilot's colours (DE_CPilot::UserDefinedColor 0..2); repaints when they change.
 	void set_paint(const Paint &p);
 	// Pose `sequence` (index into bank, -1 = bind pose) at normalised time t, placed by `world`.

@@ -251,7 +251,9 @@ int main(int argc, char **argv) {
 			}
 			sel->on_complete = [&world, ui](game::ui::AppManager &, game::ui::DescriptionSelector &s) {
 				if (!s.chosen) return;
-				if (s.chosen_model) game::complete_ui(world, ui, s.chosen.info().guid, &s.chosen_model.info().guid);
+				// ChosenModelCaller (OMF 0x35056500): the model description's model (its +0xa8 GUID).
+				auto res = s.chosen_model ? game::passive_references(world.data(), s.chosen_model) : std::vector<de::ObjectRef>{};
+				if (!res.empty()) game::complete_ui(world, ui, s.chosen.info().guid, &res[0].info().guid);
 				else game::complete_ui(world, ui, s.chosen.info().guid);
 			};
 			printf("UI \"%s\": %zu descriptions\n", u.description.c_str(), sel->pool.size());
@@ -472,6 +474,7 @@ int main(int argc, char **argv) {
 				float ms = shot ? float(game::World::kFrameMs) : float(double(t - last_render) * 1000.0 / double(SDL_GetPerformanceFrequency()));
 				last_render = t;
 				game::render_tick(world, std::fmin(ms, 100.0f));
+				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.view_scene_ms += std::fmin(ms, 100.0f);
 			}
 
 			int dw = W, dh = H;
@@ -554,7 +557,7 @@ int main(int argc, char **argv) {
 						std::string stem = res[0].file->master().name;
 						std::string robot = stem.size() > 6 && stem.compare(stem.size() - 6, 6, "Model1") == 0 ? stem.substr(0, stem.size() - 6) : stem;
 						picker_model = render::FighterRenderer();
-						picker_model.load(world.data(), *res[0].file, world.data().file(robot));
+						picker_model.load(world.data(), *res[0].file, world.data().file(robot), res[0].index);
 						picker_model_shown = m;
 						picker_pilot_shown = {};
 					}
