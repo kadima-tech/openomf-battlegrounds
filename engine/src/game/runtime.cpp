@@ -1,4 +1,5 @@
 #include "game/runtime.h"
+#include "game/impulses.h"
 
 #include "de/value.h"
 
@@ -201,6 +202,7 @@ World::World(const std::filesystem::path &dir) : data_(dir) {
 	music = std::make_shared<MusicSystem>(*this);
 	simple_physics = std::make_shared<SimplePhysicsSystem>(*this);
 	observers = std::make_shared<ObserverSystem>(*this);
+	impulses = std::make_shared<ImpulseRobot>(*this);
 	navigation = std::make_shared<Navigation>(*this);
 	// Line of sight and segment tests against the arena's fighting surfaces (DE_CScene::
 	// TestLineSegment on group 0x200000).
@@ -1413,6 +1415,7 @@ void World::tick(uint32_t ms) {
 	++frame_;
 	frame_ms_ = ms;
 	housekeeping();
+	impulses->flush();
 	// OPENBG_CALLS="Katana@400-402" (or "*@..."): log the methods brains of that owner enter.
 	static const char *calls = getenv("OPENBG_CALLS");
 	if (calls) {

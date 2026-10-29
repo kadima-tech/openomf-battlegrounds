@@ -271,6 +271,11 @@ public:
 	void mouse_move(float x, float y);
 	void mouse_button(bool down, int clicks = 1);
 	void key(int sym, int scancode = 0);
+	// Every key also goes to the impulse robot, down (and autorepeat) and up, as the original's
+	// keyboard hook sees it beside the UI; mouse presses too.
+	void key_up(int sym, int scancode = 0);
+	void mouse_press(int button);
+	bool shift_held = false, ctrl_held = false;
 	void wheel(int dy);
 	void text(const std::string &t);
 	int last_scancode = 0;  // the key event being handled

@@ -589,6 +589,12 @@ public:
 	};
 	std::map<const GameObject *, RulesDisplay> rules_displays;
 	std::function<void(GameObject *rules)> show_rules;
+	// BVCRControls' UI manager (NewVCRControls): SetNextUIManager shows the app's VCR panel; it is
+	// active locally while the panel is up, and deleting it closes the panel.
+	GameObject *vcr_ui = nullptr;
+	uint32_t vcr_handle = 0;
+	bool vcr_shown = false;
+	std::function<void(GameObject *ui)> show_vcr;
 	std::function<void()> close_ui_stack;
 	int ai_difficulty = 0;  // DE_COMF2Manager::AIDifficulty (registry default 0, Rookie) for pilots the session creates
 	struct ObjectValue {
@@ -671,6 +677,7 @@ public:
 	std::shared_ptr<class SimplePhysicsSystem> simple_physics;
 	// The observer camera's command executors (observer.h).
 	std::shared_ptr<class ObserverSystem> observers;
+	std::shared_ptr<class ImpulseRobot> impulses;  // the global impulse robot (g_GlobalImpulses)
 	// The renderer's camera actor (CRenderer::SetCamera, through CSession::SetCamera); null until set.
 	GameObject *renderer_camera = nullptr;
 	GameObject *renderer_camera_actor() const {

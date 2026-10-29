@@ -12,8 +12,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>
 
 #include "game/session.h"
+#include "game/impulses.h"
 #include "game/descriptions.h"
 
 #include "de/value.h"
@@ -610,10 +612,32 @@ void register_script_natives(World &w) {
 	};
 	reg("CObject::DeleteThisLater()", later);
 	reg("CObject::Die()", later);
-	stub("CImpulseRobot::SetDefaultHotkey(string,byte,bool,bool,bool)");
-	stub("CImpulseRobot::AttachToImpulse(string,class CReferenceTarget)");
-	reg("CImpulseRobot::bool IsImpulseEvent(class CEvent,string)", [](const NativeContext &c) { c.ret_bool(false); });
-	stub("CImpulseRobot::SetFocusRequirement(string,class CObject)");
+	reg("CImpulseRobot::SetDefaultHotkey(string,byte,bool,bool,bool)", [](const NativeContext &c) {
+		c.world.impulses->set_default_hotkey(c.arg_string(0), c.arg<uint8_t>(1), c.arg<uint8_t>(2), c.arg<uint8_t>(3), c.arg<uint8_t>(4));
+	});
+	reg("CImpulseRobot::SetDefaultMousekey(string,int,bool,bool,bool)", [](const NativeContext &c) {
+		c.world.impulses->set_default_mousekey(c.arg_string(0), c.arg<int32_t>(1), c.arg<uint8_t>(2), c.arg<uint8_t>(3), c.arg<uint8_t>(4));
+	});
+	reg("CImpulseRobot::AttachToImpulse(string,class CReferenceTarget)", [](const NativeContext &c) {
+		c.world.impulses->attach(c.arg_string(0), c.arg_object(1));
+	});
+	reg("CImpulseRobot::AttachToImpulse(string)", [](const NativeContext &c) { c.world.impulses->assure(c.arg_string(0)); });
+	reg("CImpulseRobot::SetFocusRequirement(string,class CObject)", [](const NativeContext &c) {
+		c.world.impulses->set_focus(c.arg_string(0), c.arg_object(1));
+	});
+	// IsImpulseEvent (0x700207e0 / 0x70020850): a generic event whose Text is the name, INT1 0 for
+	// down (the event's handle is not checked).
+	auto impulse_event = [](const NativeContext &c, int up) {
+		uint32_t e = c.arg<uint32_t>(0);
+		if (!e || c.world.instance_class(e) != "CGenericEvent") return false;
+		uint32_t t = c.mem().get<uint32_t>(e + kText);
+		if (strcasecmp(t ? c.world.read_string(t).c_str() : "", c.arg_string(1).c_str())) return false;
+		return c.mem().get<int32_t>(e + kInt1) == up;
+	};
+	reg("CImpulseRobot::bool IsImpulseEvent(class CEvent,string)", [impulse_event](const NativeContext &c) { c.ret_bool(impulse_event(c, 0)); });
+	reg("CImpulseRobot::bool IsImpulseEvent(class CEvent,string,bool)", [impulse_event](const NativeContext &c) {
+		c.ret_bool(impulse_event(c, c.arg<uint8_t>(2) ? 1 : 0));
+	});
 	reg("CObject::class CObject GameDialog()", [](const NativeContext &c) { c.ret_u32(0); });
 	reg("CObject::class CActor MusicPlayerActor()", [](const NativeContext &c) { c.ret_object(c.world.music_player_actor()); });
 	reg("CObject::bool IsStandardSession(class CObject)", [](const NativeContext &c) {
@@ -860,7 +884,7 @@ void register_script_natives(World &w) {
 	reg(sb + "SetAsBottomToTop()", [text](const NativeContext &c) { if (auto *t = text(c)) t->bottom_to_top = true; });
 	reg(sb + "SetAsLeftToRight()", [text](const NativeContext &c) { if (auto *t = text(c)) t->bottom_to_top = false; });
 
-	reg("CObject::class CImpulseRobot GlobalImpulseRobot()", [](const NativeContext &c) { c.ret_object(c.world.create("ImpulseRobot", "ImpulseRobot")); });
+	reg("CObject::class CImpulseRobot GlobalImpulseRobot()", [](const NativeContext &c) { c.ret_object(c.world.impulses->object()); });
 }
 
 }  // namespace game

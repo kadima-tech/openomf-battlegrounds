@@ -1,5 +1,7 @@
 #include "game/ui.h"
 
+#include "game/impulses.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -841,6 +843,7 @@ public:
 		show_overlay = false;
 		autodestroy = false;
 	}
+	void deactivated(AppManager &app) override { app.world.vcr_shown = false; }
 
 	void setup_controls(AppManager &app) override {
 		Control f = *button(app, "", "VCR");
@@ -1529,7 +1532,48 @@ Control *UIManager::button(AppManager &app, const std::string &text, const std::
 	return &c;
 }
 
-AppManager::AppManager(World &w) : world(w) {}
+AppManager::AppManager(World &w) : world(w) {
+	// DE_CInGameMenuUIManagerFactory::Init (OMF 0x350590e0) attaches the factory to its impulse.
+	world.impulses->set_default_hotkey("In Game Menu", 0x1b, false, false, false);
+	world.impulses->attach("In Game Menu", [this](bool up) {
+		if (!up) in_game_menu_impulse();
+	});
+}
+
+namespace {
+
+// SDL keycode / scancode to the Win32 virtual key (US layout, as the hook's VKs were).
+int virtual_key(int sym, int scancode) {
+	if (sym >= 'a' && sym <= 'z') return sym - 0x20;
+	if ((sym >= '0' && sym <= '9') || sym == ' ' || sym == '\t' || sym == 27 || sym == 13 || sym == 8) return sym;
+	switch (sym) {
+	case ';': return 0xba; case '=': return 0xbb; case ',': return 0xbc; case '-': return 0xbd; case '.': return 0xbe;
+	case '/': return 0xbf; case '`': return 0xc0; case '[': return 0xdb; case '\\': return 0xdc; case ']': return 0xdd;
+	case '\'': return 0xde;
+	default: break;
+	}
+	if (scancode >= 58 && scancode <= 69) return 0x70 + scancode - 58;  // F1..F12
+	if (scancode >= 89 && scancode <= 97) return 0x61 + scancode - 89;  // keypad 1..9
+	switch (scancode) {
+	case 98: return 0x60;
+	case 79: return 0x27; case 80: return 0x25; case 81: return 0x28; case 82: return 0x26;
+	case 224: case 228: return 0x11;
+	case 225: case 229: return 0x10;
+	default: return 0;
+	}
+}
+
+}  // namespace
+
+void AppManager::key_up(int sym, int scancode) {
+	if (int vk = virtual_key(sym, scancode)) world.impulses->key(vk, false, shift_held, ctrl_held);
+	world.impulses->flush();
+}
+
+void AppManager::mouse_press(int button) {
+	world.impulses->mouse_down(button, shift_held, ctrl_held);
+	world.impulses->flush();
+}
 
 UIPtr AppManager::main_menu() {
 	if (!main_menu_) {
@@ -1976,18 +2020,11 @@ void AppManager::text(const std::string &t) {
 
 void AppManager::key(int sym, int scancode) {
 	last_scancode = scancode;
+	// The impulses go first: the robot's pulse reaches its targets before the page's queued click.
+	if (int vk = virtual_key(sym, scancode)) world.impulses->key(vk, true, shift_held, ctrl_held);
+	world.impulses->flush();
 	if (!notifications.empty()) {
 		if (sym == kKeyReturn || sym == kKeyEscape) notifications.erase(notifications.begin());
-		return;
-	}
-	if (sym == kKeyEscape && in_game_menu_impulse()) return;
-	// BVCRControls (Session, slot 0 in replays): the "VCR Controls" impulse, V, toggles the panel.
-	if (sym == 'v' && replaying(world) && (!current || current == vcr_controls())) {
-		if (current == vcr_controls()) {
-			set_last();
-		} else {
-			set_next(vcr_controls(), true);
-		}
 		return;
 	}
 	if (!current || !current->activated) return;

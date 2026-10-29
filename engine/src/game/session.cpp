@@ -1371,7 +1371,24 @@ void register_session_natives(World &w) {
 		c.ret_bool(cl && shown(c, cl->ui_manager));
 	});
 	stub("CUIManager::SetHaltLoading(bool)");
-	reg("CUIManager::bool IsActiveLocally()", [shown](const NativeContext &c) { c.ret_bool(shown(c, c.self())); });
+	reg("CUIManager::bool IsActiveLocally()", [shown](const NativeContext &c) {
+		c.ret_bool(c.self() && c.self() == c.world.vcr_ui ? c.world.vcr_shown : shown(c, c.self()));
+	});
+	reg("CObject::class CVCRControls NewVCRControls()", [](const NativeContext &c) {
+		c.world.vcr_ui = c.world.create_child(nullptr, "VCRControls", "UIManager\\VCRControls");
+		c.world.vcr_handle = c.world.vcr_ui->handle;
+		c.ret_object(c.world.vcr_ui);
+	});
+	stub("CUIManager::DisableAutodestroy()");
+	// The panel finds the observer itself (StandardSessionAssureObserver), as this hands it over.
+	stub("CVCRControls::SetObserverCamera(class CCreature)");
+	reg("CObject::SetNextUIManager(class CUIManager)", [](const NativeContext &c) {
+		GameObject *ui = c.arg_object(0);
+		if (ui && ui == c.world.vcr_ui && c.world.show_vcr) {
+			c.world.vcr_shown = true;
+			c.world.show_vcr(ui);
+		}
+	});
 	reg("CUIManager::bool IsDisplayed()", [shown](const NativeContext &c) { c.ret_bool(shown(c, c.self())); });
 	reg("CObject::class CGenericDescriptionSelector NewGenericDescriptionSelector()", [](const NativeContext &c) {
 		c.ret_object(c.world.create_child(nullptr, "GenericDescriptionSelector", "UIManager\\GenericDescriptionSelector"));

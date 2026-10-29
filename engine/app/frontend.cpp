@@ -255,6 +255,7 @@ int main(int argc, char **argv) {
 				if (page && page != app.current && page != app.next) world.rules_displays[rules].shown = false;
 			}
 		};
+		world.show_vcr = [&](game::GameObject *) { app.set_next(app.vcr_controls(), true); };
 		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
 		app.has_local_session = [&] { return world.session != nullptr; };
 		app.session_fully_sequenced = [] { return true; };
@@ -289,6 +290,7 @@ int main(int argc, char **argv) {
 				for (auto &m : mouse_script) {
 					if (m.frame == fr && m.kind == 3) app.key(13);
 					if (m.frame == fr && m.kind == 4) app.key(27);
+					if (m.frame == fr && m.kind == 5) app.key(int(m.x));
 				}
 				app.update();
 				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
@@ -382,11 +384,29 @@ int main(int argc, char **argv) {
 					world.mouse_y = 1 - my;
 					if (world.relative_mouse) world.mouse_motion[0] += float(e.motion.xrel), world.mouse_motion[1] += float(e.motion.yrel);
 				}
+				if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP || e.type == SDL_MOUSEBUTTONDOWN) {
+					SDL_Keymod mods = SDL_GetModState();
+					app.shift_held = (mods & KMOD_SHIFT) != 0;
+					app.ctrl_held = (mods & KMOD_CTRL) != 0;
+				}
+				if (e.type == SDL_MOUSEBUTTONDOWN) {
+					int b = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_RIGHT ? 1 : e.button.button == SDL_BUTTON_MIDDLE ? 2 : -1;
+					if (b >= 0) app.mouse_press(b);
+				}
+				if (e.type == SDL_KEYUP) app.key_up(int(e.key.keysym.sym), int(e.key.keysym.scancode));
 				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
 				if (e.type == SDL_KEYDOWN) app.key(int(e.key.keysym.sym), int(e.key.keysym.scancode));
 				if (e.type == SDL_TEXTINPUT) app.text(e.text.text);
 				if (e.type == SDL_MOUSEWHEEL) app.wheel(e.wheel.y);
+			}
+			// BVCRControls deleted its UI manager: the panel closes.
+			if (world.vcr_handle && !world.object(world.vcr_handle)) {
+				world.vcr_handle = 0, world.vcr_ui = nullptr;
+				if (app.current == app.vcr_controls() || app.next == app.vcr_controls()) {
+					if (app.stack.empty()) app.set_next(nullptr, false);
+					else app.set_last();
+				}
 			}
 			if (world.registry != saved_registry) {
 				save_registry(world.registry);
