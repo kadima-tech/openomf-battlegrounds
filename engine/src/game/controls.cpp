@@ -705,6 +705,8 @@ Combo::Combo(Gui &g, std::vector<std::string> e, int *b) : Ctl(g), entries(std::
 	arrow_->face_up = g.image("ArrowDown");
 	arrow_->face_tint = {0, 0, 0, 1};
 	arrow_->on_click = [this] { open(); };
+	// A press anywhere on the field drops the list, as on the arrow.
+	text->on_down = [this](float, float, int) { open(); };
 	if (bound) selected = *bound;
 }
 

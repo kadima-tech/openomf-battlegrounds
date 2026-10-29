@@ -539,7 +539,10 @@ private:
 		st->o = AppManager::RenderOptions::from_registry(app);
 		st->modes = app.resolutions;
 		if (st->modes.empty()) st->modes = {{640, 480}, {800, 600}, {1024, 768}, {1280, 960}, {1600, 1200}};
-		if (std::find(st->modes.begin(), st->modes.end(), std::pair{st->o.res_x, st->o.res_y}) == st->modes.end()) st->modes.push_back({st->o.res_x, st->o.res_y});
+		if (std::find(st->modes.begin(), st->modes.end(), std::pair{st->o.res_x, st->o.res_y}) == st->modes.end()) {
+			st->modes.push_back({st->o.res_x, st->o.res_y});
+			std::sort(st->modes.begin(), st->modes.end());
+		}
 		std::vector<std::string> names;
 		st->res = 0;
 		for (size_t i = 0; i < st->modes.size(); ++i) {

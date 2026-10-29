@@ -488,13 +488,55 @@ int main(int argc, char **argv) {
 			int dw = W, dh = H;
 			if (!shot) SDL_GL_GetDrawableSize(win, &dw, &dh);
 			vpt = gui_viewport(dw, dh);
-			app.view_w = vpt.w, app.view_h = vpt.h;
+			{
+				// Controls are sized in the original's screen pixels: window points, not a HiDPI
+				// display's drawable pixels.
+				int ww = dw, wh = dh;
+				if (!shot) SDL_GetWindowSize(win, &ww, &wh);
+				float points = dw > 0 ? float(ww) / float(dw) : 1.0f;
+				app.view_w = int(float(vpt.w) * points), app.view_h = int(float(vpt.h) * points);
+			}
 			glViewport(0, 0, dw, dh);
 			// A session's scene (DE_CSceneViewerControl3d over the whole window), then the GUI.
 			bool game_shown = world.session != nullptr;
 			if (game_shown) {
 				view.draw(dw, dh, fr, shot != nullptr);
 				game_shown = view.has_arena();
+			}
+			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
+			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
+				for (game::GameObject *o : world.scene_objects()) {
+					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1);
+				}
+			}
+			// OPENBG_KO=<frame>[,<frame>...]: every computer fighter loses all its health then (testing
+			// the end of a match).
+			if (const char *ko = getenv("OPENBG_KO")) {
+				for (const char *p = ko; *p;) {
+					if (atoi(p) == fr) {
+						game::GameObject *user = nullptr;
+						for (game::GameObject *o : world.scene_objects()) {
+							if (o->fighter && o->user_controlled) user = o;
+						}
+						for (game::GameObject *o : world.scene_objects()) {
+							if (o->fighter) fprintf(stderr, "[ko %d] %s %s at %.0f %.0f %.0f\n", fr, o->name.c_str(), o->user_controlled ? "player" : "computer", o->world().t[0], o->world().t[1], o->world().t[2]);
+						}
+						for (game::GameObject *o : world.scene_objects()) {
+							if (!o->fighter || o->user_controlled) continue;
+							for (game::GameObject *ch : o->children) {
+								if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
+								std::vector<uint8_t> args(16, 0);
+								uint32_t h = user ? user->handle : 0;
+								float dmg = -100000, stun = 0;
+								memcpy(&args[0], &h, 4), memcpy(&args[4], &dmg, 4), memcpy(&args[8], &stun, 4);
+								ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
+							}
+						}
+					}
+					const char *c = strchr(p, ',');
+					if (!c) break;
+					p = c + 1;
+				}
 			}
 			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
 			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
