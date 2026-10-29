@@ -708,7 +708,7 @@ static SessionClient &add_client_to(World &w, SessionState &s, bool user, const 
 
 SessionClient &add_client(World &w, bool user, const std::string &name) { return add_client_to(w, *w.session, user, name); }
 
-void complete_ui(World &w, GameObject *ui, const de::Guid &chosen) {
+void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model) {
 	if (!ui) return;
 	SessionState *s = nullptr;
 	for (auto &sp : w.sessions) {
@@ -717,6 +717,7 @@ void complete_ui(World &w, GameObject *ui, const de::Guid &chosen) {
 	if (!s) return;
 	auto &u = s->ui[ui];
 	memcpy(u.chosen.data(), chosen.bytes, 16);
+	if (model) memcpy(u.model.data(), model->bytes, 16);
 	u.shown = false;
 	u.pending = true;
 }

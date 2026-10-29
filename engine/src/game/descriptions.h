@@ -22,6 +22,7 @@ struct DescriptionInfo {
 	bool listed = true;
 	bool locked_by_default = false;
 	bool visible_when_locked = false;
+	bool flag_d8 = false;  // +0xd8: a fighter model description's default model
 };
 DescriptionInfo read_description(const de::World &data, const de::ObjectRef &description);
 
@@ -34,6 +35,10 @@ void unlock_description(World &w, const de::ObjectRef &description);
 // DE_CEnvironmentDescription::ObjProcessContents (Creature 0x1500aa20): after the description's
 // chunk, v1 [i32 minimum recommended players +0xdc][i32 maximum +0xe0].
 std::pair<int, int> environment_players(const de::ObjectRef &environment_description);
+
+// DE_CFighterModelDescription (OMF ObjProcessContents): after the description's chunk, v1 [GUID
+// +0xf0], its fighter description. A fighter's models, in data order.
+std::vector<de::ObjectRef> fighter_models(const de::World &data, const de::ObjectRef &fighter_description);
 
 // A Value\String's text.
 std::string read_string_value(const de::ObjectRef &value);

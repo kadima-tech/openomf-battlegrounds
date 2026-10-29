@@ -1,5 +1,7 @@
 #include "game/descriptions.h"
 
+#include <algorithm>
+
 #include "de/contents.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -19,6 +21,7 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) 
 			c.f32();
 			out.locked_by_default = c.boolean();
 			out.visible_when_locked = c.boolean();
+			out.flag_d8 = c.boolean();
 		}
 	} catch (const std::exception &) {
 	}
@@ -53,6 +56,27 @@ std::pair<int, int> environment_players(const de::ObjectRef &d) {
 	} catch (const std::exception &) {
 	}
 	return {0, 0};
+}
+
+std::vector<de::ObjectRef> fighter_models(const de::World &data, const de::ObjectRef &fighter) {
+	std::vector<de::ObjectRef> out;
+	if (!fighter) return out;
+	const de::Guid &g = fighter.info().guid;
+	for (const auto &[stem, f] : data.files()) {
+		for (uint32_t i = 0; i < f->objects().size(); ++i) {
+			if (f->objects()[i].class_path != "Description\\FighterModelDescription") continue;
+			try {
+				de::Contents c(f->object_data(f->objects()[i]).contents);
+				c.seek(de::begin_chunk(c).end);
+				de::Chunk ch = de::begin_chunk(c);
+				if (ch.version != 1) continue;
+				auto b = c.bytes(16);
+				if (std::equal(b.begin(), b.end(), g.bytes)) out.push_back({f.get(), i});
+			} catch (const std::exception &) {
+			}
+		}
+	}
+	return out;
 }
 
 bool description_locked(const World &w, const de::ObjectRef &d) {

@@ -215,11 +215,14 @@ int main(int argc, char **argv) {
 			auto sel = std::make_shared<game::ui::DescriptionSelector>(u.description);
 			sel->title = u.description;
 			sel->autoselect_key = u.autoselect;
+			sel->choose_fighter = u.choose_fighter;
 			for (auto &g : u.pool) {
 				if (de::ObjectRef d = world.data().by_guid(g)) sel->pool.push_back(d);
 			}
 			sel->on_complete = [&world, ui](game::ui::AppManager &, game::ui::DescriptionSelector &s) {
-				if (s.chosen) game::complete_ui(world, ui, s.chosen.info().guid);
+				if (!s.chosen) return;
+				if (s.chosen_model) game::complete_ui(world, ui, s.chosen.info().guid, &s.chosen_model.info().guid);
+				else game::complete_ui(world, ui, s.chosen.info().guid);
 			};
 			printf("UI \"%s\": %zu descriptions\n", u.description.c_str(), sel->pool.size());
 			for (auto &d : sel->pool) {

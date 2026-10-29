@@ -110,6 +110,10 @@ public:
 	std::string next_label = "Next";  // +0x6c; empty: no Next button (Help)
 	std::vector<de::ObjectRef> pool;
 	de::ObjectRef chosen;           // +0x128 (ChosenDescription)
+	// DE_CChooseFighterUIManager (OMF 0x35056420..0x350574b0): the highlighted fighter's models
+	// (its FighterModelDescriptions) in a Model choice; ChosenModel is the one picked.
+	bool choose_fighter = false;
+	de::ObjectRef chosen_model;
 	std::function<void(AppManager &, DescriptionSelector &)> on_complete;
 
 	bool begin(AppManager &app) override;
@@ -126,6 +130,9 @@ private:
 	int visible_rows() const;
 
 	std::vector<de::ObjectRef> entries_;
+	std::vector<de::ObjectRef> models_;
+	int model_ = 0;  // +0x184
+	Control *model_box_ = nullptr;
 	int selected_ = -1;
 	int scroll_ = 0;  // the first entry shown
 	Control *list_ = nullptr, *window_ = nullptr, *next_ = nullptr, *back_ = nullptr;

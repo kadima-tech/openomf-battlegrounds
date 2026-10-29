@@ -678,10 +678,19 @@ void DescriptionSelector::select(AppManager &app, int i) {
 		if (i >= scroll_ + rows) scroll_ = i - rows + 1;
 	}
 	if (next_) next_->text = app.is_locked(entries_[size_t(i)]) ? "Locked" : next_label;
+	// ProcessSelectedObjects (0x350574b0): the fighter's models, the flagged one by default.
+	if (choose_fighter) {
+		models_ = fighter_models(app.world.data(), entries_[size_t(i)]);
+		model_ = 0;
+		for (size_t k = 0; k < models_.size(); ++k) {
+			if (read_description(app.world.data(), models_[k]).flag_d8) model_ = int(k);
+		}
+	}
 }
 
 void DescriptionSelector::choose(AppManager &app, const de::ObjectRef &d) {
 	chosen = d;
+	chosen_model = choose_fighter && model_ >= 0 && size_t(model_) < models_.size() ? models_[size_t(model_)] : de::ObjectRef{};
 	complete(app);
 	if (on_complete) on_complete(app, *this);
 }
@@ -723,6 +732,19 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 		std::copy(white, white + 4, e.rgba);
 		if (app.is_locked(entries_[i])) e.rgba[0] = e.rgba[1] = e.rgba[2] = 0.6f;
 		out.push_back(e);
+	}
+	// The Model strip along the Window's bottom (SetupControls 0x35056720).
+	if (choose_fighter && !models_.empty()) {
+		float y = window_->bottom - 0.05f;
+		DrawItem l;
+		l.kind = DrawItem::Text;
+		l.x0 = window_->left + 0.03f, l.y0 = y, l.size = kListText, l.text = "Model";
+		out.push_back(l);
+		DrawItem m = l;
+		m.x0 = (window_->left + window_->right) / 2, m.centered = true, m.text = models_[size_t(model_)].info().name;
+		const float c[4] = {0.55f, 0.75f, 0.9f, 1};
+		std::copy(c, c + 4, m.rgba);
+		out.push_back(m);
 	}
 	// NewLargeRepresentation (description vtable +0x120): the ControlCreator in the Window, or a
 	// pilot's panel (DE_CPilotDescription::NewLargeRepresentation, OMF 0x3504f930): its name, its
@@ -780,6 +802,11 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 }
 
 bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
+	// The Model choice: a click steps to the next model.
+	if (choose_fighter && window_ && what == 1 && !models_.empty() && window_->contains(x, y) && y > window_->bottom - 0.08f) {
+		model_ = (model_ + 1) % int(models_.size());
+		return true;
+	}
 	if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
 	float pad = 0.01f;
 	int row = int(std::floor((y - list_->top - pad) / kRow - 1.5f)) + scroll_;

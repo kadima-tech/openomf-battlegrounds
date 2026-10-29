@@ -131,7 +131,7 @@ void render_tick(World &w, float ms);
 SessionClient &add_client(World &w, bool user, const std::string &name);
 // The front end chose `chosen` in a launched UI manager: it completes on the next update, and
 // every node's UIManagerComplete hook hears about it.
-void complete_ui(World &w, GameObject *ui, const de::Guid &chosen);
+void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model = nullptr);
 // DE_CTransferAgent::CPassiveReference: every passive reference's object in an object's contents,
 // in order (a description's first is its resource).
 std::vector<de::ObjectRef> passive_references(const de::World &data, const de::ObjectRef &r);
