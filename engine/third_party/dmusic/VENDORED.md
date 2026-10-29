@@ -29,3 +29,4 @@ Local changes:
 - A performance (and every new segment) starts on DirectMusic's default chord, C major (pattern
   0x91, scale 0xAB5AB5, chord root 12), not an all-zero one: the theme has no chord track, and its
   chord-relative parts (the pad from 16 s) played an octave low.
+- `OPENBG_NO_LFO=1` turns the voices' LFO pitch modulation off (debugging).

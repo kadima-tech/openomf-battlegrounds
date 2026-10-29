@@ -309,6 +309,9 @@ static VREL DmMsVoiceLfo_volume(DmMsVoiceLfo* l, uint8_t mod, STIME t, STIME* ne
 }
 
 static PREL DmMsVoiceLfo_pitch(DmMsVoiceLfo* l, uint8_t mod, STIME t, STIME* next) {
+	static int no_lfo = -1;
+	if (no_lfo < 0) no_lfo = getenv("OPENBG_NO_LFO") != NULL;
+	if (no_lfo) return 0;
 	PREL p = (PREL) mod * l->src.mw_pitch_scale;
 	p /= 127;
 	p += l->src.pitch_scale;
