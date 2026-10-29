@@ -771,24 +771,47 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 		auto res = passive_references(app.world.data(), d);
 		std::optional<Pilot> pl = res.empty() ? std::nullopt : read_pilot(*res[0].file, res[0].info(), 0);
 		if (pl) {
+			// A vertical bar of four rows from 0.6 across, down to 0.73 (SetupVerticalBar), each a
+			// DE_CPilotStatsRobot (OMF 0x350510b0): the stat's icon (OMFHelp's images) on the left
+			// quarter, its name (10 virtual pixels) over the top half of the rest, and below it a
+			// down frame (0.2, 0.3, 0.3) holding a (0.2, 0.5, 0.5) well filled (0.5, 1, 1) by
+			// stat / 100.
 			const char *names[4] = {"Power", "Agility", "Endurance", "Focus"};
+			const char *icons[4] = {"Strength", "Agility", "Endurance", "Focus"};
 			float vals[4] = {pl->stats.power, pl->stats.agility, pl->stats.endurance, pl->stats.focus};
+			const de::ObjectsFile *help = app.world.data().file("OMFHelp");
+			float x0 = wx0 + 0.6f * w, x1 = wx1, top = wy0 + 0.1f * h, row = (0.73f - 0.1f) * h / 4;
 			for (int k = 0; k < 4; ++k) {
-				float y = wy0 + (0.1f + 0.15f * float(k)) * h;
+				float y = top + row * float(k), xi = x0 + 0.25f * (x1 - x0);
+				if (help) {
+					for (uint32_t i = 0; i < help->objects().size(); ++i) {
+						const de::ObjectInfo &o = help->objects()[i];
+						if (o.name != icons[k] || o.class_path != "Image\\Standard") continue;
+						float side = std::min(xi - x0, row) * 0.9f;
+						DrawItem im;
+						im.kind = DrawItem::Image;
+						im.x0 = x0 + (xi - x0 - side) / 2, im.x1 = im.x0 + side;
+						im.y0 = y + (row - side) / 2, im.y1 = im.y0 + side, im.image = {help, i};
+						out.push_back(im);
+						break;
+					}
+				}
 				DrawItem t;
 				t.kind = DrawItem::Text;
-				t.x0 = wx0 + 0.62f * w, t.y0 = y + 0.025f * h, t.size = 16.0f / 600.0f, t.text = names[k];
+				t.x0 = xi + 0.01f * (x1 - xi), t.y0 = y + row * 0.25f, t.size = 10.0f / 600.0f * 1.6f, t.text = names[k];
 				out.push_back(t);
-				DrawItem back, fill;
-				back.x0 = fill.x0 = wx0 + 0.62f * w;
-				back.x1 = wx0 + 0.98f * w;
-				back.y0 = fill.y0 = y + 0.06f * h;
-				back.y1 = fill.y1 = y + 0.1f * h;
-				const float bc[4] = {0.2f, 0.3f, 0.3f, 0.3f}, fc[4] = {0.5f, 1.0f, 1.0f, 1.0f};
-				std::copy(bc, bc + 4, back.rgba);
-				std::copy(fc, fc + 4, fill.rgba);
-				fill.x1 = fill.x0 + (back.x1 - back.x0) * std::clamp(vals[k] / 100.0f, 0.0f, 1.0f);
-				out.push_back(back);
+				DrawItem frame, well, fill;
+				frame.x0 = xi, frame.x1 = x1, frame.y0 = y + row * 0.5f, frame.y1 = y + row * 0.95f;
+				well = frame;
+				well.x0 += 0.003f, well.x1 -= 0.003f, well.y0 += 0.004f, well.y1 -= 0.004f;
+				fill = well;
+				const float fc[4] = {0.2f, 0.3f, 0.3f, 1}, wc[4] = {0.2f, 0.5f, 0.5f, 0.5f}, bc[4] = {0.5f, 1.0f, 1.0f, 1.0f};
+				std::copy(fc, fc + 4, frame.rgba);
+				std::copy(wc, wc + 4, well.rgba);
+				std::copy(bc, bc + 4, fill.rgba);
+				fill.x1 = fill.x0 + (well.x1 - well.x0) * std::clamp(vals[k] / 100.0f, 0.0f, 1.0f);
+				out.push_back(frame);
+				out.push_back(well);
 				out.push_back(fill);
 			}
 		}
