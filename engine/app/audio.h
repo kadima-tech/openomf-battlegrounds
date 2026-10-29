@@ -65,6 +65,7 @@ private:
 	std::mt19937 rng_{2097};
 	std::unique_ptr<MusicPlayer> music_;
 	float sfx_volume_ = 1.0f;  // DE_CSpeaker::GlobalSFXVolume (the registry default)
+	bool software_3d = true;  // dsound's software 3D pan, or none (no hardware 3D buffers)
 	FILE *record_ = nullptr;  // OPENBG_RECORD_AUDIO: raw f32 stereo of everything mixed
 };
 

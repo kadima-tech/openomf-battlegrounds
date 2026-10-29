@@ -109,27 +109,44 @@ void Mixer::update(Voice &v, const de::Transform &listener, float ms) {
 	v.due = 0;
 	float vol = noise_volume(dist, v.hotspot, v.falloff, sfx_volume_, v.volume);
 	// The head-relative position DirectSound3D is given: the offset in the listener's frame,
-	// x negated (DirectSound is left-handed: +x right, +z ahead). At full volume a sound behind
-	// is put in front.
+	// x negated (DirectSound is left-handed: +x right, +z ahead).
 	auto local = listener.inverse_rotate(d);
 	std::array<float, 3> ds{-local[0], local[1], local[2]};
-	if (vol == 1.0f && ds[2] < 0) ds[2] = -ds[2];
 	// IDirectSoundBuffer::SetVolume(10000 log10(1 - (1 - volume x speaker volume)^2)) in 1/100 dB;
 	// at 0 the call is out of range and the old volume stays.
 	float shaped = 1 - vol * v.volume;
 	shaped = 1 - shaped * shaped;
 	if (shaped <= 0) return;
-	float gain = std::pow(10.0f, 10000.0f * std::log10(shaped) / 2000.0f);
-	// Direction only (the buffers' minimum distance is 9999999): an equal-power pan by the azimuth.
-	float len = std::sqrt(ds[0] * ds[0] + ds[1] * ds[1] + ds[2] * ds[2]);
-	float pan = len > 1e-3f ? std::clamp(ds[0] / len, -1.0f, 1.0f) : 0.0f;
-	float a = (pan + 1) * 0.25f * 3.14159265f;
-	v.left = gain * std::cos(a) * 1.4142f * 0.5f;
-	v.right = gain * std::sin(a) * 1.4142f * 0.5f;
+	const float buffer_mb = 10000.0f * std::log10(shaped);
+	auto gain = [](float mb) { return std::pow(10.0f, std::max(mb, -10000.0f) / 2000.0f); };
+	if (!software_3d) {
+		// No hardware 3D buffers at start-up: the buffers have no 3D control, so every sound is
+		// centred at its buffer volume.
+		v.left = v.right = gain(buffer_mb);
+		return;
+	}
+	// dsound.dll's WDM software 3D (no virtualisation, FINDINGS 149): a fixed -500 mB (the distance
+	// gain is 1 with min = max = 9999999), then the tangent law between speakers at -90 / +90
+	// degrees on x (right) and z (ahead), with a blend toward the far side within 2.5 units;
+	// each channel gets 1000 log10 of its power share, truncated.
+	const float X = ds[0], Z = ds[2], rh = std::sqrt(X * X + Z * Z);
+	float pr = 0.5f;
+	if (std::fabs(X) >= 1e-5f || std::fabs(Z) >= 1e-5f) {
+		pr = std::fabs(Z) < 1e-5f ? (X > 0 ? 1.0f : 0.0f) : std::fabs(Z) / (std::fabs(Z) + rh - X);
+		if (std::fabs(X) < 2.5f && std::fabs(Z) < 2.5f && rh < 2.5f) {
+			float w = rh / 5 + 0.5f;
+			pr = w * pr + (1 - w) * (1 - pr);
+		}
+	}
+	auto level = [](float p) { return p <= 0 ? -10000.0f : std::trunc(1000.0f * std::log10(p)); };
+	v.left = gain(buffer_mb - 500 + level(1 - pr));
+	v.right = gain(buffer_mb - 500 + level(pr));
 }
 
 void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 	sfx_volume_ = world.sfx_volume;
+	// Preferences\Audio\3D Mode (ours): 1 dsound's software 3D (default), 0 no 3D (centred).
+	software_3d = world.registry_string("Preferences\\Audio\\3D Mode") != "0";
 	auto requests = std::move(world.sound_requests);
 	world.sound_requests.clear();
 	if ((!dev_ && !offline_) || getenv("OPENBG_NO_SOUND")) return;
@@ -164,9 +181,7 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 		// nor one of no volume.
 		std::array<float, 3> d{v.at[0] - listener.t[0], v.at[1] - listener.t[1], v.at[2] - listener.t[2]};
 		if (std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) >= v.falloff || sfx_volume_ * v.volume == 0) continue;
-		size_t frames = s->samples.size() / size_t(std::max(1, s->channels));
-		float length_ms = 1000.0f * float(frames) / float(std::max(1, s->rate));
-		v.rate = std::min(1.0f, length_ms / 7000.0f + 0.1f);
+		v.rate = std::min(1.0f, float(s->length_ms) / 7000.0f + 0.1f);
 		// NewNoisePlayerSphere: frequency x noise frequency x (1 + CenterRand(variance)).
 		float freq = r.frequency * s->frequency * (1 + (unit(rng_) * 2 - 1) * s->frequency_variance);
 		v.step = double(s->rate) * double(std::max(0.05f, freq)) / double(rate_);

@@ -52,6 +52,7 @@ Sound read_sound(const World &w, const ObjectRef &noise) {
 		throw FormatError("noise " + noise.info().name + ": not a RIFF WAVE");
 	}
 	int bits = 16;
+	uint32_t avg_bytes = 0;
 	for (size_t o = 12; o + 8 <= b.size();) {
 		uint32_t len = le32(&b[o + 4]);
 		const uint8_t *body = &b[o + 8];
@@ -60,6 +61,7 @@ Sound read_sound(const World &w, const ObjectRef &noise) {
 			if (le16(body) != 1) throw FormatError("noise " + noise.info().name + ": not PCM");
 			s.channels = le16(body + 2);
 			s.rate = int(le32(body + 4));
+			avg_bytes = le32(body + 8);
 			bits = le16(body + 14);
 		} else if (!memcmp(&b[o], "data", 4)) {
 			if (bits == 16) {
@@ -73,6 +75,7 @@ Sound read_sound(const World &w, const ObjectRef &noise) {
 		o += 8 + len + (len & 1);
 	}
 	if (s.samples.empty()) throw FormatError("noise " + noise.info().name + ": no samples");
+	if (avg_bytes) s.length_ms = uint32_t(uint64_t(b.size()) * 1000 / avg_bytes);
 	return s;
 }
 

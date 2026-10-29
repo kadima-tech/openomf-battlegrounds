@@ -14,6 +14,8 @@ namespace de {
 struct Sound {
 	float volume = 1, frequency = 1, frequency_variance = 0, alternate_chance = 0;
 	int rate = 22050, channels = 1;
+	// DE_CStreamNoise::Length: the whole file's bytes x 1000 / nAvgBytesPerSec (integer ms).
+	uint32_t length_ms = 0;
 	std::vector<int16_t> samples;  // interleaved
 	std::vector<ObjectRef> alternates;
 };
