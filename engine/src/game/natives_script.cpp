@@ -685,16 +685,10 @@ void register_script_natives(World &w) {
 		auto *r = recorder(c);
 		c.ret_bool(r && present(*r, now_ms(c), c.arg<uint32_t>(0)));
 	});
-	// IsRendered: in the scene and not part of another fighter than the one in focus (stand-in
-	// for the renderer's camera/visibility test; e.g. each fighter's HUD only draws for its own
-	// player).
+	// IsRenderedCaller (Core 0x7008e640): the actor's own Renderable flag (+0x108).
 	reg("CActor::bool IsRendered()", [](const NativeContext &c) {
 		GameObject *o = c.self();
-		bool r = o && in_scene(*o);
-		for (GameObject *p = o; r && p; p = p->parent) {
-			if (p->fighter) r = c.world.focus ? p == c.world.focus : p->user_controlled;
-		}
-		c.ret_bool(r);
+		c.ret_bool(o && o->visible);
 	});
 	reg("CActor::class CScene TemporalMasterScene()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
 	reg("CScene::RegisterRenderTickHook(class CClassExecutorInstance,Method(float))", [](const NativeContext &c) {

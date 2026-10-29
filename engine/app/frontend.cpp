@@ -620,7 +620,7 @@ int main(int argc, char **argv) {
 			particles_r.only = nullptr;
 			if (!game_shown) {
 				overlay.draw_world(world, vp);
-				overlay.draw(world, vpt.w, vpt.h, nullptr);
+				overlay.draw(world, vpt.w, vpt.h);
 			}
 			draw_picker();
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,

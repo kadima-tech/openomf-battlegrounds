@@ -40,11 +40,13 @@ void main() {
 })";
 
 // The fighter a primitive's mesh belongs to, if any.
-const game::GameObject *fighter_of(const game::GameObject *o) {
-	for (; o; o = o->parent) {
-		if (o->fighter) return o;
+// A mesh is drawn while the actor it belongs to is renderable (+0x108; SetRendered /
+// SetUnrendered, which BRenderActorIfCamInTree sets from the renderer's camera).
+bool rendered(const game::GameObject *mesh) {
+	for (const game::GameObject *o = mesh; o; o = o->parent) {
+		if (o->is_actor) return o->visible;
 	}
-	return nullptr;
+	return true;
 }
 
 }  // namespace
@@ -167,6 +169,7 @@ void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
 	for (auto &[obj, t] : world.texts) {
 		if (world.screen_space_meshes.count(t.mesh) || !t.mesh->parent || t.rgba[3] <= 0.01f) continue;
 		if (t.kind != game::World::Primitive::Quad && (t.kind != game::World::Primitive::Text || t.text.empty())) continue;
+		if (!rendered(t.mesh)) continue;
 		order.push_back(&t);
 	}
 	if (order.empty()) return;
@@ -226,7 +229,7 @@ void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
 	glDepthMask(GL_TRUE);
 }
 
-void OverlayRenderer::draw(const game::World &world, int width, int height, const game::GameObject *focus) {
+void OverlayRenderer::draw(const game::World &world, int width, int height) {
 	if (!prog_) return;
 	aspect_ = float(width) / float(std::max(1, height));
 	glDisable(GL_DEPTH_TEST);
@@ -240,9 +243,7 @@ void OverlayRenderer::draw(const game::World &world, int width, int height, cons
 		if (!world.screen_space_meshes.count(t.mesh) || t.rgba[3] <= 0.01f) continue;
 		if (t.kind == game::World::Primitive::Text && t.text.empty()) continue;
 		if (!game::in_scene(*t.mesh)) continue;  // its actor left the scene (a deactivated overlay)
-		// A fighter's HUD shows for the fighter in focus only (stand-in for the renderer's
-		// camera test).
-		if (const auto *f = fighter_of(t.mesh); f && f != focus) continue;
+		if (!rendered(t.mesh)) continue;
 		order.push_back(&t);
 	}
 	// Larger sort values are further back.

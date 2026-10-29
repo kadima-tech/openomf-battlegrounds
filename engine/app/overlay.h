@@ -17,9 +17,8 @@ class OverlayRenderer {
 public:
 	void load(const de::World &world);
 	// Draws the primitives of every screen-space mesh (positions are fractions of the screen,
-	// y up; text heights are fractions of the screen height). `focus` is the fighter whose HUD
-	// shows.
-	void draw(const game::World &world, int width, int height, const game::GameObject *focus);
+	// y up; text heights are fractions of the screen height), those whose actor is renderable.
+	void draw(const game::World &world, int width, int height);
 	// Draws the primitives of every other mesh in the scene (`vp` the view-projection): the same
 	// vertices in the local frame of the mesh's actor (x along the text, y up, text heights in
 	// its units), depth-tested unless the primitive is an overlay.

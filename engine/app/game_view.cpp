@@ -386,7 +386,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			// The arena's own actors are the static scene ArenaRenderer draws.
 			if (o->file == arena_file) continue;
 			bool live = game::in_scene(*o);
-			for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
+			live = live && o->visible;  // its own Renderable flag (not inherited)
 			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 			}
@@ -401,7 +401,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	{
 		for (auto *fi : fighters) {
 			auto *a = fi->actor;
-			if (!a->spawned) continue;
+			if (!a->spawned || !a->visible) continue;
 			render::FighterRenderer::AnimState st{a->sequence, a->anim_time, a->prelude, a->prelude_time, a->activations,
 			                                      a->captured_blend, a->capture_initial.sequence, a->capture_final.sequence,
 			                                      a->capture_initial.time, a->capture_final.time};
@@ -484,7 +484,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}
-	if (!capture_camera) overlay.draw(world, dw, dh, player ? player->actor : nullptr);
+	if (!capture_camera) overlay.draw(world, dw, dh);
 }
 
 }  // namespace app
