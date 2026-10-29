@@ -344,8 +344,12 @@ bool image_has_alpha(const de::ObjectRef &r) {
 // stages join it (DE_CMultiStageTextureProcess::Process makes one render material element per
 // stage, stacking ones sharing the pass). A disabled stage (+0x34) is skipped. A pass covers the
 // faces its first stage has coordinates for (an environment stage: every face of the material).
-// Faces no material covers get a flat stand-in batch. With `keep` the batches keep their vertices
+// With `keep` the batches keep their vertices
 // for re-posing (MeshBatch::vertices / source).
+// Faces no drawable material covers make no render element in the original (a material's stages
+// are its elements); OPENBG_STAND_INS=1 draws them flat for debugging.
+const bool g_stand_ins = getenv("OPENBG_STAND_INS") != nullptr;
+
 std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de::Material> &materials, const de::Transform &place,
                                      const std::function<GLuint(const de::ObjectRef &)> &texture, float *lo, float *hi,
                                      bool keep = false) {
@@ -472,7 +476,9 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		bool previous_drawn = false;
 		for (auto &l : m.layers) {
 			bool usable = !l.disabled && (l.environment || (l.image && !l.uvs.empty()));
-			if (l.stacked) {
+			// The first stage starts a pass whatever its stacked flag (Process pairs a stacked
+			// stage with the one before it).
+			if (l.stacked && &l != &m.layers.front()) {
 				// A stacked stage goes with the stage it stacks on (Process skips the pair).
 				if (usable && previous_drawn && !passes.empty()) passes.back().push_back(&l);
 				continue;
@@ -487,7 +493,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		std::sort(all.begin(), all.end());
 		all.erase(std::unique(all.begin(), all.end()), all.end());
 		if (passes.empty()) {
-			emit({}, all, true, false);
+			if (g_stand_ins) emit({}, all, true, false);
 			continue;
 		}
 		static const bool debug = getenv("OPENBG_DEBUG_MATERIALS") != nullptr;
@@ -528,7 +534,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 	}
 	static const bool debug = getenv("OPENBG_DEBUG_MATERIALS") != nullptr;
 	if (debug && !rest.empty()) fprintf(stderr, "[material]   %zu of %zu faces in no material\n", rest.size(), mesh.faces.size());
-	emit({}, rest, true, false);
+	if (g_stand_ins) emit({}, rest, true, false);
 	return out;
 }
 

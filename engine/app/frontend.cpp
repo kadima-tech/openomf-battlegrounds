@@ -465,6 +465,16 @@ int main(int argc, char **argv) {
 				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !game::in_gui(*o)) continue;
 				bool live = true;
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
+				if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
+					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
+				}
+				static const int list_at = getenv("OPENBG_LIST_GUI") ? atoi(getenv("OPENBG_LIST_GUI")) : -1;
+				if (live && fr == list_at) {
+					auto t = o->world().t;
+					const float *m = vp;
+					float x = m[0] * t[0] + m[4] * t[1] + m[8] * t[2] + m[12], y = m[1] * t[0] + m[5] * t[1] + m[9] * t[2] + m[13], ww = m[3] * t[0] + m[7] * t[1] + m[11] * t[2] + m[15];
+					fprintf(stderr, "[gui] %s under %s at %.2f %.2f\n", o->name.c_str(), o->parent ? o->parent->name.c_str() : "-", (x / ww + 1) / 2, 1 - (y / ww + 1) / 2);
+				}
 				if (live) items.push_back({{o->file, o->index}, o->world(), lights.owner_of(o)});
 			}
 			render::update_animated_textures(world.image_phases);
