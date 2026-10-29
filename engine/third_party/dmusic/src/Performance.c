@@ -1,6 +1,8 @@
 // Copyright © 2024. GothicKit Contributors
 // SPDX-License-Identifier: MIT-Modern-Variant
 #include "_Internal.h"
+
+#include <string.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -13,6 +15,21 @@ enum {
 	DmInt_DEFAULT_SAMPLE_RATE = 44100,
 	DmInt_DEFAULT_SCALE_PATTERN = 0xab5ab5,
 };
+
+// The chord a segment without a chord track plays against: DirectMusic's default, C major
+// (DMUS_CHORD_KEY "M", pattern 0x91, scale 0xAB5AB5, chord root 12). With a zero chord the
+// chord-relative parts sounded an octave low.
+static void DmPerformance_setDefaultChord(DmPerformance* slf) {
+	memset(&slf->chord, 0, sizeof slf->chord);
+	slf->chord.type = DmMessage_CHORD;
+	strcpy(slf->chord.name, "M");
+	slf->chord.subchord_count = 1;
+	slf->chord.subchords[0].chord_pattern = 0x91;
+	slf->chord.subchords[0].scale_pattern = 0xAB5AB5;
+	slf->chord.subchords[0].levels = 0xFFFFFFFF;
+	slf->chord.subchords[0].chord_root = 12;
+	slf->chord.subchords[0].scale_root = 0;
+}
 
 DmResult DmPerformance_create(DmPerformance** slf, uint32_t rate) {
 	if (slf == NULL) {
@@ -31,6 +48,7 @@ DmResult DmPerformance_create(DmPerformance** slf, uint32_t rate) {
 	new->time_signature.beats_per_measure = 4;
 	new->time_signature.beat = 4;
 	new->time_signature.grids_per_beat = 2;
+	DmPerformance_setDefaultChord(new);
 
 	DmSynth_init(&new->synth, new->sample_rate);
 
@@ -691,6 +709,7 @@ static void DmPerformance_handleCommandMessage(DmPerformance* slf, DmMessage_Com
 
 static void DmPerformance_handleSegmentMessage(DmPerformance* slf, DmMessage_SegmentChange* msg) {
 	DmSegment* sgt = msg->segment;
+	DmPerformance_setDefaultChord(slf);
 	DmSegment_release(slf->segment);
 
 	// Get rid of the currently playing segment.

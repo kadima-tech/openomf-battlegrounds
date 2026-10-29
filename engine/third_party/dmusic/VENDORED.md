@@ -26,3 +26,6 @@ Local changes:
   layers), not DDKSynth's first region by key: the theme's instruments pick their samples by
   velocity (127, 126, 125, 124 and below). `OPENBG_MUSIC_SOLO=<pchannel>` mutes the other channels
   (debugging).
+- A performance (and every new segment) starts on DirectMusic's default chord, C major (pattern
+  0x91, scale 0xAB5AB5, chord root 12), not an all-zero one: the theme has no chord track, and its
+  chord-relative parts (the pad from 16 s) played an octave low.
