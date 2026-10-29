@@ -93,8 +93,12 @@ float Interpolation::value(float a, float b, float t) const {
 			float c1 = 0.5f * p[2] - 0.5f * p[0];
 			t = clamp01(((c3 * x + c2) * x + c1) * x + p[1]);
 		}
+	} else if (type == "Coth Type") {
+		// DE_CCothType::GetValue (Core 0x7010a760): the series of coth(u) sin(u) cos(u), u = 2t - 1,
+		// a bump peaking at 1 mid-way.
+		float x = (2 * t - 1) * (2 * t - 1);
+		t = clamp01(1 - 0.3333333f * x - 0.1111111f * x * x + 0.0486773f * x * x * x - 0.0081129f * x * x * x * x);
 	}
-	// "Coth Type" is a polynomial the original evaluates; treated as linear here.
 	return (b - a) * t + a;
 }
 

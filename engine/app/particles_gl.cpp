@@ -42,6 +42,7 @@ Vec norm(const Vec &a) {
 	float l = len(a);
 	return l > 1e-9f ? mul(a, 1 / l) : a;
 }
+float dot(const Vec &a, const Vec &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 Vec cross(const Vec &a, const Vec &b) {
 	return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
@@ -103,60 +104,57 @@ GLuint ParticleRenderer::image(const de::ObjectRef &r) {
 	return images_[k] = t;
 }
 
-// DE_CRingParticleRenderer::DE_CInstanceInfo::Process (0x40015c00): per particle, an annulus of
-// 40 segments in its plane, from the inner edge (radius and height curves at the particle's age,
-// times its size; inner colour) to the outer edge (outer curves and colour).
+// DE_CRingParticleRenderer::DE_CInstanceInfo::Process (0x40015c00): per live particle, an annulus
+// of 20 segments, vertex = pos + sin(a) r A + cos(a) r B + h N in the plane mode's frame (A, B, N),
+// from the inner edge (radius and height curves at the particle's age, times its size; inner
+// colour) to the outer edge. U runs detail x (rotation + i / 20) round the ring, V 0 inner to 1 outer.
 void ParticleRenderer::ring(const game::ParticleInstance &in, const std::array<float, 3> &right, const std::array<float, 3> &up,
                             std::map<std::pair<GLuint, bool>, Batch> &batches) {
 	const de::ParticleRendererDef &d = *in.def;
+	if (d.ring_plane < 0 || d.ring_plane > 3) return;
 	de::Transform at = in.actor->world();
+	const bool local = d.generator.local, oriented = d.generator.channels[de::kChOrientation];
 	const bool additive = d.blend != 2;
 	Batch &b = batches[{image(d.image), additive}];
 	b.tex = image(d.image);
 	b.additive = additive;
-	constexpr int kSegments = 40;  // the angle steps by 0.05 pi
+	constexpr int kSegments = 20;
+	auto neg = [](const Vec &v) { return Vec{-v[0], -v[1], -v[2]}; };
 	for (const game::Particle &p : in.particles) {
-		float age = std::clamp(p.age, 0.0f, 1.0f);
-		Vec c = d.generator.local ? at.apply(p.pos) : p.pos;
-		// The ring's plane: X and Y axes of its frame.
-		Vec ax, ay;
+		Vec c = local ? at.apply(p.pos) : p.pos;
+		Vec A, B, N{0, 0, 0};
 		if (d.ring_plane == 3) {
-			ax = right;
-			ay = up;
+			A = right, B = up;
 		} else {
-			const auto &rows = d.generator.channels[de::kChOrientation] ? p.orientation : at.r;
-			Vec x = row(rows, 0), y = row(rows, 1), z = row(rows, 2);
-			if (d.generator.channels[de::kChOrientation] && d.generator.local) {
-				x = at.rotate(x);
-				y = at.rotate(y);
-				z = at.rotate(z);
-			}
-			if (d.ring_plane == 1) {
-				y = z;  // RotateLocalX(90): the ring lies in the X-Z plane
-			} else if (d.ring_plane == 2) {
-				x = z;  // RotateLocalY(90): the Z-Y plane
-			}
-			ax = x;
-			ay = y;
+			// Identity in the mesh's space (RotateX / RotateY of it), or the particle's orientation
+			// turned by RotateLocalX / RotateLocalY.
+			Vec x{1, 0, 0}, y{0, 1, 0}, z{0, 0, 1};
+			if (oriented) x = row(p.orientation, 0), y = row(p.orientation, 1), z = row(p.orientation, 2);
+			if (d.ring_plane == 0) A = x, B = y, N = z;
+			else if (d.ring_plane == 1) A = x, B = oriented ? neg(z) : z, N = oriented ? y : neg(y);
+			else A = oriented ? z : neg(z), B = y, N = oriented ? neg(x) : x;
+			if (local) A = at.rotate(A), B = at.rotate(B), N = at.rotate(N);
 		}
-		Vec normal = norm(cross(ax, ay));
-		float r0 = d.inner_radius.eval(age) * p.size, r1 = d.outer_radius.eval(age) * p.size;
-		float h0 = d.inner_height.eval(age) * p.size, h1 = d.outer_height.eval(age) * p.size;
-		auto c0 = d.inner_color.eval(age), c1 = d.outer_color.eval(age);
+		float r0 = d.inner_radius.eval(p.age) * p.size, r1 = d.outer_radius.eval(p.age) * p.size;
+		float h0 = 0, h1 = 0;
+		if (d.ring_plane != 3) h0 = d.inner_height.eval(p.age) * p.size, h1 = d.outer_height.eval(p.age) * p.size;
+		auto c0 = d.inner_color.eval(p.age), c1 = d.outer_color.eval(p.age);
 		if (additive) {
 			c0 = {c0[0] * c0[3], c0[1] * c0[3], c0[2] * c0[3], 1};
 			c1 = {c1[0] * c1[3], c1[1] * c1[3], c1[2] * c1[3], 1};
 		}
-		auto at_angle = [&](float a, float radius, float height) {
-			return add(add(c, mul(normal, height)), add(mul(ax, std::cos(a) * radius), mul(ay, std::sin(a) * radius)));
+		const float rot = d.generator.channels[de::kChRotation] ? p.rotation : 0;
+		auto at_angle = [&](int i, float radius, float height) {
+			float a = float(i) * 0.05f * 6.2831855f;
+			return add(add(c, mul(N, height)), add(mul(A, std::sin(a) * radius), mul(B, std::cos(a) * radius)));
 		};
 		for (int i = 0; i < kSegments; ++i) {
-			float a0 = float(i) / kSegments * 6.2831853f, a1 = float(i + 1) / kSegments * 6.2831853f;
-			Vec q[4] = {at_angle(a0, r0, h0), at_angle(a0, r1, h1), at_angle(a1, r1, h1), at_angle(a1, r0, h0)};
-			float u0 = float(i) / kSegments, u1 = float(i + 1) / kSegments;
-			float uv[4][2] = {{u0, 0}, {u0, 1}, {u1, 1}, {u1, 0}};
-			const std::array<float, 4> *cols[4] = {&c0, &c1, &c1, &c0};
-			for (int k : {0, 1, 2, 0, 2, 3}) {
+			// Vertices 2i (inner) and 2i + 1 (outer); triangles (v, v+2, v+3) and (v, v+3, v+1).
+			Vec q[4] = {at_angle(i, r0, h0), at_angle(i, r1, h1), at_angle(i + 1, r0, h0), at_angle(i + 1, r1, h1)};
+			float u0 = d.ring_detail * (rot + float(i) / kSegments), u1 = d.ring_detail * (rot + float(i + 1) / kSegments);
+			float uv[4][2] = {{u0, 0}, {u0, 1}, {u1, 0}, {u1, 1}};
+			const std::array<float, 4> *cols[4] = {&c0, &c1, &c0, &c1};
+			for (int k : {0, 2, 3, 0, 3, 1}) {
 				Vertex v;
 				for (int j = 0; j < 3; ++j) v.pos[j] = q[k][size_t(j)];
 				v.uv[0] = uv[k][0];
@@ -462,11 +460,40 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 		const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
 		if (set_rgb) base = {(*set_rgb)[0], (*set_rgb)[1], (*set_rgb)[2], (*set_rgb)[3] >= 0 ? (*set_rgb)[3] : base[3]};
 		if (additive) base = {base[0] * base[3], base[1] * base[3], base[2] * base[3], 1};
-		const float glow = d.cone_mode == 3 ? d.glow.eval(0) : 1;
+		// Cone modes 1 and 2 (InstanceInfo::Process): the actor's Z axis against the view fades or
+		// kills the renderer's colour; their width / height scaling never reaches the geometry.
+		const Vec az = row(at.r, 2), fwd{-view[2], -view[6], -view[10]};
+		if (d.cone_mode == 1) {
+			Vec v = norm(sub(Vec{at.t[0], at.t[1], at.t[2]}, cam));
+			float f = (1 - d.glow.eval(0)) * dot(v, norm(az)) + 1;
+			bool kill = f > 1;
+			if (!kill && in.actor->shape == game::GameObject::Shape::Cone) {
+				float s1 = std::sin(in.actor->umbra * 0.017453292f), s2 = std::sin(in.actor->penumbra * 0.017453292f);
+				if (f >= s2) kill = true;
+				else if (f >= s1) base[3] *= (s2 - f) / (s2 - s1);
+			}
+			if (kill) base = {0, 0, 0, 0};
+		} else if (d.cone_mode == 2) {
+			float zc = std::fabs(dot(norm(az), fwd));
+			if (zc > 0.9f) base[3] *= 1 - (zc - 0.9f) * 10;
+		}
+		// The quad extents (+0x38 height, +0x3c width, times the actor's scale); modes 6..23 use the
+		// bare size unless width or height differs from 1.
+		const bool use_wh = d.width != 1 || d.height != 1;
+		auto camera_depth = [&](const Vec &w) { return -(view[2] * w[0] + view[6] * w[1] + view[10] * w[2] + view[14]); };
 		for (const game::Particle &p : in.particles) {
+			if (d.mode == 8 || d.mode == 10 || d.mode == 12 || d.mode < 0 || d.mode > 23) break;
 			Vec c = local ? at.apply(p.pos) : p.pos;
-			float s = p.size * scale * glow;
-			float hw = d.width * s, hh = d.height * s;
+			const bool camera_space = d.mode <= 5 || d.mode == 13;
+			const float pz = camera_depth(c);
+			if (camera_space && pz <= d.near_limit) continue;
+			// Cone mode 3: the glow value at the particle's age replaces the actor's scale.
+			float ex_h = d.height * scale, ex_w = d.width * scale;
+			if (d.cone_mode == 3) {
+				float g = d.glow.eval(p.age);
+				ex_h = g * d.height, ex_w = g * d.width;
+			}
+			float hw = ex_w * p.size, hh = ex_h * p.size;
 			// Colour (InstanceInfo::Process, the switch on +0x90).
 			std::array<float, 4> col = base;
 			float age = std::clamp(p.age, 0.0f, 1.0f);
@@ -487,16 +514,17 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 				float k = std::fmin(d.glow_factor * 0.25f, 1.0f) * std::exp(-0.0007f * len(sub(c, cam)));
 				for (int j = 0; j < 3; ++j) col[size_t(j)] *= k;
 			}
-			// Texture coordinates (+0x8c): the whole image, or a frame of a 4x4 sheet.
+			// Texture coordinates (+0x8c): the whole image, or a frame of a 4x4 sheet (mode 1: age x
+			// 16 unclamped, so age 1 wraps to frame 0).
 			float u0 = 0, v0 = 0, du = 1, dv = 1;
 			if (d.uv_mode == 1 || d.uv_mode == 2) {
-				int frame = d.uv_mode == 1 ? std::min(15, int(age * 16)) : (p.serial & 15);
+				int frame = d.uv_mode == 1 ? int(age * 16) : (p.serial & 15);
 				u0 = float(frame & 3) * 0.25f;
 				v0 = float(frame >> 2 & 3) * 0.25f;
 				du = dv = 0.25f;
 			}
-			// Corners (SetParticleVerticies, the switch on +0x88).
-			Vec a, bb;  // half-extent vectors: corners are c -a -b, c +a -b, c +a +b, c -a +b
+			// Corners (SetParticleVerticies, the switch on +0x88), in the order v0..v3.
+			Vec q[4];
 			Vec axis{0, 0, 0};
 			bool axial = false;
 			switch (d.mode) {
@@ -508,27 +536,96 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 			case 11: axis = row(at.r, 1); axial = true; break;
 			default: break;
 			}
+			auto quad = [&](const Vec &o, const Vec &a, const Vec &bb) {
+				q[0] = sub(sub(o, a), bb), q[1] = sub(add(o, a), bb), q[2] = add(add(o, a), bb), q[3] = add(sub(o, a), bb);
+			};
 			if (axial) {
 				// A quad along the axis, turned to face the camera.
 				if ((d.mode == 6 || d.mode == 16 || d.mode == 17) && local) axis = at.rotate(axis);
-				axis = norm(axis);
-				Vec side = norm(cross(norm(sub(c, cam)), axis));
-				a = mul(side, hw);
-				bb = mul(axis, hh);
+				float sw = use_wh ? hw : p.size, sh = use_wh ? hh : p.size;
+				if (use_wh) axis = norm(axis);
+				Vec side = norm(cross(norm(sub(c, cam)), norm(axis)));
+				quad(c, mul(side, sw), mul(axis, sh));
 			} else if (d.mode >= 1 && d.mode <= 5) {
-				// Streaks from the particle along a direction: towards the actor (1), its momentum
-				// (2/3), the actor's momentum (4), scaled by +0x6c.
-				Vec dir = d.mode == 1 ? sub(Vec{at.t[0], at.t[1], at.t[2]}, c) : p.momentum;
-				if (local && d.mode != 1) dir = at.rotate(dir);
+				// A kite in screen space at the particle's depth: its sides at the particle, its tip
+				// half a width past the end point (+0x6c along the direction), its back half a width
+				// behind; half-width size x height x the actor's scale.
+				if (d.mode == 2) continue;  // the original leaves the direction unset
+				Vec dir = d.mode == 1 ? sub(Vec{at.t[0], at.t[1], at.t[2]}, c)
+				        : d.mode == 3 ? p.momentum
+				        : d.mode == 4 ? Vec{in.actor->momentum[0], in.actor->momentum[1], in.actor->momentum[2]}
+				                      : az;
 				if (d.normalize) dir = norm(dir);
-				Vec end = add(c, mul(dir, d.depth_offset));
-				Vec mid = mul(add(c, end), 0.5f);
-				Vec along = mul(sub(end, c), 0.5f);
-				if (len(along) < 1e-4f) along = mul(up, 1e-4f);
-				Vec side = norm(cross(norm(sub(mid, cam)), norm(along)));
-				c = mid;
-				a = mul(side, hw);
-				bb = add(along, mul(norm(along), hh));
+				Vec e = add(c, mul(dir, d.streak_length));
+				float ez = camera_depth(e);
+				if (ez < 5) continue;
+				// The end point's screen offset, taken back to world units at the particle's depth.
+				Vec pe = sub(e, cam), pc = sub(c, cam);
+				float dx = (dot(pe, right) / ez - dot(pc, right) / pz) * pz, dy = (dot(pe, up) / ez - dot(pc, up) / pz) * pz;
+				float l = std::sqrt(dx * dx + dy * dy);
+				if (l == 0) l = 1e-6f;
+				float nx = dx / l, ny = dy / l, w = hh;
+				auto screen = [&](const Vec &o, float x, float y) { return add(o, add(mul(right, x), mul(up, y))); };
+				q[0] = screen(c, w * ny, -w * nx);
+				q[1] = screen(c, dx + w * nx, dy + w * ny);
+				q[2] = screen(c, -w * ny, w * nx);
+				q[3] = screen(c, -w * nx, -w * ny);
+			} else if (d.mode == 14 || d.mode == 15 || (d.mode >= 18 && d.mode <= 23)) {
+				// Quads in the generator's space (the actor's for a local one) from the raw position.
+				const bool own = d.mode >= 21;
+				if (own && !d.generator.channels[de::kChOrientation]) continue;
+				float ea = (use_wh || own) ? ex_h * p.size : p.size, eb = (use_wh || own) ? ex_w * p.size : p.size;
+				Vec P = p.pos;
+				const float ang = d.generator.channels[de::kChRotation] && !own ? p.rotation * 6.2831850f : 0;
+				const float cs = std::cos(ang), sn = std::sin(ang);
+				const float ox = d.offset[0], oy = d.offset[1];
+				auto to_world = [&](const Vec &v) { return local ? at.apply(v) : v; };
+				if (d.mode == 15) {
+					Vec u{0, ea, 0}, v{eb, 0, 0};
+					if (ox != 0) P = add(P, mul(u, ox));
+					if (oy != 0) P = add(P, mul(v, oy));
+					u = {-sn * ea, cs * ea, 0}, v = {cs * eb, sn * eb, 0};
+					if (!local) u = at.rotate(u), v = at.rotate(v);
+					Vec corner[4] = {sub(add(P, u), v), add(add(P, u), v), add(sub(P, u), v), sub(sub(P, u), v)};
+					for (int k = 0; k < 4; ++k) q[k] = to_world(corner[k]);
+				} else if (own) {
+					const auto &o = p.orientation;
+					auto rot = [&](float x, float y, float z) { return add(add(mul(row(o, 0), x), mul(row(o, 1), y)), mul(row(o, 2), z)); };
+					Vec corner[4];
+					if (d.mode == 21) {
+						if (ox != 0) P[0] += ea * ox;
+						if (oy != 0) P[1] += eb * oy;
+						Vec r[4] = {rot(ea, -eb, 0), rot(ea, eb, 0), rot(-ea, eb, 0), rot(-ea, -eb, 0)};
+						for (int k = 0; k < 4; ++k) corner[k] = add(P, r[k]);
+					} else if (d.mode == 22) {
+						if (ox != 0) P[0] += ea * ox;
+						if (oy != 0) P[2] += eb * oy;
+						Vec r[4] = {rot(ea, 0, -eb), rot(ea, 0, eb), rot(-ea, 0, eb), rot(-ea, 0, -eb)};
+						for (int k = 0; k < 4; ++k) corner[k] = add(P, r[k]);
+					} else {
+						if (ox != 0) P[1] += ea * ox;
+						if (oy != 0) P[2] += eb * oy;
+						Vec r[4] = {rot(0, ea, -eb), rot(0, ea, eb), rot(0, -ea, eb), rot(0, -ea, -eb)};
+						for (int k = 0; k < 4; ++k) corner[k] = add(P, r[k]);
+					}
+					for (int k = 0; k < 4; ++k) q[k] = to_world(corner[k]);
+				} else {
+					// (a, b, 0) turned about Z by the rotation channel; XY (14, 18), XZ (19), YZ (20, whose
+					// fourth corner keeps the original's y = a').
+					float a2 = ea * cs - eb * sn, b2 = ea * sn + eb * cs;
+					if (ox != 0) P[0] += a2 * ox;
+					if (oy != 0) P[1] += b2 * oy;
+					float x = P[0], y = P[1], z = P[2];
+					Vec corner[4];
+					if (d.mode == 19) {
+						corner[0] = {x - a2, y, z - b2}, corner[1] = {x + a2, y, z - b2}, corner[2] = {x + a2, y, z + b2}, corner[3] = {x - a2, y, z + b2};
+					} else if (d.mode == 20) {
+						corner[0] = {x, y - a2, z - b2}, corner[1] = {x, y + a2, z - b2}, corner[2] = {x, y + a2, z + b2}, corner[3] = {x, a2, z + b2};
+					} else {
+						corner[0] = {x - a2, y - b2, z}, corner[1] = {x + a2, y - b2, z}, corner[2] = {x + a2, y + b2, z}, corner[3] = {x - a2, y + b2, z};
+					}
+					for (int k = 0; k < 4; ++k) q[k] = to_world(corner[k]);
+				}
 			} else {
 				// Screen-aligned square (0), rotated by the rotation channel (13).
 				Vec r = right, u = up;
@@ -537,11 +634,13 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 					r = add(mul(right, cs), mul(up, sn));
 					u = sub(mul(up, cs), mul(right, sn));
 				}
-				c = add(c, add(mul(r, d.offset[0] * hw), mul(u, d.offset[1] * hh)));
-				a = mul(r, hw);
-				bb = mul(u, hh);
+				quad(add(c, add(mul(r, d.offset[0] * hw), mul(u, d.offset[1] * hh))), mul(r, hw), mul(u, hh));
+				// The z offset (+0x80) moves only the depth: along the view ray, keeping the footprint.
+				if (d.offset[2] != 0) {
+					float k = std::max(pz + d.offset[2], d.near_limit) / pz;
+					for (Vec &v : q) v = add(cam, mul(sub(v, cam), k));
+				}
 			}
-			Vec q[4] = {sub(sub(c, a), bb), sub(add(c, a), bb), add(add(c, a), bb), add(sub(c, a), bb)};
 			float uv[4][2] = {{u0, v0 + dv}, {u0 + du, v0 + dv}, {u0 + du, v0}, {u0, v0}};
 			for (int k : {0, 1, 2, 0, 2, 3}) {
 				Vertex v;

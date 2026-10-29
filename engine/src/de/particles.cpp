@@ -338,7 +338,7 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 			const uint8_t v = b.version;
 			if (v >= 2 && v <= 7) {
 				p.color = read_embedded_color(c);
-				p.depth_offset = c.f32();
+				p.streak_length = c.f32();
 				p.mode = c.i32();
 				if (v >= 4) p.uv_mode = c.i32();
 				if (v >= 5) p.color_mode = c.i32();
@@ -359,7 +359,7 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 				} else if (v == 7) {
 					p.glow = read_embedded_float(c);
 					p.offset[2] = c.f32();
-					p.f84 = c.f32();
+					p.near_limit = c.f32();
 				}
 				if (v < 5 && old_flag) p.color_mode = 2;
 			}
@@ -393,10 +393,10 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 			if (b.version == 1) {
 				p.inner_color = read_embedded_color(c);
 				p.outer_color = read_embedded_color(c);
-				p.ring_plane = c.i32();
+				p.ring_e0 = c.i32();
 				p.ring_dc = c.i32();
-				p.ring_d4 = c.i32();
-				p.ring_d8 = c.i32();
+				p.ring_plane = c.i32();
+				p.ring_freeze_uv = c.i32();
 				p.ring_detail = c.f32();
 				p.inner_height = read_embedded_float(c);
 				p.outer_height = read_embedded_float(c);

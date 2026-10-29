@@ -124,7 +124,7 @@ struct ParticleRendererDef {
 	// BillboardedQuad v2-v7.
 	ColorValue color;
 	ObjectRef color_ref;  // the colour's Value\RGBA (scripts set it at run time)
-	float depth_offset = 0;   // +0x6c
+	float streak_length = 0;  // +0x6c
 	int32_t mode = 0;         // +0x88: 0 = screen-aligned square, others oriented/stretched
 	int32_t uv_mode = 0;      // +0x8c: 0 whole image, 1 4x4 flipbook by age, 2 frame by index
 	int32_t color_mode = 0;   // +0x90: 0 constant, 1/2 colour x age / 1-age, 3 x size channel,
@@ -135,10 +135,10 @@ struct ParticleRendererDef {
 	int32_t cone_mode = 0;         // +0x94
 	FloatValue glow;               // +0x98
 	float glow_factor = 0;         // a "GlowFactor" child: drawn into the glow layer (DE_CShader::GetShader)
-	float f84 = 0.1f;
+	float near_limit = 0.1f;  // +0x84: camera-space modes skip a particle no deeper than this
 	// Ring v1 (DE_CRingParticleRenderer 0x400158d0): an annulus per particle; inner and outer
-	// colours (+0x6c / +0x58), plane (+0xe0: 0 the particle's / actor's frame, 1 and 2 turned 90
-	// degrees about X / Y, 3 facing the camera), detail (+0x80), and curves over the particle's age
+	// colours (+0x6c / +0x58), plane (+0xd4: 0 the particle's / mesh space's frame, 1 and 2 turned 90
+	// degrees about X / Y, 3 facing the camera), U repeats (+0x80), and curves over the particle's age
 	// (x size) for the inner and outer edges' heights (+0x84 / +0x98) and radii (+0xac / +0xc0).
 	// StreamParticleRenderer v1 (DE_CStreamParticleRenderer 0x40017050): a ribbon through the
 	// particles in order. `color` (+0x58), colour mode (+0x70: 0/3 constant, 1 x age, 2 x 1 - age,
@@ -162,7 +162,8 @@ struct ParticleRendererDef {
 	float stream_width = 1, stream_uv_scale = 1, stream_uv_scroll = 0, stream_max_gap = 0;
 	bool stream_breaks = false;
 	ColorValue inner_color, outer_color;
-	int32_t ring_plane = 0, ring_dc = 0, ring_d4 = 0, ring_d8 = 0;
+	// +0xd4 plane mode (0..3), +0xd8 UVs frozen; +0xe0 and +0xdc are never read by Process.
+	int32_t ring_e0 = 0, ring_dc = 0, ring_plane = 0, ring_freeze_uv = 0;
 	float ring_detail = 1;
 	FloatValue inner_height, outer_height, inner_radius, outer_radius;
 };
