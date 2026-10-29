@@ -30,3 +30,6 @@ Local changes:
   0x91, scale 0xAB5AB5, chord root 12), not an all-zero one: the theme has no chord track, and its
   chord-relative parts (the pad from 16 s) played an octave low.
 - `OPENBG_NO_LFO=1` turns the voices' LFO pitch modulation off (debugging).
+- A band instrument finds its DLS instrument by program, bank LSB, bank MSB and drum flag (upstream
+  compared only program and bank LSB, so the theme's drum kit resolved to a melodic instrument).
+  `OPENBG_DEBUG_NOTES=<pchannel>` prints each note-on's key, velocity, region root and wave (debugging).

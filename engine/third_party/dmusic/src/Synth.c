@@ -19,6 +19,7 @@
 #include "_MsSynthTables.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 typedef int64_t STIME;
@@ -1208,6 +1209,12 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 		if (DmMsVoice_start(e, v, r, e->time, key, velocity, pitch)) {
 			v->in_use = true;
 			DmMsEngine_queue(e, v);
+		}
+		static int dbg = -2;
+		if (dbg == -2) dbg = getenv("OPENBG_DEBUG_NOTES") ? atoi(getenv("OPENBG_DEBUG_NOTES")) : -1;
+		if (dbg >= 0 && (int) channel == dbg) {
+			fprintf(stderr, "[note %lld] ch %u key %d vel %d root %d rate %u len %u loop %u-%u one_shot %d pitch %d\n", (long long) e->time, channel, key, velocity,
+			        r->root_key, r->wave_rate, r->length, r->loop_start, r->loop_end, r->one_shot, v->base_pitch);
 		}
 	}
 }

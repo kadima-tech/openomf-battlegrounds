@@ -48,7 +48,12 @@ DmDlsInstrument* DmInstrument_getDlsInstrument(DmInstrument* slf) {
 		return NULL;
 	}
 
+	// DMUS patch: program bits 0-7, bank LSB (CC32) 8-14, bank MSB (CC0) 16-22, drum kit bit 31.
+	// DLS ulBank: LSB bits 0-6, MSB 8-14, drum kit bit 31. All of them must match: the theme's DLS
+	// has a melodic instrument and a drum kit at the same LSB and program.
 	uint32_t bank = (slf->patch & 0xFF00U) >> 8;
+	uint32_t msb = (slf->patch >> 16) & 0x7FU;
+	uint32_t drum = slf->patch >> 31;
 	uint32_t patch = slf->patch & 0xFFU;
 
 	DmDlsInstrument* ins = NULL;
@@ -61,7 +66,7 @@ DmDlsInstrument* DmInstrument_getDlsInstrument(DmInstrument* slf) {
 		//                   thus prevents problems where the same channel is re-used multiple times, specifically in
 		//                   Gothic 1, which assigns a drum kit and melodic instrument to the same channel. This works
 		//                   in conjunction with the TSF creation in Dm_createHydra to prevent drum kit issues in G1.
-		if ((ins->bank & 127) == bank && ins->patch == patch) {
+		if ((ins->bank & 127) == bank && ((ins->bank >> 8) & 127) == msb && (ins->bank >> 31) == drum && ins->patch == patch) {
 			return ins;
 		}
 	}
