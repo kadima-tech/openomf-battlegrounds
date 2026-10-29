@@ -74,14 +74,19 @@ MusicPlayer::MusicPlayer(int rate) : rate_(rate) {
 		perf_ = nullptr;
 		return;
 	}
-	// DE_CDirectXSpeakerElement::Update sets the audiopath's volume to 10000 log10(1 - (1 - v s)^2)
-	// (1/100 dB), s being the speaker's volume (the segments' is 1) and v its noise volume: the
-	// global music volume (0.6, its registry default; only the options menu changes it) times s.
-	// That is -7.6 dB.
-	const float global = 0.6f, speaker = 1.0f;
+	set_volume(0.6f);
+}
+
+// DE_CDirectXSpeakerElement::Update sets the audiopath's volume to 10000 log10(1 - (1 - v s)^2)
+// (1/100 dB), s being the speaker's volume (the segments' is 1) and v its noise volume: the global
+// music volume (0.6 by default: -7.6 dB) times s.
+void MusicPlayer::set_volume(float global) {
+	volume_ = global;
+	if (!perf_) return;
+	const float speaker = 1.0f;
 	float shaped = 1 - global * speaker * speaker;
 	shaped = 1 - shaped * shaped;
-	DmPerformance_setVolume(perf_, std::pow(10.0f, 10000.0f * std::log10(shaped) / 2000.0f));
+	DmPerformance_setVolume(perf_, shaped <= 0 ? 0.0f : std::pow(10.0f, 10000.0f * std::log10(shaped) / 2000.0f));
 }
 
 MusicPlayer::~MusicPlayer() {
@@ -153,6 +158,7 @@ DmSegment *MusicPlayer::segment(game::World &world, const game::GameObject *nois
 
 void MusicPlayer::update(game::World &world) {
 	if (!perf_ || !world.music) return;
+	if (world.music_volume != volume_) set_volume(world.music_volume);
 	game::GameObject *s = world.music->music_speaker();
 	if (!s) return;
 	auto &sp = world.music->speaker(s);

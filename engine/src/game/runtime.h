@@ -460,6 +460,11 @@ public:
 	// match), and the current one: the newest begun, whose scene is being played.
 	std::vector<std::shared_ptr<struct SessionState>> sessions;
 	std::shared_ptr<struct SessionState> session;
+	// DE_CSpeaker::GlobalMusicVolume / GlobalSFXVolume (registry Audio\Music Volume, default 0.6,
+	// and Audio\SFX Volume, 1.0; the options' Audio panel sets them).
+	float music_volume = 0.6f, sfx_volume = 1.0f;
+	// Preferences\Renderer\Glow Enabled / Lighting Enabled (the options' Video panel).
+	bool glow_enabled = true, lighting_enabled = true;
 	// The mouse over the GUI (CObject::MouseScreenPositionX/Y: fractions of its width and height,
 	// y up) and the screen's aspect ratio (ScreenAspectRatio, width / height); the app sets them.
 	float mouse_x = 0.5f, mouse_y = 0.5f, screen_aspect = 4.0f / 3.0f;

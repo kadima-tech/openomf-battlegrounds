@@ -80,6 +80,7 @@ public:
 	virtual bool mouse(AppManager &, float, float, int) { return false; }
 	virtual bool key(AppManager &, int) { return false; }
 	virtual void wheel(AppManager &, int) {}
+	virtual void text(AppManager &, const std::string &) {}
 	virtual void deactivated(AppManager &) {}
 
 	void activate(AppManager &app);
@@ -161,6 +162,7 @@ public:
 	UIPtr main_menu();
 	UIPtr quit_menu();
 	UIPtr help_menu();
+	UIPtr options_menu();
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 
@@ -207,8 +209,22 @@ public:
 	// Input, in screen fractions (y down).
 	void mouse_move(float x, float y);
 	void mouse_button(bool down, int clicks = 1);
-	void key(int sym);
+	void key(int sym, int scancode = 0);
 	void wheel(int dy);
+	void text(const std::string &t);
+	int last_scancode = 0;  // the key event being handled
+	// The keyboard actions (DE_COMF2Manager::ObjInitContents's impulses) and their bindings, kept as
+	// registry values "Controls\<action>" (SDL scancodes); `key_name` names a scancode.
+	struct Action {
+		const char *name;
+		int default_scancode;
+	};
+	static const std::vector<Action> &actions();
+	int binding(size_t action) const;
+	void set_binding(size_t action, int scancode);
+	std::function<std::string(int)> key_name;
+	// Apply the registry's settings to the game (volumes, renderer switches, AI difficulty).
+	void apply_settings();
 
 private:
 	void transition_ui();
@@ -220,7 +236,7 @@ private:
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
 	bool first_ui_ = true;
-	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_;
+	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_;
 };
 
 }  // namespace ui

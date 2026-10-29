@@ -15,6 +15,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <iterator>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -167,6 +168,7 @@ int main(int argc, char **argv) {
 		game::World world(data);
 		game::ui::AppManager app(world);
 		if (!shot && !headless) load_registry(world.registry);
+		app.apply_settings();
 		auto saved_registry = world.registry;
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
@@ -305,10 +307,17 @@ int main(int argc, char **argv) {
 		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
-		const int W = 1024, H = 768;
+		// Preferences\Renderer\Resolution and Full Screen (the options' Video panel; next start).
+		static const int kRes[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1280, 960}, {1600, 1200}};
+		std::string res = app.registry_string("Preferences\\Renderer\\Resolution");
+		int ri = shot || res.empty() ? 2 : std::clamp(atoi(res.c_str()), 0, 4);
+		const int W = kRes[ri][0], H = kRes[ri][1];
+		bool fullscreen = !shot && app.registry_bool("Preferences\\Renderer\\Full Screen");
 		SDL_Window *win = SDL_CreateWindow("One Must Fall: Battlegrounds", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
 		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE |
-		                                       (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+		                                       (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+		app.key_name = [](int sc) { return std::string(SDL_GetScancodeName(SDL_Scancode(sc))); };
+		SDL_StartTextInput();
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
 		SDL_GL_SetSwapInterval(1);
 		if (shot) glu::offscreen(W, H);
@@ -354,7 +363,8 @@ int main(int argc, char **argv) {
 				}
 				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
-				if (e.type == SDL_KEYDOWN) app.key(int(e.key.keysym.sym));
+				if (e.type == SDL_KEYDOWN) app.key(int(e.key.keysym.sym), int(e.key.keysym.scancode));
+				if (e.type == SDL_TEXTINPUT) app.text(e.text.text);
 				if (e.type == SDL_MOUSEWHEEL) app.wheel(e.wheel.y);
 			}
 			if (world.registry != saved_registry) {
@@ -396,18 +406,15 @@ int main(int argc, char **argv) {
 			// (DE_CAppManager::IsUIManagerDisableUserCreatureInput).
 			world.input = {};
 			if (!shot && !(app.current && app.current->input_off)) {
+				// The options' key bindings, in AppManager::actions() order.
+				static bool game::Input::*const fields[] = {&game::Input::up, &game::Input::down, &game::Input::left, &game::Input::right,
+				                                             &game::Input::left_punch, &game::Input::right_punch, &game::Input::left_kick,
+				                                             &game::Input::right_kick, &game::Input::jump, &game::Input::evade, &game::Input::duck};
 				const Uint8 *k = SDL_GetKeyboardState(nullptr);
-				world.input.up = k[SDL_SCANCODE_UP];
-				world.input.down = k[SDL_SCANCODE_DOWN];
-				world.input.left = k[SDL_SCANCODE_LEFT];
-				world.input.right = k[SDL_SCANCODE_RIGHT];
-				world.input.left_punch = k[SDL_SCANCODE_A];
-				world.input.right_punch = k[SDL_SCANCODE_S];
-				world.input.left_kick = k[SDL_SCANCODE_Z];
-				world.input.right_kick = k[SDL_SCANCODE_X];
-				world.input.jump = k[SDL_SCANCODE_SPACE];
-				world.input.evade = k[SDL_SCANCODE_LSHIFT];
-				world.input.duck = k[SDL_SCANCODE_C];
+				for (size_t i = 0; i < std::size(fields) && i < game::ui::AppManager::actions().size(); ++i) {
+					int sc = app.binding(i);
+					if (sc > 0 && sc < SDL_NUM_SCANCODES && k[sc]) world.input.*fields[i] = true;
+				}
 			}
 			app.update();
 			// Autopause: the scene passes no time while a page that autopauses is up (the

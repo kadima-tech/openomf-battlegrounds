@@ -32,10 +32,12 @@ public:
 	bool ok() const { return perf_ != nullptr; }
 	// Main thread, once per frame: follow the music speaker and report segment ends.
 	void update(game::World &world);
+	void set_volume(float global);
 	// Audio thread: add the music to `frames` interleaved stereo samples.
 	void mix(float *out, int frames);
 
 private:
+	float volume_ = -1;
 	DmSegment *segment(game::World &world, const game::GameObject *noise);
 	void add_container(game::World &world, const game::GameObject *container);
 	static void *resolve(void *self, const char *file, size_t *len);

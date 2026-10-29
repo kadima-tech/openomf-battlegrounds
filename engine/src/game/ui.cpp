@@ -195,7 +195,9 @@ public:
 			app.set_next(app.quit_menu(), true);
 		} else if (&c == help_) {
 			app.set_next(app.help_menu(), true);
-		} else if (&c == options_ || &c == replays_) {
+		} else if (&c == options_) {
+			app.set_next(app.options_menu(), true);
+		} else if (&c == replays_) {
 			app.not_ported(c.text);
 		}
 	}
@@ -326,13 +328,277 @@ public:
 		} else if (&c == help_) {
 			app.set_next(app.help_menu(), true);
 		} else if (&c == options_) {
-			app.not_ported(c.text);
+			app.set_next(app.options_menu(), true);
 		}
 	}
 
 private:
 	Control *main_menu_ = nullptr, *change_ = nullptr, *add_bot_ = nullptr, *resume_ = nullptr, *quit_ = nullptr, *options_ = nullptr,
 	        *help_ = nullptr;
+};
+
+
+// DE_COptionsUIManager (OMF ObjInitContents 0x3505b060, SetupControls 0x3505d0e0, click
+// 0x3505e170) and its panels (DE_CAudioPanelRobot, DE_CVideoPanelRobot 0x3505eef0,
+// DE_CGameplayPanelRobot 0x3505b170, DE_CNetworkPanelRobot 0x3505bc60, DE_CControlsPanelRobot
+// 0x3505f6e0): the panel buttons, Back (Esc) and the panel in WINDOW; the previous panel's
+// settings are applied when another opens or the page is left. Each setting keeps the registry
+// value the original uses.
+class OptionsMenu : public UIManager {
+public:
+	OptionsMenu() : UIManager("Options", "Options") { halt_loading = true; }
+
+	void setup_controls(AppManager &app) override {
+		controls_ = button(app, "Control", "Controls");
+		video_ = button(app, "Video", "Video");
+		audio_ = button(app, "Audio", "Audio");
+		game_ = button(app, "Gameplay", "Game");
+		network_ = button(app, "Network", "Network");
+		back_ = button(app, "Back", "Back");
+		back_->keys = {kKeyEscape};
+		window_ = button(app, "", "WINDOW");
+		open(app, audio_);
+	}
+	void click(AppManager &app, Control &c) override {
+		apply(app);
+		if (&c == back_) {
+			app.set_last();
+			return;
+		}
+		if (&c != window_) open(app, &c);
+	}
+	void deactivated(AppManager &app) override {
+		apply(app);
+		settings_.clear();
+		panel_ = nullptr;
+	}
+	void draw(AppManager &app, std::vector<DrawItem> &out) override {
+		if (!window_) return;
+		const float pad = 0.02f;
+		float x0 = window_->left + pad, x1 = window_->right - pad, y = window_->top + pad;
+		auto text = [&](const std::string &t, float x, float yy, float size, bool centered = false, float a = 1) {
+			DrawItem d;
+			d.kind = DrawItem::Text;
+			d.x0 = x, d.y0 = yy, d.size = size, d.text = t, d.centered = centered;
+			d.rgba[3] = a;
+			out.push_back(d);
+		};
+		text(title_, (x0 + x1) / 2, y + 0.02f, 0.042f, true);  // DE_CUISizes PanelTitle
+		y += 0.06f;
+		rows_.clear();
+		row_h_ = std::min(kRowH, (window_->bottom - pad - y) / float(std::max<size_t>(1, settings_.size())));
+		const float kRowH = row_h_;
+		for (size_t i = 0; i < settings_.size(); ++i) {
+			Setting &st = settings_[i];
+			float mid = x0 + (x1 - x0) * 0.5f;
+			if (y + kRowH > window_->bottom - pad) break;
+			rows_.push_back({y, y + kRowH});
+			if (int(i) == focus_) {
+				DrawItem r;
+				r.x0 = x0, r.x1 = x1, r.y0 = y, r.y1 = y + kRowH;
+				const float hi[4] = {0.55f, 0.75f, 0.9f, 0.2f};
+				std::copy(hi, hi + 4, r.rgba);
+				out.push_back(r);
+			}
+			text(st.label, x0 + 0.01f, y + kRowH / 2, 0.033f);  // PanelItem
+			std::string v;
+			switch (st.kind) {
+			case Setting::Slider: {
+				DrawItem back, fill;
+				back.x0 = fill.x0 = mid, back.x1 = x1 - 0.01f, back.y0 = fill.y0 = y + kRowH * 0.35f, back.y1 = fill.y1 = y + kRowH * 0.65f;
+				const float bc[4] = {0.2f, 0.3f, 0.3f, 0.6f}, fc[4] = {0.5f, 1.0f, 1.0f, 1.0f};
+				std::copy(bc, bc + 4, back.rgba);
+				std::copy(fc, fc + 4, fill.rgba);
+				fill.x1 = mid + (back.x1 - mid) * std::clamp(st.value, 0.0f, 1.0f);
+				out.push_back(back);
+				out.push_back(fill);
+				break;
+			}
+			case Setting::Choice: v = st.choices.empty() ? std::string() : st.choices[size_t(st.index)]; break;
+			case Setting::Check: v = st.value != 0 ? "On" : "Off"; break;
+			case Setting::Text: v = st.text + (int(i) == focus_ && editing_ ? "_" : ""); break;
+			case Setting::Key: v = (int(i) == focus_ && assigning_) ? "Press a key..." : (app.key_name ? app.key_name(app.binding(size_t(st.action))) : ""); break;
+			case Setting::Button: v = "[ " + st.text + " ]"; break;
+			}
+			if (!v.empty()) text(v, (mid + x1) / 2, y + kRowH / 2, 0.033f, true);
+			y += kRowH;
+		}
+		if (!note_.empty() && y + 0.05f < window_->bottom) {
+			ControlLayout l;
+			l.kind = ControlLayout::Text;
+			l.text = note_;
+			l.text_height = 15;
+			flow(app, l, x0, y + 0.02f, x1 - x0, window_->bottom - pad, out);
+		}
+	}
+	bool mouse(AppManager &app, float x, float y, int what) override {
+		if (!window_ || !window_->contains(x, y) || (what != 1 && what != 3)) return false;
+		float x0 = window_->left + 0.02f, x1 = window_->right - 0.02f, mid = x0 + (x1 - x0) * 0.5f;
+		for (size_t i = 0; i < rows_.size() && i < settings_.size(); ++i) {
+			if (y < rows_[i].first || y >= rows_[i].second) continue;
+			Setting &st = settings_[i];
+			focus_ = int(i);
+			editing_ = st.kind == Setting::Text;
+			assigning_ = false;
+			switch (st.kind) {
+			case Setting::Slider:
+				if (x >= mid) st.value = std::clamp((x - mid) / (x1 - 0.01f - mid), 0.0f, 1.0f);
+				break;
+			case Setting::Choice:
+				if (!st.choices.empty()) st.index = (st.index + (x < (mid + x1) / 2 ? int(st.choices.size()) - 1 : 1)) % int(st.choices.size());
+				break;
+			case Setting::Check: st.value = st.value != 0 ? 0 : 1; break;
+			case Setting::Key: assigning_ = true; break;
+			case Setting::Button:
+				if (st.on_click) st.on_click(app);
+				break;
+			default: break;
+			}
+			changed(app);
+			return true;
+		}
+		return true;
+	}
+	bool key(AppManager &app, int sym) override {
+		if (focus_ < 0 || size_t(focus_) >= settings_.size()) return false;
+		Setting &st = settings_[size_t(focus_)];
+		if (assigning_ && st.kind == Setting::Key) {
+			if (sym != kKeyEscape && app.last_scancode) app.set_binding(size_t(st.action), app.last_scancode);
+			assigning_ = false;
+			return true;
+		}
+		if (editing_ && st.kind == Setting::Text) {
+			if (sym == 8 && !st.text.empty()) st.text.pop_back();  // backspace
+			else if (sym == kKeyReturn || sym == kKeyEscape) editing_ = false;
+			return true;
+		}
+		return false;
+	}
+	void text(AppManager &, const std::string &t) override {
+		if (!editing_ || focus_ < 0 || size_t(focus_) >= settings_.size()) return;
+		Setting &st = settings_[size_t(focus_)];
+		if (st.kind == Setting::Text && st.text.size() < 32) st.text += t;
+	}
+
+private:
+	static constexpr float kRowH = 0.055f;
+	float row_h_ = kRowH;
+	struct Setting {
+		enum Kind { Slider, Choice, Check, Text, Key, Button } kind = Check;
+		std::string label, reg;  // registry value name
+		float value = 0;
+		std::vector<std::string> choices;
+		int index = 0;
+		std::string text;
+		int action = -1;
+		std::function<void(AppManager &)> on_click;
+	};
+
+	static float reg_float(AppManager &app, const std::string &name, float def) {
+		std::string v = app.registry_string(name);
+		return v.empty() ? def : float(atof(v.c_str()));
+	}
+	void open(AppManager &app, Control *c) {
+		panel_ = c;
+		settings_.clear();
+		focus_ = -1;
+		editing_ = assigning_ = false;
+		note_.clear();
+		auto slider = [&](const char *label, const char *reg, float def) {
+			Setting s;
+			s.kind = Setting::Slider, s.label = label, s.reg = reg, s.value = reg_float(app, reg, def);
+			settings_.push_back(s);
+		};
+		auto check = [&](const char *label, const char *reg, bool def) {
+			Setting s;
+			s.kind = Setting::Check, s.label = label, s.reg = reg;
+			std::string v = app.registry_string(reg);
+			s.value = v.empty() ? (def ? 1.0f : 0.0f) : (v == "1" ? 1.0f : 0.0f);
+			settings_.push_back(s);
+		};
+		auto choice = [&](const char *label, const char *reg, std::vector<std::string> choices, int def) {
+			Setting s;
+			s.kind = Setting::Choice, s.label = label, s.reg = reg, s.choices = std::move(choices);
+			std::string v = app.registry_string(reg);
+			s.index = std::clamp(v.empty() ? def : atoi(v.c_str()), 0, int(s.choices.size()) - 1);
+			settings_.push_back(s);
+		};
+		auto textf = [&](const char *label, const char *reg) {
+			Setting s;
+			s.kind = Setting::Text, s.label = label, s.reg = reg, s.text = app.registry_string(reg);
+			settings_.push_back(s);
+		};
+		if (c == audio_) {
+			title_ = "Audio Settings";
+			slider("Music Volume", "Audio\\Music Volume", 0.6f);
+			slider("Sound Volume", "Audio\\SFX Volume", 1.0f);
+		} else if (c == game_) {
+			title_ = "Game Settings";
+			textf("Player Name", "Network\\Player Name");
+			check("Record Session", "Gamepley\\Record Session", false);
+			// DE_COMF2Manager::SetupAIDifficultyList.
+			choice("AI Difficulty", "AI Difficulty", {"Rookie", "Amateur", "Veteran", "Champion", "World Champion", "Master"}, 0);
+			choice("Auto Populate With AIs", "Auto Populate With AIs", {"Disabled", "2 Players", "3 Players", "4 Players", "5 Players", "6 Players", "7 Players", "8 Players"}, 0);
+		} else if (c == video_) {
+			title_ = "Video Options";
+			check("Lights", "Preferences\\Renderer\\Lighting Enabled", true);
+			check("Reflections", "Preferences\\Renderer\\Reflections Enabled", true);
+			check("Glow", "Preferences\\Renderer\\Glow Enabled", true);
+			check("Bump Mapping", "Preferences\\Renderer\\Bump Mapping Enabled", true);
+			check("High Detail Geometry", "Preferences\\Renderer\\High Quality Geometry Enabled", true);
+			choice("Shadows", "Preferences\\Renderer\\Shadow Type", {"None", "Low Quality", "Medium Quality", "High Quality"}, 3);
+			choice("Resolutions", "Preferences\\Renderer\\Resolution", {"640 x 480", "800 x 600", "1024 x 768", "1280 x 960", "1600 x 1200"}, 2);
+			check("Full Screen", "Preferences\\Renderer\\Full Screen", false);
+			note_ = "Resolution and bit depth changes will take effect next time you start the game.";
+		} else if (c == network_) {
+			title_ = "Network Settings";
+			check("LAN Only", "Network\\LAN Only", false);
+			textf("Server Name", "Network\\Server Name");
+			textf("Server Password", "Network\\Server Password");
+			textf("Remote Admin Password", "Network\\Remote Admin Password");
+			textf("Listener Port", "Winsock\\Listener Port");
+			textf("Max Clients", "Network\\Max Clients");
+		} else if (c == controls_) {
+			title_ = "Control Settings";
+			for (size_t i = 0; i < AppManager::actions().size(); ++i) {
+				Setting s;
+				s.kind = Setting::Key, s.label = AppManager::actions()[i].name, s.action = int(i);
+				settings_.push_back(s);
+			}
+			Setting d;
+			d.kind = Setting::Button, d.label = "", d.text = "Set Defaults";
+			d.on_click = [](AppManager &a) {
+				for (size_t i = 0; i < AppManager::actions().size(); ++i) a.set_binding(i, AppManager::actions()[i].default_scancode);
+			};
+			settings_.push_back(d);
+		}
+	}
+	// Sliders take effect at once (DE_CAudioPanelRobot::OnUpdateOption).
+	void changed(AppManager &app) {
+		if (panel_ == audio_) apply(app);
+	}
+	// OnApplyOptions.
+	void apply(AppManager &app) {
+		for (Setting &st : settings_) {
+			if (st.reg.empty()) continue;
+			switch (st.kind) {
+			case Setting::Slider: app.set_registry_string(st.reg, std::to_string(st.value)); break;
+			case Setting::Check: app.set_registry_bool(st.reg, st.value != 0); break;
+			case Setting::Choice: app.set_registry_string(st.reg, std::to_string(st.index)); break;
+			case Setting::Text: app.set_registry_string(st.reg, st.text); break;
+			default: break;
+			}
+		}
+		app.apply_settings();
+	}
+
+	Control *controls_ = nullptr, *video_ = nullptr, *audio_ = nullptr, *game_ = nullptr, *network_ = nullptr, *back_ = nullptr, *window_ = nullptr;
+	Control *panel_ = nullptr;
+	std::string title_, note_;
+	std::vector<Setting> settings_;
+	std::vector<std::pair<float, float>> rows_;
+	int focus_ = -1;
+	bool editing_ = false, assigning_ = false;
 };
 
 // DE_CQuitMenuUIManager (OMF 0x350611d0, 0x35061210, 0x35061610).
@@ -668,6 +934,44 @@ UIPtr AppManager::help_menu() {
 	return help_menu_;
 }
 
+UIPtr AppManager::options_menu() {
+	if (!options_menu_) options_menu_ = std::make_shared<OptionsMenu>();
+	return options_menu_;
+}
+
+const std::vector<AppManager::Action> &AppManager::actions() {
+	// SDL scancodes: arrows, A S Z X, Space, Left Shift, C.
+	static const std::vector<Action> a = {
+		{"Move Forward", 82}, {"Move Backward", 81}, {"Turn Left", 80}, {"Turn Right", 79}, {"Left Punch", 4}, {"Right Punch", 22},
+		{"Left Kick", 29},    {"Right Kick", 27},    {"Jump", 44},      {"Evade", 225},     {"Duck", 6},
+	};
+	return a;
+}
+
+int AppManager::binding(size_t i) const {
+	std::string v = registry_string(std::string("Controls\\") + actions()[i].name);
+	return v.empty() ? actions()[i].default_scancode : atoi(v.c_str());
+}
+
+void AppManager::set_binding(size_t i, int scancode) { set_registry_string(std::string("Controls\\") + actions()[i].name, std::to_string(scancode)); }
+
+void AppManager::apply_settings() {
+	auto f = [&](const char *name, float def) {
+		std::string v = registry_string(name);
+		return v.empty() ? def : float(atof(v.c_str()));
+	};
+	auto b = [&](const char *name, bool def) {
+		std::string v = registry_string(name);
+		return v.empty() ? def : v == "1";
+	};
+	world.music_volume = f("Audio\\Music Volume", 0.6f);
+	world.sfx_volume = f("Audio\\SFX Volume", 1.0f);
+	world.glow_enabled = b("Preferences\\Renderer\\Glow Enabled", true);
+	world.lighting_enabled = b("Preferences\\Renderer\\Lighting Enabled", true);
+	// DE_COMF2Manager::Activate: registry "AI Difficulty" (default 0, Rookie).
+	world.ai_difficulty = int(f("AI Difficulty", 0));
+}
+
 UIPtr AppManager::quit_menu() {
 	if (!quit_menu_) quit_menu_ = std::make_shared<QuitMenu>();
 	return quit_menu_;
@@ -931,7 +1235,12 @@ void AppManager::mouse_button(bool down, int clicks) {
 	pressed_ = nullptr;
 }
 
-void AppManager::key(int sym) {
+void AppManager::text(const std::string &t) {
+	if (notifications.empty() && current && current->activated) current->text(*this, t);
+}
+
+void AppManager::key(int sym, int scancode) {
+	last_scancode = scancode;
 	if (!notifications.empty()) {
 		if (sym == kKeyReturn || sym == kKeyEscape) notifications.erase(notifications.begin());
 		return;

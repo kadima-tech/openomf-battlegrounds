@@ -129,6 +129,7 @@ void Mixer::update(Voice &v, const de::Transform &listener, float ms) {
 }
 
 void Mixer::play_requests(game::World &world, const de::Transform &listener) {
+	sfx_volume_ = world.sfx_volume;
 	auto requests = std::move(world.sound_requests);
 	world.sound_requests.clear();
 	if ((!dev_ && !offline_) || getenv("OPENBG_NO_SOUND")) return;

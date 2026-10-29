@@ -262,6 +262,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	// The frame's lights and their lighting owners (scene_lights.h).
 	render::FrameLights frame_lights = render::collect_lights(world, fr, [](const game::GameObject *o) { return !game::in_gui(*o); });
+	if (!world.lighting_enabled) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
 	const auto &light_owners = frame_lights.owners;
 	auto light_owner_of = [&](const game::GameObject *o) { return frame_lights.owner_of(o); };
 	const de::ObjectsFile *arena_file = world.data().file(arena);
@@ -364,7 +365,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	overlay.draw_world(world, vp);
 	// The glow layer, added over the scene (OPENBG_NO_GLOW=1 leaves it out).
 	static const bool no_glow = getenv("OPENBG_NO_GLOW") != nullptr;
-	if (!no_glow) {
+	if (!no_glow && world.glow_enabled) {
 		glow_r.begin();
 		arena_r.draw_glow(vp, eye);
 		{
