@@ -371,7 +371,10 @@ GameObject *World::resolve_passive_reference(GameObject *o) {
 	ReferenceFlags flags;
 	de::Guid target;
 	bool rename = false;
-	if (!read_reference(o, flags, target, rename) || (flags.mode != 2 && flags.mode != 3)) return nullptr;
+	bool ok = read_reference(o, flags, target, rename);
+	static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
+	if (debug) fprintf(stderr, "[passive %u] %s: mode %d place %d add %d\n", frame_, o->name.c_str(), ok ? flags.mode : -1, flags.place, flags.add);
+	if (!ok || (flags.mode != 2 && flags.mode != 3)) return nullptr;
 	GameObject *n = reference_target(*this, o, flags, target, rename);
 	if (!n) return nullptr;
 	if (flags.place == 0) {

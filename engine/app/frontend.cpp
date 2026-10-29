@@ -120,6 +120,7 @@ int main(int argc, char **argv) {
 	std::string data = argv[1];
 	const char *shot = nullptr;
 	std::string launch;
+	bool simulate_fullscreen = false;  // the launcher's "simulatefullscreen" switch
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
 	bool headless = false;
 	int frames = 60;
@@ -127,6 +128,7 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
+		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) simulate_fullscreen = true;
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
 			for (size_t p = 0; p <= l.size();) {
@@ -167,7 +169,9 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
 		game::ui::AppManager app(world);
-		if (!shot && !headless) load_registry(world.registry);
+		// DE_GLOBAL::FirstRun: Core's DE_CRegistry found no registry yet.
+		bool first_run = false;
+		if (!shot && !headless) first_run = !load_registry(world.registry);
 		app.apply_settings();
 		auto saved_registry = world.registry;
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
@@ -400,9 +404,16 @@ int main(int argc, char **argv) {
 				else if (m.kind == 4) app.key(27);
 				else app.mouse_button(m.kind == 1);
 			}
-			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI.
+			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI. On a first run
+			// (and without "simulatefullscreen") the launcher also greets the player and launches
+			// SinglePlayer\Basic Training, which the retail data does not have.
 			if (!ui_begun) {
 				ui_begun = true;
+				if (first_run && !simulate_fullscreen) {
+					app.notify("Welcome", "");
+					de::ObjectRef basic = world.data().find("Description\\SessionMaster", "Basic Training");
+					if (basic && app.launch_session) app.launch_session(basic, true);
+				}
 				app.begin_ui();
 			}
 			// The user's creature hears the keyboard unless a page is up that disables its input
