@@ -353,6 +353,16 @@ void OverlayRenderer::image_rect(const de::ObjectRef &img, float x0, float y0, f
 	end_screen();
 }
 
+void OverlayRenderer::texture_rect(GLuint tex, float x0, float y0, float x1, float y1, int width, int height) {
+	if (!prog_ || !tex) return;
+	begin_screen(width, height);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glUniform1i(glGetUniformLocation(prog_, "mode"), 0);
+	const float white[4] = {1, 1, 1, 1};
+	quad(x0, 1 - y1, x1, 1 - y0, 0, 0, 1, 1, white);
+	end_screen();
+}
+
 float OverlayRenderer::text_width(const std::string &str, float size, int width, int height) {
 	game::World::Primitive t;
 	t.text = str;

@@ -694,12 +694,12 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 			Batch &b = batches[{image(t.image), true}];
 			b.tex = image(t.image);
 			b.additive = true;
-			float ua = t.reverse_uv ? 0.0f : 1.0f, ub = 1 - ua;
+			float ua = t.reverse_uv ? 1.0f : 0.0f, ub = 1 - ua;
 			for (size_t i = 1; i < t.points.size(); ++i) {
 				const auto &p0 = t.points[i - 1], &p1 = t.points[i];
 				if (p0.cut || p1.cut || p1.life < 0) continue;
 				Vec q[4] = {add(p0.pos, p0.width), sub(p0.pos, p0.width), sub(p1.pos, p1.width), add(p1.pos, p1.width)};
-				float uv[4][2] = {{ua, 1 - p0.life}, {ub, 1 - p0.life}, {ub, 1 - p1.life}, {ua, 1 - p1.life}};
+				float uv[4][2] = {{ua, p0.v}, {ub, p0.v}, {ub, p1.v}, {ua, p1.v}};
 				const std::array<float, 4> *cols[4] = {&p0.color, &p0.color, &p1.color, &p1.color};
 				for (int k : {0, 1, 2, 0, 2, 3}) {
 					Vertex v;

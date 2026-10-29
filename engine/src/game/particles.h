@@ -99,15 +99,17 @@ struct ParticleInstance {
 // A fighter's swing trail (OMF DE_CAttackTrailer 0x3503fa90 GeneratePoint, 0x35040250 Process):
 // while the attack script calls Continue() every frame, each fighter tick adds a point at the
 // emitter actor (offset and half-width vector in its frame) in the trailer's colour; once it stops
-// the colour ramps to black over 8 points and points keep coming until it is dark. A point lives
-// `length` creature ticks; consecutive points (born within 2 ticks) are joined by a quad.
+// the colour ramps to black over 8 points and points keep coming until it is dark. Each draw ages
+// the points by the creature ticks since the last (life -= dt / length); consecutive points (born
+// within 2 ticks) are joined by a quad.
 struct AttackTrailer {
 	GameObject *object = nullptr;   // the script handle (COMF2Fighter::*Trailer())
 	GameObject *emitter = nullptr;  // "<Left|Right><Punch|Kick>TrailerEmitter" reference value
 	de::ObjectRef image;            // the fighter's "AttackTrailer" property
 	std::array<float, 3> offset{}, width{};
 	float length = 30;              // +0xd8
-	bool reverse_uv = false;        // +0xe4 (the right punch's)
+	bool reverse_uv = false;        // +0xe4: ReverseUVs, which nothing calls
+	uint32_t last = 0;              // +0xdc: the creature time of the last draw
 	bool continuing = false;        // +0xe0
 	std::array<float, 4> color{0, 0, 0, 0}, step{0, 0, 0, 0}, target{0, 0, 0, 0}, dest{0, 0, 0, 0};
 	int steps = 0, dest_steps = 0;  // +0xd0, +0xcc
@@ -115,6 +117,7 @@ struct AttackTrailer {
 		std::array<float, 3> pos, width;
 		std::array<float, 4> color;
 		float life = 1, decay = 0;
+		float v = 0;  // 1 - life before the last draw's ageing
 		uint32_t born = 0;
 		bool cut = true;  // not joined to the previous point
 	};
@@ -197,6 +200,9 @@ public:
 	void set_trail_enabled(GameObject *mesh, bool on);
 	// DE_COMF2Fighter::Tick: every trailer of the fighter adds its point.
 	void tick_trailers(GameObject &fighter);
+	// DE_CAttackTrailer::Process (OMF 0x35040250), once per drawn frame: with two points or more
+	// each ages by the creature ticks since the last draw; then dead points leave from the front.
+	void process_trailers();
 
 	// Value\RGBA objects set at run time (CValueRGBA::Set, and a billboard renderer's SetColor on
 	// its colour value +0x58), by value object; null when the data's colour stands. An alpha

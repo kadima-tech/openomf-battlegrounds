@@ -68,6 +68,8 @@ public:
 	const float fighter_radius = 60;  // camera framing
 	float yaw = 0.6f, pitch = 0.18f, distance = fighter_radius * 5.0f;
 	bool dragging = false;
+	// Draw from this camera actor with no HUD, leaving the HUD's projection alone (a capture).
+	game::GameObject *capture_camera = nullptr;
 
 	render::ArenaRenderer arena_r;
 	render::OverlayRenderer overlay;

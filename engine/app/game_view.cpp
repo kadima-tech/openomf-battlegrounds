@@ -278,7 +278,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	// horizontal; the vertical angle is kept on wider screens).
 	game::GameObject *cam = nullptr;
 	Fighter *viewed = viewed_fighter();
-	game::GameObject *scene_cam = scene_camera();
+	game::GameObject *scene_cam = capture_camera ? capture_camera : scene_camera();
 	if (!free_camera && viewed && !scene_cam) {
 		std::function<game::GameObject *(game::GameObject *)> find = [&](game::GameObject *o) -> game::GameObject * {
 			for (auto *ch : o->children) {
@@ -316,7 +316,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	glu::mul(vp, proj, view);
 	// CRenderer::ConvertFromWorldToScreen for the HUD: screen fractions (y up), view depth.
-	memcpy(screen_vp.data(), vp, sizeof vp);
+	if (!capture_camera) memcpy(screen_vp.data(), vp, sizeof vp);
 	if (!world.world_to_screen) {
 		world.world_to_screen = [this](const std::array<float, 3> &p) {
 			const float *m = screen_vp.data();
@@ -450,6 +450,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		}
 		shadows_r.update(shadow_type, casters, render::g_lighting, view, 70.5f);
 	}
+	if (!capture_camera) world.particles->process_trailers();
 	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye);
 	overlay.draw_world(world, vp);
 	// The glow layer, added over the scene (OPENBG_NO_GLOW=1 leaves it out).
@@ -465,7 +466,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}
-	overlay.draw(world, dw, dh, player ? player->actor : nullptr);
+	if (!capture_camera) overlay.draw(world, dw, dh, player ? player->actor : nullptr);
 }
 
 }  // namespace app

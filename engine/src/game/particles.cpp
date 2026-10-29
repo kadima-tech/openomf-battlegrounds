@@ -16,7 +16,7 @@ using Vec = std::array<float, 3>;
 using Rows = std::array<float, 9>;
 
 constexpr float kGravity = -0.0098f;  // DE_CScene::Gravity: units per ms per ms, -y
-constexpr float kMaxStep = 100;       // the instance's step is capped (generator +0x7c)
+constexpr float kMaxStep = 1000;      // the instance's step is capped (generator +0x7c, ObjInitContents)
 
 Vec add(const Vec &a, const Vec &b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
 Vec sub(const Vec &a, const Vec &b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
@@ -998,7 +998,6 @@ AttackTrailer *ParticleSystem::trailer(GameObject *fighter, int which) {
 			t.object = w_.create_child(nullptr, names[i], "Mesh\\AttackTrailer");
 			trailer_objects_[t.object] = &t;
 			t.image = image;
-			t.reverse_uv = i == 1;
 			const auto &v = fighter->stats.trailer_vectors;
 			for (int k = 0; k < 3; ++k) {
 				t.offset[size_t(k)] = v[size_t(vectors[i] + k)];
@@ -1018,14 +1017,25 @@ AttackTrailer *ParticleSystem::trailer_of(const GameObject *object) {
 void ParticleSystem::tick_trailers(GameObject &fighter) {
 	auto it = trailers_.find(&fighter);
 	if (it == trailers_.end()) return;
-	uint32_t now = w_.frame();
-	for (auto &t : it->second) {
-		t.generate_point(now);
-		// Process: a point fades over `length` ticks; dead ones leave from the front.
-		for (auto &p : t.points) p.life = 1 - float(now - p.born) * p.decay;
-		size_t dead = 0;
-		while (dead < t.points.size() && t.points[dead].life < 0) ++dead;
-		t.points.erase(t.points.begin(), t.points.begin() + long(dead));
+	for (auto &t : it->second) t.generate_point(fighter.creature_ticks);
+}
+
+void ParticleSystem::process_trailers() {
+	for (auto &[fighter, set] : trailers_) {
+		const uint32_t now = fighter->creature_ticks;
+		for (auto &t : set) {
+			if (t.points.size() >= 2) {
+				float dt = float(now - t.last);
+				for (auto &p : t.points) {
+					p.v = 1 - p.life;
+					p.life -= dt * p.decay;
+				}
+			}
+			t.last = now;
+			size_t dead = 0;
+			while (dead < t.points.size() && t.points[dead].life < 0) ++dead;
+			t.points.erase(t.points.begin(), t.points.begin() + long(dead));
+		}
 	}
 }
 

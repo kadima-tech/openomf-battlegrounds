@@ -44,6 +44,7 @@ struct DrawItem {
 	float size = 0;  // text height, screen heights
 	bool centered = false;
 	de::ObjectRef image;
+	uint32_t render_target = 0;  // the handle of an Image\RenderTarget the app has rendered (Capture)
 };
 
 class UIManager {

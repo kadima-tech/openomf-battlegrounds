@@ -182,6 +182,10 @@ int main(int argc, char **argv) {
 		app.set_active(app.backdrop, false);
 		app.set_active(app.main_frame, false);
 		app::GameView view(world);
+		struct RenderTarget {
+			GLuint fbo = 0, tex = 0, depth = 0;
+		};
+		std::map<uint32_t, RenderTarget> render_targets;  // by image handle
 		view.wire_session();
 		// DE_COMF2Manager::ProcessEvent on the session chooser's Complete (FINDINGS 125): a session
 		// from the chosen master description's resource (its master modifier), a local
@@ -463,6 +467,58 @@ int main(int argc, char **argv) {
 				view.draw(dw, dh, fr, shot != nullptr);
 				game_shown = view.has_arena();
 			}
+			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
+			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
+			if (fr == test_snapshot) {
+				for (game::Brain *b : world.brains()) {
+					std::vector<uint8_t> args(8);
+					if (b->call(world, "SubSessionCaptureSnapshot(class CCreature,class CCreature)", args)) {
+						fprintf(stderr, "test snapshot on %s\n", b->owner->name.c_str());
+						break;
+					}
+				}
+			}
+			// The frame's captures (CRenderTargetImage::Capture): the scene from each camera into
+			// its image's 256 x 256 target.
+			for (auto &[img, cam_handle] : world.capture_requests) {
+				game::GameObject *camera = world.object(cam_handle);
+				if (!game_shown || !world.object(img) || !camera) continue;
+				RenderTarget &t = render_targets[img];
+				if (!t.fbo) {
+					glGenTextures(1, &t.tex);
+					glBindTexture(GL_TEXTURE_2D, t.tex);
+					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+					glGenRenderbuffers(1, &t.depth);
+					glBindRenderbuffer(GL_RENDERBUFFER, t.depth);
+					glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 256, 256);
+					glGenFramebuffers(1, &t.fbo);
+					glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+					glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.tex, 0);
+					glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, t.depth);
+				}
+				glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+				view.capture_camera = camera;
+				view.draw(256, 256, fr, true);
+				view.capture_camera = nullptr;
+				// OPENBG_DEBUG_CAPTURE=<dir> writes each capture there.
+				if (const char *dir = getenv("OPENBG_DEBUG_CAPTURE")) {
+					std::vector<uint8_t> px(256 * 256 * 4);
+					glReadPixels(0, 0, 256, 256, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+					std::string out = std::string(dir) + "/capture-" + std::to_string(fr) + ".png";
+					glu::write_png(out.c_str(), 256, 256, px);
+					fprintf(stderr, "capture %s from %s\n", out.c_str(), camera->name.c_str());
+				}
+				glBindFramebuffer(GL_FRAMEBUFFER, 0);
+				glViewport(0, 0, dw, dh);
+			}
+			world.capture_requests.clear();
+			for (auto it = render_targets.begin(); it != render_targets.end();) {
+				if (world.object(it->first)) { ++it; continue; }
+				glDeleteFramebuffers(1, &it->second.fbo), glDeleteRenderbuffers(1, &it->second.depth), glDeleteTextures(1, &it->second.tex);
+				it = render_targets.erase(it);
+			}
 			if (!game_shown) {
 				glClearColor(0, 0, 0, 1);
 				glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -571,7 +627,9 @@ int main(int argc, char **argv) {
 				app.current->draw(app, items);
 				for (auto &d : items) {
 					if (d.kind == game::ui::DrawItem::Rect) overlay.rect(d.x0, d.y0, d.x1, d.y1, d.rgba, vpt.w, vpt.h);
-					else if (d.kind == game::ui::DrawItem::Image) overlay.image_rect(d.image, d.x0, d.y0, d.x1, d.y1, vpt.w, vpt.h, d.rgba);
+					else if (d.kind == game::ui::DrawItem::Image && d.render_target) {
+						if (auto it = render_targets.find(d.render_target); it != render_targets.end()) overlay.texture_rect(it->second.tex, d.x0, d.y0, d.x1, d.y1, vpt.w, vpt.h);
+					} else if (d.kind == game::ui::DrawItem::Image) overlay.image_rect(d.image, d.x0, d.y0, d.x1, d.y1, vpt.w, vpt.h, d.rgba);
 					else overlay.label(d.text, d.x0, d.y0, d.size, d.rgba, vpt.w, vpt.h, d.centered);
 				}
 				for (auto &c : app.current->controls) {

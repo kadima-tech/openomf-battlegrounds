@@ -258,6 +258,7 @@ public:
 		next_box_ = button(app, "", "NextTextBox");
 		name_box_ = button(app, "", "MatchName");
 		progress_box_ = button(app, "", "Progress");
+		shot_box_ = button(app, "", "MatchScreenShot");
 	}
 	void draw(AppManager &app, std::vector<DrawItem> &out) override {
 		auto &r = app.world.rules_displays[rules_];
@@ -273,6 +274,25 @@ public:
 			flow(app, l, c->left + 0.005f, c->top + 0.005f, c->right - c->left - 0.01f, c->bottom, out);
 			for (size_t i = from; i < out.size(); ++i) std::copy(rgba.begin(), rgba.end(), out[i].rgba);
 		};
+		// MatchScreenShot: the owner's SnapshotImage child (BSubSessionLauncher::SubSessionCaptureSnapshot),
+		// filled white with the captured image.
+		if (shot_box_) {
+			SessionState *s = session_of(app.world, r.session);
+			GameObject *owner = s && s->owner ? s->owner->obj : nullptr;
+			GameObject *shot = nullptr;
+			if (owner) {
+				for (GameObject *ch : owner->children) {
+					if (ch->name == "SnapshotImage") shot = ch;
+				}
+			}
+			if (shot) {
+				DrawItem im;
+				im.kind = DrawItem::Image;
+				im.x0 = shot_box_->left, im.x1 = shot_box_->right, im.y0 = shot_box_->top, im.y1 = shot_box_->bottom;
+				im.render_target = shot->handle;
+				out.push_back(im);
+			}
+		}
 		text(name_box_, title_, 19, {1, 1, 0.65f, 1});
 		text(commentary_box_, commentary_, 14, {1, 0.75f, 0.8f, 1});
 		text(next_box_, next_, 16, {0.8f, 0.8f, 0.8f, 1});
@@ -300,7 +320,7 @@ public:
 private:
 	GameObject *rules_;
 	std::string title_, commentary_, next_;
-	Control *commentary_box_ = nullptr, *next_box_ = nullptr, *name_box_ = nullptr, *progress_box_ = nullptr;
+	Control *commentary_box_ = nullptr, *next_box_ = nullptr, *name_box_ = nullptr, *progress_box_ = nullptr, *shot_box_ = nullptr;
 };
 
 // DE_CInGameMenuUIManager (OMF ObjInitContents 0x35059460, SetupControls 0x35059490, click

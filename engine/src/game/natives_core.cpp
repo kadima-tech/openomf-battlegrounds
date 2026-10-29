@@ -417,6 +417,9 @@ void register_core_natives(World &w) {
 	// SetPhaseCaller (Core 0x7018cc90, vtable +0x16c): DE_CImage::SetPhase stores the phase and
 	// marks the image changed; DE_CAVIImage's picks its frame, a procedural image regenerates
 	// (none of the scripted ones is procedural).
+	reg("CRenderTargetImage::Capture(class CActor)", [](const NativeContext &c) {
+		if (GameObject *img = c.self(); img && c.arg_object(0)) c.world.capture_requests.push_back({img->handle, c.arg_object(0)->handle});
+	});
 	reg("CImage::SetPhase(float)", [](const NativeContext &c) {
 		if (GameObject *o = c.self(); o && o->file) c.world.image_phases[{o->file, o->index}] = c.arg<float>(0);
 	});

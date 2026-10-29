@@ -699,6 +699,9 @@ public:
 	// The game camera's projection for CRenderer::ConvertFromWorldToScreen (set by the app):
 	// world point -> (x, y screen fractions, y up; z depth along the view).
 	std::function<std::array<float, 3>(const std::array<float, 3> &)> world_to_screen;
+	// DE_CRenderTargetImage::Capture (Core 0x70193570): the image and the camera actor to render
+	// it from, for the app to draw after this frame's scene (256 x 256, its +0x7c).
+	std::vector<std::pair<uint32_t, uint32_t>> capture_requests;  // handles
 	// The nearest point where a segment meets the arena's collision surface (set by the app).
 	std::function<std::optional<std::array<float, 3>>(const std::array<float, 3> &, const std::array<float, 3> &)> segment_hit;
 	bool render_ticks_per_frame = true;  // false when the app calls render_tick per drawn frame
