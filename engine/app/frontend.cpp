@@ -6,6 +6,10 @@
 // actors (frame, doors, backdrop, environment) and one F.<Screen> folder per page, its VE.*
 // actors the buttons, driven by the UI managers in game/ui.h.
 //
+// --launch <match> starts that match's session at once; --choose Elizabeth,Jaguar makes the UIs
+// it launches pick those (testing); --headless N runs N frames without a window and lists the
+// natives still missing.
+//
 // MOUSE="x,y@frame;down@frame;up@frame;..." scripts the mouse in screenshot runs (x, y fractions
 // of the 4:3 GUI area, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
@@ -14,14 +18,17 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "de/lighting.h"
 #include "game/runtime.h"
 #include "game/session.h"
+#include "game/descriptions.h"
 #include "game/ui.h"
 #include "audio.h"
+#include "game_view.h"
 #include "gl_util.h"
 #include "overlay.h"
 #include "particles_gl.h"
@@ -81,10 +88,27 @@ int main(int argc, char **argv) {
 	}
 	std::string data = argv[1];
 	const char *shot = nullptr;
+	std::string launch;
+	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
+	bool headless = false;
 	int frames = 60;
 	for (int i = 2; i < argc; ++i) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
+		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
+			std::string l = argv[++i];
+			for (size_t p = 0; p <= l.size();) {
+				size_t q = l.find(',', p);
+				choose.push_back(l.substr(p, q == std::string::npos ? std::string::npos : q - p));
+				if (q == std::string::npos) break;
+				p = q + 1;
+			}
+		}
+		else if (!strcmp(argv[i], "--headless")) {
+			headless = true;
+			if (i + 1 < argc && argv[i + 1][0] != '-') frames = atoi(argv[++i]);
+		}
 	}
 	struct MouseStep {
 		int frame;
@@ -126,8 +150,79 @@ int main(int argc, char **argv) {
 		app.transition = persistent("V.MainDoors");
 		app.set_active(app.backdrop, false);
 		app.set_active(app.main_frame, false);
-		// DE_CGameLauncherWindow::ObjInitContents: the main menu is the first UI manager.
-		app.set_next(app.main_menu(), true);
+		app::GameView view(world);
+		view.wire_session();
+		// DE_COMF2Manager::ProcessEvent on the session chooser's Complete (FINDINGS 125): a session
+		// from the chosen master description's resource (its master modifier), a local
+		// user-controlled client named "User", then Begin.
+		app.launch_session = [&](const de::ObjectRef &desc, bool single_player) {
+			auto res = game::passive_references(world.data(), desc);
+			if (res.empty()) {
+				app.notify(desc.info().name, "This match has no session to start.");
+				return;
+			}
+			printf("launching %s (%s)%s\n", desc.info().name.c_str(), res[0].info().name.c_str(), single_player ? ", single player" : "");
+			game::start_session(world, {res[0]});
+			game::add_client(world, true, "User");
+			game::begin_session(world);
+			app.set_registry_bool("SinglePlayerPlayed", true);
+		};
+		// A UI manager the session scripts launch (FINDINGS 127): a description selector over the
+		// script's pool; Next completes it for the script.
+		world.launch_ui = [&](game::GameObject *ui) {
+			auto &u = world.session->ui[ui];
+			auto sel = std::make_shared<game::ui::DescriptionSelector>(u.description);
+			sel->title = u.description;
+			sel->autoselect_key = u.autoselect;
+			for (auto &g : u.pool) {
+				if (de::ObjectRef d = world.data().by_guid(g)) sel->pool.push_back(d);
+			}
+			sel->on_complete = [&world, ui](game::ui::AppManager &, game::ui::DescriptionSelector &s) {
+				if (s.chosen) game::complete_ui(world, ui, s.chosen.info().guid);
+			};
+			printf("UI \"%s\": %zu descriptions\n", u.description.c_str(), sel->pool.size());
+			for (auto &d : sel->pool) {
+				if (std::find(choose.begin(), choose.end(), d.info().name) != choose.end()) {
+					printf("UI \"%s\": chose %s\n", u.description.c_str(), d.info().name.c_str());
+					game::complete_ui(world, ui, d.info().guid);
+					return;
+				}
+			}
+			app.set_next(sel, true);
+		};
+		app.has_local_session = [&] { return world.session != nullptr; };
+		app.session_fully_sequenced = [] { return true; };
+		app.session_scene_rendering = [&] { return view.has_arena(); };
+		if (!launch.empty()) {
+			de::ObjectRef d = world.data().find("Description\\SessionMaster", launch);
+			if (!d) {
+				fprintf(stderr, "no match named %s\n", launch.c_str());
+				return 1;
+			}
+			app.launch_session(d, true);
+		} else {
+			// DE_CGameLauncherWindow::ObjInitContents: the main menu is the first UI manager.
+			app.set_next(app.main_menu(), true);
+		}
+		if (headless) {
+			for (int fr = 0; fr < frames; ++fr) {
+				app.update();
+				world.tick();
+				for (auto &[obj, t] : world.texts) {
+					static std::map<const game::GameObject *, std::string> shown;
+					if (t.text != shown[obj] && !t.text.empty()) printf("frame %5d  [screen] %s\n", fr, t.text.c_str());
+					shown[obj] = t.text;
+				}
+				world.sound_requests.clear();
+			}
+			for (auto &l : world.log) printf("log: %s\n", l.c_str());
+			std::vector<std::pair<uint64_t, std::string>> miss;
+			for (auto &[k, n] : world.missing()) miss.emplace_back(n, k);
+			std::sort(miss.rbegin(), miss.rend());
+			printf("%zu natives still missing (by calls):\n", miss.size());
+			for (auto &[n, k] : miss) printf("  %6llu  %s\n", (unsigned long long)n, k.c_str());
+			return 0;
+		}
 
 		SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
@@ -144,6 +239,7 @@ int main(int argc, char **argv) {
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
 		SDL_GL_SetSwapInterval(1);
 		if (shot) glu::offscreen(W, H);
+		view.init_gl();
 		render::ActorMeshRenderer actors_r;
 		render::ParticleRenderer particles_r;
 		particles_r.load();

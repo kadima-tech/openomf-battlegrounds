@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <optional>
 
 #include "de/image.h"
 #include "de/mesh.h"
@@ -306,8 +307,53 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 		if (app.is_locked(entries_[i])) e.rgba[0] = e.rgba[1] = e.rgba[2] = 0.6f;
 		out.push_back(e);
 	}
-	// NewLargeRepresentation (description vtable +0x120): the ControlCreator in the Window.
-	if (selected_ >= 0) {
+	// NewLargeRepresentation (description vtable +0x120): the ControlCreator in the Window, or a
+	// pilot's panel (DE_CPilotDescription::NewLargeRepresentation, OMF 0x3504f930): its name, its
+	// photo framed on the left, its stats as bars on the right.
+	if (selected_ >= 0 && entries_[size_t(selected_)].info().class_path == "Description\\Pilot") {
+		const de::ObjectRef &d = entries_[size_t(selected_)];
+		float wx0 = window_->left + 2 * pad, wx1 = window_->right - 2 * pad, wy0 = window_->top + 2 * pad, wy1 = window_->bottom - 2 * pad;
+		float w = wx1 - wx0, h = wy1 - wy0;
+		DrawItem n;
+		n.kind = DrawItem::Text;
+		n.x0 = wx0 + 0.01f * w, n.y0 = wy0 + 0.04f * h, n.size = 20.0f / 600.0f, n.text = d.info().name;
+		out.push_back(n);
+		if (de::ObjectRef photo = pilot_photo(app.world.data(), d)) {
+			const float frame[4] = {0.55f, 0.75f, 0.9f, 0.8f};
+			DrawItem f;
+			f.x0 = wx0 + 0.01f * w - 0.003f, f.x1 = wx0 + 0.58f * w + 0.003f, f.y0 = wy0 + 0.1f * h - 0.004f, f.y1 = wy0 + 0.65f * h + 0.004f;
+			std::copy(frame, frame + 4, f.rgba);
+			out.push_back(f);
+			DrawItem im;
+			im.kind = DrawItem::Image;
+			im.x0 = wx0 + 0.01f * w, im.x1 = wx0 + 0.58f * w, im.y0 = wy0 + 0.1f * h, im.y1 = wy0 + 0.65f * h, im.image = photo;
+			out.push_back(im);
+		}
+		auto res = passive_references(app.world.data(), d);
+		std::optional<Pilot> pl = res.empty() ? std::nullopt : read_pilot(*res[0].file, res[0].info(), 0);
+		if (pl) {
+			const char *names[4] = {"Power", "Agility", "Endurance", "Focus"};
+			float vals[4] = {pl->stats.power, pl->stats.agility, pl->stats.endurance, pl->stats.focus};
+			for (int k = 0; k < 4; ++k) {
+				float y = wy0 + (0.1f + 0.15f * float(k)) * h;
+				DrawItem t;
+				t.kind = DrawItem::Text;
+				t.x0 = wx0 + 0.62f * w, t.y0 = y + 0.025f * h, t.size = 16.0f / 600.0f, t.text = names[k];
+				out.push_back(t);
+				DrawItem back, fill;
+				back.x0 = fill.x0 = wx0 + 0.62f * w;
+				back.x1 = wx0 + 0.98f * w;
+				back.y0 = fill.y0 = y + 0.06f * h;
+				back.y1 = fill.y1 = y + 0.1f * h;
+				const float bc[4] = {0.2f, 0.3f, 0.3f, 0.3f}, fc[4] = {0.5f, 1.0f, 1.0f, 1.0f};
+				std::copy(bc, bc + 4, back.rgba);
+				std::copy(fc, fc + 4, fill.rgba);
+				fill.x1 = fill.x0 + (back.x1 - back.x0) * std::clamp(vals[k] / 100.0f, 0.0f, 1.0f);
+				out.push_back(back);
+				out.push_back(fill);
+			}
+		}
+	} else if (selected_ >= 0) {
 		DescriptionInfo info = read_description(app.world.data(), entries_[size_t(selected_)]);
 		if (info.large && info.large.info().class_path == "ControlCreator") {
 			flow(app, read_control_creator(app.world.data(), info.large), window_->left + 2 * pad, window_->top + 2 * pad,

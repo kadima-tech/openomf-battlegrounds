@@ -16,7 +16,7 @@ reverse engineering of its own. Small, self-contained fixes are not left here.
 
 ## Waiting on the front end (menus, options, single player)
 
-The launcher's own part is known (FINDINGS 124), and so are the UI managers' page flow, controls and single-player screens (FINDINGS 125–127). `openbg` runs the front end: the main menu and the Quit page are ported, on the GUI scene in OMFBGGUI with its own scripts (buttons, doors). The rest of the front end is below.
+The launcher's own part is known (FINDINGS 124), and so are the UI managers' page flow, controls and single-player screens (FINDINGS 125–127). `openbg` runs the front end: the main menu, the Quit page, Choose Match (Single Player and Host) and the session's Choose Pilot / Choose Creature selectors are ported, on the GUI scene in OMFBGGUI with its own scripts (buttons, doors). A chosen match's master session starts and its choosers run; the matches themselves wait on sub-sessions (below).
 
 | What | Kind | Notes |
 |---|---|---|
@@ -25,16 +25,20 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | Controls | Stand-in | Buttons are hit rectangles at the `PositionControl` rectangles with their labels drawn by the overlay, not `DE_CControl3d` meshes in a frame-control scene. Label colour is white (the colour every screen passes to `NewButtonControl`; the launcher's `ColorButtonText` override is not readable). The GUI is drawn 4:3, pillar- or letterboxed. |
 | Notifications (`NewUserInformation`) | Stand-in | Our own panel (title, wrapped text, OK; Enter, Esc or a click closes it), not `DE_CDialog3d::UserInformation`'s dialog. |
 | Registry | Stand-in | Values the menus keep (`SinglePlayerPlayed`, the main menu's last choice) live for the run only. |
-| Screens | Missing | Options, Help, Replays, Credits, Join (session browser) and the session chooser behind Single Player and Host (`MenuSelect`) say "not ported yet". The in-game menu, description selectors, choose-fighter and rules display are not ported. |
+| Screens | Missing | Options, Help, Replays, Credits and Join (session browser) say "not ported yet". The in-game menu and rules display are not ported. |
+| Sub-sessions | Missing | One session at a time: `NewSubSession`, the session client calls (`NewClient`, `LastClient`, `Client`, `SetAsUserControlled`, `Activate`, `SetDescription`), `OwnMasterDescription`, the attached modifier GUID pools and `MasterDescription` are missing, so a single-player tournament stops after its choosers ("No SubSession created"). |
+| Choose Creature | Approximation | Shown as a plain description selector: no Model combo box or View button (the 3D model picker). `ChosenModel` is null, so the fighter's default model is used. |
+| Pilot panel | Approximation | Name, photo and the four stats as bars; the stat rows' icons and `DE_CPilotStatsRobot`'s exact layout are not ported. |
+| Next button's text box | Approximation | Renders solid white in the 3D scene (the `TextBoxNext` mesh's material); not looked into yet. |
 | Main menu music | Missing | `GH_MUSIC_PLAYER_ASSURE_DEFAULT_MUSIC` to the music player is not sent. |
 | Robot, pilot, arena and score-limit choices | Stand-in | Picked up front by `openbg-fight`, the way `BSinglePlayerSubSession` does, instead of through menus. |
 | Factions (teams' pilots) | Approximation | Ported for what Last Man Standing does (FINDINGS 112): a pilot's faction is null unless the picker sets one in a team game; `CPilot::Faction`/`SetFaction` and `CFaction::Photo` are ported. Team game modes (and with them `CFaction::TeamIndex`, faction vtable +0x180, and the session's team lists) are not run or decoded. |
-| UI managers (description selectors, choose-fighter UI) | Stand-in | A launched UI with a preset choice completes on the next update; without one it never completes. `IsUIManagerActive`/`IsActiveLocally`/`IsDisplayed` return false. |
+| UI managers in `openbg-fight` | Stand-in | Without the front end, a launched UI with a preset choice completes on the next update. |
 | Loading screen | Stand-in | `update_session` imitates the engine's loading screen (`SessionQuerryIsLoadingRequired` → `SessionLoadElements`, once per element). The launcher only fetches the splash image (`GH_GET_SPLASH_SCREEN_OBJECT`) and stamps its build on it (FINDINGS 124); the loading itself is the session's. |
 | Rules display | Stand-in | Created, shown nowhere, and authorised to continue at once. |
 | `CSession::EndAndDie` | Stub | The match ends in the script's EndingSession state and stays there: nothing to return to. |
 | `CImpulseRobot` (hotkeys), `GameDialog`, `SubSessionOwner` | Stub / fixed answer | No hotkeys, dialogs or sub-sessions until the front end and single player exist. |
-| `CDescription::IsMemberOf` | Fixed answer | Always true; only menus filter descriptions by cast. |
+| `CDescription::IsMemberOf` | Approximation | The description's own cast list (FINDINGS 127); a session master description's master modifier's casts are not merged in (`DE_CSessionMasterDescription::Update`). |
 | AI difficulty | Approximation | The original reads it from the registry (default 0, Rookie, which we use); `--difficulty` stands in for the options screen. |
 
 ## Waiting on networking (out of scope unless LAN play is wanted)

@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "game/descriptions.h"
+
 namespace game {
 
 // An object's reference block as consecutive chunks, each a run of BOOL-terminated reference
@@ -44,6 +46,8 @@ const std::vector<de::ObjectRef> &list_at(const std::vector<std::vector<std::vec
 
 de::ObjectRef source_of(const GameObject *o) { return o && o->file ? de::ObjectRef{o->file, o->index} : de::ObjectRef{}; }
 
+}  // namespace
+
 // DE_CTransferAgent::CPassiveReference: BOOL set, a 0x20-byte block of {file GUID, object GUID}.
 // Returns every passive reference's object in a contents block, in order.
 std::vector<de::ObjectRef> passive_references(const de::World &data, const de::ObjectRef &r) {
@@ -62,6 +66,8 @@ std::vector<de::ObjectRef> passive_references(const de::World &data, const de::O
 	}
 	return out;
 }
+
+namespace {
 
 // ClassExecutor (Core 0x701434b0): contents [name][entry state name]; references: its class.
 struct ExecutorClass {
@@ -640,6 +646,14 @@ SessionClient &add_client(World &w, bool user, const std::string &name) {
 	return c;
 }
 
+void complete_ui(World &w, GameObject *ui, const de::Guid &chosen) {
+	if (!w.session || !ui) return;
+	auto &u = w.session->ui[ui];
+	memcpy(u.chosen.data(), chosen.bytes, 16);
+	u.shown = false;
+	u.pending = true;
+}
+
 uint32_t new_event(World &w, const std::string &handle) {
 	uint32_t e = w.make_instance("CGenericEvent", 1);
 	w.memory().set<uint32_t>(e, w.string(handle));
@@ -1060,31 +1074,84 @@ void register_session_natives(World &w) {
 		if (it != S(c)->ui_choices.end()) {
 			memcpy(u.chosen.data(), it->second.bytes, 16);
 			u.pending = true;
+		} else if (c.world.launch_ui) {
+			u.shown = true;
+			c.world.launch_ui(ui);
 		} else {
 			c.world.log.push_back("session: no preset choice for UI \"" + u.description + "\"");
 		}
 	});
-	reg("CClient::bool IsUIManagerActive()", [](const NativeContext &c) { c.ret_bool(false); });
+	auto shown = [S](const NativeContext &c, GameObject *ui) {
+		auto *s = S(c);
+		auto it = s && ui ? s->ui.find(ui) : decltype(s->ui.end()){};
+		return s && ui && it != s->ui.end() && it->second.shown;
+	};
+	reg("CClient::bool IsUIManagerActive()", [client, shown](const NativeContext &c) {
+		auto *cl = client(c);
+		c.ret_bool(cl && shown(c, cl->ui_manager));
+	});
 	stub("CUIManager::SetHaltLoading(bool)");
-	reg("CUIManager::bool IsActiveLocally()", [](const NativeContext &c) { c.ret_bool(false); });
-	reg("CUIManager::bool IsDisplayed()", [](const NativeContext &c) { c.ret_bool(false); });
+	reg("CUIManager::bool IsActiveLocally()", [shown](const NativeContext &c) { c.ret_bool(shown(c, c.self())); });
+	reg("CUIManager::bool IsDisplayed()", [shown](const NativeContext &c) { c.ret_bool(shown(c, c.self())); });
 	reg("CObject::class CGenericDescriptionSelector NewGenericDescriptionSelector()", [](const NativeContext &c) {
 		c.ret_object(c.world.create_child(nullptr, "GenericDescriptionSelector", "UIManager\\GenericDescriptionSelector"));
 	});
-	reg("CObject::class CChooseFighterUIManager NewChooseFighterUIManager()", [](const NativeContext &c) {
-		c.ret_object(c.world.create_child(nullptr, "ChooseFighterUIManager", "UIManager\\GenericDescriptionSelector\\ChooseFighter"));
+	reg("CObject::class CChooseFighterUIManager NewChooseFighterUIManager()", [S](const NativeContext &c) {
+		GameObject *ui = c.world.create_child(nullptr, "ChooseFighterUIManager", "UIManager\\GenericDescriptionSelector\\ChooseFighter");
+		if (auto *s = S(c)) s->ui[ui].choose_fighter = true;
+		c.ret_object(ui);
 	});
 	reg("CGenericDescriptionSelector::SetUIDescription(string)", [S](const NativeContext &c) {
 		if (auto *s = S(c); s && c.self()) s->ui[c.self()].description = c.arg_string(0);
 	});
-	for (const char *k : {"CGenericDescriptionSelector::AddAllDescriptionsDerivedFrom(classtype )",
-	                      "CGenericDescriptionSelector::SetAutoselectDescription(string)",
-	                      "CGenericDescriptionSelector::AddDescriptionGUID(class CGUID)",
-	                      "CGenericDescriptionSelector::GetAvailableDescriptionGUIDPool(class CGUIDPool)",
-	                      "CGenericDescriptionSelector::SetAvailableDescriptionGUIDPool(class CGUIDPool)",
-	                      "CObject::CloseUIManagerStack()"}) {
-		stub(k);
-	}
+	reg("CGenericDescriptionSelector::SetAutoselectDescription(string)", [S](const NativeContext &c) {
+		if (auto *s = S(c); s && c.self()) s->ui[c.self()].autoselect = c.arg_string(0);
+	});
+	// AddAllDescriptionsDerivedFrom (0x701e4770): every master object of that class or a derived one.
+	reg("CGenericDescriptionSelector::AddAllDescriptionsDerivedFrom(classtype )", [S](const NativeContext &c) {
+		auto *s = S(c);
+		if (!s || !c.self()) return;
+		std::string path = c.world.class_path_of_handle(c.arg<uint32_t>(0));
+		if (path.empty()) return;
+		for (const auto &[stem, f] : c.world.data().files()) {
+			for (auto &o : f->objects()) {
+				if (o.class_path == path || o.class_path.rfind(path + "\\", 0) == 0) s->ui[c.self()].pool.push_back(o.guid);
+			}
+		}
+	});
+	reg("CGenericDescriptionSelector::AddDescriptionGUID(class CGUID)", [S](const NativeContext &c) {
+		auto *s = S(c);
+		uint32_t g = c.arg<uint32_t>(0);
+		if (!s || !c.self() || !g) return;
+		de::Guid guid;
+		memcpy(guid.bytes, c.mem().ptr(g, 16), 16);
+		s->ui[c.self()].pool.push_back(guid);
+	});
+	// GUID pools are {+0 data, +4 count} of 16-byte entries.
+	reg("CGenericDescriptionSelector::GetAvailableDescriptionGUIDPool(class CGUIDPool)", [S](const NativeContext &c) {
+		auto *s = S(c);
+		uint32_t p = c.arg<uint32_t>(0);
+		if (!s || !c.self() || !p) return;
+		auto &v = s->ui[c.self()].pool;
+		uint32_t data = c.mem().alloc(uint32_t(std::max<size_t>(1, v.size())) * 16);
+		for (size_t i = 0; i < v.size(); ++i) memcpy(c.mem().ptr(data + uint32_t(i) * 16, 16), v[i].bytes, 16);
+		c.mem().set<uint32_t>(p, data);
+		c.mem().set<uint32_t>(p + 4, uint32_t(v.size()));
+	});
+	reg("CGenericDescriptionSelector::SetAvailableDescriptionGUIDPool(class CGUIDPool)", [S](const NativeContext &c) {
+		auto *s = S(c);
+		uint32_t p = c.arg<uint32_t>(0);
+		if (!s || !c.self() || !p) return;
+		auto &v = s->ui[c.self()].pool;
+		v.clear();
+		uint32_t data = c.mem().get<uint32_t>(p), n = c.mem().get<uint32_t>(p + 4);
+		for (uint32_t i = 0; i < n; ++i) {
+			de::Guid g;
+			memcpy(g.bytes, c.mem().ptr(data + i * 16, 16), 16);
+			v.push_back(g);
+		}
+	});
+	stub("CObject::CloseUIManagerStack()");
 
 	// --- Descriptions (Core DE_CDescription::NewResource 0x701f2170, OMF
 	// DE_CFighterDescription::NewResource 0x35033080) ------------------------------------------
@@ -1140,8 +1207,20 @@ void register_session_natives(World &w) {
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it
 	// lives as long as the scene; ours live until deleted anyway.
 	reg("CScene::OwnBranch(class CObject)", [](const NativeContext &) {});
-	reg("CDescription::bool IsMemberOf(class CCast)", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CChooseFighterUIManager::class CGUID ChosenModel()", [](const NativeContext &c) { c.ret_u32(c.world.make_instance("CObject::CGUID", 1)); });
+	// IsMemberOfCaller (Core 0x701f1130): the cast is in the description's cast list.
+	reg("CDescription::bool IsMemberOf(class CCast)", [](const NativeContext &c) {
+		de::ObjectRef d = source_of(c.self()), cast = source_of(c.arg_object(0));
+		bool member = false;
+		if (d && cast) {
+			for (auto &m : read_description(c.world.data(), d).casts) member |= m.info().guid.str() == cast.info().guid.str();
+		}
+		c.ret_bool(member);
+	});
+	reg("CChooseFighterUIManager::class CGUID ChosenModel()", [S](const NativeContext &c) {
+		uint32_t g = c.world.make_instance("CObject::CGUID", 1);
+		if (auto *s = S(c); s && c.self() && s->ui.count(c.self())) memcpy(c.mem().ptr(g, 16), s->ui[c.self()].model.data(), 16);
+		c.ret_u32(g);
+	});
 	reg("CGenericDescriptionSelector::class CGUID ChosenDescription()", [S](const NativeContext &c) {
 		uint32_t g = c.world.make_instance("CObject::CGUID", 1);
 		if (auto *s = S(c); s && c.self() && s->ui.count(c.self())) memcpy(c.mem().ptr(g, 16), s->ui[c.self()].chosen.data(), 16);

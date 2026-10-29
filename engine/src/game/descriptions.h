@@ -41,4 +41,8 @@ struct ControlLayout {
 };
 ControlLayout read_control_creator(const de::World &data, const de::ObjectRef &creator);
 
+// A pilot description's resource (its Pilot) and that pilot's photo (DE_CPilot::CurrentPhoto: the
+// first Image among its children and properties).
+de::ObjectRef pilot_photo(const de::World &data, const de::ObjectRef &pilot_description);
+
 }  // namespace game

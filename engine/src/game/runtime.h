@@ -512,6 +512,10 @@ public:
 	std::function<GameObject *(const de::ObjectRef &actor)> make_fighter;
 	// A slot took a creature (slot index): the app learns who fights.
 	std::function<void(GameObject *creature, int slot)> on_creature_owned;
+	// A script launched a UI manager (CClient::LaunchRemoteUIManager) that has no preset choice:
+	// the front end shows it (its pool and title are the session's UiManager record) and
+	// completes it with complete_ui (session.h).
+	std::function<void(GameObject *ui)> launch_ui;
 	int ai_difficulty = 0;  // DE_COMF2Manager::AIDifficulty (registry default 0, Rookie) for pilots the session creates
 	struct ObjectValue {
 		uint32_t bits = 0;  // BOOL / INT / FLOAT

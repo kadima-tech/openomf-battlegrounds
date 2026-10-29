@@ -72,9 +72,14 @@ struct SessionState {
 	// UI managers (description selectors). The menus that would show them are not built yet:
 	// a launched UI whose description has a preset choice completes on the next update with it.
 	struct UiManager {
-		std::string description;
+		std::string description;        // SetUIDescription: the title
+		std::string autoselect;         // SetAutoselectDescription
+		std::vector<de::Guid> pool;     // the available descriptions
+		bool choose_fighter = false;    // a ChooseFighterUIManager
 		std::array<uint8_t, 16> chosen{};
+		std::array<uint8_t, 16> model{};  // ChosenModel (zero: the fighter's default)
 		bool pending = false;
+		bool shown = false;             // launched and not yet completed
 	};
 	std::map<const GameObject *, UiManager> ui;
 	std::map<std::string, de::Guid> ui_choices;  // "Choose Environment" -> description GUID
@@ -115,6 +120,12 @@ void update_session(World &w);
 void render_tick(World &w, float ms);
 // DE_CSession::NewClient + Activate: a local client (the user's, or a computer player's).
 SessionClient &add_client(World &w, bool user, const std::string &name);
+// The front end chose `chosen` in a launched UI manager: it completes on the next update, and
+// every node's UIManagerComplete hook hears about it.
+void complete_ui(World &w, GameObject *ui, const de::Guid &chosen);
+// DE_CTransferAgent::CPassiveReference: every passive reference's object in an object's contents,
+// in order (a description's first is its resource).
+std::vector<de::ObjectRef> passive_references(const de::World &data, const de::ObjectRef &r);
 // Send a generic event built by `fill` (an event block) to an object (and, for the session, its
 // slots): what CEvent::SendToNow does.
 uint32_t new_event(World &w, const std::string &handle);

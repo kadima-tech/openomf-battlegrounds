@@ -329,13 +329,20 @@ void register_script_natives(World &w) {
 		assign(c.mem(), a, e);
 	});
 	// Gather*: every in-scene object of a class (classtype argument: the class handle's path).
+	// GatherAllObjectsDerivedFromCaller (Core 0x7014d350): DE_CTransferAgent::FindObjectsDerivedFrom,
+	// every master object of the class or a derived one in the data, each appended once.
 	reg(ra + "GatherAllObjectsDerivedFrom(classtype )", [](const NativeContext &c) {
 		uint32_t a = c.self_handle();
 		std::string path = c.world.class_path_of_handle(c.arg<uint32_t>(0));
 		if (!a || path.empty()) return;
 		auto e = elements(c.mem(), a);
-		for (GameObject *o : c.world.scene_objects()) {
-			if (o->is(path.c_str())) e.push_back(o->handle);
+		for (const auto &[stem, f] : c.world.data().files()) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				const std::string &cp = f->objects()[i].class_path;
+				if (cp != path && cp.rfind(path + "\\", 0) != 0) continue;
+				GameObject *o = c.world.global_object({f.get(), i});
+				if (o && std::find(e.begin(), e.end(), o->handle) == e.end()) e.push_back(o->handle);
+			}
 		}
 		assign(c.mem(), a, e);
 	});

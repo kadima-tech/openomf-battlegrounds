@@ -95,4 +95,21 @@ ControlLayout read_control_creator(const de::World &data, const de::ObjectRef &c
 	return out;
 }
 
+de::ObjectRef pilot_photo(const de::World &data, const de::ObjectRef &d) {
+	auto res = passive_references(data, d);
+	if (res.empty()) return {};
+	const de::ObjectRef &p = res[0];
+	auto parents = p.file->parents();
+	for (uint32_t i = 0; i < parents.size(); ++i) {
+		if (parents[i] == int32_t(p.index) && p.file->objects()[i].class_path.rfind("Image", 0) == 0) return {p.file, i};
+	}
+	auto lists = reference_lists(data, p);
+	if (lists.size() > 1 && !lists[1].empty()) {
+		for (auto &r : lists[1][0]) {
+			if (r && r.info().class_path.rfind("Image", 0) == 0) return r;
+		}
+	}
+	return {};
+}
+
 }  // namespace game
