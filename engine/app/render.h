@@ -212,6 +212,8 @@ public:
 	void draw(const float *vp, const float *eye, const de::Transform &world, const AnimState &a);
 	// Its glow-layer passes in the pose last drawn.
 	void draw_glow(const float *vp, const float *eye);
+	// Its meshes in the pose last drawn, with the caller's program bound (shadow silhouettes).
+	void draw_flat() const;
 	// Second skinned meshes posed by their own bank under one of the body's bones (Gargoyle's
 	// wings: "DE_Wings Mesh" with WingDeformInfo, animated by WingAnimationBank, under Chest via
 	// WingBase). Per attachment, the actor right under that bone, whose child

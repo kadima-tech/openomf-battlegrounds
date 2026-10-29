@@ -269,6 +269,9 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	// The frame's lights and their lighting owners (scene_lights.h).
 	render::FrameLights frame_lights = render::collect_lights(world, fr, [](const game::GameObject *o) { return !game::in_gui(*o); });
 	if (!world.lighting_enabled) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
+	// Preferences\Renderer\Shadow Type (default 0), only with the lights on.
+	const int shadow_type = world.lighting_enabled ? std::atoi(world.registry_string("Preferences\\Renderer\\Shadow Type").c_str()) : 0;
+	shadows_r.append(render::g_lighting);
 	const auto &light_owners = frame_lights.owners;
 	auto light_owner_of = [&](const game::GameObject *o) { return frame_lights.owner_of(o); };
 	const de::ObjectsFile *arena_file = world.data().file(arena);
@@ -366,6 +369,25 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (const game::Pilot *pl = game::pilot_of(a)) fi->renderer.set_paint(pl->colours);
 			fi->renderer.draw(vp, eye, body, st);
 		}
+		// The robots' shadows from this frame's poses (they project in the next frame's light passes).
+		std::vector<render::ShadowRenderer::Caster> casters;
+		if (shadow_type > 0) {
+			for (auto *fi : fighters) {
+				if (!fi->actor->spawned) continue;
+				const void *owner = light_owner_of(fi->actor);
+				for (auto &[aff, own] : frame_lights.render_affectors) {
+					if (own != fi->actor || aff->shape != game::GameObject::Shape::Sphere) continue;
+					render::ShadowRenderer::Caster c;
+					c.owner = owner;
+					c.centre = aff->world().t;
+					c.radius = aff->falloff;
+					c.draw = [fi](GLuint) { fi->renderer.draw_flat(); };
+					casters.push_back(c);
+					break;
+				}
+			}
+		}
+		shadows_r.update(shadow_type, casters, render::g_lighting, view, 70.5f);
 	}
 	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye);
 	overlay.draw_world(world, vp);

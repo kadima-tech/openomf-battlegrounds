@@ -555,7 +555,7 @@ private:
 			check("Glow", "Preferences\\Renderer\\Glow Enabled", true);
 			check("Bump Mapping", "Preferences\\Renderer\\Bump Mapping Enabled", true);
 			check("High Detail Geometry", "Preferences\\Renderer\\High Quality Geometry Enabled", true);
-			choice("Shadows", "Preferences\\Renderer\\Shadow Type", {"None", "Low Quality", "Medium Quality", "High Quality"}, 3);
+			choice("Shadows", "Preferences\\Renderer\\Shadow Type", {"None", "Low Quality", "Medium Quality", "High Quality"}, 0);
 			choice("Resolutions", "Preferences\\Renderer\\Resolution", {"640 x 480", "800 x 600", "1024 x 768", "1280 x 960", "1600 x 1200"}, 2);
 			check("Full Screen", "Preferences\\Renderer\\Full Screen", false);
 			note_ = "Resolution and bit depth changes will take effect next time you start the game.";

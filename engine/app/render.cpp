@@ -736,6 +736,8 @@ void draw_splashes(GLuint prog, const std::vector<MeshBatch> &batches) {
 		glUniformMatrix3fv(glGetUniformLocation(prog, "splash_axes"), 1, GL_TRUE, l.frame.r.data());
 		for (auto &b : batches) {
 			if (b.lighting != 2 || (l.reaches_all && l.position_static && b.position_static) || !l.lights(b.light_owner)) continue;
+			// A darkening projector multiplies each touched polygon once, not once per material pass.
+			if (blend == 2 && b.overlay) continue;
 			bool overlaps = true;
 			for (int k = 0; k < 3; ++k) overlaps = overlaps && l.pos[size_t(k)] + l.outer >= b.bmin[k] && l.pos[size_t(k)] - l.outer <= b.bmax[k];
 			if (!overlaps) continue;
@@ -1336,6 +1338,18 @@ void upload_vertices(std::vector<MeshBatch> &batches, const de::Mesh &mesh, cons
 }
 
 }  // namespace
+
+void FighterRenderer::draw_flat() const {
+	auto draw = [](const std::vector<MeshBatch> &batches) {
+		for (const MeshBatch &b : batches) {
+			glBindVertexArray(b.vao);
+			glDrawArrays(GL_TRIANGLES, 0, b.count);
+		}
+	};
+	draw(batches_);
+	for (const Attachment &at : attachments_) draw(at.batches);
+	glBindVertexArray(0);
+}
 
 void FighterRenderer::draw_pose(const float *vp, const float *eye, const de::Transform &world, const std::vector<de::Transform> *posep) {
 	std::vector<std::array<float, 3>> pos =

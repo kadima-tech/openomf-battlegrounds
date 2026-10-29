@@ -15,6 +15,7 @@
 #include "overlay.h"
 #include "particles_gl.h"
 #include "render.h"
+#include "shadows.h"
 
 namespace app {
 
@@ -64,6 +65,7 @@ public:
 	render::ArenaRenderer arena_r;
 	render::OverlayRenderer overlay;
 	render::ParticleRenderer particles_r;
+	render::ShadowRenderer shadows_r;
 	render::GlowRenderer glow_r;
 	render::ActorMeshRenderer actors_r;
 

@@ -115,7 +115,9 @@ add_executable(pcc tools/pcc.cpp)
 target_link_libraries(pcc PRIVATE vm)
 add_executable(openbg-brain tools/brain.cpp)
 target_link_libraries(openbg-brain PRIVATE vm)
-add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
+add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp
+	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg-fight PRIVATE game dmusic SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
-add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
+add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
+	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg PRIVATE game dmusic SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
