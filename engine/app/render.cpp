@@ -315,9 +315,12 @@ GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint>
 		if (!img.channels.empty()) {
 			auto px = img.rgba();
 			t = glu::texture_rgba(img.width, img.height, px.data());
+			if (const char *dir = getenv("OPENBG_DUMP_TEXTURES")) glu::write_png((std::string(dir) + "/" + r.info().name + ".png").c_str(), img.width, img.height, px, false);
 		}
-	} catch (const std::exception &) {
+	} catch (const std::exception &e) {
+		if (getenv("OPENBG_DEBUG_TEXTURES")) fprintf(stderr, "[texture] %s (%s): %s\n", r.info().name.c_str(), r.info().class_path.c_str(), e.what());
 	}
+	if (!t && getenv("OPENBG_DEBUG_TEXTURES")) fprintf(stderr, "[texture] %s (%s): no texture\n", r.info().name.c_str(), r.info().class_path.c_str());
 	return textures_[k] = t;
 }
 
@@ -495,6 +498,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 				for (auto *l : p) {
 					fprintf(stderr, " %s(%s m%d c%.2f,%.2f,%.2f,%.2f%s)", l->name.c_str(), l->environment ? (l->cube ? l->cube.info().name.c_str() : "env") : l->image ? l->image.info().name.c_str() : "-", l->mode,
 					        l->colour[0], l->colour[1], l->colour[2], l->colour[3], l->corner_colours.empty() ? "" : " vcol");
+					if (!l->environment && image_has_alpha(l->image)) fprintf(stderr, "[A]");
 				}
 			}
 			fprintf(stderr, "\n");
@@ -1000,7 +1004,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				return texture_of(textures_, r);
 			};
 			try {
-				for (auto &m : de::actor_meshes(data, a.actor)) {
+				for (auto &m : de::actor_meshes(data, a.actor, false)) {
 					auto mesh = de::read_mesh(*m.file, m.info());
 					auto materials = de::read_materials(data, m);
 					if (image_of) {

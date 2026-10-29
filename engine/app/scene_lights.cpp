@@ -35,8 +35,11 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 			if (in_scene_layer && !in_scene_layer(o)) continue;
 			if (o->class_path == "Light" && o->file && game::in_scene(*o) && o->parent) placed.emplace_back(de::ObjectRef{o->file, o->index}, o, o->parent);
 			if ((o->shape == game::GameObject::Shape::Sphere || o->shape == game::GameObject::Shape::Cone) && o->file && game::in_scene(*o)) {
+				// A particle's light is its Light child (with the particle's own intensity and colour),
+				// not the property it was made from as well.
+				bool has_child_light = std::any_of(o->children.begin(), o->children.end(), [](const game::GameObject *c) { return c->class_path == "Light"; });
 				for (const de::ObjectRef &p : world.properties_of(*o)) {
-					if (p && p.info().class_path == "Light") placed.emplace_back(p, nullptr, o);
+					if (p && p.info().class_path == "Light" && !has_child_light) placed.emplace_back(p, nullptr, o);
 				}
 			}
 		}
@@ -49,6 +52,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 			const de::LightInfo &info = *it->second;
 			SceneLight l;
 			l.frame = aff->world();
+			l.name = aff->name + "/" + lref.info().name + (o ? "" : " (property)") + " under " + (aff->parent ? aff->parent->name : "-");
 			l.position_static = game::position_static(*aff);
 			l.pos = l.frame.t;
 			if (aff->shape == game::GameObject::Shape::Sphere) {
@@ -91,6 +95,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 				fprintf(stderr, "  %s at %.0f %.0f %.0f r %.0f..%.0f colour %.2f %.2f %.2f x %.2f mask %x%s blend %d, reaches", l.shape ? "cone" : "sphere", l.pos[0], l.pos[1],
 				        l.pos[2], l.inner, l.outer, l.colour[0], l.colour[1], l.colour[2], l.intensity, l.mask, l.image ? " own image" : "", l.blend);
 				if (l.position_static) fprintf(stderr, " static");
+				fprintf(stderr, " [%s]", l.name.c_str());
 				for (const void *ow : l.reaches) fprintf(stderr, " %s", static_cast<const game::GameObject *>(ow)->name.c_str());
 				fprintf(stderr, "\n");
 			}

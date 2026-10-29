@@ -360,12 +360,12 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 	return out;
 }
 
-std::vector<ObjectRef> actor_meshes(const World &w, const ObjectRef &actor) {
+std::vector<ObjectRef> actor_meshes(const World &w, const ObjectRef &actor, bool children) {
 	std::vector<ObjectRef> meshes;
 	const ObjectsFile &file = *actor.file;
 	const auto &objs = file.objects();
 	for (uint32_t c : ObjectsFile::children(file.object_data(objs[actor.index]))) {
-		if (objs[c].class_path == "Mesh\\Standard") meshes.push_back({&file, c});
+		if (children && objs[c].class_path == "Mesh\\Standard") meshes.push_back({&file, c});
 	}
 	for (auto &ref : actor_components(file.object_data(objs[actor.index]))) {
 		ObjectRef m = w.resolve(file, ref);
@@ -432,12 +432,9 @@ std::vector<DrawItem> collect_scene(const World &w, const ObjectsFile &file) {
 		if (!is_actor_class(objs[i].class_path) || hidden(i)) {
 			continue;
 		}
+		// DE_CD3DRenderActor::GetValidActorType: an actor draws the meshes among its components
+		// (+0x20); a mesh that is only a child (a mesh affector's collision shape) is not drawn.
 		std::vector<ObjectRef> meshes;
-		for (uint32_t c : ObjectsFile::children(file.object_data(objs[i]))) {
-			if (objs[c].class_path == "Mesh\\Standard") {
-				meshes.push_back({&file, c});
-			}
-		}
 		for (auto &ref : actor_components(file.object_data(objs[i]))) {
 			ObjectRef m = w.resolve(file, ref);
 			if (m && m.info().class_path == "Mesh\\Standard") {

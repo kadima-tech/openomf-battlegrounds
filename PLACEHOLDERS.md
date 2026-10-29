@@ -47,7 +47,6 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 
 | What | Kind | Notes |
 |---|---|---|
-| Blade Pit's look | Open | The arena renders washed out, nearly white (standalone and in the front end alike): its lighting or glow passes are off. |
 | Blade Pit's blades during the warm-up | Open | The spinning blades (BSpinningBlade, always live by design) cut an idle fighter to death during "Prepare To Fight" (standalone and tournament alike), so either the spawn points or the blades' collision are placed wrongly. The North American Open's first match is in the Blade Pit. |
 | `CSession::IsSinglePlayer` | Fixed answer | Always true; the original reads the session info's +0xdc (FINDINGS 127). Matters only for multiplayer. |
 | Main menu theme's lead timbre | Open | Reported as choppy / a different instrument sound than in the game, with the right notes. Checked and faithful: the band (every channel a DLS instrument from "!theme dls", none falling back to GM), the instruments' loops and articulations, voice allocation (no steals; 29 voices at most), the synth's 22050 Hz default (InitAudio passes no audio parameters), the mix loop, LFO routing, tempo (135 BPM) and note scheduling. The soundtrack MP3s are studio mixes, so they cannot settle timbre; a recording of the original game's menu would. |

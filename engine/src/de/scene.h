@@ -179,8 +179,9 @@ struct DrawItem {
 // The TextureProcess\\MultiStage materials under a mesh object, with their stages' UVs and images.
 std::vector<Material> read_materials(const World &w, const ObjectRef &mesh);
 
-// The Mesh\\Standard objects an actor draws: its mesh children and mesh components.
-std::vector<ObjectRef> actor_meshes(const World &w, const ObjectRef &actor);
+// The Mesh\\Standard objects of an actor: its mesh children (unless `children` is false) and its
+// mesh components. Only the components are drawn (DE_CD3DRenderActor::GetValidActorType).
+std::vector<ObjectRef> actor_meshes(const World &w, const ObjectRef &actor, bool children = true);
 
 // Every mesh drawn by the actors under `root_file` (all actors in that file).
 std::vector<DrawItem> collect_scene(const World &w, const ObjectsFile &root_file);

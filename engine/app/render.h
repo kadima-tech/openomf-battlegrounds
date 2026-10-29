@@ -96,6 +96,7 @@ struct SceneLight {
 	GLuint image = 0;
 	int blend = 0;
 	bool has_image = false;  // a sphere light with one gets no projector pass
+	std::string name;        // debugging: its affector / light
 };
 struct Lighting {
 	std::array<float, 3> ambient{0.3f, 0.3f, 0.3f};  // the environment's ambient (de::read_ambient)
