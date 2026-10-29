@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "vm/compiler.h"
 #include "vm/disasm.h"
 
 namespace game {
@@ -625,13 +626,25 @@ GameObject *World::instantiate_file(const std::string &stem) {
 Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, const std::string &entry) {
 	auto d = cls_obj.file->object_data(cls_obj.info());
 	auto vmc2 = cls_obj.file->ex_payload(d, "VMC2");
-	if (!vmc2) {
-		throw std::runtime_error("class " + cls_obj.info().name + " has no compiled VMCode");
+	auto behavior_refs = vm::class_behavior_refs(d.references);
+	vm::VMClass code;
+	if (vmc2) {
+		code = vm::VMClass::parse(vmc2->data, behavior_refs.size());
+	} else {
+		// DE_CClass::PrepareForExecution compiles a class shipped without VMC2 from its sources.
+		auto key = std::make_pair(cls_obj.file, cls_obj.index);
+		auto it = compiled_classes_.find(key);
+		if (it == compiled_classes_.end()) {
+			std::vector<std::string> notes;
+			vm::VMClass compiled = vm::compile_class(data_, cls_obj, &notes);
+			for (auto &n : notes) log.push_back("compiler: " + n);
+			it = compiled_classes_.emplace(key, std::move(compiled)).first;
+		}
+		code = it->second;
 	}
 	auto b = std::make_unique<Brain>();
 	b->owner = owner;
-	auto behavior_refs = vm::class_behavior_refs(d.references);
-	vm::load_class(b->cls, mem_, d.contents, vm::VMClass::parse(vmc2->data, behavior_refs.size()));
+	vm::load_class(b->cls, mem_, d.contents, std::move(code));
 	// The class's behaviors (Behavior objects, possibly in other files) and their global IDs.
 	for (auto &r : behavior_refs) {
 		de::ObjectRef br = data_.resolve(*cls_obj.file, r);
@@ -696,10 +709,13 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 				extent = std::max(extent, uint32_t(ins.args[0] + ins.args[2]));
 			} else if (ins.opcode == 66 && ins.args.size() >= 3) {
 				extent = std::max(extent, uint32_t(ins.args[1] + ins.args[2]));
-			} else if (ins.opcode >= 53 && ins.opcode <= 59 && !ins.args.empty()) {
+			} else if (((ins.opcode >= 53 && ins.opcode <= 59) || ins.opcode == 27 || ins.opcode == 29) && !ins.args.empty()) {
 				extent = std::max(extent, uint32_t(ins.args[0] + 4));
 			}
 		}
+	}
+	for (auto &beh : b->cls.code.behaviors) {
+		for (auto &ci : beh.instances) extent = std::max(extent, ci.value + 4);
 	}
 	b->inst.cls = &b->cls;
 	b->inst.members_size = extent + 64;

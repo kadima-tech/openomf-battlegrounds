@@ -51,6 +51,8 @@ void read_method(Contents &c, PCodeElement &e) {
 	}
 	e.name = block_text(c);
 	e.source = block_text(c);
+	if (c.pos() < ch.end) e.virtual_ = c.u8() == 0;
+	if (c.pos() < ch.end) e.excluded = c.u8() != 0;
 	c.seek(ch.end);
 }
 

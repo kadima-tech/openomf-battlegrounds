@@ -454,6 +454,8 @@ public:
 		[](const std::array<float, 3> &, const std::array<float, 3> &) { return false; };
 	const std::map<std::string, uint64_t> &missing() const { return missing_; }
 	std::vector<std::string> log;
+	// Classes compiled from source (no VMC2), by Class object.
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, vm::VMClass> compiled_classes_;
 
 	// --- Session support (session.cpp) ---
 	// Every live session (a single-player tournament's master and the sub-session of its current

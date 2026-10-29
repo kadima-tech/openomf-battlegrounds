@@ -17,7 +17,9 @@ struct PCodeElement {
 	Type type;
 	std::string name;
 	std::string source;
-	uint32_t method_id = 0;  // Method v9: leading u32 (+0x54)
+	uint32_t method_id = 0;  // Method v9: leading u32 (+0x54): 0 a state, 1 instant, 2+ not compiled
+	bool virtual_ = false;   // Method: the byte after the source is 0
+	bool excluded = false;   // Method: the next byte is set (Templates, Setup: not compiled, nor their children)
 	int32_t link = -1;       // trailing per-element index: parent element (nesting), -1 = top level
 	std::vector<std::string> globals;  // Global v2+: entry names
 };

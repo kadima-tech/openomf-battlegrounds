@@ -59,6 +59,8 @@ Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space
 - `app/viewer.cpp` (`openbg-viewer`): native SDL2/OpenGL fighter viewer with pilot recolouring and skeletal animation:
   `engine/build/openbg-viewer --data source/extracted/App_Executables/Data --fighter Jaguar --anim LeftMediumPunch`
   (Left/Right cycles through the fighter's moves; `--list` prints them; Space pauses.)
+- `tools/pcc.cpp` (`pcc`): compiles a Class from its behaviors' sources (`vm/compiler.cpp`, for the classes the game ships without bytecode) and prints the code next to the shipped VMC2 where there is one:
+  `engine/build/pcc source/extracted/App_Executables/Data SinglePlayer PSubSession 1`.
 - `app/arena.cpp` (`openbg-arena`): native arena fly-through:
   `engine/build/openbg-arena source/extracted/App_Executables/Data Desert` (WASD/QE, drag to look), drawn with
   the fight's renderer (materials, the arena's lights, reflections, glow).

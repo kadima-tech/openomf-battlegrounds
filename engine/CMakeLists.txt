@@ -63,6 +63,8 @@ add_library(vm STATIC
 	src/vm/memory.cpp
 	src/vm/script.cpp
 	src/vm/executor.cpp
+	src/vm/pcode_parser.cpp
+	src/vm/compiler.cpp
 )
 target_link_libraries(vm PUBLIC de)
 
@@ -108,6 +110,8 @@ add_executable(openbg-viewer app/viewer.cpp)
 target_link_libraries(openbg-viewer PRIVATE de SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg-arena app/arena.cpp app/render.cpp app/glow.cpp)
 target_link_libraries(openbg-arena PRIVATE de SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
+add_executable(pcc tools/pcc.cpp)
+target_link_libraries(pcc PRIVATE vm)
 add_executable(openbg-brain tools/brain.cpp)
 target_link_libraries(openbg-brain PRIVATE vm)
 add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
