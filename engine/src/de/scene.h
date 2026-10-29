@@ -101,9 +101,9 @@ struct ActorInfo {
 	uint32_t flags = 6;
 };
 // The detail level (the registry's high-detail BOOL, default 1, global 0x7035dec0).
-constexpr bool kHighDetail = true;
+inline bool g_high_detail = true;
 // DE_CActor::ObjPrepare: an actor without its detail level's flag is left out of the scene.
-inline bool shown_at_detail(uint32_t flags) { return (flags & (kHighDetail ? 4u : 2u)) != 0; }
+inline bool shown_at_detail(uint32_t flags) { return (flags & (g_high_detail ? 4u : 2u)) != 0; }
 // Throws FormatError when the object's first contents chunk is not an actor chunk.
 ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o);
 

@@ -711,7 +711,7 @@ public:
 	}
 	void draw(AppManager &, std::vector<DrawItem> &out) override {
 		if (!list_ || !window_) return;
-		const float white[4] = {1, 1, 1, 1}, dim[4] = {0.75f, 0.8f, 0.85f, 1}, hilite[4] = {0.55f, 0.75f, 0.9f, 0.35f};
+		const float white[4] = {1, 1, 1, 1}, dim[4] = {0.75f, 0.8f, 0.85f, 1}, hilite[4] = {0, 0, 0.5f, 1};
 		auto text = [&](float x, float y, const std::string &s, float size, const float *c, bool centred = false) {
 			DrawItem t;
 			t.kind = DrawItem::Text;
@@ -993,7 +993,11 @@ private:
 }  // namespace
 
 namespace {
-constexpr float kRow = 20.0f / 600.0f, kListText = 16.0f / 600.0f;  // DE_CListControl3dEx entry height 0x14
+// DE_CListControl3dEx: entries at least 0x14 screen pixels (SetMinEntrySize; the references are at
+// 1024x768), the text as tall as the launcher's SizeListControlEntryText gives (measured).
+constexpr float kRow = 20.0f / 768.0f, kListText = 19.0f / 768.0f;
+// ColorSelectedItem: the system highlight (classic Windows navy, as in the references).
+constexpr float kSelected[4] = {0, 0, 0.5f, 1};
 }
 
 bool DescriptionSelector::begin(AppManager &app) {
@@ -1056,7 +1060,7 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 // The robot's ProcessSelectedObjects (0x701e5370): Next reads "Locked" for a locked one.
 int DescriptionSelector::visible_rows() const {
 	if (!list_) return 0;
-	return std::max(1, int((list_->bottom - list_->top - 0.01f) / kRow - 1.5f));
+	return std::max(1, int((list_->bottom - list_->top - 0.02f) / kRow));
 }
 
 // The list control (DE_CListControl3dEx) scrolls to keep the selection in view.
@@ -1107,15 +1111,11 @@ void DescriptionSelector::click(AppManager &app, Control &c) {
 
 void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 	if (!list_ || !window_) return;
-	const float white[4] = {1, 1, 1, 1}, hilite[4] = {0.55f, 0.75f, 0.9f, 0.35f};
+	const float white[4] = {1, 1, 1, 1};
+	const float *hilite = kSelected;
 	float pad = 0.01f;
-	DrawItem t;
-	t.kind = DrawItem::Text;
-	t.x0 = (list_->left + list_->right) / 2, t.y0 = list_->top + pad + kRow / 2, t.size = kListText * 1.15f, t.centered = true, t.text = title;
-	std::copy(white, white + 4, t.rgba);
-	out.push_back(t);
 	for (size_t i = size_t(std::max(0, scroll_)); i < entries_.size(); ++i) {
-		float y = list_->top + pad + kRow * (float(i) - float(scroll_) + 1.5f);
+		float y = list_->top + pad + kRow * (float(i) - float(scroll_));
 		if (y + kRow > list_->bottom) break;
 		if (int(i) == selected_) {
 			DrawItem r;
@@ -1152,34 +1152,36 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 		const de::ObjectRef &d = entries_[size_t(selected_)];
 		float wx0 = window_->left + 2 * pad, wx1 = window_->right - 2 * pad, wy0 = window_->top + 2 * pad, wy1 = window_->bottom - 2 * pad;
 		float w = wx1 - wx0, h = wy1 - wy0;
+		// The name across the top 0.08, centred.
 		DrawItem n;
 		n.kind = DrawItem::Text;
-		n.x0 = wx0 + 0.01f * w, n.y0 = wy0 + 0.04f * h, n.size = 20.0f / 600.0f, n.text = d.info().name;
+		n.x0 = (wx0 + wx1) / 2, n.y0 = wy0 + 0.04f * h, n.size = 20.0f / 600.0f, n.text = d.info().name, n.centered = true;
 		out.push_back(n);
+		// The photo (0.1..0.65 down, to 0.58 across) in a down frame.
 		if (de::ObjectRef photo = pilot_photo(app.world.data(), d)) {
 			const float frame[4] = {0.55f, 0.75f, 0.9f, 0.8f};
 			DrawItem f;
-			f.x0 = wx0 + 0.01f * w - 0.003f, f.x1 = wx0 + 0.58f * w + 0.003f, f.y0 = wy0 + 0.1f * h - 0.004f, f.y1 = wy0 + 0.65f * h + 0.004f;
+			f.x0 = wx0 - 0.003f, f.x1 = wx0 + 0.58f * w + 0.003f, f.y0 = wy0 + 0.1f * h - 0.004f, f.y1 = wy0 + 0.65f * h + 0.004f;
 			std::copy(frame, frame + 4, f.rgba);
 			out.push_back(f);
 			DrawItem im;
 			im.kind = DrawItem::Image;
-			im.x0 = wx0 + 0.01f * w, im.x1 = wx0 + 0.58f * w, im.y0 = wy0 + 0.1f * h, im.y1 = wy0 + 0.65f * h, im.image = photo;
+			im.x0 = wx0, im.x1 = wx0 + 0.58f * w, im.y0 = wy0 + 0.1f * h, im.y1 = wy0 + 0.65f * h, im.image = photo;
 			out.push_back(im);
 		}
 		auto res = passive_references(app.world.data(), d);
 		std::optional<Pilot> pl = res.empty() ? std::nullopt : read_pilot(*res[0].file, res[0].info(), 0);
+		// Beside the photo (its row, 0.1..0.65), from 0.6 across: down to 0.73 of the row four
+		// DE_CPilotStatsRobot rows (OMF 0x350510b0: the stat's icon tinted (0.5, 1, 1) on the left
+		// quarter, its name over the top half of the rest, a (0.2, 0.3, 0.3) down frame holding a
+		// (0.2, 0.5, 0.5) well filled (0.5, 1, 1) by stat / 100); below, "Colors" over the pilot's
+		// three colours (from 0.32 of that part), each in an up frame.
+		float x0 = wx0 + 0.6f * w, x1 = wx1, top = wy0 + 0.1f * h, rh = 0.55f * h, row = 0.73f * rh / 4;
 		if (pl) {
-			// A vertical bar of four rows from 0.6 across, down to 0.73 (SetupVerticalBar), each a
-			// DE_CPilotStatsRobot (OMF 0x350510b0): the stat's icon (OMFHelp's images) on the left
-			// quarter, its name (10 virtual pixels) over the top half of the rest, and below it a
-			// down frame (0.2, 0.3, 0.3) holding a (0.2, 0.5, 0.5) well filled (0.5, 1, 1) by
-			// stat / 100.
 			const char *names[4] = {"Power", "Agility", "Endurance", "Focus"};
 			const char *icons[4] = {"Strength", "Agility", "Endurance", "Focus"};
 			float vals[4] = {pl->stats.power, pl->stats.agility, pl->stats.endurance, pl->stats.focus};
 			const de::ObjectsFile *help = app.world.data().file("OMFHelp");
-			float x0 = wx0 + 0.6f * w, x1 = wx1, top = wy0 + 0.1f * h, row = (0.73f - 0.1f) * h / 4;
 			for (int k = 0; k < 4; ++k) {
 				float y = top + row * float(k), xi = x0 + 0.25f * (x1 - x0);
 				if (help) {
@@ -1191,6 +1193,8 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 						im.kind = DrawItem::Image;
 						im.x0 = x0 + (xi - x0 - side) / 2, im.x1 = im.x0 + side;
 						im.y0 = y + (row - side) / 2, im.y1 = im.y0 + side, im.image = {help, i};
+						const float tint[4] = {0.5f, 1, 1, 1};
+						std::copy(tint, tint + 4, im.rgba);
 						out.push_back(im);
 						break;
 					}
@@ -1213,6 +1217,53 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 				out.push_back(well);
 				out.push_back(fill);
 			}
+			float y = top + 0.73f * rh, ch = 0.27f * rh;
+			DrawItem c;
+			c.kind = DrawItem::Text;
+			c.x0 = (x0 + x1) / 2, c.y0 = y + ch * 0.16f, c.size = 10.0f / 600.0f * 1.6f, c.text = "Colors", c.centered = true;
+			out.push_back(c);
+			float gap = 4.0f / 800.0f, sw = (x1 - x0 - 2 * gap) / 3;
+			for (int k = 0; k < 3; ++k) {
+				DrawItem e, sq;
+				e.x0 = x0 + float(k) * (sw + gap), e.x1 = e.x0 + sw, e.y0 = y + ch * 0.32f, e.y1 = y + ch;
+				const float edge[4] = {0.8f, 0.8f, 0.85f, 1};
+				std::copy(edge, edge + 4, e.rgba);
+				sq = e;
+				sq.x0 += 0.002f, sq.x1 -= 0.002f, sq.y0 += 0.003f, sq.y1 -= 0.003f;
+				sq.rgba[0] = pl->colours[size_t(k)][0], sq.rgba[1] = pl->colours[size_t(k)][1], sq.rgba[2] = pl->colours[size_t(k)][2], sq.rgba[3] = 1;
+				out.push_back(e);
+				out.push_back(sq);
+			}
+		}
+		// GetPilotDescriptionText (OMF 0x35050870): its PilotDescription value ("BIO UNNAVAILABLE"
+		// when empty), centred from 0.66 down.
+		std::string bio;
+		if (GameObject *g = app.world.global_object(d)) {
+			if (auto *v = app.world.object_value(g, "PilotDescription")) bio = v->text;
+		}
+		if (bio.empty()) bio = "BIO UNNAVAILABLE";
+		float bx0 = wx0 + 0.013f * w, bx1 = wx1 - 0.013f * w, size = kListText;
+		std::vector<std::string> lines;
+		std::string line;
+		for (size_t p = 0; p <= bio.size();) {
+			size_t q = bio.find(' ', p);
+			std::string word = bio.substr(p, q == std::string::npos ? std::string::npos : q - p);
+			std::string test = line.empty() ? word : line + " " + word;
+			if (!line.empty() && app.text_width && app.text_width(test, size) > bx1 - bx0) {
+				lines.push_back(line);
+				line = word;
+			} else {
+				line = test;
+			}
+			if (q == std::string::npos) break;
+			p = q + 1;
+		}
+		if (!line.empty()) lines.push_back(line);
+		for (size_t i = 0; i < lines.size(); ++i) {
+			DrawItem t;
+			t.kind = DrawItem::Text;
+			t.x0 = (bx0 + bx1) / 2, t.y0 = wy0 + 0.69f * h + float(i) * size * 1.45f, t.size = size, t.text = lines[i], t.centered = true;
+			out.push_back(t);
 		}
 	} else if (selected_ >= 0) {
 		DescriptionInfo info = read_description(app.world.data(), entries_[size_t(selected_)]);
@@ -1232,7 +1283,7 @@ bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
 	}
 	if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
 	float pad = 0.01f;
-	int row = int(std::floor((y - list_->top - pad) / kRow - 1.5f)) + scroll_;
+	int row = int(std::floor((y - list_->top - pad) / kRow)) + scroll_;
 	if (row < 0 || row >= int(entries_.size())) return true;
 	select(app, row);
 	if (what == 3 && next_) click(app, *next_);
@@ -1512,6 +1563,7 @@ void AppManager::apply_settings() {
 	world.sfx_volume = f("Audio\\SFX Volume", 1.0f);
 	world.glow_enabled = b("Preferences\\Renderer\\Glow Enabled", true);
 	world.lighting_enabled = b("Preferences\\Renderer\\Lighting Enabled", true);
+	de::g_high_detail = b("Preferences\\Renderer\\High Quality Geometry Enabled", true);
 	// DE_COMF2Manager::Activate: registry "AI Difficulty" (default 0, Rookie).
 	world.ai_difficulty = int(f("AI Difficulty", 0));
 }

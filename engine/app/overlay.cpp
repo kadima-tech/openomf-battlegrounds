@@ -341,7 +341,7 @@ void OverlayRenderer::label(const std::string &str, float x, float y, float size
 	end_screen();
 }
 
-void OverlayRenderer::image_rect(const de::ObjectRef &img, float x0, float y0, float x1, float y1, int width, int height) {
+void OverlayRenderer::image_rect(const de::ObjectRef &img, float x0, float y0, float x1, float y1, int width, int height, const float *tint) {
 	if (!prog_ || !img) return;
 	GLuint tex = image(img.file, img.index);
 	if (!tex) return;
@@ -349,7 +349,7 @@ void OverlayRenderer::image_rect(const de::ObjectRef &img, float x0, float y0, f
 	glBindTexture(GL_TEXTURE_2D, tex);
 	glUniform1i(glGetUniformLocation(prog_, "mode"), 0);
 	const float white[4] = {1, 1, 1, 1};
-	quad(x0, 1 - y1, x1, 1 - y0, 0, 1, 1, 0, white);
+	quad(x0, 1 - y1, x1, 1 - y0, 0, 1, 1, 0, tint ? tint : white);
 	end_screen();
 }
 

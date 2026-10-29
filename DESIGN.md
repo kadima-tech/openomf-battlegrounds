@@ -20,6 +20,12 @@ to present that data, and the few places where the look is our own.
   and they slide open (500 ms). The main frame shows on every page except the main menu and in-game
   menus. The doors cover everything on the page, its text, images and bars included; only
   notifications draw over them.
+- **Lists (description selectors, Replays).** Rows 20 screen pixels at 768 high, names 19 high, white;
+  the selection a solid navy bar (0, 0, 0.5), Windows' classic highlight as the original shows it;
+  locked entries grey. No title above the list.
+- **Pilot panel.** The name centred at the top; the photo (to 0.58 across) in a pale frame; beside it
+  four stat rows (icon tinted (0.5, 1, 1), name, a teal well filled cyan) and "Colors" over the
+  pilot's three colour swatches; the biography centred below.
 - **Model picker (Choose Creature's View).** The page's own 3D scene, `LoadScene`'s hangar
   (`ChooseFighterModelPickerEnvironment`), fills the 4:3 field through its `EnvironmentCamera`, the
   robot on `RobotPedistal` in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:

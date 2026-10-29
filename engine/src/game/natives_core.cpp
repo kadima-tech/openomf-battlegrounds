@@ -491,7 +491,7 @@ void register_core_natives(World &w) {
 	});
 	// IsHighDetailGeometryCaller (Core 0x70045a60): the detail level; ShouldBeInactiveCaller
 	// (0x7008e700): the actor lacks its flag for that level (+0x110: 2 low, 4 high).
-	reg("CObject::bool IsHighDetailGeometry()", [](const NativeContext &c) { c.ret_bool(de::kHighDetail); });
+	reg("CObject::bool IsHighDetailGeometry()", [](const NativeContext &c) { c.ret_bool(de::g_high_detail); });
 	reg("CActor::bool ShouldBeInactive()", [](const NativeContext &c) {
 		GameObject *o = c.self();
 		c.ret_bool(o && !de::shown_at_detail(o->actor_flags));

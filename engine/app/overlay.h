@@ -29,7 +29,7 @@ public:
 	void rect(float x0, float y0, float x1, float y1, const float *rgba, int width, int height);
 	// centred on x, or starting there.
 	void label(const std::string &text, float x, float y, float size, const float *rgba, int width, int height, bool centered = true);
-	void image_rect(const de::ObjectRef &image, float x0, float y0, float x1, float y1, int width, int height);
+	void image_rect(const de::ObjectRef &image, float x0, float y0, float x1, float y1, int width, int height, const float *tint = nullptr);
 	// The width of a label, in screen widths.
 	float text_width(const std::string &text, float size, int width, int height);
 
