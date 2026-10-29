@@ -16,23 +16,23 @@ void main() {
 }
 )";
 
-// SuperSampleForGlow: per pass the 8-tap average ("Color*=(1.0/8.0)/1.0") of taps on a circle of
-// `radius` (45 degrees apart; the second ring turned by half a step), saturated, the passes added.
+// SuperSampleForGlow (0x200283b0): five additive passes of the 8-tap average ("Color*=(1.0/8.0)/1.0"),
+// the first at radius 0, the other four at `radius` with taps at 45..360 degrees, each saturated.
 const char *kSuperFS = R"(#version 410 core
 in vec2 v_uv;
 uniform sampler2D src;
 uniform float radius;
 out vec4 color;
-vec3 ring(float r, float turn) {
+vec3 ring(float r) {
 	vec3 c = vec3(0.0);
-	for (int k = 0; k < 8; ++k) {
-		float a = (float(k) + turn) * 0.785398;
+	for (int k = 1; k <= 8; ++k) {
+		float a = float(k) * 0.785398;
 		c += texture(src, v_uv + r * vec2(sin(a), cos(a))).rgb;
 	}
 	return clamp(c / 8.0, 0.0, 1.0);
 }
 void main() {
-	color = vec4(clamp(ring(0.0, 0.0) + ring(radius, 0.0) + ring(radius, 0.5), 0.0, 1.0), 1.0);
+	color = vec4(clamp(ring(0.0) + 4.0 * ring(radius), 0.0, 1.0), 1.0);
 }
 )";
 

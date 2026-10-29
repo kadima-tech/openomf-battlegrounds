@@ -1,7 +1,7 @@
 // The glow layer (DE_CRendererDirect3D::UpdateGlowMaps 0x20026ce0, DrawGlow 0x20028870): the
 // shaders of layer 9 (GlowFactor / SpecularFactor passes) are drawn into a 256x256 target with
-// its own depth (SetupGlowRenderTarget), spread by SuperSampleForGlow (three additive passes of
-// the 8-tap average, radius 0 then 2 texels), reduced 4x4 twice (Downsample4x4: 64x64, 16x16;
+// its own depth (SetupGlowRenderTarget), spread by SuperSampleForGlow (five additive passes of
+// the 8-tap average, radius 0 then four at 2 texels), reduced 4x4 twice (Downsample4x4: 64x64, 16x16;
 // the high-quality glow) and added over the frame by the 8-sample composite (sum / 6 - 0.05) at
 // the taps DrawGlow sets: four axial and four diagonal from the 256 target, then four each from
 // the 64 and 16 ones at twice and three times the spread. The pixel shaders are the HLSL the

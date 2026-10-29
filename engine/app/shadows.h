@@ -23,8 +23,9 @@ public:
 		std::function<void(GLuint prog)> draw;  // its posed meshes, as drawn this frame
 	};
 	// After the casters are drawn: each one's shadows from the frame's lights, and their maps.
-	// `view` is the main camera's view matrix, `fov` its full field of view (degrees).
-	void update(int type, const std::vector<Caster> &casters, const Lighting &lights, const float *view, float fov);
+	// `texture_detail` is the applied Texture Detail (0 High .. 2 Low), `view` the main camera's
+	// view matrix, `fov` its full field of view (degrees).
+	void update(int type, int texture_detail, const std::vector<Caster> &casters, const Lighting &lights, const float *view, float fov);
 	// The shadow cones, for the next frame's light list (layer 2: after the additive lights).
 	void append(Lighting &lights) const;
 	void clear() { shadows_.clear(); }

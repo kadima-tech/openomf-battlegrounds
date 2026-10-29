@@ -17,6 +17,54 @@
 
 namespace app {
 
+namespace {
+
+// DE_CPilot::UserDefinedColor (OMF 0x3504c8e0): colour 0 is the pilot's faction's colour (+0x32c,
+// DE_CFaction +0x314, its last contents chunk v1) when it has one; colours 1 and 2 its own.
+std::optional<std::array<std::array<float, 3>, 3>> paint_colours(game::World &world, game::GameObject *fighter) {
+	const game::Pilot *pl = game::pilot_of(fighter);
+	if (!pl) return std::nullopt;
+	auto colours = pl->colours;
+	for (game::GameObject *p = fighter; p; p = p->parent) {
+		if (!p->fighter) continue;
+		for (game::GameObject *ch : p->children) {
+			if (!ch->is("Actor\\Creature\\Pilot") || !ch->faction) continue;
+			game::GameObject *f = world.object(ch->faction);
+			if (!f || !f->file) break;
+			static std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::optional<std::array<float, 3>>> cache;
+			auto key = std::make_pair(f->file, f->index);
+			if (auto it = cache.find(key); it != cache.end()) {
+				if (it->second) colours[0] = *it->second;
+				break;
+			}
+			auto &slot = cache[key];
+			try {
+				de::Contents c(f->file->object_data(f->file->objects()[f->index]).contents);
+				size_t body = 0;
+				int version = -1;
+				while (c.remaining() > 1) {
+					de::Chunk k = de::begin_chunk(c);
+					if (k.end > c.size() || k.end < c.pos()) break;
+					version = k.version, body = c.pos();
+					c.seek(k.end);
+				}
+				if (version == 1) {
+					c.seek(body);
+					auto v = de::read_embedded_color(c);
+					slot = std::array<float, 3>{v.rgba[0], v.rgba[1], v.rgba[2]};
+					colours[0] = *slot;
+				}
+			} catch (const std::exception &) {
+			}
+			break;
+		}
+		break;
+	}
+	return colours;
+}
+
+}  // namespace
+
 Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats) {
 	const de::ObjectsFile *ff = world.data().file(name);
 	if (!ff) {
@@ -158,10 +206,7 @@ void GameView::init_gl() {
 		auto it = world.image_filters.find({img.file, img.index});
 		if (it == world.image_filters.end()) return std::nullopt;
 		for (game::GameObject *p = it->second; p; p = p->parent) {
-			if (p->fighter) {
-				if (const game::Pilot *pl = game::pilot_of(p)) return pl->colours;
-				break;
-			}
+			if (p->fighter) return paint_colours(world, p);
 		}
 		return std::nullopt;
 	};
@@ -440,7 +485,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 				}
 				st.attachments.push_back(as);
 			}
-			if (const game::Pilot *pl = game::pilot_of(a)) fi->renderer.set_paint(pl->colours);
+			if (auto paint = paint_colours(world, a)) fi->renderer.set_paint(*paint);
 			fi->renderer.draw(vp, eye, body, st);
 		}
 		render::set_transparent_sink(nullptr);
@@ -462,7 +507,9 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 				}
 			}
 		}
-		shadows_r.update(shadow_type, casters, render::g_lighting, view, 70.5f);
+		// Texture Detail (registry Texture Mip Map, default 1 Medium), as the options panel saved it.
+		const std::string detail = world.registry_string("Preferences\\Renderer\\Texture Mip Map");
+		shadows_r.update(shadow_type, detail.empty() ? 1 : atoi(detail.c_str()), casters, render::g_lighting, view, 70.5f);
 	}
 	if (!capture_camera) world.particles->process_trailers();
 	render::set_transparent_sink(nullptr);

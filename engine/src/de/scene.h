@@ -149,10 +149,10 @@ struct Layer {
 	float specular = 1;
 	// An environment stage's own cube (an Image\CubeEnvironment reference); else the arena's.
 	ObjectRef cube;
-	// The stage image's "Bump" child image and its "BumpFactor" (DE_CShader::CStage::SetStates,
-	// Direct3D 0x20031c60): it bends the normal the pass's reflection is taken along.
+	// The stage image's "Bump" child image, its "BumpFactor" and "RotateValue" (DE_CShader::CStage::
+	// SetStates, Direct3D 0x20031b60): the stage image's du/dv channels (6, 7) bend the reflection.
 	ObjectRef bump;
-	float bump_factor = 0;
+	float bump_factor = 0, bump_rotate = 0;
 };
 
 struct Material {

@@ -319,7 +319,8 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 				if (o.name == "Bump" && o.class_path == "Image\\Standard") {
 					layer.bump = {layer.image.file, c};
 					layer.bump_factor = child_float(w, layer.bump, "BumpFactor").value_or(0);
-					if (layer.bump_factor == 0) layer.bump = {};
+					layer.bump_rotate = child_float(w, layer.bump, "RotateValue").value_or(0);
+					if (layer.bump_factor == 0 && layer.bump_rotate == 0) layer.bump = {};
 					break;
 				}
 			}

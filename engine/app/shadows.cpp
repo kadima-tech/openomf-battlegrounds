@@ -46,7 +46,7 @@ de::Transform pointing(const V3 &pos, V3 z) {
 }  // namespace
 
 // DE_CShadowCaster::Update (0x20036540) and CShadow::DoneAddingLights (0x20036aa0).
-void ShadowRenderer::update(int type, const std::vector<Caster> &casters, const Lighting &lights, const float *view, float fov) {
+void ShadowRenderer::update(int type, int texture_detail, const std::vector<Caster> &casters, const Lighting &lights, const float *view, float fov) {
 	if (type <= 0) {
 		shadows_.clear();
 		return;
@@ -58,8 +58,9 @@ void ShadowRenderer::update(int type, const std::vector<Caster> &casters, const 
 		const float r = std::max(c.radius, 1e-3f);
 		float depth = view[2] * c.centre[0] + view[6] * c.centre[1] + view[10] * c.centre[2] + view[14];
 		depth = -depth;  // camera-space distance in front of the eye
-		// Low (1) and Medium (2): one shadow at 128 px; High (3): two at 256.
-		const int base = type == 3 ? 0 : 1, used = type == 3 ? 2 : 1;
+		// Low (1) and Medium (2): one shadow at 128 px; High (3): two at 256; Texture Detail Low one
+		// level smaller (SymbiotRenderAffectorShadowCasterInvalid 0x200358f0).
+		const int base = (type == 3 ? 0 : 1) + std::max(texture_detail - 1, 0), used = type == 3 ? 2 : 1;
 		V3 P[2] = {{0, 0, 0}, {0, 0, 0}};
 		float I[2] = {0, 0}, total = 0;
 		for (auto it = lights.lights.rbegin(); it != lights.lights.rend(); ++it) {
@@ -96,17 +97,18 @@ void ShadowRenderer::update(int type, const std::vector<Caster> &casters, const 
 			cone.colour = {1, 1, 1};
 			cone.intensity = 1;
 			cone.name = "shadow";
-			float L;
+			// The light point's distance test and the 0.6 cap come before the overhead branch.
+			V3 p = scale(P[k], 1 / I[k]);
+			V3 d = sub(p, c.centre);
+			float L = len(d);
+			if (L == 0) continue;
+			strength = std::min(strength, 0.6f);
 			if (type == 1) {
-				// Straight above, 4r up, the cone looking down.
+				// CShadow::Setup's frame, RotateX(pi / 2) of identity (+Z straight down), 4r above.
 				L = 4 * r;
-				cone.frame = pointing({c.centre[0], c.centre[1] + L, c.centre[2]}, {0, -1, 0});
+				cone.frame.t = {c.centre[0], c.centre[1] + L, c.centre[2]};
+				cone.frame.r = {1, 0, 0, 0, 0, 1, 0, -1, 0};
 			} else {
-				V3 p = scale(P[k], 1 / I[k]);
-				V3 d = sub(p, c.centre);
-				L = len(d);
-				if (L == 0) continue;
-				strength = std::min(strength, 0.6f);
 				float clamped = std::clamp(L, 3 * r, 6 * r);
 				p = {c.centre[0] + d[0] / L * clamped, c.centre[1] + d[1] / L * clamped, c.centre[2] + d[2] / L * clamped};
 				L = clamped;

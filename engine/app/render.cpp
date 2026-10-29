@@ -89,20 +89,22 @@ uniform sampler2D shadow_atten;
 uniform vec3 splash_colour;
 uniform sampler2D bumpmap;
 uniform int bump_stage;
-uniform float bump_factor;
+uniform int bump_on;
+uniform vec4 bump_matrix;
 uniform float out_scale;    // the glow layer's blend factor (GlowFactor / SpecularFactor)
 uniform float fog_density;  // the glow layer's black exponential fog (D3DFOG_EXP)
 out vec4 color;
 vec4 sample_stage(int i, vec2 uv) {
 	if (is_env[i] != 0) {
 		if (has_env == 0) return vec4(0.0);
-		// BumpNormal = tex2D(Bump, UV) x deBumpValues.x with z = 0, added to the normal.
-		vec3 n = normalize(v_normal);
-		if (bump_factor > 0.0) {
+		vec3 r = reflect(normalize(v_pos - eye), normalize(v_normal));
+		// D3DTOP_BUMPENVMAP: u += du M00 + dv M10, v += du M01 + dv M11 on the next stage's
+		// coordinates, here the world reflection vector; du/dv are V8U8, stored + 127.
+		if (bump_on != 0) {
 			vec2 buv = bump_stage == 0 ? v_uv[0] : bump_stage == 1 ? v_uv[1] : bump_stage == 2 ? v_uv[2] : v_uv[3];
-			n = normalize(n + vec3(texture(bumpmap, buv).rg * bump_factor, 0.0));
+			vec2 d = (texture(bumpmap, buv).rg * 255.0 - 127.0) / 127.0;
+			r.xy += d.x * bump_matrix.xy + d.y * bump_matrix.zw;
 		}
-		vec3 r = reflect(normalize(v_pos - eye), n);
 		return texture(env, r);
 	}
 	if (has_tex[i] == 0) return vec4(1.0);
@@ -352,6 +354,38 @@ GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint>
 
 namespace {
 
+// DE_CD3DTexture::CreateTextureFromImage (0x2001bce0) for an image with channels 6 and 7 (the du/dv
+// DE_CStandardImage::GenerateBumpUVs stores): a V8U8 texture of each byte + 0x81, kept here as
+// the unsigned bytes (decoded in the shader), mipmapped like the image.
+GLuint bump_texture(const de::ObjectRef &r) {
+	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> cache;
+	if (!r) return 0;
+	auto k = std::make_pair(r.file, r.index);
+	if (auto it = cache.find(k); it != cache.end()) return it->second;
+	GLuint t = 0;
+	try {
+		auto img = de::read_image(*r.file, r.info());
+		auto du = img.channels.find(6), dv = img.channels.find(7);
+		size_t n = size_t(img.width) * size_t(img.height);
+		if (du != img.channels.end() && dv != img.channels.end() && du->second.size() >= n && dv->second.size() >= n) {
+			std::vector<uint8_t> px(n * 2);
+			for (size_t i = 0; i < n; ++i) px[i * 2] = du->second[i], px[i * 2 + 1] = dv->second[i];
+			glGenTextures(1, &t);
+			glBindTexture(GL_TEXTURE_2D, t);
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, img.width, img.height, 0, GL_RG, GL_UNSIGNED_BYTE, px.data());
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+			if (img.mipmap) glGenerateMipmap(GL_TEXTURE_2D);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, img.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+		}
+	} catch (const std::exception &) {
+	}
+	return cache[k] = t;
+}
+
 // DE_CImage +0x44 flag 8: the image has an alpha channel (channel 3).
 bool image_has_alpha(const de::ObjectRef &r) {
 	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, bool> cache;
@@ -501,9 +535,16 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		}
 		for (size_t k = 0; k < pass.size() && k < 4; ++k) {
 			if (pass[k]->bump) {
-				bt.bump = texture(pass[k]->bump);
+				bt.bump = bump_texture(pass[k]->image);
 				bt.bump_stage = int(k);
-				bt.bump_factor = pass[k]->bump_factor;
+				// CStage::SetStates (0x20031b60): a RotateValue turns the du/dv (radians = value x 0.000723)
+				// and ignores the factor; without one the matrix is BumpFactor x identity.
+				if (float a = pass[k]->bump_rotate * 0.000723f; pass[k]->bump_rotate != 0) {
+					bt.bump_matrix[0] = std::cos(a), bt.bump_matrix[1] = -std::sin(a);
+					bt.bump_matrix[2] = std::sin(a), bt.bump_matrix[3] = std::cos(a);
+				} else {
+					bt.bump_matrix[0] = bt.bump_matrix[3] = pass[k]->bump_factor;
+				}
 				break;
 			}
 		}
@@ -715,7 +756,8 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		glActiveTexture(GL_TEXTURE6);
 		glBindTexture(GL_TEXTURE_2D, b.bump);
 		glUniform1i(glGetUniformLocation(prog, "bump_stage"), b.bump_stage);
-		glUniform1f(glGetUniformLocation(prog, "bump_factor"), b.bump ? b.bump_factor : 0.0f);
+		glUniform1i(glGetUniformLocation(prog, "bump_on"), b.bump != 0);
+		glUniform4fv(glGetUniformLocation(prog, "bump_matrix"), 1, b.bump_matrix);
 		int has_tex[4], is_env[4], mode[4], has_alpha[4];
 		for (int i = 0; i < 4; ++i) {
 			glActiveTexture(GL_TEXTURE0 + GLenum(i));
@@ -999,7 +1041,8 @@ static void draw_glow_batches(GLuint prog_, const std::vector<MeshBatch> &batche
 		}
 		c.lighting = b.lighting, c.cube = b.cube, c.specular_cube = b.specular_cube;
 		c.two_sided = b.two_sided, c.light_owner = b.light_owner, c.position_static = b.position_static;
-		c.bump = b.bump, c.bump_stage = b.bump_stage, c.bump_factor = b.bump_factor;
+		c.bump = b.bump, c.bump_stage = b.bump_stage;
+		memcpy(c.bump_matrix, b.bump_matrix, sizeof c.bump_matrix);
 		c.overlay = true;
 		g_specular_pass = specular;
 		draw_batches(prog_, one, -1, at, owner);
@@ -1076,7 +1119,7 @@ std::optional<std::array<float, 3>> ArenaRenderer::segment_point(const std::arra
 // Actors made at run time (pickups, jets, spawned props)
 
 namespace {
-de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection);
+de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection, const std::vector<de::Image> &scaled = {});
 }
 
 void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye) {
@@ -1109,7 +1152,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 						try {
 							auto img = de::read_image(*r.file, r.info());
 							if (!img.channels.empty()) {
-								auto px = paint_image(img, *p, r.info().name.rfind("ReflectionMask", 0) == 0).rgba();
+								auto px = paint_image(img, *p, r.info().name == "ReflectionMask").rgba();
 								t = glu::texture_rgba(img.width, img.height, px.data());
 							}
 						} catch (const std::exception &) {
@@ -1165,8 +1208,10 @@ namespace {
 
 // DE_COMF2FighterImageFilter::DE_CColorConversion::Update: per mask level i the colour's
 // i x c x 256, clamped to 0..65280; Filter sums the three channels' entries and shifts by 8.
-// The ReflectionMask image takes the colours lightened: normalize(c x 0.5 + 0.5).
-de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection) {
+// The image named exactly ReflectionMask takes the colours lightened: normalize(c x 0.5 + 0.5).
+// Then each RGBScaled image of the same size is added, scaled by UpdateStaticColorRemapperTable's
+// clamp(0.7 L + 0.3, 0, 1), L a weighted sum of the unlightened colours.
+de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection, const std::vector<de::Image> &scaled) {
 	FighterRenderer::Paint p = paint;
 	if (reflection) {
 		for (auto &c : p) {
@@ -1194,6 +1239,19 @@ de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint,
 		for (int k = 0; k < 3; ++k) {
 			int sum = (table[0][mask[0]][k] + table[1][mask[1]][k] + table[2][mask[2]][k]) >> 8;
 			out.channels[k][px] = uint8_t(std::min(sum, 255));
+		}
+	}
+	const float L = 0.35f * (0.7f * paint[0][0] + 0.8f * paint[0][1] + 0.5f * paint[0][2]) +
+	                0.10f * (0.7f * paint[1][0] + 0.8f * paint[1][1] + 0.5f * paint[1][2]) +
+	                0.05f * (0.7f * paint[2][0] + 0.8f * paint[2][1] + 0.5f * paint[2][2]);
+	const float gain = std::clamp(0.7f * L + 0.3f, 0.0f, 1.0f);
+	for (const de::Image &sc : scaled) {
+		if (sc.width != src.width || sc.height != src.height) continue;
+		for (int ch = 0; ch < 3; ++ch) {
+			auto it = sc.channels.find(ch);
+			if (it == sc.channels.end() || it->second.size() < r->size()) break;
+			for (size_t px = 0; px < r->size(); ++px)
+				out.channels[ch][px] = uint8_t(std::min(int(out.channels[ch][px]) + int(float(it->second[px]) * gain), 255));
 		}
 	}
 	return out;
@@ -1251,6 +1309,23 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 			load_attachments(world, f, model, mesh_index, *fighter, deform, bank_obj);
 		}
 	}
+	// DE_CCreatureModel::Setup (OMF 0x35037470): the model's descendant images named RGBScaled* join
+	// the filter's scaled list.
+	scaled_.clear();
+	if (model != SIZE_MAX) {
+		std::vector<uint32_t> todo = de::ObjectsFile::children(f.object_data(objs[model]));
+		while (!todo.empty()) {
+			uint32_t i = todo.back();
+			todo.pop_back();
+			if (objs[i].class_path == "Image\\Standard" && objs[i].name.rfind("RGBScaled", 0) == 0) {
+				try {
+					scaled_.push_back(de::read_image(f, objs[i]));
+				} catch (const std::exception &) {
+				}
+			}
+			for (uint32_t c : de::ObjectsFile::children(f.object_data(objs[i]))) todo.push_back(c);
+		}
+	}
 	prog_ = glu::program(kArenaVS, kArenaFS);
 	// Until a pilot is known: the filter's own defaults (DE_COMF2FighterImageFilter::ObjInitContents).
 	paint_ = {{{1.0f, 0.88f, 0.8f}, {0.36f, 0.56f, 0.48f}, {0.48f, 0.96f, 1.28f}}};
@@ -1281,14 +1356,14 @@ void FighterRenderer::build() {
 	auto tex = [this](const de::ObjectRef &r) -> GLuint {
 		if (!r) return 0;
 		const std::string &name = r.info().name;
-		if (name != "RGBMain" && name != "ReflectionMask") return texture_of(textures_, r);
+		if (name.rfind("RGBMain", 0) != 0 && name.rfind("ReflectionMask", 0) != 0) return texture_of(textures_, r);
 		auto k = std::make_pair(r.file, r.index);
 		if (auto it = painted_textures_.find(k); it != painted_textures_.end()) return it->second;
 		GLuint t = 0;
 		try {
 			auto img = de::read_image(*r.file, r.info());
 			if (!img.channels.empty()) {
-				auto px = paint_image(img, paint_, name == "ReflectionMask").rgba();
+				auto px = paint_image(img, paint_, name == "ReflectionMask", scaled_).rgba();
 				t = glu::texture_rgba(img.width, img.height, px.data());
 			}
 		} catch (const std::exception &) {

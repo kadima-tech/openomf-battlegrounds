@@ -65,11 +65,11 @@ struct MeshBatch {
 	float glow = 0, specular = 0;
 	// The environment stage's own cube and its specular cube (0: the arena's).
 	GLuint cube = 0, specular_cube = 0;
-	// A stage's bump image: the reflection normal + its RG x factor (in world X/Y), at that stage's
-	// coordinates (the Direct3D module's bump reflection pixel shader).
+	// D3DTOP_BUMPENVMAP: the stage image's du/dv at that stage's coordinates, times the bump matrix
+	// (00, 01, 10, 11), moves the reflection vector's world X/Y.
 	GLuint bump = 0;
 	int bump_stage = 0;
-	float bump_factor = 0;
+	float bump_matrix[4] = {0, 0, 0, 0};
 	float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
 	// Kept for meshes re-posed every frame (fighters): the vertices and their mesh vertex.
 	std::vector<BatchVertex> vertices;
@@ -180,9 +180,9 @@ private:
 };
 
 // A fighter's mesh, skin and rig (from <Name>Model1.DEObjects and <Name>.DEObjects), drawn with
-// its mesh's own materials. The paint is the fighter's ImageFilter\OMF2Fighter applied to the
-// model's "RGBMain" and "ReflectionMask" images with the pilot's three colours
-// (DE_COMF2FighterImageFilter::Filter, OMF 0x350350e0).
+// its mesh's own materials. The paint is the fighter's ImageFilter\OMF2Fighter, which
+// DE_CCreatureModel::Setup (OMF 0x35037470) gives the model's images named RGBMain* and
+// ReflectionMask*, with the pilot's three colours (DE_COMF2FighterImageFilter::Filter 0x350350e0).
 class FighterRenderer {
 public:
 	using Paint = std::array<std::array<float, 3>, 3>;
@@ -253,6 +253,7 @@ private:
 	std::array<float, 3> last_at_{0, 0, 0};
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> painted_textures_;
+	std::vector<de::Image> scaled_;  // the filter's scaled images (the model's RGBScaled*)
 	struct Attachment {
 		de::Mesh mesh;
 		std::vector<de::Material> materials;
