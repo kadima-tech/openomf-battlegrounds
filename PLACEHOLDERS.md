@@ -30,7 +30,6 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | Choose Creature | Approximation | Shown as a plain description selector: no Model combo box or View button (the 3D model picker). `ChosenModel` is null, so the fighter's default model is used. |
 | Pilot panel | Approximation | Name, photo and the four stats as bars; the stat rows' icons and `DE_CPilotStatsRobot`'s exact layout are not ported. |
 | Next button's text box | Approximation | Renders solid white in the 3D scene (the `TextBoxNext` mesh's material); not looked into yet. |
-| Main menu music | Missing | `GH_MUSIC_PLAYER_ASSURE_DEFAULT_MUSIC` to the music player is not sent. |
 | Robot, pilot, arena and score-limit choices | Stand-in | Picked up front by `openbg-fight`, the way `BSinglePlayerSubSession` does, instead of through menus. |
 | Factions (teams' pilots) | Approximation | Ported for what Last Man Standing does (FINDINGS 112): a pilot's faction is null unless the picker sets one in a team game; `CPilot::Faction`/`SetFaction` and `CFaction::Photo` are ported. Team game modes (and with them `CFaction::TeamIndex`, faction vtable +0x180, and the session's team lists) are not run or decoded. |
 | UI managers in `openbg-fight` | Stand-in | Without the front end, a launched UI with a preset choice completes on the next update. |

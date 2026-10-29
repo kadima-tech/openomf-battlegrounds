@@ -9,6 +9,7 @@
 #include "de/mesh.h"
 #include "de/scene.h"
 #include "game/descriptions.h"
+#include "game/music.h"
 #include "game/runtime.h"
 #include "game/session.h"
 
@@ -140,9 +141,11 @@ class MainMenu : public UIManager {
 public:
 	MainMenu() : UIManager("MainMenu", "MainMenu") { show_main_frame = false; }
 
+	// DE_CMainMenuUIManager::Begin (OMF 0x3505a3c0).
 	bool begin(AppManager &app) override {
 		UIManager::begin(app);
 		app.delete_stack(false);
+		if (app.world.music) app.world.music->play_default();
 		if (auto_select) {
 			// The remembered choice: "Singleplayer" reopens Single Player, anything else Host.
 			app.menu_select(app.registry_string("MainMenu") == "Singleplayer" ? 3 : 2);
@@ -159,6 +162,7 @@ public:
 		host_ = button(app, "Host Game", "MULTIPLAYERCREATE");
 		help_ = button(app, "Help", "HELP");
 		quit_ = button(app, "Quit", "QUIT");
+		send(app.world, app.world.music_player_actor(), "MusicPlayerAssureDefaultMusic");
 	}
 	// DE_CMainMenuUIManagerRobot::ProcessButtonClickEvent (OMF 0x3505a8f0).
 	void click(AppManager &app, Control &c) override {

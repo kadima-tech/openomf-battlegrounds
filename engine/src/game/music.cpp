@@ -26,7 +26,7 @@ MusicSystem::Speaker &MusicSystem::speaker(GameObject *s) {
 	if (!sp.read && s) {
 		sp.read = true;
 		// UniqueActorProperty\Speaker: references chunk 2, list 1 is its noise.
-		if (de::ObjectRef n = reference_at(w_.data(), *s, 2, 1)) sp.active = w_.global_object(n);
+		if (de::ObjectRef n = reference_at(w_.data(), *s, 2, 1)) sp.active = sp.initial = w_.global_object(n);
 	}
 	return sp;
 }
@@ -55,6 +55,18 @@ GameObject *MusicSystem::jump(const GameObject *segment, int mood) {
 	if (!segment || mood < 1 || mood > 20) return nullptr;
 	de::ObjectRef r = reference_at(w_.data(), *segment, 2, 1, size_t(mood - 1));
 	return r ? w_.global_object(r) : nullptr;
+}
+
+void MusicSystem::play_default() {
+	w_.music_player_actor();
+	GameObject *s = music_speaker();
+	if (!s) return;
+	Speaker &sp = speaker(s);
+	sp.active = sp.initial;
+	sp.playing = sp.active != nullptr;
+	if (kDebug) fprintf(stderr, "[music %u] default music %s\n", w_.frame(), sp.active ? sp.active->name.c_str() : "-");
+	sp.queued = false;
+	++sp.serial;
 }
 
 void MusicSystem::segment_almost_over(GameObject *s) {

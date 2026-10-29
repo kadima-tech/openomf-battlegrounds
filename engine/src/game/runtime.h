@@ -585,6 +585,7 @@ public:
 	};
 	std::vector<SoundRequest> sound_requests;
 	GameObject *music_player = nullptr;  // MusicPlayerActor()
+	GameObject *music_player_actor();
 	// Particle effects (generator instances per drawing actor), stepped every game frame.
 	std::shared_ptr<class ParticleSystem> particles;
 	// Forces and materials (footfalls, launch pads, mines, rumble), ticked every game frame.

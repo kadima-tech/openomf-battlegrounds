@@ -116,6 +116,26 @@ World::ObjectValue *World::object_value(GameObject *o, const std::string &name) 
 	return nullptr;
 }
 
+// The application's music player: Music.DEObjects' "MusicPlayer" actor (a speaker and the
+// BMusicPlayer behaviour), put in the scene once.
+GameObject *World::music_player_actor() {
+	if (!music_player) {
+		if (const de::ObjectsFile *f = data().file("Music")) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				const auto &o = f->objects()[i];
+				if (o.name != "MusicPlayer" || o.class_path.rfind("Actor", 0) != 0) continue;
+				if (GameObject *tpl = global_object({f, i})) {
+					music_player = copy_tree(*tpl);
+					enter_scene(music_player);
+				}
+				break;
+			}
+		}
+		if (!music_player) music_player = create("MusicPlayer", "Actor");
+	}
+	return music_player;
+}
+
 void register_script_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
 	auto stub = [&](const char *key) { w.register_native(key, [](const NativeContext &) {}); };
@@ -513,26 +533,7 @@ void register_script_natives(World &w) {
 	reg("CImpulseRobot::bool IsImpulseEvent(class CEvent,string)", [](const NativeContext &c) { c.ret_bool(false); });
 	stub("CImpulseRobot::SetFocusRequirement(string,class CObject)");
 	reg("CObject::class CObject GameDialog()", [](const NativeContext &c) { c.ret_u32(0); });
-	// The application's music player: Music.DEObjects' "MusicPlayer" actor (a speaker and the
-	// BMusicPlayer behaviour), put in the scene once.
-	reg("CObject::class CActor MusicPlayerActor()", [](const NativeContext &c) {
-		World &w = c.world;
-		if (!w.music_player) {
-			if (const de::ObjectsFile *f = w.data().file("Music")) {
-				for (uint32_t i = 0; i < f->objects().size(); ++i) {
-					const auto &o = f->objects()[i];
-					if (o.name != "MusicPlayer" || o.class_path.rfind("Actor", 0) != 0) continue;
-					if (GameObject *tpl = w.global_object({f, i})) {
-						w.music_player = w.copy_tree(*tpl);
-						w.enter_scene(w.music_player);
-					}
-					break;
-				}
-			}
-			if (!w.music_player) w.music_player = w.create("MusicPlayer", "Actor");
-		}
-		c.ret_object(w.music_player);
-	});
+	reg("CObject::class CActor MusicPlayerActor()", [](const NativeContext &c) { c.ret_object(c.world.music_player_actor()); });
 	reg("CObject::bool IsStandardSession(class CObject)", [](const NativeContext &c) {
 		GameObject *o = c.arg_object(0);
 		c.ret_bool(o && o->is("Session\\Standard"));

@@ -29,6 +29,7 @@ public:
 		uint32_t serial = 0;  // bumped by every Play: the player restarts on a change
 		bool queued = false;  // the last Play chained from an ending segment: start at its end
 		bool read = false;
+		GameObject *initial = nullptr;  // its noise in the data (DE_GLOBAL's default music)
 	};
 	explicit MusicSystem(World &w) : w_(w) {}
 	Speaker &speaker(GameObject *s);
@@ -38,6 +39,8 @@ public:
 	GameObject *container(const GameObject *segment);
 	// The jump of `segment` for `mood` (null when it has none).
 	GameObject *jump(const GameObject *segment, int mood);
+	// DE_GLOBAL::PlayDefaultMusic (Core 0x70013d70): the music speaker plays its default noise.
+	void play_default();
 	// The player's report that the playing segment of `s` is almost over: chain to its jump.
 	void segment_almost_over(GameObject *s);
 	// ...and that it ended with nothing queued.
