@@ -350,6 +350,62 @@ bool image_has_alpha(const de::ObjectRef &r) {
 // are its elements); OPENBG_STAND_INS=1 draws them flat for debugging.
 const bool g_stand_ins = getenv("OPENBG_STAND_INS") != nullptr;
 
+// DE_CStandardMesh::CalculateNormals (Core 0x7012fb10) with AddNeighborFaces: each face's corner
+// normal is its own face normal plus those of the faces around it (reached across edges, sharing a
+// vertex with it) that share a smoothing group (face flags) and that vertex, normalised.
+std::vector<std::array<std::array<float, 3>, 3>> corner_normals(const de::Mesh &mesh, const std::vector<std::array<float, 3>> &pos) {
+	size_t nf = mesh.faces.size();
+	std::vector<std::array<float, 3>> fn(nf, {0, 0, 1});
+	for (size_t i = 0; i < nf; ++i) {
+		auto &f = mesh.faces[i];
+		if (f.v[0] >= pos.size() || f.v[1] >= pos.size() || f.v[2] >= pos.size()) continue;
+		auto &a = pos[f.v[0]], &b = pos[f.v[1]], &c = pos[f.v[2]];
+		float u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, w[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+		std::array<float, 3> n{u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]};
+		float l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+		if (l > 0) n = {n[0] / l, n[1] / l, n[2] / l};
+		if (!(l > 0) || std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) <= 0.1f) n[2] = 1;
+		fn[i] = n;
+	}
+	auto shares_vertex = [&](size_t a, size_t b) {
+		for (uint16_t x : mesh.faces[a].v)
+			for (uint16_t y : mesh.faces[b].v)
+				if (x == y) return true;
+		return false;
+	};
+	std::vector<std::array<std::array<float, 3>, 3>> out(nf);
+	std::vector<uint16_t> around;
+	std::vector<uint32_t> seen(nf, ~0u);
+	for (size_t i = 0; i < nf; ++i) {
+		around.clear();
+		std::vector<size_t> stack{i};
+		while (!stack.empty()) {
+			size_t cur = stack.back();
+			stack.pop_back();
+			for (uint16_t g : mesh.faces[cur].adjacent) {
+				if (g == 0xffff || g >= nf || g == i || seen[g] == i || !shares_vertex(i, g)) continue;
+				seen[g] = uint32_t(i);
+				around.push_back(g);
+				stack.push_back(g);
+			}
+		}
+		const auto &f = mesh.faces[i];
+		for (int k = 0; k < 3; ++k) {
+			std::array<float, 3> n = fn[i];
+			for (uint16_t g : around) {
+				const auto &o = mesh.faces[g];
+				if (!(f.flags & o.flags)) continue;
+				for (uint16_t v : o.v) {
+					if (v == f.v[size_t(k)]) n = {n[0] + fn[g][0], n[1] + fn[g][1], n[2] + fn[g][2]};
+				}
+			}
+			float l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+			out[i][size_t(k)] = l > 0 ? std::array<float, 3>{n[0] / l, n[1] / l, n[2] / l} : fn[i];
+		}
+	}
+	return out;
+}
+
 std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de::Material> &materials, const de::Transform &place,
                                      const std::function<GLuint(const de::ObjectRef &)> &texture, float *lo, float *hi,
                                      bool keep = false) {
@@ -363,18 +419,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 			hi[j] = std::fmax(hi[j], wpos[i][j]);
 		}
 	}
-	// Smooth vertex normals (the face normals averaged, area-weighted) for lighting and the
-	// reflection vector; the meshes' own normal elements are not decoded.
-	std::vector<std::array<float, 3>> vnormal(wpos.size(), {0, 0, 0});
-	for (auto &f : mesh.faces) {
-		if (f.v[0] >= wpos.size() || f.v[1] >= wpos.size() || f.v[2] >= wpos.size()) continue;
-		auto &a = wpos[f.v[0]], &bb = wpos[f.v[1]], &c = wpos[f.v[2]];
-		float u[3] = {bb[0] - a[0], bb[1] - a[1], bb[2] - a[2]}, w[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-		float n[3] = {u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]};
-		for (int k = 0; k < 3; ++k) {
-			for (int j = 0; j < 3; ++j) vnormal[f.v[k]][j] += n[j];
-		}
-	}
+	auto corner = corner_normals(mesh, wpos);
 	std::vector<bool> covered(mesh.faces.size(), false);
 	float material_glow = 0;
 	auto emit = [&](const std::vector<const de::Layer *> &pass, const std::vector<uint32_t> &faces, bool stand_in, bool overlay, bool late = false) {
@@ -390,18 +435,11 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 			covered[fi] = true;
 			auto &f = mesh.faces[fi];
 			if (f.v[0] >= wpos.size() || f.v[1] >= wpos.size() || f.v[2] >= wpos.size()) continue;
-			auto &a = wpos[f.v[0]], &bb = wpos[f.v[1]], &c = wpos[f.v[2]];
-			float u[3] = {bb[0] - a[0], bb[1] - a[1], bb[2] - a[2]}, w[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-			float n[3] = {u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]};
 			for (int k = 0; k < 3; ++k) {
 				BatchVertex v{};
 				memcpy(v.pos, wpos[f.v[k]].data(), sizeof v.pos);
 				for (int j = 0; j < 3; ++j) bt.bmin[j] = std::fmin(bt.bmin[j], v.pos[j]), bt.bmax[j] = std::fmax(bt.bmax[j], v.pos[j]);
-				// Shared vertices whose faces disagree strongly (hard edges) keep the face normal.
-				auto &vn = vnormal[f.v[k]];
-				float vl = std::sqrt(vn[0] * vn[0] + vn[1] * vn[1] + vn[2] * vn[2]), fl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-				bool smooth = vl > 0 && fl > 0 && (vn[0] * n[0] + vn[1] * n[1] + vn[2] * n[2]) / (vl * fl) > 0.7f;
-				memcpy(v.normal, smooth || keep ? vn.data() : n, sizeof n);
+				memcpy(v.normal, corner[fi][size_t(k)].data(), sizeof v.normal);
 				v.colour[0] = v.colour[1] = v.colour[2] = 1;
 				for (size_t s = 0; s < pass.size() && s < 4; ++s) {
 					if (auto it = uvs[s].find(fi); it != uvs[s].end()) {
