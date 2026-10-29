@@ -33,6 +33,13 @@ public:
 	void texture_rect(GLuint tex, float x0, float y0, float x1, float y1, int width, int height);
 	// The width of a label, in screen widths.
 	float text_width(const std::string &text, float size, int width, int height);
+	// A label whose glyph cell (`size` screen heights) has its top at y, starting at x or centred on it.
+	void label_cell(const std::string &text, float x, float y, float size, const float *rgba, int width, int height, bool centered = false);
+	// Where each letter starts and the last ends (DE_CFlatText3::CalculateCharOffsets), in screen widths.
+	std::vector<float> char_offsets(const std::string &text, float size, int width, int height);
+	// A quad with a colour per corner (the control bevels' vertex colours), corners in screen
+	// fractions with y down.
+	void quad4(const float *xy, const float *rgba, int width, int height);
 
 private:
 	struct FontGL {
@@ -54,6 +61,7 @@ private:
 	float aspect_ = 16.0f / 9;
 	GLuint prog_ = 0, vao_ = 0, vbo_ = 0;
 	GLuint prog3_ = 0, vao3_ = 0, vbo3_ = 0;  // world-space primitives
+	GLuint progc_ = 0, vaoc_ = 0, vboc_ = 0;  // per-vertex coloured quads
 };
 
 }  // namespace render

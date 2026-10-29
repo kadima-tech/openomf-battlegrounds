@@ -95,7 +95,6 @@ int main(int argc, char **argv) {
 	std::string data = argv[1];
 	const char *shot = nullptr;
 	std::string launch;
-	bool simulate_fullscreen = false;  // the launcher's "simulatefullscreen" switch
 	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
 	bool headless = false;
@@ -105,7 +104,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
-		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) simulate_fullscreen = true;
+		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
 			for (size_t p = 0; p <= l.size();) {
@@ -152,9 +151,8 @@ int main(int argc, char **argv) {
 		if (const char *seed = getenv("OPENBG_SEED")) game::crt_srand(uint32_t(strtoul(seed, nullptr, 0)));
 		else if (!shot && !headless) game::crt_srand(uint32_t(time(nullptr)));
 		game::ui::AppManager app(world);
-		// DE_GLOBAL::FirstRun: Core's DE_CRegistry found no registry yet.
-		bool first_run = false;
-		if (!shot && !headless) first_run = !load_registry(world.registry);
+		if (!shot && !headless) load_registry(world.registry);
+		game::migrate_lock_records(world.registry);
 		// OPENBG_SET="name=value;..." sets registry values for this run (testing).
 		if (const char *set = getenv("OPENBG_SET")) {
 			std::string l = set;
@@ -204,7 +202,9 @@ int main(int argc, char **argv) {
 			auto &ss = game::start_session(world, {res[0]});
 			ss.master_description = world.global_object(desc);
 			ss.single_player = single_player;
-			ss.max_player_clients = 4;  // the session info's MaxPlayers (where the original sets it is not found)
+			// DE_CSession::SetAsServer (Core 0x701f8110): a joinable session takes Network\Max Clients, others 20.
+			int max_clients = atoi(app.registry_string("Network\\Max Clients").c_str());
+			ss.max_player_clients = !single_player && max_clients > 0 ? max_clients : 20;
 			game::add_client(world, true, "User");
 			game::begin_session(world);
 			app.set_registry_bool("SinglePlayerPlayed", true);
@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
 				for (auto &m : mouse_script) {
 					if (m.frame == fr && m.kind == 3) app.key(13);
 					if (m.frame == fr && m.kind == 4) app.key(27);
-					if (m.frame == fr && m.kind == 5) app.key(int(m.x));
+					if (m.frame == fr && m.kind == 5) app.key(int(m.x)), app.text(std::string(1, char(m.x)));
 				}
 				app.update();
 				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
@@ -326,11 +326,16 @@ int main(int argc, char **argv) {
 		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
-		// Preferences\Renderer\Resolution and Full Screen (the options' Video panel; next start).
-		static const int kRes[][2] = {{640, 480}, {800, 600}, {1024, 768}, {1280, 960}, {1600, 1200}};
-		std::string res = app.registry_string("Preferences\\Renderer\\Resolution");
-		int ri = shot || res.empty() ? 2 : std::clamp(atoi(res.c_str()), 0, 4);
-		const int W = kRes[ri][0], H = kRes[ri][1];
+		// The renderer's resolutions (GetAvailableResolutions): the display's modes.
+		for (int i = 0, n = SDL_GetNumDisplayModes(0); i < n; ++i) {
+			SDL_DisplayMode m;
+			if (SDL_GetDisplayMode(0, i, &m) != 0) continue;
+			std::pair<int, int> r{m.w, m.h};
+			if (std::find(app.resolutions.begin(), app.resolutions.end(), r) == app.resolutions.end()) app.resolutions.push_back(r);
+		}
+		std::sort(app.resolutions.begin(), app.resolutions.end());
+		// Preferences\Renderer\Resolution X / Y (the Video panel's; the next start) and Full Screen.
+		const int W = shot ? 1024 : std::max(320, app.render_started.res_x), H = shot ? 768 : std::max(240, app.render_started.res_y);
 		bool fullscreen = !shot && app.registry_bool("Preferences\\Renderer\\Full Screen");
 		SDL_Window *win = SDL_CreateWindow("One Must Fall: Battlegrounds", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
 		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE |
@@ -357,6 +362,8 @@ int main(int argc, char **argv) {
 		de::ObjectRef picker_model_shown, picker_pilot_shown;
 		Viewport vpt = gui_viewport(W, H);
 		app.text_width = [&](const std::string &t, float size) { return overlay.text_width(t, size, vpt.w, vpt.h); };
+		app.char_offsets = [&](const std::string &t, float size) { return overlay.char_offsets(t, size, vpt.w, vpt.h); };
+		app.view_w = vpt.w, app.view_h = vpt.h;
 
 		// The UI parent frame: local x 0..1 across the width and y 0..0.75 up, one unit from the
 		// 60-degree frame-control camera, which looks down -Z (DE_CTopControl3d::AdjustRootActor,
@@ -408,7 +415,8 @@ int main(int argc, char **argv) {
 					else app.set_last();
 				}
 			}
-			if (world.registry != saved_registry) {
+			// Screenshot and headless runs neither load nor save the user's registry.
+			if (!shot && !headless && world.registry != saved_registry) {
 				save_registry(world.registry);
 				saved_registry = world.registry;
 			}
@@ -436,20 +444,15 @@ int main(int argc, char **argv) {
 				}
 				else if (m.kind == 3) app.key(13);
 				else if (m.kind == 4) app.key(27);
-				else if (m.kind == 5) app.key(int(m.x));
+				else if (m.kind == 5) app.key(int(m.x)), app.text(std::string(1, char(m.x)));
 				else if (m.kind == 6) app.wheel(int(m.x));
 				else app.mouse_button(m.kind == 1);
 			}
-			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI. On a first run
-			// (and without "simulatefullscreen") the launcher also greets the player and launches
-			// SinglePlayer\Basic Training, which the retail data does not have.
+			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI. The retail launcher
+			// has no first-run greeting: its imports lack FirstRun, FindMasterObject and LaunchSession,
+			// which the 2004 build's greeting (and its SinglePlayer\Basic Training launch) use.
 			if (!ui_begun) {
 				ui_begun = true;
-				if (first_run && !simulate_fullscreen) {
-					app.notify("Welcome", "");
-					de::ObjectRef basic = world.data().find("Description\\SessionMaster", "Basic Training");
-					if (basic && app.launch_session) app.launch_session(basic, true);
-				}
 				app.begin_ui();
 			}
 			// The user's creature hears the keyboard unless a page is up that disables its input
@@ -469,6 +472,7 @@ int main(int argc, char **argv) {
 			app.update();
 			// Autopause: the scene passes no time while a page that autopauses is up (the
 			// sessions still update).
+			world.scene_paused = app.autopaused() && world.session;
 			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
 			++fr;
 			mixer.play_requests(world, view.player ? view.ear() : listener);
@@ -484,6 +488,7 @@ int main(int argc, char **argv) {
 			int dw = W, dh = H;
 			if (!shot) SDL_GL_GetDrawableSize(win, &dw, &dh);
 			vpt = gui_viewport(dw, dh);
+			app.view_w = vpt.w, app.view_h = vpt.h;
 			glViewport(0, 0, dw, dh);
 			// A session's scene (DE_CSceneViewerControl3d over the whole window), then the GUI.
 			bool game_shown = world.session != nullptr;
@@ -648,13 +653,27 @@ int main(int argc, char **argv) {
 			const float white[4] = {1, 1, 1, 1};
 			if (app.current && app.current->activated) {
 				std::vector<game::ui::DrawItem> items;
-				app.current->draw(app, items);
+				game::ui::UIPtr page = app.current;
+				if (page->gui) page->gui->paint(items);
+				page->draw(app, items);
+				if (page->gui) page->gui->paint_over(items);
 				for (auto &d : items) {
-					if (d.kind == game::ui::DrawItem::Rect) overlay.rect(d.x0, d.y0, d.x1, d.y1, d.rgba, vpt.w, vpt.h);
+					// A control's clip: the scissor, in the window's pixels (origin bottom left).
+					bool clip = d.clip[2] > d.clip[0];
+					if (clip) {
+						glEnable(GL_SCISSOR_TEST);
+						int sx0 = vpt.x + int(std::floor(d.clip[0] * float(vpt.w))), sx1 = vpt.x + int(std::ceil(d.clip[2] * float(vpt.w)));
+						int sy0 = vpt.y + int(std::floor((1 - d.clip[3]) * float(vpt.h))), sy1 = vpt.y + int(std::ceil((1 - d.clip[1]) * float(vpt.h)));
+						glScissor(sx0, sy0, std::max(0, sx1 - sx0), std::max(0, sy1 - sy0));
+					}
+					if (d.kind == game::ui::DrawItem::Quad) overlay.quad4(d.pts, d.cols, vpt.w, vpt.h);
+					else if (d.kind == game::ui::DrawItem::Text && d.cell) overlay.label_cell(d.text, d.x0, d.y0, d.size, d.rgba, vpt.w, vpt.h, d.centered);
+					else if (d.kind == game::ui::DrawItem::Rect) overlay.rect(d.x0, d.y0, d.x1, d.y1, d.rgba, vpt.w, vpt.h);
 					else if (d.kind == game::ui::DrawItem::Image && d.render_target) {
 						if (auto it = render_targets.find(d.render_target); it != render_targets.end()) overlay.texture_rect(it->second.tex, d.x0, d.y0, d.x1, d.y1, vpt.w, vpt.h);
 					} else if (d.kind == game::ui::DrawItem::Image) overlay.image_rect(d.image, d.x0, d.y0, d.x1, d.y1, vpt.w, vpt.h, d.rgba);
 					else overlay.label(d.text, d.x0, d.y0, d.size, d.rgba, vpt.w, vpt.h, d.centered);
+					if (clip) glDisable(GL_SCISSOR_TEST);
 				}
 				for (auto &c : app.current->controls) {
 					overlay.label(c.text, (c.left + c.right) / 2, (c.top + c.bottom) / 2, 16.0f / 600.0f, white, vpt.w, vpt.h);

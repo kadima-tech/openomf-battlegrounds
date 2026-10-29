@@ -39,6 +39,19 @@ void main() {
 	frag = vec4(t.rgb * color.rgb, a * color.a);
 })";
 
+const char *kVSC = R"(#version 410
+layout(location = 0) in vec2 pos;
+layout(location = 1) in vec4 col;
+out vec4 v_col;
+void main() {
+	v_col = col;
+	gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+})";
+const char *kFSC = R"(#version 410
+in vec4 v_col;
+out vec4 frag;
+void main() { frag = v_col; })";
+
 // The fighter a primitive's mesh belongs to, if any.
 // A mesh is drawn while the actor it belongs to is renderable (+0x108; SetRendered /
 // SetUnrendered, which BRenderActorIfCamInTree sets from the renderer's camera).
@@ -78,6 +91,15 @@ void OverlayRenderer::load(const de::World &world) {
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, nullptr);
 	glEnableVertexAttribArray(1);
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, reinterpret_cast<void *>(8));
+	progc_ = glu::program(kVSC, kFSC);
+	glGenVertexArrays(1, &vaoc_);
+	glGenBuffers(1, &vboc_);
+	glBindVertexArray(vaoc_);
+	glBindBuffer(GL_ARRAY_BUFFER, vboc_);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 24, nullptr);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 24, reinterpret_cast<void *>(8));
 	prog3_ = glu::program(kVS3, kFS);
 	glGenVertexArrays(1, &vao3_);
 	glGenBuffers(1, &vbo3_);
@@ -374,6 +396,58 @@ float OverlayRenderer::text_width(const std::string &str, float size, int width,
 	float lo = 1e9f, hi = -1e9f;
 	for (size_t i = 0; i < v.size(); i += 4) lo = std::min(lo, v[i]), hi = std::max(hi, v[i]);
 	return v.empty() ? 0 : hi - lo;
+}
+
+void OverlayRenderer::label_cell(const std::string &str, float x, float y, float size, const float *rgba, int width, int height, bool centered) {
+	if (!prog_ || str.empty()) return;
+	game::World::Primitive t;
+	t.text = str;
+	t.height = size;
+	t.centered = centered;
+	t.x = x;
+	t.y = 1 - (y + size);
+	const FontGL *f = font_for(t);
+	if (!f) return;
+	begin_screen(width, height);
+	glBindTexture(GL_TEXTURE_2D, f->tex);
+	glUniform1i(glGetUniformLocation(prog_, "mode"), f->alpha ? 0 : 1);
+	text(*f, t, rgba, 0, 0);
+	end_screen();
+}
+
+std::vector<float> OverlayRenderer::char_offsets(const std::string &str, float size, int width, int height) {
+	std::vector<float> o{0};
+	game::World::Primitive t;
+	t.height = size;
+	const FontGL *f = font_for(t);
+	if (!f || f->font.height <= 0) return std::vector<float>(str.size() + 1, 0.0f);
+	float sx = size / f->font.height / (float(width) / float(std::max(1, height)));
+	for (unsigned char ch : str) {
+		auto &g = f->font.glyphs[ch];
+		o.push_back(o.back() + (g.present ? g.x1 - g.x0 : 0.5f) * sx);
+	}
+	return o;
+}
+
+void OverlayRenderer::quad4(const float *xy, const float *rgba, int width, int height) {
+	if (!progc_) return;
+	float v[6][6];
+	const int order[6] = {0, 1, 2, 0, 2, 3};
+	for (int i = 0; i < 6; ++i) {
+		int k = order[i];
+		v[i][0] = xy[k * 2], v[i][1] = 1 - xy[k * 2 + 1];
+		for (int c = 0; c < 4; ++c) v[i][2 + c] = rgba[k * 4 + c];
+	}
+	aspect_ = float(width) / float(std::max(1, height));
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glUseProgram(progc_);
+	glBindVertexArray(vaoc_);
+	glBindBuffer(GL_ARRAY_BUFFER, vboc_);
+	glBufferData(GL_ARRAY_BUFFER, sizeof v, v, GL_STREAM_DRAW);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+	end_screen();
 }
 
 }  // namespace render

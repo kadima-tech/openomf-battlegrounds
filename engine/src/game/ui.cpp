@@ -25,7 +25,7 @@ namespace game::ui {
 
 namespace {
 
-constexpr int kKeyReturn = 13, kKeyEscape = 27, kKeyUp = (1 << 30) | 82, kKeyDown = (1 << 30) | 81;  // SDL keycodes
+constexpr int kKeyReturn = 13, kKeyEscape = 27;  // SDL keycodes
 
 std::string upper(std::string s) {
 	for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -143,6 +143,20 @@ float flow(AppManager &app, const ControlLayout &l, float x, float y, float widt
 		}
 	}
 	return used;
+}
+
+// gNewDescriptionLeft (Core 0x700968e0): a row VPU 30 high, the label (VPU 16, ":" added) on the
+// left `frac` of it, and the holder for its control on the rest, 2 pixels in from the right.
+Ctl *describe(Gui &g, Ctl *parent, const std::string &label, float frac) {
+	Ctl *row = parent->add<Ctl>();
+	row->len_y = g.vy(30);
+	row->align = 2;
+	auto *t = row->add<Text>(label.empty() || label.back() == ':' ? label : label + ":", g.vy(16), theme::kText, 2);
+	t->sr = frac;
+	Ctl *holder = row->add<Ctl>();
+	holder->sl = frac;
+	holder->from_right = 2;
+	return holder;
 }
 
 class MainMenu : public UIManager {
@@ -287,12 +301,28 @@ public:
 					if (ch->name == "SnapshotImage") shot = ch;
 				}
 			}
+			DrawItem im;
+			im.kind = DrawItem::Image;
+			im.x0 = shot_box_->left, im.x1 = shot_box_->right, im.y0 = shot_box_->top, im.y1 = shot_box_->bottom;
 			if (shot) {
-				DrawItem im;
-				im.kind = DrawItem::Image;
-				im.x0 = shot_box_->left, im.x1 = shot_box_->right, im.y0 = shot_box_->top, im.y1 = shot_box_->bottom;
 				im.render_target = shot->handle;
 				out.push_back(im);
+			} else if (s) {
+				// Otherwise the medium representation (DE_CDescription::NewMediumRepresentation, Core
+				// 0x701f2020) of the tournament's master description in single player, else the
+				// session's own (DE_CRulesDisplayRobot, OMF 0x35063520).
+				SessionState *root = s;
+				while (root->owner) root = root->owner;
+				GameObject *md = s->owner && root->single_player ? s->owner->master_description : s->master_description;
+				if (md && md->file) {
+					de::ObjectRef medium = read_description(app.world.data(), {md->file, md->index}).medium;
+					if (medium && medium.info().class_path.rfind("Image", 0) == 0) {
+						im.image = medium;
+						out.push_back(im);
+					} else if (medium && medium.info().class_path == "ControlCreator") {
+						flow(app, read_control_creator(app.world.data(), medium), im.x0, im.y0, im.x1 - im.x0, im.y1, out);
+					}
+				}
 			}
 		}
 		text(name_box_, title_, 19, {1, 1, 0.65f, 1});
@@ -371,11 +401,10 @@ private:
 
 
 // DE_COptionsUIManager (OMF ObjInitContents 0x3505b060, SetupControls 0x3505d0e0, click
-// 0x3505e170) and its panels (DE_CAudioPanelRobot, DE_CVideoPanelRobot 0x3505eef0,
-// DE_CGameplayPanelRobot 0x3505b170, DE_CNetworkPanelRobot 0x3505bc60, DE_CControlsPanelRobot
-// 0x3505f6e0): the panel buttons, Back (Esc) and the panel in WINDOW; the previous panel's
-// settings are applied when another opens or the page is left. Each setting keeps the registry
-// value the original uses.
+// 0x3505e170) and its panel robots in WINDOW: Audio, Video (0x3505eef0), Gameplay (0x3505b170),
+// Network (0x3505bc60) and Controls (0x3505f6e0). No panel is open at first; every button click
+// first applies the open panel (OnApplyOptions), the open panel's own button then does nothing,
+// and another builds its panel anew.
 class OptionsMenu : public UIManager {
 public:
 	OptionsMenu() : UIManager("Options", "Options") { halt_loading = true; }
@@ -388,249 +417,368 @@ public:
 		network_ = button(app, "Network", "Network");
 		back_ = button(app, "Back", "Back");
 		back_->keys = {kKeyEscape};
-		window_ = button(app, "", "WINDOW");
-		open(app, audio_);
+		window_ = marker(app, "WINDOW");
+		close_panel();
 	}
 	void click(AppManager &app, Control &c) override {
-		apply(app);
+		if (on_apply_) on_apply_();
 		if (&c == back_) {
 			app.set_last();
 			return;
 		}
-		if (&c != window_) open(app, &c);
+		if (&c == open_) return;
+		open(app, &c);
 	}
-	void deactivated(AppManager &app) override {
-		apply(app);
-		settings_.clear();
-		panel_ = nullptr;
-	}
-	void draw(AppManager &app, std::vector<DrawItem> &out) override {
-		if (!window_) return;
-		const float pad = 0.02f;
-		float x0 = window_->left + pad, x1 = window_->right - pad, y = window_->top + pad;
-		auto text = [&](const std::string &t, float x, float yy, float size, bool centered = false, float a = 1) {
-			DrawItem d;
-			d.kind = DrawItem::Text;
-			d.x0 = x, d.y0 = yy, d.size = size, d.text = t, d.centered = centered;
-			d.rgba[3] = a;
-			out.push_back(d);
-		};
-		text(title_, (x0 + x1) / 2, y + 0.02f, 0.042f, true);  // DE_CUISizes PanelTitle
-		y += 0.06f;
-		rows_.clear();
-		row_h_ = std::min(kRowH, (window_->bottom - pad - y) / float(std::max<size_t>(1, settings_.size())));
-		const float kRowH = row_h_;
-		for (size_t i = 0; i < settings_.size(); ++i) {
-			Setting &st = settings_[i];
-			float mid = x0 + (x1 - x0) * 0.5f;
-			if (y + kRowH > window_->bottom - pad) break;
-			rows_.push_back({y, y + kRowH});
-			if (int(i) == focus_) {
-				DrawItem r;
-				r.x0 = x0, r.x1 = x1, r.y0 = y, r.y1 = y + kRowH;
-				const float hi[4] = {0.55f, 0.75f, 0.9f, 0.2f};
-				std::copy(hi, hi + 4, r.rgba);
-				out.push_back(r);
-			}
-			text(st.label, x0 + 0.01f, y + kRowH / 2, 0.033f);  // PanelItem
-			std::string v;
-			switch (st.kind) {
-			case Setting::Slider: {
-				DrawItem back, fill;
-				back.x0 = fill.x0 = mid, back.x1 = x1 - 0.01f, back.y0 = fill.y0 = y + kRowH * 0.35f, back.y1 = fill.y1 = y + kRowH * 0.65f;
-				const float bc[4] = {0.2f, 0.3f, 0.3f, 0.6f}, fc[4] = {0.5f, 1.0f, 1.0f, 1.0f};
-				std::copy(bc, bc + 4, back.rgba);
-				std::copy(fc, fc + 4, fill.rgba);
-				fill.x1 = mid + (back.x1 - mid) * std::clamp(st.value, 0.0f, 1.0f);
-				out.push_back(back);
-				out.push_back(fill);
-				break;
-			}
-			case Setting::Choice: v = st.choices.empty() ? std::string() : st.choices[size_t(st.index)]; break;
-			case Setting::Check: v = st.value != 0 ? "On" : "Off"; break;
-			case Setting::Text: v = st.text + (int(i) == focus_ && editing_ ? "_" : ""); break;
-			case Setting::Key: v = (int(i) == focus_ && assigning_) ? "Press a key..." : (app.key_name ? app.key_name(app.binding(size_t(st.action))) : ""); break;
-			case Setting::Button: v = "[ " + st.text + " ]"; break;
-			}
-			if (!v.empty()) text(v, (mid + x1) / 2, y + kRowH / 2, 0.033f, true);
-			y += kRowH;
-		}
-		if (!note_.empty() && y + 0.05f < window_->bottom) {
-			ControlLayout l;
-			l.kind = ControlLayout::Text;
-			l.text = note_;
-			l.text_height = 15;
-			flow(app, l, x0, y + 0.02f, x1 - x0, window_->bottom - pad, out);
-		}
-	}
-	bool mouse(AppManager &app, float x, float y, int what) override {
-		if (!window_ || !window_->contains(x, y) || (what != 1 && what != 3)) return false;
-		float x0 = window_->left + 0.02f, x1 = window_->right - 0.02f, mid = x0 + (x1 - x0) * 0.5f;
-		for (size_t i = 0; i < rows_.size() && i < settings_.size(); ++i) {
-			if (y < rows_[i].first || y >= rows_[i].second) continue;
-			Setting &st = settings_[i];
-			focus_ = int(i);
-			editing_ = st.kind == Setting::Text;
-			assigning_ = false;
-			switch (st.kind) {
-			case Setting::Slider:
-				if (x >= mid) st.value = std::clamp((x - mid) / (x1 - 0.01f - mid), 0.0f, 1.0f);
-				break;
-			case Setting::Choice:
-				if (!st.choices.empty()) st.index = (st.index + (x < (mid + x1) / 2 ? int(st.choices.size()) - 1 : 1)) % int(st.choices.size());
-				break;
-			case Setting::Check: st.value = st.value != 0 ? 0 : 1; break;
-			case Setting::Key: assigning_ = true; break;
-			case Setting::Button:
-				if (st.on_click) st.on_click(app);
-				break;
-			default: break;
-			}
-			changed(app);
-			return true;
-		}
-		return true;
-	}
-	bool key(AppManager &app, int sym) override {
-		if (focus_ < 0 || size_t(focus_) >= settings_.size()) return false;
-		Setting &st = settings_[size_t(focus_)];
-		if (assigning_ && st.kind == Setting::Key) {
-			if (sym != kKeyEscape && app.last_scancode) app.set_binding(size_t(st.action), app.last_scancode);
-			assigning_ = false;
-			return true;
-		}
-		if (editing_ && st.kind == Setting::Text) {
-			if (sym == 8 && !st.text.empty()) st.text.pop_back();  // backspace
-			else if (sym == kKeyReturn || sym == kKeyEscape) editing_ = false;
-			return true;
-		}
-		return false;
-	}
-	void text(AppManager &, const std::string &t) override {
-		if (!editing_ || focus_ < 0 || size_t(focus_) >= settings_.size()) return;
-		Setting &st = settings_[size_t(focus_)];
-		if (st.kind == Setting::Text && st.text.size() < 32) st.text += t;
+	// The robot's teardown (0x35060b00) destroys the panel without applying it.
+	void deactivated(AppManager &) override { close_panel(); }
+	void update(AppManager &) override {
+		if (on_update_) on_update_();
 	}
 
 private:
-	static constexpr float kRowH = 0.055f;
-	float row_h_ = kRowH;
-	struct Setting {
-		enum Kind { Slider, Choice, Check, Text, Key, Button } kind = Check;
-		std::string label, reg;  // registry value name
-		float value = 0;
-		std::vector<std::string> choices;
-		int index = 0;
-		std::string text;
-		int action = -1;
-		std::function<void(AppManager &)> on_click;
-	};
-
+	void close_panel() {
+		on_apply_ = nullptr;
+		on_update_ = nullptr;
+		open_ = nullptr;
+		holder_ = nullptr;
+	}
 	static float reg_float(AppManager &app, const std::string &name, float def) {
 		std::string v = app.registry_string(name);
 		return v.empty() ? def : float(atof(v.c_str()));
 	}
-	void open(AppManager &app, Control *c) {
-		panel_ = c;
-		settings_.clear();
-		focus_ = -1;
-		editing_ = assigning_ = false;
-		note_.clear();
-		auto slider = [&](const char *label, const char *reg, float def) {
-			Setting s;
-			s.kind = Setting::Slider, s.label = label, s.reg = reg, s.value = reg_float(app, reg, def);
-			settings_.push_back(s);
-		};
-		auto check = [&](const char *label, const char *reg, bool def) {
-			Setting s;
-			s.kind = Setting::Check, s.label = label, s.reg = reg;
-			std::string v = app.registry_string(reg);
-			s.value = v.empty() ? (def ? 1.0f : 0.0f) : (v == "1" ? 1.0f : 0.0f);
-			settings_.push_back(s);
-		};
-		auto choice = [&](const char *label, const char *reg, std::vector<std::string> choices, int def) {
-			Setting s;
-			s.kind = Setting::Choice, s.label = label, s.reg = reg, s.choices = std::move(choices);
-			std::string v = app.registry_string(reg);
-			s.index = std::clamp(v.empty() ? def : atoi(v.c_str()), 0, int(s.choices.size()) - 1);
-			settings_.push_back(s);
-		};
-		auto textf = [&](const char *label, const char *reg) {
-			Setting s;
-			s.kind = Setting::Text, s.label = label, s.reg = reg, s.text = app.registry_string(reg);
-			settings_.push_back(s);
-		};
-		if (c == audio_) {
-			title_ = "Audio Settings";
-			slider("Music Volume", "Audio\\Music Volume", 0.6f);
-			slider("Sound Volume", "Audio\\SFX Volume", 1.0f);
-		} else if (c == game_) {
-			title_ = "Game Settings";
-			textf("Player Name", "Network\\Player Name");
-			check("Record Session", "Gamepley\\Record Session", false);
-			// DE_COMF2Manager::SetupAIDifficultyList.
-			choice("AI Difficulty", "AI Difficulty", {"Rookie", "Amateur", "Veteran", "Champion", "World Champion", "Master"}, 0);
-			choice("Auto Populate With AIs", "Auto Populate With AIs", {"Disabled", "2 Players", "3 Players", "4 Players", "5 Players", "6 Players", "7 Players", "8 Players"}, 0);
-		} else if (c == video_) {
-			title_ = "Video Options";
-			check("Lights", "Preferences\\Renderer\\Lighting Enabled", true);
-			check("Reflections", "Preferences\\Renderer\\Reflections Enabled", true);
-			check("Glow", "Preferences\\Renderer\\Glow Enabled", true);
-			check("Bump Mapping", "Preferences\\Renderer\\Bump Mapping Enabled", true);
-			check("High Detail Geometry", "Preferences\\Renderer\\High Quality Geometry Enabled", true);
-			choice("Shadows", "Preferences\\Renderer\\Shadow Type", {"None", "Low Quality", "Medium Quality", "High Quality"}, 0);
-			choice("Resolutions", "Preferences\\Renderer\\Resolution", {"640 x 480", "800 x 600", "1024 x 768", "1280 x 960", "1600 x 1200"}, 2);
-			check("Full Screen", "Preferences\\Renderer\\Full Screen", false);
-			note_ = "Resolution and bit depth changes will take effect next time you start the game.";
-		} else if (c == network_) {
-			title_ = "Network Settings";
-			check("LAN Only", "Network\\LAN Only", false);
-			textf("Server Name", "Network\\Server Name");
-			textf("Server Password", "Network\\Server Password");
-			textf("Remote Admin Password", "Network\\Remote Admin Password");
-			textf("Listener Port", "Winsock\\Listener Port");
-			textf("Max Clients", "Network\\Max Clients");
-		} else if (c == controls_) {
-			title_ = "Control Settings";
-			for (size_t i = 0; i < AppManager::actions().size(); ++i) {
-				Setting s;
-				s.kind = Setting::Key, s.label = AppManager::actions()[i].name, s.action = int(i);
-				settings_.push_back(s);
-			}
-			Setting d;
-			d.kind = Setting::Button, d.label = "", d.text = "Set Defaults";
-			d.on_click = [](AppManager &a) {
-				for (size_t i = 0; i < AppManager::actions().size(); ++i) a.set_binding(i, AppManager::actions()[i].default_scancode);
-			};
-			settings_.push_back(d);
-		}
-	}
-	// Sliders take effect at once (DE_CAudioPanelRobot::OnUpdateOption).
-	void changed(AppManager &app) {
-		if (panel_ == audio_) apply(app);
-	}
-	// OnApplyOptions.
-	void apply(AppManager &app) {
-		for (Setting &st : settings_) {
-			if (st.reg.empty()) continue;
-			switch (st.kind) {
-			case Setting::Slider: app.set_registry_string(st.reg, std::to_string(st.value)); break;
-			case Setting::Check: app.set_registry_bool(st.reg, st.value != 0); break;
-			case Setting::Choice: app.set_registry_string(st.reg, std::to_string(st.index)); break;
-			case Setting::Text: app.set_registry_string(st.reg, st.text); break;
-			default: break;
-			}
-		}
-		app.apply_settings();
+	static int reg_int(AppManager &app, const std::string &name, int def) {
+		std::string v = app.registry_string(name);
+		return v.empty() ? def : atoi(v.c_str());
 	}
 
-	Control *controls_ = nullptr, *video_ = nullptr, *audio_ = nullptr, *game_ = nullptr, *network_ = nullptr, *back_ = nullptr, *window_ = nullptr;
-	Control *panel_ = nullptr;
-	std::string title_, note_;
-	std::vector<Setting> settings_;
-	std::vector<std::pair<float, float>> rows_;
-	int focus_ = -1;
-	bool editing_ = false, assigning_ = false;
+	// PanelHolder (0x35060a70): WINDOW less VPU 16 at the top; SetTitle (0x3505e610): the title
+	// VPU 18 high in a VPU 28 strip, the body under it.
+	Ctl *panel(Gui &g, const std::string &title) {
+		holder_ = g.place(window_);
+		holder_->from_top = g.vy(16);
+		auto *t = holder_->add<Text>(title, g.vy(18), theme::kText, 4);
+		t->len_y = g.vy(28);
+		Ctl *body = holder_->add<Ctl>();
+		body->from_top = g.vy(28);
+		return body;
+	}
+	Button *check(Gui &, Ctl *column, const std::string &label, int *value) {
+		auto *b = column->add<Button>(label, Button::Check);
+		b->toggle = true;
+		b->bound = value;
+		b->len_y = 30;  // SizeDefaultButton
+		return b;
+	}
+	Combo *combo(Gui &g, Ctl *column, const std::string &label, std::vector<std::string> pool, int *value, float frac) {
+		return describe(g, column, label, frac)->add<Combo>(std::move(pool), value);
+	}
+	Edit *edit(Gui &g, Ctl *column, const std::string &label, const std::string &text, int max_len, float frac, bool numeric = false) {
+		auto *e = describe(g, column, label, frac)->add<Edit>(text, max_len, numeric);
+		e->len_y = g.vy(25);
+		e->align = 2;
+		return e;
+	}
+
+	void open(AppManager &app, Control *c) {
+		Gui &g = *gui;
+		if (holder_) holder_->destroy();
+		close_panel();
+		open_ = c;
+		if (c == audio_) audio(app, g);
+		else if (c == video_) video(app, g);
+		else if (c == game_) gameplay(app, g);
+		else if (c == network_) network(app, g);
+		else if (c == controls_) controls(app, g);
+	}
+
+	// DE_CAudioPanelRobot: CreateSlider (0x3505e890) rows; the volumes follow the sliders at once
+	// (OnUpdateOption 0x3505eda0).
+	void audio(AppManager &app, Gui &g) {
+		Ctl *body = panel(g, "Audio Settings");
+		struct State {
+			float music, sfx;
+		};
+		auto st = std::make_shared<State>(State{reg_float(app, "Audio\\Music Volume", 0.6f), reg_float(app, "Audio\\SFX Volume", 1.0f)});
+		auto row = [&](const char *label, float top, float *value, const char *key, float World::*field) {
+			Ctl *r = body->add<Ctl>()->scale(0, top, 1, top + 0.2f);
+			r->add<Ctl>()->scale(0, 0, 0.45f, 0.5f)->add<Text>(label, g.vy(16), theme::kText, 0);
+			auto *s = r->add<Slider>(value);
+			s->scale(0.16f, 0.5f, 0.84f, 0.9f);
+			auto *v = r->add<Ctl>()->scale(0.85f, 0.5f, 1, 1)->add<Text>("0", g.vy(16), Rgba{1, 1, 0, 1}, 0);
+			// InternalSetValue (0x3505e740), display mode 0.
+			auto show = [v](float x) { v->str = std::to_string(int(x * 100 + 0.5f)); };
+			show(*value);
+			s->on_change = [&app, show, key, field, st](float x) {
+				show(x);
+				app.world.*field = x;
+				app.set_registry_string(key, std::to_string(x));
+			};
+		};
+		row("Music Volume", 0, &st->music, "Audio\\Music Volume", &World::music_volume);
+		row("Sound Volume", 0.2f, &st->sfx, "Audio\\SFX Volume", &World::sfx_volume);
+		on_apply_ = [&app, st] {
+			app.world.music_volume = st->music, app.world.sfx_volume = st->sfx;
+			app.set_registry_string("Audio\\Music Volume", std::to_string(st->music));
+			app.set_registry_string("Audio\\SFX Volume", std::to_string(st->sfx));
+		};
+	}
+
+	// DE_CVideoPanelRobot: a copy of the user's render options (CRenderOptions) behind the
+	// controls, written back each pre-draw; Apply (enabled while they differ from what is
+	// applied) applies them, all but the resolution and bit depth, which wait for the next start.
+	void video(AppManager &app, Gui &g) {
+		Ctl *body = panel(g, "Video Options");
+		struct State {
+			AppManager::RenderOptions o;
+			int res = 0;
+			std::vector<std::pair<int, int>> modes;
+			bool apply = false;
+			Button *apply_button = nullptr;
+		};
+		auto st = std::make_shared<State>();
+		st->o = AppManager::RenderOptions::from_registry(app);
+		st->modes = app.resolutions;
+		if (st->modes.empty()) st->modes = {{640, 480}, {800, 600}, {1024, 768}, {1280, 960}, {1600, 1200}};
+		if (std::find(st->modes.begin(), st->modes.end(), std::pair{st->o.res_x, st->o.res_y}) == st->modes.end()) st->modes.push_back({st->o.res_x, st->o.res_y});
+		std::vector<std::string> names;
+		st->res = 0;
+		for (size_t i = 0; i < st->modes.size(); ++i) {
+			names.push_back(std::to_string(st->modes[i].first) + " x " + std::to_string(st->modes[i].second));
+			if (st->modes[i] == std::pair{st->o.res_x, st->o.res_y}) st->res = int(i);
+		}
+		auto *column = body->add<Stack>();
+		check(g, column, "Lights", &st->o.lights);
+		check(g, column, "Reflections", &st->o.reflections);
+		check(g, column, "Glow", &st->o.glow);
+		check(g, column, "Bump Mapping", &st->o.bump);
+		check(g, column, "High Detail Geometry", &st->o.high_detail);
+		combo(g, column, "Shadows", {"None", "Low Quality", "Medium Quality", "High Quality"}, &st->o.shadows, 0.35f);
+		combo(g, column, "BitsPerPixel", {"16 BPP", "32 BPP"}, &st->o.bit_depth, 0.5f);
+		combo(g, column, "Resolutions", names, &st->res, 0.5f);
+		combo(g, column, "Texture Detail", {"High Quality", "Medium Quality", "Low Quality"}, &st->o.texture, 0.5f);
+		auto *apply = column->add<Button>("Apply");
+		apply->len_y = 30;
+		apply->scale(0.3f, 0, 0.7f, 1);
+		apply->disabled = true;
+		apply->on_click = [st] { st->apply = true; };
+		st->apply_button = apply;
+		// ProcessPreDraw (0x3505eef0).
+		on_update_ = [&app, st] {
+			if (st->res >= 0 && size_t(st->res) < st->modes.size()) st->o.res_x = st->modes[size_t(st->res)].first, st->o.res_y = st->modes[size_t(st->res)].second;
+			static bool told = false;
+			const AppManager::RenderOptions &started = app.render_started;
+			if (!told && (st->o.res_x != started.res_x || st->o.res_y != started.res_y || st->o.bit_depth != started.bit_depth)) {
+				told = true;
+				app.notify("Video Options", "Resolution and bit depth changes will take effect next time you start the game.");
+			}
+			st->o.save(app);
+			const AppManager::RenderOptions &now = app.render_global;
+			bool same = st->o.shadows == now.shadows && st->o.texture == now.texture && st->o.lights == now.lights &&
+			            st->o.reflections == now.reflections && st->o.glow == now.glow && st->o.bump == now.bump && st->o.high_detail == now.high_detail;
+			st->apply_button->disabled = same;
+			if (!same && st->apply) {
+				st->apply = false;
+				app.apply_render(st->o);
+			}
+		};
+	}
+
+	// DE_CGameplayPanelRobot (0x3505b170) and its DE_CAutoPopulateListRobot (0x3505d7b0): a pilot
+	// and a fighter for each auto-populated player.
+	void gameplay(AppManager &app, Gui &g) {
+		Ctl *body = panel(g, "Game Settings");
+		struct State {
+			int record = 0, count = 0;
+			int pilot[20] = {}, fighter[20] = {};
+			std::vector<de::ObjectRef> pilots, fighters;
+			std::vector<std::string> pilot_names, fighter_names;
+			Edit *name = nullptr;
+			PageViewer *list = nullptr;
+		};
+		auto st = std::make_shared<State>();
+		st->record = app.registry_bool("Gamepley\\Record Session") ? 1 : 0;
+		st->count = std::clamp(reg_int(app, "AutoPopulate\\Num", 0), 0, 20);
+		// GatherUnlockedMasters: the unlocked pilots and fighters (fighters by name only once).
+		for (const auto &[stem, f] : app.world.data().files()) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				const std::string &cp = f->objects()[i].class_path;
+				de::ObjectRef d{f.get(), i};
+				if (cp != "Description\\Pilot" && cp != "Description\\Creature\\Fighter") continue;
+				if (!read_description(app.world.data(), d).listed || app.is_locked(d)) continue;
+				bool pilot = cp == "Description\\Pilot";
+				auto &names = pilot ? st->pilot_names : st->fighter_names;
+				if (!pilot && std::find(names.begin(), names.end(), d.info().name) != names.end()) continue;
+				(pilot ? st->pilots : st->fighters).push_back(d);
+				names.push_back(d.info().name);
+			}
+		}
+		// AutoPopulatePilotReference / AutoPopulateFighterReference (0x350146a0 / 0x35014890).
+		for (int i = 0; i < 20; ++i) {
+			for (int k = 0; k < 2; ++k) {
+				auto &list = k == 0 ? st->pilots : st->fighters;
+				int &out = k == 0 ? st->pilot[i] : st->fighter[i];
+				std::string want = app.registry_string(std::string("AutoPopulate\\") + (k == 0 ? "Pilot" : "Fighter") + std::to_string(i));
+				out = list.empty() ? 0 : i % int(list.size());
+				for (size_t j = 0; j < list.size(); ++j) {
+					if (!want.empty() && list[j].info().guid.str() == want) out = int(j);
+				}
+			}
+		}
+		auto *column = body->add<Stack>();
+		st->name = edit(g, column, "Player Name", app.registry_string("Network\\Player Name"), 20, 0.35f);
+		check(g, column, "Recordings", &st->record);
+		std::vector<std::string> ai = {"Rookie", "Amateur", "Veteran", "Champion", "World Champion", "Master"};
+		combo(g, column, "AI Difficulty", ai, &app.world.ai_difficulty, 0.5f);
+		std::vector<std::string> counts = {"Disabled"};
+		for (int i = 1; i <= 20; ++i) counts.push_back(std::to_string(i) + " Players");
+		combo(g, column, "Auto Populate With AIs", counts, &st->count, 0.65f);
+		st->list = column->add<PageViewer>();
+		st->list->len_y = g.vy(195);
+		const float row_h = g.vy(25);
+		auto rebuild = [st, row_h] {
+			Ctl *page = st->list->page;
+			while (!page->children.empty()) page->children.back()->destroy();
+			for (int i = 0; i < st->count; ++i) {
+				Ctl *row = page->add<Ctl>();
+				row->from_top = row_h * float(i), row->len_y = row_h;
+				row->add<Combo>(st->pilot_names, &st->pilot[i])->sr = 0.48f;
+				row->add<Combo>(st->fighter_names, &st->fighter[i])->sl = 0.52f;
+			}
+		};
+		st->list->page_height = [st, row_h](float) { return row_h * float(st->count); };
+		rebuild();
+		// ProcessPreDraw (0x3505d9b0): SetNumAutoPopulateEntries saves the count at once.
+		on_update_ = [&app, st, rebuild] {
+			if (st->count == reg_int(app, "AutoPopulate\\Num", 0)) return;
+			app.set_registry_string("AutoPopulate\\Num", std::to_string(std::clamp(st->count, 0, 20)));
+			rebuild();
+		};
+		// OnApplyOptions (0x3505ba50).
+		on_apply_ = [&app, st] {
+			app.set_registry_string("Network\\Player Name", st->name->str);
+			app.set_registry_bool("Gamepley\\Record Session", st->record != 0);
+			app.set_registry_string("AI Difficulty", std::to_string(app.world.ai_difficulty));
+			for (int i = 0; i < 20; ++i) {
+				if (!st->pilots.empty()) app.set_registry_string("AutoPopulate\\Pilot" + std::to_string(i), st->pilots[size_t(st->pilot[i])].info().guid.str());
+				if (!st->fighters.empty())
+					app.set_registry_string("AutoPopulate\\Fighter" + std::to_string(i), st->fighters[size_t(st->fighter[i])].info().guid.str());
+			}
+		};
+	}
+
+	// DE_CNetworkPanelRobot (0x3505bc60); its DE_CConnectionTypeRobot (0x3505de50) sets the bytes
+	// per second for a connection type and locks the field.
+	void network(AppManager &app, Gui &g) {
+		Ctl *body = panel(g, "Network Settings");
+		static const int kRates[6] = {0, 3600, 7000, 16000, 40000, 187500};
+		struct State {
+			int lan = 1, connection = 0;
+			Edit *server = nullptr, *port = nullptr, *max = nullptr, *password = nullptr, *admin = nullptr, *bytes = nullptr;
+		};
+		auto st = std::make_shared<State>();
+		st->lan = reg_int(app, "Network\\LAN Only", 1) != 0;
+		int bytes = reg_int(app, "Network\\Winsock\\Maximum Outgoing Bytes", 0);
+		for (int k = 1; k < 6; ++k) {
+			if (bytes == kRates[k]) st->connection = k;
+		}
+		auto *column = body->add<Stack>();
+		st->server = edit(g, column, "Server Name", app.registry_string("Network\\Server Name"), 20, 0.35f);
+		check(g, column, "LAN Only", &st->lan);
+		st->port = edit(g, column, "Listener Port", std::to_string(reg_int(app, "Network\\Winsock\\Listener Port", 0)), -1, 0.5f, true);
+		st->max = edit(g, column, "Max Players", std::to_string(reg_int(app, "Network\\Max Clients", 0)), -1, 0.5f, true);
+		st->password = edit(g, column, "Server Password", app.registry_string("Network\\Server Password"), 15, 0.5f);
+		st->admin = edit(g, column, "Admin Password", app.registry_string("Network\\Remote Admin Password"), 15, 0.5f);
+		combo(g, column, "Connection", {"Custom", "28k Dialup", "56k Dialup", "ISDN", "Cable", "T1 or LAN"}, &st->connection, 0.5f);
+		st->bytes = edit(g, column, "Bytes Per Second", std::to_string(bytes), -1, 0.5f, true);
+		on_update_ = [st] {
+			st->bytes->disabled = st->connection != 0;
+			if (st->connection > 0 && st->connection < 6) st->bytes->str = std::to_string(kRates[st->connection]);
+		};
+		// OnApplyOptions (0x3505c8f0).
+		on_apply_ = [&app, st] {
+			app.set_registry_bool("Network\\LAN Only", st->lan != 0);
+			app.set_registry_string("Network\\Server Name", st->server->str);
+			app.set_registry_string("Network\\Server Password", st->password->str);
+			app.set_registry_string("Network\\Remote Admin Password", st->admin->str);
+			app.set_registry_string("Network\\Winsock\\Maximum Outgoing Bytes", std::to_string(atoi(st->bytes->str.c_str())));
+			app.set_registry_string("Network\\Winsock\\Listener Port", std::to_string(atoi(st->port->str.c_str())));
+			app.set_registry_string("Network\\Max Clients", std::to_string(atoi(st->max->str.c_str())));
+		};
+	}
+
+	// DE_CControlsPanelRobot (0x3505f6e0): the actions, the selected one's controls, Assign
+	// (CaptureControl 0x35060240), Remove and Set Defaults. Bindings take effect at once.
+	void controls(AppManager &app, Gui &g) {
+		Ctl *body = panel(g, "Control Settings");
+		struct State {
+			int action = -1;
+			List *actions = nullptr, *keys = nullptr;
+			Button *assign = nullptr, *remove = nullptr;
+		};
+		auto st = std::make_shared<State>();
+		Ctl *left = body->add<Ctl>()->scale(0, 0, 0.5f, 0.85f);
+		st->actions = left->add<List>();
+		st->actions->title = "Actions";
+		std::vector<List::Row> rows;
+		for (auto &a : AppManager::actions()) rows.push_back({{a.name}});
+		st->actions->set_rows(rows);
+		Ctl *right = body->add<Ctl>()->scale(0.55f, 0, 1, 0.4f);
+		st->keys = right->add<List>();
+		st->keys->title = "Controls";
+		auto refresh = [&app, st] {
+			std::vector<List::Row> k;
+			if (st->action >= 0) {
+				int sc = app.binding(size_t(st->action));
+				if (sc > 0) k.push_back({{app.key_name ? app.key_name(sc) : std::to_string(sc)}});
+			}
+			st->keys->set_rows(k);
+			st->remove->disabled = true;
+		};
+		st->assign = body->add<Button>("Assign");
+		st->assign->scale(0.55f, 0.45f, 0.77f, 0.55f);
+		st->assign->disabled = true;
+		st->remove = body->add<Button>("Remove");
+		st->remove->scale(0.78f, 0.45f, 1, 0.55f);
+		st->remove->disabled = true;
+		auto *defaults = body->add<Button>("Set Defaults");
+		defaults->scale(0, 0.9f, 0.5f, 1);
+		Ctl *desc = body->add<Ctl>()->scale(0.55f, 0.6f, 1, 1);
+		desc->add<TextDisplay>("", g.vy(13));
+		st->actions->on_select = [st, refresh](int i) {
+			st->action = i;
+			st->assign->disabled = false;
+			refresh();
+		};
+		st->keys->on_select = [st](int) { st->remove->disabled = false; };
+		st->assign->on_click = [&app, &g, st, refresh] {
+			if (st->action < 0) return;
+			Dialog *d = g.open_dialog("", 450, 150);
+			d->set_fill({0.2f, 0.2f, 0.2f, 0.9f});
+			d->body->add<TextDisplay>("Press key to assign it to this action", g.vy(16));
+			d->on_key = [&app, d, st, refresh](int) {
+				if (app.last_scancode) app.set_binding(size_t(st->action), app.last_scancode);
+				d->close();
+				refresh();
+				return true;
+			};
+		};
+		st->remove->on_click = [&app, st, refresh] {
+			if (st->action < 0) return;
+			app.set_binding(size_t(st->action), 0);
+			refresh();
+		};
+		defaults->on_click = [&app, refresh] {
+			for (size_t i = 0; i < AppManager::actions().size(); ++i) app.set_binding(i, AppManager::actions()[i].default_scancode);
+			refresh();
+		};
+		refresh();
+	}
+
+	Control *controls_ = nullptr, *video_ = nullptr, *audio_ = nullptr, *game_ = nullptr, *network_ = nullptr, *back_ = nullptr;
+	Control window_;
+	Control *open_ = nullptr;
+	Ctl *holder_ = nullptr;
+	std::function<void()> on_apply_, on_update_;
 };
 
 // DE_CRecordingListUIManager (OMF ObjInitContents 0x350619e0, Begin 0x35062040, SetupControls
@@ -645,32 +793,31 @@ public:
 	bool begin(AppManager &app) override {
 		UIManager::begin(app);
 		records_ = list_recordings();
-		std::stable_sort(records_.begin(), records_.end(), [](auto &a, auto &b) { return a->name < b->name; });  // UseSortByName
 		selected_ = -1;
-		confirm_ = renaming_ = false;
 		return true;
 	}
 	void setup_controls(AppManager &app) override {
-		list_ = button(app, "", "ListWindow");
-		window_ = button(app, "", "Window");
+		Gui &g = *gui;
 		play_ = button(app, "Play", "NEXT");
 		play_->enabled = false;  // ReadOnlyOn until a record is selected
-		play_->keys = {kKeyReturn};
 		back_ = button(app, "Back", "BACK");
-		back_->keys = {kKeyEscape};
-		float l = window_->left + 0.6f * (window_->right - window_->left), r = window_->right - 0.01f;
-		float t = window_->top, h = window_->bottom - window_->top;
-		delete_ = &controls.emplace_back();
-		delete_->text = "Delete", delete_->left = l, delete_->right = r, delete_->top = t + 0.02f * h, delete_->bottom = t + 0.25f * h;
-		rename_ = &controls.emplace_back();
-		rename_->text = "Rename", rename_->left = l, rename_->right = r, rename_->top = t + 0.375f * h, rename_->bottom = t + 0.625f * h;
-		yes_ = &controls.emplace_back();
-		no_ = &controls.emplace_back();
-		yes_->text = "Yes", no_->text = "No";
-		yes_->left = window_->left + 0.1f * (window_->right - window_->left), yes_->right = window_->left + 0.4f * (window_->right - window_->left);
-		no_->left = window_->left + 0.6f * (window_->right - window_->left), no_->right = window_->left + 0.9f * (window_->right - window_->left);
-		yes_->top = no_->top = t + 0.7f * h, yes_->bottom = no_->bottom = t + 0.85f * h;
-		select(-1);
+		Ctl *frame = g.place(marker(app, "ListWindow"));
+		frame->set_frame(2, true);
+		frame->set_fill(theme::kWindowBack);
+		Ctl *inner = frame->add<Ctl>();
+		inner->set_frame(2, true);
+		inner->set_fill(theme::kWindowBack);
+		list_ = inner->add<List>();
+		list_->title = "Recordings Browser";
+		list_->columns = {{"Name", 0.35f}, {"Type", 0.2f}, {"Date", 0.15f}, {"Time", 0.15f}, {"Length", -1}};
+		list_->on_select = [this](int i) { select(i); };
+		list_->on_double = [this, &app](int) { click(app, *play_); };
+		window_ = g.place(marker(app, "Window"));
+		window_->set_frame(2, true);
+		window_->set_fill(theme::kWindowBack);
+		info_ = nullptr;
+		refresh();
+		g.set_focus(list_);
 	}
 	void click(AppManager &app, Control &c) override {
 		if (&c == back_) {
@@ -681,116 +828,66 @@ public:
 			std::string path = current()->path;
 			complete(app);
 			if (app.launch_replay) app.launch_replay(path);
-		} else if (&c == delete_ && current()) {
-			confirm_ = true;
-			renaming_ = false;
-			yes_->text = "Yes", no_->text = "No";
-			yes_->enabled = no_->enabled = true;
-		} else if (&c == yes_ && confirm_) {
-			// DeleteMasterObject, then DestroyResource deletes the file.
-			delete_recording(*current());
-			records_.erase(records_.begin() + selected_);
-			confirm_ = false;
-			select(-1);
-		} else if (&c == no_ && confirm_) {
-			confirm_ = false;
-			yes_->text = no_->text = "";
-			yes_->enabled = no_->enabled = false;
-		} else if (&c == rename_ && current()) {
-			// UserModalGetString("Enter New Name"), pre-filled with the name.
-			renaming_ = true;
-			confirm_ = false;
-			edit_ = current()->name;
-		}
-	}
-	bool key(AppManager &app, int sym) override {
-		if (renaming_) {
-			if (sym == kKeyReturn) {
-				if (!edit_.empty()) rename_recording(*current(), edit_);
-				renaming_ = false;
-			} else if (sym == kKeyEscape) {
-				renaming_ = false;
-			} else if (sym == 8 && !edit_.empty()) {
-				edit_.pop_back();
-			}
-			return true;
-		}
-		if (sym == kKeyUp) select(std::max(0, selected_ - 1));
-		else if (sym == kKeyDown) select(std::min(int(records_.size()) - 1, selected_ + 1));
-		else return false;
-		return true;
-	}
-	void text(AppManager &, const std::string &t) override {
-		if (renaming_) edit_ += t;
-	}
-	bool mouse(AppManager &app, float x, float y, int what) override {
-		if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
-		int row = int(std::floor((y - list_->top - kPad) / kRow - 2.5f));
-		if (row >= 0 && row < int(records_.size())) {
-			select(row);
-			if (what == 3) click(app, *play_);  // DE_CCloseListOnDoubleClickRobot
-		}
-		return true;
-	}
-	void draw(AppManager &, std::vector<DrawItem> &out) override {
-		if (!list_ || !window_) return;
-		const float white[4] = {1, 1, 1, 1}, dim[4] = {0.75f, 0.8f, 0.85f, 1}, hilite[4] = {0, 0, 0.5f, 1};
-		auto text = [&](float x, float y, const std::string &s, float size, const float *c, bool centred = false) {
-			DrawItem t;
-			t.kind = DrawItem::Text;
-			t.x0 = x, t.y0 = y, t.size = size, t.text = s, t.centered = centred;
-			std::copy(c, c + 4, t.rgba);
-			out.push_back(t);
-		};
-		float lw = list_->right - list_->left - 2 * kPad, x0 = list_->left + kPad;
-		text((list_->left + list_->right) / 2, list_->top + kPad + kRow / 2, "Recordings Browser", kText * 1.15f, white, true);
-		const char *heads[5] = {"Name", "Type", "Date", "Time", "Length"};
-		const float cols[6] = {0, 0.35f, 0.55f, 0.7f, 0.85f, 1};
-		float hy = list_->top + kPad + kRow * 2;
-		for (int k = 0; k < 5; ++k) text(x0 + cols[k] * lw + kPad, hy, heads[k], kText * 0.9f, dim);
-		for (size_t i = 0; i < records_.size(); ++i) {
-			float y = list_->top + kPad + kRow * (float(i) + 2.5f);
-			if (y + kRow > list_->bottom) break;
-			if (int(i) == selected_) {
-				DrawItem r;
-				r.x0 = x0, r.x1 = list_->right - kPad, r.y0 = y, r.y1 = y + kRow;
-				std::copy(hilite, hilite + 4, r.rgba);
-				out.push_back(r);
-			}
-			auto cells = cells_of(*records_[i]);
-			for (int k = 0; k < 5; ++k) text(x0 + cols[k] * lw + kPad, y + kRow / 2, cells[size_t(k)], kText * 0.9f, white);
-		}
-		// The session info (DE_CSessionInfoInGameRobot): the game type and the record's details.
-		if (SessionRecord *r = current()) {
-			float wx = window_->left + 0.03f * (window_->right - window_->left), wy = window_->top, h = window_->bottom - window_->top;
-			auto cells = cells_of(*r);
-			text(wx, wy + 0.08f * h, cells[1], 18.0f / 600.0f, white);
-			text(wx, wy + 0.2f * h, cells[0], kText, dim);
-			text(wx, wy + 0.3f * h, cells[2] + "  " + cells[3] + "  (" + cells[4] + ")", kText, dim);
-			if (!r->player.empty()) text(wx, wy + 0.4f * h, r->player, kText, dim);
-			if (renaming_) {
-				text(wx, wy + 0.55f * h, "Enter New Name", kText, white);
-				text(wx, wy + 0.63f * h, edit_ + "_", kText, white);
-			}
-			if (confirm_) {
-				text((window_->left + window_->right) / 2, wy + 0.55f * h, "Are you sure you want to delete this replay?", kText, white, true);
-			}
 		}
 	}
 
 private:
-	static constexpr float kRow = 20.0f / 600.0f, kText = 16.0f / 600.0f, kPad = 0.01f;
-
 	SessionRecord *current() const { return selected_ >= 0 && size_t(selected_) < records_.size() ? records_[size_t(selected_)].get() : nullptr; }
+	// RefreshList: UseSortByName.
+	void refresh() {
+		std::stable_sort(records_.begin(), records_.end(), [](auto &a, auto &b) { return a->name < b->name; });
+		std::vector<List::Row> rows;
+		for (auto &r : records_) {
+			auto c = cells_of(*r);
+			rows.push_back({{c.begin(), c.end()}});
+		}
+		list_->set_rows(rows);
+		select(-1);
+	}
+	// SetCurrentRecord (0x35062610): a new info control for the record; Play follows the selection.
 	void select(int i) {
 		selected_ = i >= 0 && size_t(i) < records_.size() ? i : -1;
 		if (play_) play_->enabled = current() != nullptr;
-		bool on = current() != nullptr;
-		if (delete_) delete_->text = on ? "Delete" : "", delete_->enabled = on;
-		if (rename_) rename_->text = on ? "Rename" : "", rename_->enabled = on;
-		if (yes_) yes_->text = "", yes_->enabled = false;
-		if (no_) no_->text = "", no_->enabled = false;
-		confirm_ = renaming_ = false;
+		if (info_) info_->destroy();
+		info_ = nullptr;
+		SessionRecord *r = current();
+		if (!r) return;
+		Gui &g = *gui;
+		info_ = window_->add<Ctl>();
+		Ctl *left = info_->add<Ctl>()->scale(0, 0, 0.5f, 1), *right = info_->add<Ctl>()->scale(0.5f, 0, 1, 1);
+		Ctl *a = left->add<Ctl>()->scale(0.3f, 0, 1, 0.3f);
+		auto *name = left->add<Text>(cells_of(*r)[1], g.vy(18), theme::kText, 0);
+		name->hug();
+		name->from_left = 3;
+		auto *rules = a->add<Text>("Rules and Mods:", g.vy(12), theme::kText, 0);
+		rules->hug();
+		rules->from_left = 3, rules->from_top = g.vy(40);
+		Ctl *b = right->add<Ctl>()->scale(0.6f, 0, 1, 1);
+		auto *del = b->add<Button>("Delete");
+		del->sb = 0.25f;
+		del->on_click = [this] {
+			gui->confirm("Delete Replay", "Are you sure you want to delete this replay?", [this](bool yes) {
+				if (!yes || !current()) return;
+				// DeleteMasterObject, then DestroyResource deletes the file.
+				delete_recording(*current());
+				records_.erase(records_.begin() + selected_);
+				refresh();
+			});
+		};
+		auto *ren = b->add<Button>("Rename");
+		ren->scale(0, 0.375f, 1, 0.625f);
+		ren->on_click = [this] {
+			if (!current()) return;
+			gui->get_string("Enter New Name", current()->name, [this](bool ok, const std::string &name) {
+				SessionRecord *rec = current();
+				if (!ok || !rec || name.empty()) return;
+				rename_recording(*rec, name);
+				refresh();
+				for (size_t k = 0; k < records_.size(); ++k) {
+					if (records_[k].get() == rec) list_->select(int(k));
+				}
+			});
+		};
 	}
 	// DE_CSessionRecord::ProcessEvent's cells (Core 0x70203280): Date "%#d/%#m/%y", Time
 	// "%#I:%#M%p", Length gFormatTimeStringFromSeconds (0x70202f70), Type the master description.
@@ -820,10 +917,9 @@ public:
 private:
 	std::vector<std::shared_ptr<SessionRecord>> records_;
 	int selected_ = -1;
-	bool confirm_ = false, renaming_ = false;
-	std::string edit_;
-	Control *list_ = nullptr, *window_ = nullptr, *play_ = nullptr, *back_ = nullptr, *delete_ = nullptr, *rename_ = nullptr,
-	        *yes_ = nullptr, *no_ = nullptr;
+	Control *play_ = nullptr, *back_ = nullptr;
+	List *list_ = nullptr;
+	Ctl *window_ = nullptr, *info_ = nullptr;
 };
 
 // DE_CVCRControls (OMF ObjInitContents 0x35064de0, SetupControls 0x350654a0, ObjUpdate 0x35064ff0;
@@ -845,59 +941,32 @@ public:
 	}
 	void deactivated(AppManager &app) override { app.world.vcr_shown = false; }
 
+	// DE_CVCRRobot (0x35065760): in VCRUIManager.Fill (0.2..0.8 down the VCR rectangle) the
+	// transport buttons across the first 0.35 (DE_CAutoStackHorizontalRobot, spacing 0.1), the
+	// slow and fast speed combos under them, the seek slider, the observer combo and Snapshot.
 	void setup_controls(AppManager &app) override {
-		Control f = *button(app, "", "VCR");
-		controls.pop_back();
-		// Panel P: 0.2..0.8 down the VCR rectangle.
-		float w = f.right - f.left, h = (f.bottom - f.top) * 0.6f, top = f.top + 0.2f * (f.bottom - f.top);
-		auto sub = [&](const std::string &text, float l, float t, float r, float b) {
-			Control &c = controls.emplace_back();
-			c.text = text;
-			c.left = f.left + l * w, c.right = f.left + r * w, c.top = top + t * h, c.bottom = top + b * h;
-			return &c;
-		};
-		// The buttons row (DE_CAutoStackHorizontalRobot, spacing 0.1) across 0..0.35.
-		const float bw = 0.35f / (4 + 3 * 0.1f);
-		for (int k = 0; k < 4; ++k) buttons_[k] = sub("", k * bw * 1.1f, 0, k * bw * 1.1f + bw, 0.5f);
-		slow_ = sub("", 0.35f * 0.04f, 0.6f, 0.35f * 0.46f, 1);
-		fast_ = sub("", 0.35f * 0.54f, 0.6f, 0.35f * 0.96f, 1);
-		seek_ = sub("", 0.4f, 0, 1, 0.3f);
-		observer_ = sub("", 0.6f, 0.7f, 0.88f, 1);
-		snap_ = sub("Snapshot", 0.9f, 0.7f, 1, 1);
-		if (const de::ObjectsFile *gui = app.world.data().file("OMFBGGUI")) {
-			for (uint32_t i = 0; i < gui->objects().size(); ++i) {
-				const de::ObjectInfo &o = gui->objects()[i];
-				if (o.class_path != "Image\\Standard") continue;
-				for (auto &[name, ref] : std::initializer_list<std::pair<const char *, de::ObjectRef *>>{
-				         {"VCRPlay", &play_img_}, {"VCRPause", &pause_img_}, {"VCRAdvanceFrame", &step_img_},
-				         {"VCRFastBackward", &rewind_img_}, {"VCRFastForward", &ff_img_}}) {
-					if (o.name == name) *ref = {gui, i};
-				}
-			}
+		Gui &g = *gui;
+		fill_ = g.place(marker(app, "VCR"))->add<Ctl>()->scale(0, 0.2f, 1, 0.8f);
+		Ctl *row = fill_->add<Ctl>()->scale(0, 0, 0.35f, 0.5f);
+		const float bw = 1 / (4 + 3 * 0.1f);
+		const char *faces[4] = {"VCRPause", "VCRAdvanceFrame", "VCRFastBackward", "VCRFastForward"};
+		int *flags[4] = {&paused_, &step_, &rewind_, &ff_};
+		for (int k = 0; k < 4; ++k) {
+			auto *b = row->add<Button>("");
+			b->scale(float(k) * bw * 1.1f, 0, float(k) * bw * 1.1f + bw, 1);
+			b->face_up = g.image(faces[k]);
+			b->bound = flags[k];
+			if (k == 0) b->toggle = true, b->face_down = g.image("VCRPlay");
 		}
+		Ctl *speed = fill_->add<Ctl>()->scale(0, 0.6f, 0.35f, 1);
+		speed->add<Combo>(std::vector<std::string>{"Normal", "1/2", "1/4", "1/8"}, &slow_index_)->scale(0.04f, 0, 0.46f, 1);
+		speed->add<Combo>(std::vector<std::string>{"2X", "4X", "8X", "16X"}, &fast_index_)->scale(0.54f, 0, 0.96f, 1);
+		fill_->add<Slider>(&slider_)->scale(0.4f, 0, 1, 0.3f);
+		fill_->add<Combo>(std::vector<std::string>{"Auto Observer", "Manual Observer"}, &observer_mode_)->scale(0.6f, 0.7f, 0.88f, 1);
+		auto *snap = fill_->add<Button>("Snapshot");
+		snap->scale(0.9f, 0.7f, 1, 1);
+		snap->bound = &snapshot_;
 		last_ = std::chrono::steady_clock::now();
-		labels();
-	}
-	void click(AppManager &app, Control &c) override {
-		if (&c == buttons_[0]) paused_ = !paused_;
-		else if (&c == buttons_[1]) step_ = true;
-		else if (&c == buttons_[2]) rewind_ = true;
-		else if (&c == buttons_[3]) ff_ = true;
-		else if (&c == slow_) slow_index_ = (slow_index_ + 1) % 4;
-		else if (&c == fast_) fast_index_ = (fast_index_ + 1) % 4;
-		else if (&c == observer_) observer_mode_ ^= 1;
-		else if (&c == snap_) snapshot_ = true;
-		labels();
-		(void)app;
-	}
-	bool mouse(AppManager &, float x, float y, int what) override {
-		if (!seek_ || !seek_->contains(x, y) || (what != 1 && what != 0) || (what == 0 && !dragging_)) {
-			if (what == 2) dragging_ = false;
-			return false;
-		}
-		dragging_ = what == 1 || dragging_;
-		slider_ = std::clamp((x - seek_->left) / (seek_->right - seek_->left), 0.0f, 1.0f);
-		return true;
 	}
 	// ObjUpdate.
 	void update(AppManager &app) override {
@@ -921,19 +990,20 @@ public:
 		if (snapshot_) {
 			if (hide_ <= 1) hide_ += 0.2f;
 			else {
-				snapshot_ = false;
+				snapshot_ = 0;
 				app.snapshot_requested = true;
 				hide_ = 1;
 			}
 		}
 		if (hide_ > 0) hide_ = std::max(0.0f, hide_ - 0.1f);
+		if (fill_) fill_->hidden = hide_ > 0;
 		if (hide_ > 0) return;
 		float end = float(replay_end_ms(w));
 		if (end <= 0) return;
 		if (slider_ != last_slider_) w.passed_ms += double(end * slider_ - w.scene_ms());  // seek
 		slider_ = std::clamp(w.scene_ms() / end, 0.0f, 1.0f);
-		if (ff_) ff_ = false, mode_ = mode_ != 1 ? 1 : 0;
-		if (rewind_) rewind_ = false, mode_ = mode_ != 2 ? 2 : 0;
+		if (ff_) ff_ = 0, mode_ = mode_ != 1 ? 1 : 0;
+		if (rewind_) rewind_ = 0, mode_ = mode_ != 2 ? 2 : 0;
 		if (paused_ != last_paused_) mode_ = 0;
 		float speed = 1;
 		bool run = true;
@@ -944,7 +1014,7 @@ public:
 			speed = std::array<float, 4>{2, 4, 8, 16}[size_t(fast_index_)];
 			if (mode_ == 2) speed = -speed;
 		}
-		if (step_) step_ = false, w.passed_ms += 50;
+		if (step_) step_ = 0, w.passed_ms += 50;
 		if (!run) {
 			w.time_scale = 0;
 		} else if (speed < 0) {
@@ -956,54 +1026,12 @@ public:
 		last_slider_ = slider_;
 		last_paused_ = paused_;
 		prev_dt_ = dt;
-		labels();
-	}
-	void draw(AppManager &, std::vector<DrawItem> &out) override {
-		if (hide_ > 0) return;
-		const float edge[4] = {0.55f, 0.75f, 0.9f, 0.9f}, back[4] = {0.05f, 0.08f, 0.12f, 0.8f}, fill[4] = {0.5f, 1, 1, 1};
-		de::ObjectRef imgs[4] = {paused_ ? play_img_ : pause_img_, step_img_, rewind_img_, ff_img_};
-		for (int k = 0; k < 4; ++k) {
-			if (!buttons_[k] || !imgs[k]) continue;
-			DrawItem d;
-			d.kind = DrawItem::Image;
-			d.x0 = buttons_[k]->left, d.x1 = buttons_[k]->right, d.y0 = buttons_[k]->top, d.y1 = buttons_[k]->bottom, d.image = imgs[k];
-			if ((k == 2 && mode_ == 2) || (k == 3 && mode_ == 1)) {
-				DrawItem r;
-				r.x0 = d.x0, r.x1 = d.x1, r.y0 = d.y1 - 0.004f, r.y1 = d.y1;
-				std::copy(fill, fill + 4, r.rgba);
-				out.push_back(r);
-			}
-			out.push_back(d);
-		}
-		if (seek_) {
-			float cy = (seek_->top + seek_->bottom) / 2;
-			DrawItem track, well, knob;
-			track.x0 = seek_->left, track.x1 = seek_->right, track.y0 = cy - 0.006f, track.y1 = cy + 0.006f;
-			std::copy(edge, edge + 4, track.rgba);
-			well = track;
-			well.x0 += 0.002f, well.x1 -= 0.002f, well.y0 += 0.002f, well.y1 -= 0.002f;
-			std::copy(back, back + 4, well.rgba);
-			float kx = seek_->left + slider_ * (seek_->right - seek_->left);
-			knob.x0 = kx - 0.006f, knob.x1 = kx + 0.006f, knob.y0 = seek_->top, knob.y1 = seek_->bottom;
-			std::copy(fill, fill + 4, knob.rgba);
-			out.push_back(track);
-			out.push_back(well);
-			out.push_back(knob);
-		}
 	}
 
 private:
-	void labels() {
-		static const char *slow[4] = {"Normal", "1/2", "1/4", "1/8"}, *fast[4] = {"2X", "4X", "8X", "16X"};
-		if (slow_) slow_->text = slow[slow_index_];
-		if (fast_) fast_->text = fast[fast_index_];
-		if (observer_) observer_->text = observer_mode_ ? "Manual Observer" : "Auto Observer";
-	}
-
-	Control *buttons_[4] = {}, *slow_ = nullptr, *fast_ = nullptr, *seek_ = nullptr, *observer_ = nullptr, *snap_ = nullptr;
-	de::ObjectRef play_img_, pause_img_, step_img_, rewind_img_, ff_img_;
-	bool paused_ = true, last_paused_ = true;  // +0x130 (paused at first), +0x134
-	bool step_ = false, ff_ = false, rewind_ = false, snapshot_ = false, dragging_ = false;
+	Ctl *fill_ = nullptr;
+	int paused_ = 1, last_paused_ = 1;  // +0x130 (paused at first), +0x134
+	int step_ = 0, ff_ = 0, rewind_ = 0, snapshot_ = 0;
 	float slider_ = 0, last_slider_ = 0, hide_ = 0, prev_dt_ = 0;
 	int mode_ = 0, slow_index_ = 0, fast_index_ = 0, observer_mode_ = 0;
 	std::chrono::steady_clock::time_point last_;
@@ -1028,14 +1056,6 @@ private:
 
 }  // namespace
 
-namespace {
-// DE_CListControl3dEx: entries at least 0x14 screen pixels (SetMinEntrySize; the references are at
-// 1024x768), the text as tall as the launcher's SizeListControlEntryText gives (measured).
-constexpr float kRow = 20.0f / 768.0f, kListText = 19.0f / 768.0f;
-// ColorSelectedItem: the system highlight (classic Windows navy, as in the references).
-constexpr float kSelected[4] = {0, 0, 0.5f, 1};
-}
-
 bool DescriptionSelector::begin(AppManager &app) {
 	UIManager::begin(app);
 	// DE_CChooseFighterUIManager::Begin (0x35056b20): back from the model picker with Next, the
@@ -1056,7 +1076,6 @@ bool DescriptionSelector::begin(AppManager &app) {
 	}
 	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
 	selected_ = entries_.empty() ? -1 : 0;
-	scroll_ = 0;
 	// Begin (0x701e4d40): a pool of one is chosen without showing; backing out passes through.
 	if (pool.size() == 1) {
 		choose(app, pool[0]);
@@ -1070,52 +1089,89 @@ bool DescriptionSelector::begin(AppManager &app) {
 	return true;
 }
 
+// DE_CGenericDescriptionSelector::SetupControls (Core 0x701e4a60), and DE_CChooseFighterUIManager's
+// (OMF 0x35056720): the list in ListWindow, the representation in Window; Choose Creature adds a
+// strip from 0.93 down the Window with the Model combo (to 0.7 across) and View (0.73 to 0.97),
+// and its Back has no Esc.
 void DescriptionSelector::setup_controls(AppManager &app) {
-	list_ = button(app, "", "ListWindow");
-	window_ = button(app, "", "Window");
+	Gui &g = *gui;
+	list_rect_ = marker(app, "ListWindow");
+	window_rect_ = marker(app, "Window");
+	next_ = nullptr;
 	if (!next_label.empty()) {
 		next_ = button(app, next_label, "NEXT");
 		next_->keys = {kKeyReturn};
 	}
 	back_ = button(app, "Back", "BACK");
-	back_->keys = {kKeyEscape};
-	view_ = nullptr;
-	// SetupControls (0x35056720): under the Window, a strip from 0.93 down holding the Model choice
-	// (to 0.7 across) and View (0.73 to 0.97).
-	if (choose_fighter && window_) {
-		float h = window_->bottom - window_->top, w = window_->right - window_->left;
-		Control &v = controls.emplace_back();
-		v.text = "View";
-		v.top = window_->top + 0.93f * h, v.bottom = window_->bottom;
-		v.left = window_->left + 0.73f * w, v.right = window_->left + 0.97f * w;
-		view_ = &v;
+	if (!choose_fighter) back_->keys = {kKeyEscape};
+	list_ = g.place(list_rect_)->add<List>();
+	std::vector<List::Row> rows;
+	for (auto &e : entries_) {
+		List::Row r{{e.info().name}};
+		if (app.is_locked(e)) r.color = {0.6f, 0.6f, 0.6f, 1};
+		rows.push_back(r);
 	}
+	list_->set_rows(rows);
+	list_->on_select = [this, &app](int i) { select(app, i); };
+	list_->on_double = [this, &app](int) {
+		if (next_) click(app, *next_);
+	};
+	Ctl *window = g.place(window_rect_);
+	panel_ = window->add<Ctl>();
+	panel_->from_left = panel_->from_right = 0.02f * g.W;
+	panel_->from_top = panel_->from_bottom = 0.02f * g.H;
+	// DE_CPilotDescription::NewLargeRepresentation (OMF 0x3504f930): the text below 0.66.
+	bio_ = panel_->add<TextDisplay>("", g.vy(13));
+	bio_->scale(0.013f, 0.66f, 0.987f, 1);
+	bio_->hidden = true;
+	model_holder_ = nullptr;
+	model_combo_ = nullptr;
+	if (choose_fighter) {
+		Ctl *strip = window->add<Ctl>();
+		strip->st = 0.93f;
+		Ctl *row = strip->add<Ctl>();
+		row->sr = 0.7f;
+		model_holder_ = describe(g, row, "Model", 0.5f);
+		auto *view = strip->add<Button>("View");
+		view->scale(0.73f, 0, 0.97f, 1);
+		view->on_click = [this, &app] {
+			if (models_.empty()) return;
+			// ProcessButtonClickEvent (0x35057270): the picker, over this page.
+			if (!picker_) picker_ = std::make_shared<ModelPicker>(this);
+			begun = false;
+			app.set_next(picker_, true);
+		};
+	}
+	g.layout();
+	g.set_focus(list_);
+	if (selected_ >= 0) list_->select(selected_, false);
 	select(app, selected_);
 }
 
-// The robot's ProcessSelectedObjects (0x701e5370): Next reads "Locked" for a locked one.
-int DescriptionSelector::visible_rows() const {
-	if (!list_) return 0;
-	return std::max(1, int((list_->bottom - list_->top - 0.02f) / kRow));
-}
-
-// The list control (DE_CListControl3dEx) scrolls to keep the selection in view.
+// ProcessSelectedObjects (0x701e5370; Choose Creature's 0x350574b0): Next reads "Locked" for a
+// locked one; the fighter's models in a new combo, the flagged one chosen.
 void DescriptionSelector::select(AppManager &app, int i) {
 	if (i < 0 || i >= int(entries_.size())) return;
-	selected_ = i, bio_scroll_ = 0;
-	int rows = visible_rows();
-	if (rows > 0) {
-		if (i < scroll_) scroll_ = i;
-		if (i >= scroll_ + rows) scroll_ = i - rows + 1;
+	selected_ = i;
+	const de::ObjectRef &d = entries_[size_t(i)];
+	if (next_) next_->text = app.is_locked(d) ? "Locked" : next_label;
+	if (bio_) {
+		bool pilot = d.info().class_path == "Description\\Pilot";
+		bio_->hidden = !pilot;
+		if (pilot) bio_->set_text(pilot_text(app, d));
 	}
-	if (next_) next_->text = app.is_locked(entries_[size_t(i)]) ? "Locked" : next_label;
-	// ProcessSelectedObjects (0x350574b0): the fighter's models, the flagged one by default.
 	if (choose_fighter) {
-		models_ = fighter_models(app.world.data(), entries_[size_t(i)]);
+		models_ = fighter_models(app.world.data(), d);
 		model_ = 0;
+		std::vector<std::string> names;
 		for (size_t k = 0; k < models_.size(); ++k) {
 			if (read_description(app.world.data(), models_[k]).flag_d8) model_ = int(k);
+			const std::string &n = models_[k].info().name;
+			if (std::find(names.begin(), names.end(), n) == names.end()) names.push_back(n);
 		}
+		if (model_combo_) model_combo_->destroy();
+		model_combo_ = nullptr;
+		if (model_holder_ && !names.empty()) model_combo_ = model_holder_->add<Combo>(names, &model_);
 	}
 }
 
@@ -1132,11 +1188,6 @@ void DescriptionSelector::click(AppManager &app, Control &c) {
 	if (&c == back_) {
 		backed_out = true;
 		app.set_last();
-	} else if (&c == view_ && !models_.empty()) {
-		// ProcessButtonClickEvent (0x35057270): the picker, over this page.
-		if (!picker_) picker_ = std::make_shared<ModelPicker>(this);
-		begun = false;
-		app.set_next(picker_, true);
 	} else if (&c == next_ && selected_ >= 0) {
 		const de::ObjectRef &d = entries_[size_t(selected_)];
 		if (app.is_locked(d)) app.notify("Selection Locked", d.info().name + " is currently locked and cannot be selected.");
@@ -1144,46 +1195,43 @@ void DescriptionSelector::click(AppManager &app, Control &c) {
 	}
 }
 
+// GetPilotDescriptionText (OMF 0x35050870): its PilotDescription value ("BIO UNNAVAILABLE" when
+// empty), then under RECON DATA each AI stat whose descriptor is unlocked (id 100 + k,
+// UnlockStatDescriptions) by its level.
+std::string DescriptionSelector::pilot_text(AppManager &app, const de::ObjectRef &d) const {
+	std::string bio;
+	if (GameObject *g = app.world.global_object(d)) {
+		if (auto *v = app.world.object_value(g, "PilotDescription")) bio = v->text;
+	}
+	if (bio.empty()) bio = "BIO UNNAVAILABLE";
+	auto res = passive_references(app.world.data(), d);
+	std::optional<Pilot> pl = res.empty() ? std::nullopt : read_pilot(*res[0].file, res[0].info(), 0);
+	if (!pl) return bio;
+	static const char *stat_names[22] = {"Light Attacks", "Heavy Attacks", "Punches", "Kicks", "Special Moves", "Melee Attacks",
+	                                     "Preimptive Attacks", "Back Attacks", "Counter Attacks", "Jumping", "Grappls",
+	                                     "Carryable Weapons", "Powerups", "Super Moves", "Left Attacks", "Right Attacks",
+	                                     "Movement Urgency", "Evasion", "Mercy", "Attack Range", "Attack Variation", "Defend Objective"};
+	// DE_CPilot::StatByIndex (OMF 0x35051330).
+	static const uint32_t stat_offsets[22] = {0x428, 0x448, 0x468, 0x488, 0x4a8, 0x4e8, 0x508, 0x528, 0x548, 0x568, 0x588,
+	                                          0x5a8, 0x5c8, 0x4c8, 0x3e8, 0x408, 0x628, 0x648, 0x668, 0x5e8, 0x608, 0x688};
+	static const char *levels[9] = {"None", "Abysimal", "Low", "Below Average", "Average", "Above Average", "High", "Huge", "Massive"};
+	bool header = false;
+	for (int k = 0; k < 22; ++k) {
+		if (description_locked(app.world, d, uint32_t(100 + k))) continue;
+		if (!header) bio += "\n\nRECON DATA\n\nObserved Preferences:\n\n", header = true;
+		auto it = pl->ai.find(stat_offsets[k]);
+		uint32_t level = it == pl->ai.end() ? 4 : it->second.level;
+		bio += std::string(stat_names[k]) + ": " + (level < 9 ? levels[level] : "") + "\n";
+	}
+	return bio;
+}
 
+// NewLargeRepresentation (description vtable +0x120): the ControlCreator in the Window, or a
+// pilot's panel (DE_CPilotDescription::NewLargeRepresentation, OMF 0x3504f930): its name, its
+// photo framed on the left, its stats as bars on the right; its text is the panel's text display.
 void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
-	if (!list_ || !window_) return;
-	const float white[4] = {1, 1, 1, 1};
-	const float *hilite = kSelected;
+	const Control *window_ = &window_rect_;
 	float pad = 0.01f;
-	for (size_t i = size_t(std::max(0, scroll_)); i < entries_.size(); ++i) {
-		float y = list_->top + pad + kRow * (float(i) - float(scroll_));
-		if (y + kRow > list_->bottom) break;
-		if (int(i) == selected_) {
-			DrawItem r;
-			r.x0 = list_->left + pad, r.x1 = list_->right - pad, r.y0 = y, r.y1 = y + kRow;
-			std::copy(hilite, hilite + 4, r.rgba);
-			out.push_back(r);
-		}
-		DrawItem e;
-		e.kind = DrawItem::Text;
-		e.x0 = list_->left + 2 * pad, e.y0 = y + kRow / 2, e.size = kListText, e.text = entries_[i].info().name;
-		std::copy(white, white + 4, e.rgba);
-		if (app.is_locked(entries_[i])) e.rgba[0] = e.rgba[1] = e.rgba[2] = 0.6f;
-		out.push_back(e);
-	}
-	// The Model choice in the strip under the Window (SetupControls 0x35056720): its label on the
-	// left half of the first 0.7, the model on the right half.
-	if (choose_fighter && !models_.empty()) {
-		float h = window_->bottom - window_->top, w = window_->right - window_->left;
-		float y = window_->top + 0.965f * h;
-		DrawItem l;
-		l.kind = DrawItem::Text;
-		l.x0 = window_->left + 0.02f * w, l.y0 = y, l.size = kListText, l.text = "Model";
-		out.push_back(l);
-		DrawItem m = l;
-		m.x0 = window_->left + 0.525f * w, m.centered = true, m.text = models_[size_t(model_)].info().name;
-		const float c[4] = {0.55f, 0.75f, 0.9f, 1};
-		std::copy(c, c + 4, m.rgba);
-		out.push_back(m);
-	}
-	// NewLargeRepresentation (description vtable +0x120): the ControlCreator in the Window, or a
-	// pilot's panel (DE_CPilotDescription::NewLargeRepresentation, OMF 0x3504f930): its name, its
-	// photo framed on the left, its stats as bars on the right.
 	if (selected_ >= 0 && entries_[size_t(selected_)].info().class_path == "Description\\Pilot") {
 		const de::ObjectRef &d = entries_[size_t(selected_)];
 		float wx0 = window_->left + 2 * pad, wx1 = window_->right - 2 * pad, wy0 = window_->top + 2 * pad, wy1 = window_->bottom - 2 * pad;
@@ -1271,60 +1319,6 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 				out.push_back(sq);
 			}
 		}
-		// GetPilotDescriptionText (OMF 0x35050870): its PilotDescription value ("BIO UNNAVAILABLE"
-		// when empty), then under RECON DATA each AI stat whose descriptor is unlocked (id 100 + k,
-		// UnlockStatDescriptions) by its level; centred from 0.66 down.
-		std::string bio;
-		if (GameObject *g = app.world.global_object(d)) {
-			if (auto *v = app.world.object_value(g, "PilotDescription")) bio = v->text;
-		}
-		if (bio.empty()) bio = "BIO UNNAVAILABLE";
-		if (pl) {
-			static const char *stat_names[22] = {"Light Attacks", "Heavy Attacks", "Punches", "Kicks", "Special Moves", "Melee Attacks",
-			                                     "Preimptive Attacks", "Back Attacks", "Counter Attacks", "Jumping", "Grappls",
-			                                     "Carryable Weapons", "Powerups", "Super Moves", "Left Attacks", "Right Attacks",
-			                                     "Movement Urgency", "Evasion", "Mercy", "Attack Range", "Attack Variation", "Defend Objective"};
-			// DE_CPilot::StatByIndex (OMF 0x35051330).
-			static const uint32_t stat_offsets[22] = {0x428, 0x448, 0x468, 0x488, 0x4a8, 0x4e8, 0x508, 0x528, 0x548, 0x568, 0x588,
-			                                          0x5a8, 0x5c8, 0x4c8, 0x3e8, 0x408, 0x628, 0x648, 0x668, 0x5e8, 0x608, 0x688};
-			static const char *levels[9] = {"None", "Abysimal", "Low", "Below Average", "Average", "Above Average", "High", "Huge", "Massive"};
-			bool header = false;
-			for (int k = 0; k < 22; ++k) {
-				if (description_locked(app.world, d, uint32_t(100 + k))) continue;
-				if (!header) bio += "\n\nRECON DATA\n\nObserved Preferences:\n\n", header = true;
-				auto it = pl->ai.find(stat_offsets[k]);
-				uint32_t level = it == pl->ai.end() ? 4 : it->second.level;
-				bio += std::string(stat_names[k]) + ": " + (level < 9 ? levels[level] : "") + "\n";
-			}
-		}
-		float bx0 = wx0 + 0.013f * w, bx1 = wx1 - 0.013f * w, size = kListText;
-		std::vector<std::string> lines;
-		std::string line;
-		for (size_t p = 0; p <= bio.size();) {
-			size_t q = bio.find_first_of(" \n", p);
-			std::string word = bio.substr(p, q == std::string::npos ? std::string::npos : q - p);
-			std::string test = line.empty() ? word : line + " " + word;
-			if (!line.empty() && app.text_width && app.text_width(test, size) > bx1 - bx0) {
-				lines.push_back(line);
-				line = word;
-			} else {
-				line = test;
-			}
-			if (q == std::string::npos) break;
-			if (bio[q] == '\n') lines.push_back(line), line.clear();
-			p = q + 1;
-		}
-		if (!line.empty()) lines.push_back(line);
-		while (!lines.empty() && lines.back().empty()) lines.pop_back();
-		bio_lines_ = int(lines.size());
-		bio_rows_ = std::max(1, int((wy1 - size - (wy0 + 0.69f * h)) / (size * 1.45f)) + 1);
-		bio_scroll_ = std::clamp(bio_scroll_, 0, std::max(0, bio_lines_ - bio_rows_));
-		for (int i = 0; i < bio_rows_ && bio_scroll_ + i < bio_lines_; ++i) {
-			DrawItem t;
-			t.kind = DrawItem::Text;
-			t.x0 = (bx0 + bx1) / 2, t.y0 = wy0 + 0.69f * h + float(i) * size * 1.45f, t.size = size, t.text = lines[size_t(bio_scroll_ + i)], t.centered = true;
-			out.push_back(t);
-		}
 	} else if (selected_ >= 0) {
 		DescriptionInfo info = read_description(app.world.data(), entries_[size_t(selected_)]);
 		if (info.large && info.large.info().class_path == "ControlCreator") {
@@ -1332,39 +1326,6 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 			     window_->right - window_->left - 4 * pad, window_->bottom - pad, out);
 		}
 	}
-}
-
-bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
-	// The Model choice: a click steps to the next model.
-	if (choose_fighter && window_ && what == 1 && !models_.empty() && window_->contains(x, y) &&
-	    y > window_->top + 0.93f * (window_->bottom - window_->top) && x < window_->left + 0.7f * (window_->right - window_->left)) {
-		model_ = (model_ + 1) % int(models_.size());
-		return true;
-	}
-	if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
-	float pad = 0.01f;
-	int row = int(std::floor((y - list_->top - pad) / kRow)) + scroll_;
-	if (row < 0 || row >= int(entries_.size())) return true;
-	select(app, row);
-	if (what == 3 && next_) click(app, *next_);
-	return true;
-}
-
-void DescriptionSelector::wheel(AppManager &app, int dy) {
-	// Over the pilot text when it overflows: scroll it (a stand-in for the text display's page viewer).
-	if (window_ && window_->contains(app.mouse_x(), app.mouse_y()) && bio_lines_ > bio_rows_) {
-		bio_scroll_ = std::clamp(bio_scroll_ - dy, 0, bio_lines_ - bio_rows_);
-		return;
-	}
-	int rows = visible_rows();
-	scroll_ = std::clamp(scroll_ - dy, 0, std::max(0, int(entries_.size()) - rows));
-}
-
-bool DescriptionSelector::key(AppManager &app, int sym) {
-	if (sym == kKeyUp) select(app, selected_ - 1);
-	else if (sym == kKeyDown) select(app, selected_ + 1);
-	else return false;
-	return true;
 }
 
 ModelPicker::ModelPicker(DescriptionSelector *chooser) : UIManager("ChooseFighterModelPicker", "LoadFrame"), chooser_(chooser) {
@@ -1491,6 +1452,7 @@ void UIManager::activate(AppManager &app) {
 	ve_actors_ = root_->children;
 	controls.clear();
 	controls.reserve(32);  // Control pointers stay valid while the page is up
+	gui = std::make_unique<Gui>(app);
 	setup_controls(app);
 	for (GameObject *ve : ve_actors_) send(w, ve, "GUILeave");
 	activated = true;
@@ -1503,6 +1465,7 @@ void UIManager::deactivate(AppManager &app) {
 	root_ = nullptr;
 	ve_actors_.clear();
 	controls.clear();
+	gui.reset();
 	activated = false;
 }
 
@@ -1530,6 +1493,12 @@ Control *UIManager::button(AppManager &app, const std::string &text, const std::
 	}
 	fprintf(stderr, "PositionControl() was unnable to find %s so was unnable to correctly position the control\n", key.c_str());
 	return &c;
+}
+
+Control UIManager::marker(AppManager &app, const std::string &m) {
+	Control c = *button(app, "", m);
+	controls.pop_back();
+	return c;
 }
 
 AppManager::AppManager(World &w) : world(w) {
@@ -1656,20 +1625,46 @@ int AppManager::binding(size_t i) const {
 
 void AppManager::set_binding(size_t i, int scancode) { set_registry_string(std::string("Controls\\") + actions()[i].name, std::to_string(scancode)); }
 
+// DE_CRenderer::LoadOptions / SaveOptions (Core 0x701837c0 / 0x70183ae0).
+AppManager::RenderOptions AppManager::RenderOptions::from_registry(const AppManager &app) {
+	auto i = [&](const char *name, int def) {
+		std::string v = app.registry_string(std::string("Preferences\\Renderer\\") + name);
+		return v.empty() ? def : atoi(v.c_str());
+	};
+	RenderOptions o;
+	o.lights = i("Lighting Enabled", 1), o.reflections = i("Reflections Enabled", 1), o.bump = i("Bump Mapping Enabled", 1);
+	o.glow = i("Glow Enabled", 1), o.high_detail = i("High Quality Geometry Enabled", 1), o.shadows = i("Shadow Type", 0);
+	o.texture = i("Texture Mip Map", 1), o.res_x = i("Resolution X", 800), o.res_y = i("Resolution Y", 600), o.bit_depth = i("Bit Depth", 1);
+	return o;
+}
+
+void AppManager::RenderOptions::save(AppManager &app) const {
+	auto set = [&](const char *name, int v) { app.set_registry_string(std::string("Preferences\\Renderer\\") + name, std::to_string(v)); };
+	set("Lighting Enabled", lights), set("Reflections Enabled", reflections), set("Bump Mapping Enabled", bump), set("Glow Enabled", glow);
+	set("High Quality Geometry Enabled", high_detail), set("Shadow Type", shadows), set("Texture Mip Map", texture);
+	set("Resolution X", res_x), set("Resolution Y", res_y), set("Bit Depth", bit_depth);
+}
+
+// DE_CRenderer::ApplyUserOptions (Core 0x70183db0): the resolution and bit depth stay as they were.
+void AppManager::apply_render(const RenderOptions &o) {
+	RenderOptions g = o;
+	g.res_x = render_global.res_x, g.res_y = render_global.res_y, g.bit_depth = render_global.bit_depth;
+	render_global = g;
+	world.glow_enabled = g.glow != 0;
+	world.lighting_enabled = g.lights != 0;
+	de::g_high_detail = g.high_detail != 0;
+	world.shadow_type = g.shadows;
+}
+
 void AppManager::apply_settings() {
 	auto f = [&](const char *name, float def) {
 		std::string v = registry_string(name);
 		return v.empty() ? def : float(atof(v.c_str()));
 	};
-	auto b = [&](const char *name, bool def) {
-		std::string v = registry_string(name);
-		return v.empty() ? def : v == "1";
-	};
 	world.music_volume = f("Audio\\Music Volume", 0.6f);
 	world.sfx_volume = f("Audio\\SFX Volume", 1.0f);
-	world.glow_enabled = b("Preferences\\Renderer\\Glow Enabled", true);
-	world.lighting_enabled = b("Preferences\\Renderer\\Lighting Enabled", true);
-	de::g_high_detail = b("Preferences\\Renderer\\High Quality Geometry Enabled", true);
+	render_started = render_global = RenderOptions::from_registry(*this);
+	apply_render(render_global);
 	// DE_COMF2Manager::Activate: registry "AI Difficulty" (default 0, Rookie).
 	world.ai_difficulty = int(f("AI Difficulty", 0));
 }
@@ -1917,9 +1912,11 @@ void AppManager::not_ported(const std::string &what) { notify(what, "This screen
 void AppManager::mouse_move(float x, float y) {
 	mouse_x_ = x, mouse_y_ = y;
 	if (!current || !current->activated) return;
-	if (notifications.empty()) current->mouse(*this, x, y, 0);
-	for (Control &c : current->controls) {
-		bool over = notifications.empty() && c.contains(x, y);
+	UIPtr page = current;
+	bool taken = notifications.empty() && page->gui && page->gui->mouse_move(x, y);
+	if (notifications.empty() && !taken) page->mouse(*this, x, y, 0);
+	for (Control &c : page->controls) {
+		bool over = notifications.empty() && !taken && c.contains(x, y);
 		if (over && !c.hovered && c.enabled) {
 			c.hovered = true;
 			send(world, c.ve, "GUIEnter");
@@ -1993,6 +1990,10 @@ void AppManager::mouse_button(bool down, int clicks) {
 	if (!current || !current->activated) return;
 	{
 		UIPtr page = current;
+		if (page->gui && page->gui->mouse_button(down, clicks)) {
+			pressed_ = nullptr;
+			return;
+		}
 		if (page->mouse(*this, mouse_x_, mouse_y_, down ? (clicks >= 2 ? 3 : 1) : 2)) {
 			pressed_ = nullptr;
 			return;
@@ -2015,7 +2016,10 @@ void AppManager::mouse_button(bool down, int clicks) {
 }
 
 void AppManager::text(const std::string &t) {
-	if (notifications.empty() && current && current->activated) current->text(*this, t);
+	if (!notifications.empty() || !current || !current->activated) return;
+	UIPtr page = current;
+	if (page->gui && page->gui->text(t)) return;
+	page->text(*this, t);
 }
 
 void AppManager::key(int sym, int scancode) {
@@ -2028,6 +2032,7 @@ void AppManager::key(int sym, int scancode) {
 		return;
 	}
 	if (!current || !current->activated) return;
+	if (UIPtr page = current; page->gui && page->gui->key(sym)) return;
 	if (UIPtr page = current; page->key(*this, sym)) return;
 	for (Control &c : current->controls) {
 		if (std::find(c.keys.begin(), c.keys.end(), sym) == c.keys.end() || !c.enabled) continue;
@@ -2039,7 +2044,10 @@ void AppManager::key(int sym, int scancode) {
 }
 
 void AppManager::wheel(int dy) {
-	if (notifications.empty() && current && current->activated) current->wheel(*this, dy);
+	if (!notifications.empty() || !current || !current->activated) return;
+	UIPtr page = current;
+	if (page->gui && page->gui->wheel(dy)) return;
+	page->wheel(*this, dy);
 }
 
 std::string AppManager::registry_string(const std::string &name) const { return world.registry_string(name); }

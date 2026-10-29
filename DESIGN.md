@@ -20,6 +20,13 @@ to present that data, and the few places where the look is our own.
   and they slide open (500 ms). The main frame shows on every page except the main menu and in-game
   menus. The doors cover everything on the page, its text, images and bars included; only
   notifications draw over them.
+- **Controls** (the engine's 3D GUI controls, `game/controls.*`). Bevelled frames (5 quads, per-corner
+  highlight / shadow colours with a slight face gradient, swapped when pressed); faces grey 0.5 at
+  half alpha, window backs (0, 0, 0.1) at 0.7, white button text, a 30-pixel blue-to-navy title bar;
+  lists with (0, 0, 0.5) selected rows and 24-pixel tiled scroll bars without arrows; combo boxes,
+  sliders, check and radio buttons, edit fields with a yellow caret; Yes/No and text-input dialogs.
+  Sizes in screen pixels (the original's units), so controls stay the same pixel size at any
+  resolution.
 - **Lists (description selectors, Replays).** Rows 20 screen pixels at 768 high, names 19 high, white;
   the selection a solid navy bar (0, 0, 0.5), Windows' classic highlight as the original shows it;
   locked entries grey. No title above the list.

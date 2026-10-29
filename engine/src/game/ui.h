@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "de/scene.h"
+#include "game/controls.h"
 
 namespace game {
 
@@ -37,7 +38,7 @@ struct Control {
 // What a page draws besides its button labels, in screen fractions (y down). A text item is
 // anchored at (x0, y0): its left edge, or its centre when centred, and its vertical middle.
 struct DrawItem {
-	enum Kind { Rect, Text, Image } kind = Rect;
+	enum Kind { Rect, Text, Image, Quad } kind = Rect;
 	float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 	float rgba[4] = {1, 1, 1, 1};
 	std::string text;
@@ -45,6 +46,9 @@ struct DrawItem {
 	bool centered = false;
 	de::ObjectRef image;
 	uint32_t render_target = 0;  // the handle of an Image\RenderTarget the app has rendered (Capture)
+	bool cell = false;                 // Text: y0 is the top of a glyph cell `size` high
+	float pts[8] = {}, cols[16] = {};  // Quad: corners (x, y) and a colour each
+	float clip[4] = {};                // drawn only inside, when clip[2] > clip[0]
 };
 
 class UIManager {
@@ -70,6 +74,8 @@ public:
 	bool persistent = false;       // the factory's persistent instance: never deleted
 
 	std::vector<Control> controls;
+	// The page's 3D controls (built by setup_controls, gone when it deactivates).
+	std::unique_ptr<Gui> gui;
 
 	// Begin (vtable +0x148): false vetoes showing the page (or redirects it).
 	virtual bool begin(AppManager &app);
@@ -94,6 +100,8 @@ public:
 protected:
 	// DE_CUIManagerRobot::NewButtonControl + PositionControl(marker).
 	Control *button(AppManager &app, const std::string &text, const std::string &marker);
+	// PositionControl for a plain control: the marker's rectangle.
+	Control marker(AppManager &app, const std::string &marker);
 
 private:
 	GameObject *root_ = nullptr;          // the custom actor under the UI parent
@@ -151,26 +159,24 @@ public:
 	void setup_controls(AppManager &app) override;
 	void click(AppManager &app, Control &c) override;
 	void draw(AppManager &app, std::vector<DrawItem> &out) override;
-	bool mouse(AppManager &app, float x, float y, int what) override;
-	bool key(AppManager &app, int sym) override;
-	void wheel(AppManager &app, int dy) override;
 
 private:
 	void choose(AppManager &app, const de::ObjectRef &d);
 	void select(AppManager &app, int i);
-	int visible_rows() const;
+	std::string pilot_text(AppManager &app, const de::ObjectRef &d) const;
 
 	friend class ModelPicker;
 	std::vector<de::ObjectRef> entries_;
 	std::vector<de::ObjectRef> models_;
 	int model_ = 0;  // +0x184
-	Control *model_box_ = nullptr;
-	Control *view_ = nullptr;
 	std::shared_ptr<ModelPicker> picker_;  // +0x154
 	int selected_ = -1;
-	int scroll_ = 0;  // the first entry shown
-	int bio_scroll_ = 0, bio_lines_ = 0, bio_rows_ = 0;  // the pilot text's first line shown, its lines, those that fit
-	Control *list_ = nullptr, *window_ = nullptr, *next_ = nullptr, *back_ = nullptr;
+	Control list_rect_, window_rect_;
+	Control *next_ = nullptr, *back_ = nullptr;
+	List *list_ = nullptr;
+	Ctl *panel_ = nullptr, *model_holder_ = nullptr;
+	Combo *model_combo_ = nullptr;
+	TextDisplay *bio_ = nullptr;
 };
 
 class AppManager {
@@ -261,6 +267,12 @@ public:
 	bool is_locked(const de::ObjectRef &description) const;
 	// The app's text measure (screen widths for a text `size` screen heights high).
 	std::function<float(const std::string &, float)> text_width;
+	// Each letter's start and the end (CalculateCharOffsets), in screen widths.
+	std::function<std::vector<float>(const std::string &, float)> char_offsets;
+	// The GUI viewport's pixels.
+	int view_w = 1024, view_h = 768;
+	// The renderer's resolutions ("W x H"; GetAvailableResolutions).
+	std::vector<std::pair<int, int>> resolutions;
 	// DE_COMF2Manager::ProcessEvent on the session chooser's Complete: start the chosen session.
 	std::function<void(const de::ObjectRef &master_description, bool single_player)> launch_session;
 
@@ -291,6 +303,15 @@ public:
 	std::function<std::string(int)> key_name;
 	// Apply the registry's settings to the game (volumes, renderer switches, AI difficulty).
 	void apply_settings();
+	// CRenderOptions: the user's (the registry), those applied, those the run started with.
+	struct RenderOptions {
+		int lights = 1, reflections = 1, bump = 1, glow = 1, high_detail = 1, shadows = 0, texture = 1;
+		int res_x = 800, res_y = 600, bit_depth = 1;
+		static RenderOptions from_registry(const AppManager &app);
+		void save(AppManager &app) const;
+	};
+	RenderOptions render_global, render_started;
+	void apply_render(const RenderOptions &o);
 
 private:
 	void transition_ui();
