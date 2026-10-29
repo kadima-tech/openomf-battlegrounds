@@ -59,6 +59,11 @@ struct SessionNode {
 
 struct SessionState {
 	GameObject *obj = nullptr;
+	SessionState *owner = nullptr;          // SubSessionOwner (+0xcc): the session that made this one
+	GameObject *master_description = nullptr;  // MasterDescription / OwnMasterDescription
+	std::vector<de::Guid> attached_guids;   // AttachedSessionModifierDescriptionGUIDs
+	bool single_player = false;             // the session info's +0xdc
+	bool ended = false;                     // End has run (EndAndDie)
 	std::vector<GameObject *> modifiers;  // master first
 	std::vector<std::unique_ptr<SessionSlot>> slots;
 	std::vector<std::unique_ptr<SessionClient>> clients;
@@ -106,6 +111,8 @@ struct SessionState {
 // Create the session with its modifiers (master first; their own attached modifiers follow) and
 // an environment (the arena description's resource, or null to let a picker choose).
 SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifiers);
+// The session an object belongs to (a session, its modifiers, slots and clients), if any.
+SessionState *session_of(World &w, const GameObject *o);
 // DE_CDescription::NewResource: the description's resource (fighter, pilot, environment,
 // session modifier...), with a fighter's model/extra actors and the description's values.
 GameObject *new_resource(World &w, GameObject *description, const de::Guid *model);

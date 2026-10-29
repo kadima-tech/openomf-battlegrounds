@@ -172,12 +172,11 @@ public:
 	// A screen this port does not have yet: says so instead of guessing.
 	void not_ported(const std::string &what);
 
-	// The game's registry values (SinglePlayerPlayed, the main menu's last choice, ...).
-	std::map<std::string, std::string> registry;
+	// The game's registry (World::registry).
 	std::string registry_string(const std::string &name) const;
 	bool registry_bool(const std::string &name) const { return registry_string(name) == "1"; }
-	void set_registry_string(const std::string &name, const std::string &v) { registry[name] = v; }
-	void set_registry_bool(const std::string &name, bool v) { registry[name] = v ? "1" : "0"; }
+	void set_registry_string(const std::string &name, const std::string &v);
+	void set_registry_bool(const std::string &name, bool v) { set_registry_string(name, v ? "1" : "0"); }
 
 	// DE_CDescription::IsLocked(0): locked by default and not unlocked since (the registry's
 	// DLock records; here the run's registry).

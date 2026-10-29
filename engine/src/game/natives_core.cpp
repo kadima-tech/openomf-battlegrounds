@@ -13,6 +13,7 @@
 #include "game/forces.h"
 #include "game/particles.h"
 #include "game/runtime.h"
+#include "game/session.h"
 
 namespace game {
 
@@ -351,7 +352,10 @@ void register_core_natives(World &w) {
 
 	// --- Scene / session --------------------------------------------------------------------
 	reg("CActor::class CScene Scene()", [](const NativeContext &c) { c.ret_object(singleton(c.world, "Scene", "Scene")); });
-	reg("CScene::class CSession Session()", [](const NativeContext &c) { c.ret_object(singleton(c.world, "Session", "Session")); });
+	// The scene's session: the current one (the match being played).
+	reg("CScene::class CSession Session()", [](const NativeContext &c) {
+		c.ret_object(c.world.session ? c.world.session->obj : singleton(c.world, "Session", "Session"));
+	});
 	reg("CCreature::class CCreature Environment()",
 	    [](const NativeContext &c) { c.ret_object(singleton(c.world, "Environment", "Actor\\Creature\\Environment")); });
 	// Scene time is in milliseconds (scripts wait e.g. 200 between navigation commands); 60 frames/s.

@@ -3,11 +3,14 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "de/scene.h"
 
 namespace game {
+
+class World;
 
 // DE_CDescription::ObjProcessContents (Core 0x701f14e0): [name][resource passive reference]
 // v2+ [BOOL listed +0xbc] v3 [f32 +0xd4][BOOL locked by default +0xc4][BOOL visible when locked
@@ -21,6 +24,16 @@ struct DescriptionInfo {
 	bool visible_when_locked = false;
 };
 DescriptionInfo read_description(const de::World &data, const de::ObjectRef &description);
+
+// DE_CDescription::IsLocked(0) (Core 0x701f2640): locked by default and not unlocked since.
+// Unlock (0x70010aa0 -> UnlockAndNotify) writes the description's DLock record; ours is the
+// registry value "DLock <guid>".
+bool description_locked(const World &w, const de::ObjectRef &description);
+void unlock_description(World &w, const de::ObjectRef &description);
+
+// DE_CEnvironmentDescription::ObjProcessContents (Creature 0x1500aa20): after the description's
+// chunk, v1 [i32 minimum recommended players +0xdc][i32 maximum +0xe0].
+std::pair<int, int> environment_players(const de::ObjectRef &environment_description);
 
 // A Value\String's text.
 std::string read_string_value(const de::ObjectRef &value);

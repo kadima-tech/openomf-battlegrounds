@@ -157,13 +157,14 @@ std::vector<Brain *> World::brain_list(GameObject *o) {
 			if (bp->owner == x) out.push_back(bp.get());
 		}
 	};
-	if (session && o == session->obj) {
+	SessionState *ss = session_of(*this, o);
+	if (ss && o == ss->obj) {
 		own(o);
-		for (GameObject *m : session->modifiers) {
+		for (GameObject *m : ss->modifiers) {
 			auto v = brain_list(m);
 			out.insert(out.end(), v.begin(), v.end());
 		}
-	} else if (SessionSlot *sl = session ? session->slot_of(o) : nullptr; sl && sl->obj == o) {
+	} else if (SessionSlot *sl = ss ? ss->slot_of(o) : nullptr; sl && sl->obj == o) {
 		for (GameObject *m : sl->modifiers) {
 			auto v = brain_list(m);
 			out.insert(out.end(), v.begin(), v.end());
@@ -586,6 +587,15 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	return res;
 }
 
+SessionState *session_of(World &w, const GameObject *o) {
+	for (const GameObject *p = o; p; p = p->parent) {
+		for (auto &s : w.sessions) {
+			if (s->obj == p) return s.get();
+		}
+	}
+	return nullptr;
+}
+
 void add_session_modifier(World &w, GameObject *m) {
 	auto &s = *w.session;
 	m->parent = s.obj;
@@ -594,24 +604,37 @@ void add_session_modifier(World &w, GameObject *m) {
 	make_node(w, s, m);
 }
 
-SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifiers) {
+namespace {
+
+std::shared_ptr<SessionState> new_session(World &w, const char *name) {
 	auto s = std::make_shared<SessionState>();
-	s->obj = w.create("Session", "Session\\Standard");
-	w.session = s;
-	for (auto &r : modifiers) {
-		GameObject *tpl = w.global_object(r);
-		if (!tpl) continue;
-		GameObject *m = w.copy_tree(*tpl);
-		m->parent = s->obj;
-		s->obj->children.push_back(m);
-		s->modifiers.push_back(m);
-		make_node(w, *s, m);
-	}
-	return *s;
+	s->obj = w.create_child(nullptr, name, "Session\\Standard");
+	w.sessions.push_back(s);
+	return s;
 }
 
-void begin_session(World &w) {
-	auto &s = *w.session;
+void add_modifier_copy(World &w, SessionState &s, const de::ObjectRef &r) {
+	GameObject *tpl = w.global_object(r);
+	if (!tpl) return;
+	GameObject *m = w.copy_tree(*tpl);
+	m->parent = s.obj;
+	s.obj->children.push_back(m);
+	s.modifiers.push_back(m);
+	make_node(w, s, m);
+}
+
+// DE_CSession::Begin for `s`: its attached modifier descriptions' resources join it, then every
+// modifier is initialised and begun (DE_CStandardSession::Begin).
+void begin(World &w, SessionState &s) {
+	for (const de::Guid &g : s.attached_guids) {
+		GameObject *tpl = w.global_object(w.data().by_guid(g));
+		GameObject *m = tpl ? new_resource(w, w.copy_tree(*tpl), nullptr) : nullptr;
+		if (!m) continue;
+		m->parent = s.obj;
+		s.obj->children.push_back(m);
+		s.modifiers.push_back(m);
+		make_node(w, s, m);
+	}
 	// InitializeModifiers walks the growing list: attached modifiers are initialised too.
 	for (size_t i = 0; i < s.modifiers.size(); ++i) {
 		initialize_node(w, s, *s.node(s.modifiers[i]));
@@ -619,7 +642,7 @@ void begin_session(World &w) {
 	if (getenv("OPENBG_DEBUG_SESSION")) {
 		for (auto *m : s.modifiers) {
 			auto &n = *s.node(m);
-			fprintf(stderr, "[session] modifier %s: %zu properties, brain %s, hooks%s%s%s%s\n", m->name.c_str(), n.properties.size(),
+			fprintf(stderr, "[session %s] modifier %s: %zu properties, brain %s, hooks%s%s%s%s\n", s.obj->name.c_str(), m->name.c_str(), n.properties.size(),
 			        m->brain ? m->brain->cls.name.c_str() : "-", n.begin ? " begin" : "", n.update ? " update" : "",
 			        n.set_as_master ? " master" : "", n.ui_complete ? " ui" : "");
 		}
@@ -635,8 +658,18 @@ void begin_session(World &w) {
 	s.begun = true;
 }
 
-SessionClient &add_client(World &w, bool user, const std::string &name) {
-	auto &s = *w.session;
+}  // namespace
+
+SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifiers) {
+	auto s = new_session(w, "Session");
+	w.session = s;
+	for (auto &r : modifiers) add_modifier_copy(w, *s, r);
+	return *s;
+}
+
+void begin_session(World &w) { begin(w, *w.session); }
+
+static SessionClient &add_client_to(World &w, SessionState &s, bool user, const std::string &name) {
 	auto &c = *s.clients.emplace_back(std::make_unique<SessionClient>());
 	c.obj = w.create_child(s.obj, "Client" + std::to_string(s.clients.size()), "Client\\Standard");
 	c.user = user;
@@ -646,9 +679,16 @@ SessionClient &add_client(World &w, bool user, const std::string &name) {
 	return c;
 }
 
+SessionClient &add_client(World &w, bool user, const std::string &name) { return add_client_to(w, *w.session, user, name); }
+
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen) {
-	if (!w.session || !ui) return;
-	auto &u = w.session->ui[ui];
+	if (!ui) return;
+	SessionState *s = nullptr;
+	for (auto &sp : w.sessions) {
+		if (sp->ui.count(ui)) s = sp.get();
+	}
+	if (!s) return;
+	auto &u = s->ui[ui];
 	memcpy(u.chosen.data(), chosen.bytes, 16);
 	u.shown = false;
 	u.pending = true;
@@ -669,35 +709,11 @@ void render_tick(World &w, float ms) {
 	}
 }
 
-void update_session(World &w) {
-	{
-		auto hooks = w.delta_tick_hooks;
-		float ms = float(w.frame_ms());
-		for (auto &[b, m] : hooks) {
-			if (b->inst.shut_down) continue;
-			std::vector<uint8_t> args(4);
-			memcpy(args.data(), &ms, 4);
-			b->call_handle(w, m, args);
-		}
-	}
-	if (w.render_ticks_per_frame) render_tick(w, float(w.frame_ms()));
-	if (!w.session || !w.session->begun) return;
-	auto &s = *w.session;
-	// DE_CStandardSession::Update: connect each active client without a slot to the next
-	// connectable one.
-	for (auto &c : s.clients) {
-		if (!c->active || c->slot) continue;
-		for (auto &sl : s.slots) {
-			if (sl->connectable && !sl->client && sl->begun) {
-				sl->client = c.get();
-				c->slot = sl.get();
-				for (auto &h : s.slot_connect_hooks) call_hook(w, h, sl->obj->handle, true);
-				uint32_t e = new_event(w, "SessionSlotNewClient");
-				w.send_event(sl->obj, e);
-				break;
-			}
-		}
-	}
+// A session begun during the frame's updates becomes the current one after them.
+static std::weak_ptr<SessionState> g_begun;
+
+// One session's update (DE_CStandardSession::Update).
+static void update_one(World &w, SessionState &s) {
 	// A preset UI choice completes: every node's UIManagerComplete hook hears about it (each
 	// checks whether the manager is its own).
 	for (auto &[ui, u] : s.ui) {
@@ -736,12 +752,88 @@ void update_session(World &w) {
 			if (auto *n = s.node(m)) call_hook(w, n->update);
 		}
 	}
+	// DE_CStandardSession::Update (Session 0x4500e770): after DE_CSession::Update (the modifiers),
+	// connect each active client without a slot to the next connectable one.
+	for (auto &c : s.clients) {
+		if (!c->active || c->slot) continue;
+		for (auto &sl : s.slots) {
+			if (sl->connectable && !sl->client && sl->begun) {
+				sl->client = c.get();
+				c->slot = sl.get();
+				for (auto &h : s.slot_connect_hooks) call_hook(w, h, sl->obj->handle, true);
+				uint32_t e = new_event(w, "SessionSlotNewClient");
+				w.send_event(sl->obj, e);
+				break;
+			}
+		}
+	}
+}
+
+void update_session(World &w) {
+	{
+		auto hooks = w.delta_tick_hooks;
+		float ms = float(w.frame_ms());
+		for (auto &[b, m] : hooks) {
+			if (b->inst.shut_down) continue;
+			std::vector<uint8_t> args(4);
+			memcpy(args.data(), &ms, 4);
+			b->call_handle(w, m, args);
+		}
+	}
+	if (w.render_ticks_per_frame) render_tick(w, float(w.frame_ms()));
+	// Sessions whose object has been deleted (EndAndDie) are gone; the current one falls back to
+	// the session that made it.
+	for (size_t i = 0; i < w.sessions.size();) {
+		auto sp = w.sessions[i];
+		if (w.object(sp->obj->handle)) {
+			++i;
+			continue;
+		}
+		w.sessions.erase(w.sessions.begin() + long(i));
+		if (w.session == sp) {
+			w.session = nullptr;
+			for (auto &o : w.sessions) {
+				if (o.get() == sp->owner) w.session = o;
+			}
+			if (!w.session && !w.sessions.empty()) w.session = w.sessions.back();
+		}
+		for (auto &o : w.sessions) {
+			if (o->owner == sp.get()) o->owner = nullptr;
+		}
+	}
+	auto current = w.session;
+	auto all = w.sessions;
+	for (auto &sp : all) {
+		if (!sp->begun || sp->ended) continue;
+		w.session = sp;
+		update_one(w, *sp);
+	}
+	if (std::find(w.sessions.begin(), w.sessions.end(), current) != w.sessions.end() || !current) w.session = current;
+	if (auto b = g_begun.lock()) {
+		if (std::find(w.sessions.begin(), w.sessions.end(), b) != w.sessions.end()) w.session = b;
+		g_begun.reset();
+	}
+	if (w.session && std::find(w.sessions.begin(), w.sessions.end(), w.session) == w.sessions.end()) w.session = w.sessions.empty() ? nullptr : w.sessions.back();
 }
 
 void register_session_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
 	auto stub = [&](const char *key) { w.register_native(key, [](const NativeContext &) {}); };
-	auto S = [](const NativeContext &c) -> SessionState * { return c.world.session.get(); };
+	// The session a call is about: the one its object belongs to, else the one the calling
+	// script's object belongs to, else the current one.
+	auto S = [](const NativeContext &c) -> SessionState * {
+		if (SessionState *s = session_of(c.world, c.self())) return s;
+		if (Brain *b = c.world.brain_of(c.ex)) {
+			if (SessionState *s = session_of(c.world, b->owner)) return s;
+		}
+		return c.world.session.get();
+	};
+	auto shared = [](const NativeContext &c, SessionState *s) -> std::shared_ptr<SessionState> {
+		for (auto &sp : c.world.sessions) {
+			if (sp.get() == s) return sp;
+		}
+		return nullptr;
+	};
 	auto node = [S](const NativeContext &c) -> SessionNode * {
 		auto *s = S(c);
 		return s ? s->node(c.self()) : nullptr;
@@ -776,6 +868,9 @@ void register_session_natives(World &w) {
 				if (auto *n = node(c)) n->*f = {c.world.brain_of(c.ex), c.arg<uint32_t>(1)};
 			});
 		}
+		reg(std::string(cls) + "UnregisterUpdateHook(class CClassExecutorInstance,Method())", [node](const NativeContext &c) {
+			if (auto *n = node(c); n && n->update.brain == c.world.brain_of(c.ex)) n->update = {};
+		});
 		stub((std::string(cls) + "RegisterState()").c_str());
 		stub((std::string(cls) + "RegisterUrgentState()").c_str());
 		reg(std::string(cls) + "class CStandardSession Session()", [S](const NativeContext &c) {
@@ -975,7 +1070,112 @@ void register_session_natives(World &w) {
 	reg("CSession::bool AreMasterRequirementsSatisfied()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::string StatusDescription()", [](const NativeContext &c) { c.ret_u32(c.world.string("")); });
 	stub("CSession::LoadingComplete()");
-	stub("CSession::EndAndDie()");
+	// EndAndDieCaller (Core 0x701f7d90): DeleteThisLater, then DE_CSession::End (0x701f9400):
+	// every client destroyed, the modifiers, scene and environment deleted; DE_CStandardSession::End
+	// also its slots, whose owned creatures go with them.
+	reg("CSession::EndAndDie()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		if (!s || s->ended) return;
+		s->ended = true;
+		World &w = c.world;
+		for (auto &cl : s->clients) w.clean_later(cl->obj);
+		for (auto &sl : s->slots) {
+			if (sl->creature) w.clean_later(sl->creature);
+			w.clean_later(sl->obj);
+		}
+		if (s->environment) w.clean_later(s->environment);
+		for (GameObject *m : s->modifiers) w.clean_later(m);
+		w.clean_later(s->obj);
+	});
+	// NewSubSessionCaller: a standard session made by this one (its SubSessionOwner), with no
+	// modifiers until OwnMasterDescription; the id is the caller's.
+	reg("CObject::class CStandardSession NewSubSession(word)", [S, shared](const NativeContext &c) {
+		SessionState *owner = S(c);
+		auto sub = new_session(c.world, "SubSession");
+		sub->owner = owner;
+		c.ret_object(sub->obj);
+	});
+	// The master description's resource is the session's master modifier.
+	reg("CSession::OwnMasterDescription(class CSessionMasterDescription)", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		GameObject *d = c.arg_object(0);
+		if (!s || !d) return;
+		s->master_description = d;
+		d->parent = s->obj;
+		s->obj->children.push_back(d);
+		auto res = passive_references(c.world.data(), source_of(d));
+		if (!res.empty()) {
+			add_modifier_copy(c.world, *s, res[0]);
+			// The master first.
+			std::rotate(s->modifiers.begin(), s->modifiers.end() - 1, s->modifiers.end());
+		}
+	});
+	reg("CSession::class CSessionMasterDescription MasterDescription()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		c.ret_object(s ? s->master_description : nullptr);
+	});
+	reg("CSession::SetAttachedSessionModifierDescriptionGUIDs(class CGUIDPool)", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		uint32_t p = c.arg<uint32_t>(0);
+		if (!s || !p) return;
+		s->attached_guids.clear();
+		uint32_t data = c.mem().get<uint32_t>(p), n = c.mem().get<uint32_t>(p + 4);
+		for (uint32_t i = 0; i < n; ++i) {
+			de::Guid g;
+			memcpy(g.bytes, c.mem().ptr(data + i * 16, 16), 16);
+			s->attached_guids.push_back(g);
+		}
+	});
+	reg("CSession::class CGUIDPool AttachedSessionModifierDescriptionGUIDs()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		uint32_t p = c.world.make_instance("CObject::CGUIDPool", 1);
+		size_t n = s ? s->attached_guids.size() : 0;
+		uint32_t data = c.mem().alloc(uint32_t(std::max<size_t>(1, n)) * 16);
+		for (size_t i = 0; i < n; ++i) memcpy(c.mem().ptr(data + uint32_t(i) * 16, 16), s->attached_guids[i].bytes, 16);
+		c.mem().set<uint32_t>(p, data);
+		c.mem().set<uint32_t>(p + 4, uint32_t(n));
+		c.ret_u32(p);
+	});
+	reg("CSession::Begin()", [S, shared](const NativeContext &c) {
+		SessionState *s = S(c);
+		if (!s || s->begun) return;
+		auto keep = c.world.session;
+		auto sp = shared(c, s);
+		c.world.session = sp;
+		begin(c.world, *s);
+		c.world.session = keep;
+		g_begun = sp;
+	});
+	reg("CObject::class CSession SubSessionOwner()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		c.ret_object(s && s->owner ? s->owner->obj : nullptr);
+	});
+	reg("CObject::class CSession MasterSession()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		while (s && s->owner) s = s->owner;
+		c.ret_object(s ? s->obj : nullptr);
+	});
+	stub("CSession::SetJoinable(bool)");
+	reg("CSession::class CClient NewClient()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		if (!s) {
+			c.ret_u32(0);
+			return;
+		}
+		SessionClient &cl = add_client_to(c.world, *s, false, "");
+		cl.active = false;
+		cl.local = false;
+		c.ret_object(cl.obj);
+	});
+	reg("CSession::class CClient LastClient()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		c.ret_object(s && !s->clients.empty() ? s->clients.back()->obj : nullptr);
+	});
+	reg("CSession::class CClient Client(int)", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		int i = c.arg<int32_t>(0);
+		c.ret_object(s && i >= 0 && size_t(i) < s->clients.size() ? s->clients[size_t(i)]->obj : nullptr);
+	});
 	stub("CStandardSession::ForceClientsToLoad()");
 	reg("CSession::class CClient ControllingClient()", [user_client](const NativeContext &c) {
 		auto *cl = user_client(c);
@@ -985,10 +1185,12 @@ void register_session_natives(World &w) {
 	reg("CSession::int NumPlayersAfterPopulation()", [S](const NativeContext &c) { c.ret_u32(S(c) ? uint32_t(S(c)->clients.size()) : 0); });
 	reg("CSession::SetCamera(class CActor)", [S](const NativeContext &c) { if (auto *s = S(c)) s->camera = c.arg_object(0); });
 	reg("CSession::class CActor Camera()", [S](const NativeContext &c) { c.ret_object(S(c) ? S(c)->camera : nullptr); });
-	reg("CStandardSession::class CStandardSessionModifier Master()", [S](const NativeContext &c) {
-		auto *s = S(c);
-		c.ret_object(s && !s->modifiers.empty() ? s->modifiers[0] : nullptr);
-	});
+	for (const char *k : {"CStandardSession::class CStandardSessionModifier Master()", "CSession::class CSessionModifier Master()"}) {
+		reg(k, [S](const NativeContext &c) {
+			auto *s = S(c);
+			c.ret_object(s && !s->modifiers.empty() ? s->modifiers[0] : nullptr);
+		});
+	}
 	reg("CStandardSession::int NumSlot()", [S](const NativeContext &c) { c.ret_u32(S(c) ? uint32_t(S(c)->slots.size()) : 0); });
 	reg("CStandardSession::class CStandardSessionSlot Slot(int)", [slot_at](const NativeContext &c) { c.ret_object(slot_at(c, c.arg<int32_t>(0))); });
 	// SlotInFocus: the slot the local user plays in (the camera follows its creature).
@@ -1062,6 +1264,25 @@ void register_session_natives(World &w) {
 		c.ret_u32(cl && !cl->player_name.empty() ? c.world.string(cl->player_name) : 0);
 	});
 	reg("CClient::SetPlayerName(string)", [client](const NativeContext &c) { if (auto *cl = client(c)) cl->player_name = c.arg_string(0); });
+	reg("CClient::SetDescription(string)", [client](const NativeContext &c) { if (auto *cl = client(c)) cl->description = c.arg_string(0); });
+	reg("CClient::SetAsLocal()", [client](const NativeContext &c) { if (auto *cl = client(c)) cl->local = true; });
+	reg("CClient::SetAsUserControlled()", [client](const NativeContext &c) {
+		if (auto *cl = client(c)) cl->user = cl->local = true;
+	});
+	reg("CClient::Activate()", [client](const NativeContext &c) { if (auto *cl = client(c)) cl->active = true; });
+	// DestroyClient: the client leaves its slot and the session.
+	reg("CClient::DestroyClient()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		GameObject *o = c.self();
+		if (!s || !o) return;
+		for (size_t i = 0; i < s->clients.size(); ++i) {
+			if (s->clients[i]->obj != o) continue;
+			if (s->clients[i]->slot) s->clients[i]->slot->client = nullptr;
+			s->clients.erase(s->clients.begin() + long(i));
+			break;
+		}
+		c.world.clean_later(o);
+	});
 	// UI managers would show the creature/pilot/arena pickers; choices are made up front here, so
 	// a launched UI never completes.
 	reg("CClient::LaunchRemoteUIManager(class CUIManager)", [client, S](const NativeContext &c) {
@@ -1214,6 +1435,8 @@ void register_session_natives(World &w) {
 		if (d && cast) {
 			for (auto &m : read_description(c.world.data(), d).casts) member |= m.info().guid.str() == cast.info().guid.str();
 		}
+		static const bool dbg = getenv("OPENBG_DEBUG_CASTS") != nullptr;
+		if (dbg) fprintf(stderr, "[cast] %s in %s: %d\n", d ? d.info().name.c_str() : "-", cast ? cast.info().name.c_str() : (c.arg_object(0) ? c.arg_object(0)->name.c_str() : "null"), member);
 		c.ret_bool(member);
 	});
 	reg("CChooseFighterUIManager::class CGUID ChosenModel()", [S](const NativeContext &c) {

@@ -1,6 +1,7 @@
 #include "game/descriptions.h"
 
 #include "de/contents.h"
+#include "game/runtime.h"
 #include "game/session.h"
 
 namespace game {
@@ -37,6 +38,29 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) 
 	} catch (const std::exception &) {
 	}
 	return out;
+}
+
+std::pair<int, int> environment_players(const de::ObjectRef &d) {
+	if (!d) return {0, 0};
+	try {
+		de::Contents c(d.file->object_data(d.info()).contents);
+		c.seek(de::begin_chunk(c).end);
+		de::Chunk ch = de::begin_chunk(c);
+		if (ch.version == 1) {
+			int lo = c.i32();
+			return {lo, c.i32()};
+		}
+	} catch (const std::exception &) {
+	}
+	return {0, 0};
+}
+
+bool description_locked(const World &w, const de::ObjectRef &d) {
+	return read_description(w.data(), d).locked_by_default && w.registry_string("DLock " + d.info().guid.str()).empty();
+}
+
+void unlock_description(World &w, const de::ObjectRef &d) {
+	if (d) w.registry["DLock " + d.info().guid.str()] = "1";
 }
 
 std::string read_string_value(const de::ObjectRef &v) {

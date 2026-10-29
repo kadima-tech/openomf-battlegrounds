@@ -456,7 +456,20 @@ public:
 	std::vector<std::string> log;
 
 	// --- Session support (session.cpp) ---
+	// Every live session (a single-player tournament's master and the sub-session of its current
+	// match), and the current one: the newest begun, whose scene is being played.
+	std::vector<std::shared_ptr<struct SessionState>> sessions;
 	std::shared_ptr<struct SessionState> session;
+	// The mouse over the GUI (CObject::MouseScreenPositionX/Y: fractions of its width and height,
+	// y up) and the screen's aspect ratio (ScreenAspectRatio, width / height); the app sets them.
+	float mouse_x = 0.5f, mouse_y = 0.5f, screen_aspect = 4.0f / 3.0f;
+	// The game's registry values (DE_CRegistry: AI Difficulty, SinglePlayerPlayed, unlocks, the
+	// main menu's last choice, ...); the app loads and saves them.
+	std::map<std::string, std::string> registry;
+	std::string registry_string(const std::string &name) const {
+		auto it = registry.find(name);
+		return it == registry.end() ? std::string() : it->second;
+	}
 	// AddEventRelay(exThis(), Method(CEvent)): per object, the brains and methods events go to.
 	std::map<const GameObject *, std::vector<std::pair<Brain *, uint32_t>>> relays;
 	void send_event(GameObject *target, uint32_t event);

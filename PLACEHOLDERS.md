@@ -26,7 +26,7 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | Notifications (`NewUserInformation`) | Stand-in | Our own panel (title, wrapped text, OK; Enter, Esc or a click closes it), not `DE_CDialog3d::UserInformation`'s dialog. |
 | Registry | Stand-in | Values the menus keep (`SinglePlayerPlayed`, the main menu's last choice) live for the run only. |
 | Screens | Missing | Options, Help, Replays, Credits and Join (session browser) say "not ported yet". The in-game menu and rules display are not ported. |
-| Sub-sessions | Missing | One session at a time: `NewSubSession`, the session client calls (`NewClient`, `LastClient`, `Client`, `SetAsUserControlled`, `Activate`, `SetDescription`), `OwnMasterDescription`, the attached modifier GUID pools and `MasterDescription` are missing, so a single-player tournament stops after its choosers ("No SubSession created"). |
+| Classes without bytecode | Missing | Six shipped classes have no VMC2 and the original compiles them from their behaviours' source when loading (`DE_CClass::PrepareForExecution`, FINDINGS 21/23): Training's and Practice's sub-session classes, Trophy Room's, `PSlidingText`, `PCarManager` and `PBoulder`. Without a compiler for the script language, Training, Practice and Trophy Room stop when their first match starts ("class PSubSession has no compiled VMCode"); the other tournaments run. |
 | Choose Creature | Approximation | Shown as a plain description selector: no Model combo box or View button (the 3D model picker). `ChosenModel` is null, so the fighter's default model is used. |
 | Pilot panel | Approximation | Name, photo and the four stats as bars; the stat rows' icons and `DE_CPilotStatsRobot`'s exact layout are not ported. |
 | Next button's text box | Approximation | Renders solid white in the 3D scene (the `TextBoxNext` mesh's material); not looked into yet. |
@@ -35,8 +35,7 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | UI managers in `openbg-fight` | Stand-in | Without the front end, a launched UI with a preset choice completes on the next update. |
 | Loading screen | Stand-in | `update_session` imitates the engine's loading screen (`SessionQuerryIsLoadingRequired` → `SessionLoadElements`, once per element). The launcher only fetches the splash image (`GH_GET_SPLASH_SCREEN_OBJECT`) and stamps its build on it (FINDINGS 124); the loading itself is the session's. |
 | Rules display | Stand-in | Created, shown nowhere, and authorised to continue at once. |
-| `CSession::EndAndDie` | Stub | The match ends in the script's EndingSession state and stays there: nothing to return to. |
-| `CImpulseRobot` (hotkeys), `GameDialog`, `SubSessionOwner` | Stub / fixed answer | No hotkeys, dialogs or sub-sessions until the front end and single player exist. |
+| `CImpulseRobot` (hotkeys) | Stub | No hotkeys until the in-game menu exists. (`GameDialog` returning null is the original's own answer, FINDINGS 127.) |
 | `CDescription::IsMemberOf` | Approximation | The description's own cast list (FINDINGS 127); a session master description's master modifier's casts are not merged in (`DE_CSessionMasterDescription::Update`). |
 | AI difficulty | Approximation | The original reads it from the registry (default 0, Rookie, which we use); `--difficulty` stands in for the options screen. |
 
@@ -44,6 +43,8 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 
 | What | Kind | Notes |
 |---|---|---|
+| Blade Pit's blades during the warm-up | Open | The spinning blades (BSpinningBlade, always live by design) cut an idle fighter to death during "Prepare To Fight" (standalone and tournament alike), so either the spawn points or the blades' collision are placed wrongly. The North American Open's first match is in the Blade Pit. |
+| `CSession::IsSinglePlayer` | Fixed answer | Always true; the original reads the session info's +0xdc (FINDINGS 127). Matters only for multiplayer. |
 | Main menu theme's lead timbre | Open | Reported as choppy / a different instrument sound than in the game, with the right notes. Checked and faithful: the band (every channel a DLS instrument from "!theme dls", none falling back to GM), the instruments' loops and articulations, voice allocation (no steals; 29 voices at most), the synth's 22050 Hz default (InitAudio passes no audio parameters), the mix loop, LFO routing, tempo (135 BPM) and note scheduling. The soundtrack MP3s are studio mixes, so they cannot settle timbre; a recording of the original game's menu would. |
 
 ## Waiting on networking (out of scope unless LAN play is wanted)

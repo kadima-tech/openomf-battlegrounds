@@ -899,9 +899,25 @@ void register_ai_natives(World &w) {
 		}
 		c.ret_object(img);
 	});
-	reg("CActor::SetGlobalInterest(float)", [](const NativeContext &c) { if (auto *o = c.self()) o->global_interest = c.arg<float>(0); });
+	reg("CActor::SetGlobalInterest(float)", [](const NativeContext &c) {
+		auto *o = c.self();
+		if (!o) return;
+		o->global_interest = c.arg<float>(0);
+		static const bool dbg = getenv("OPENBG_DEBUG_INTEREST") != nullptr;
+		if (dbg) {
+			Brain *b = c.world.brain_of(c.ex);
+			auto *m = b && b->exec ? b->exec->current_method() : nullptr;
+			fprintf(stderr, "[interest %u] %s#%x = %.2f (%s)\n", c.world.frame(), o->name.c_str(), o->handle, o->global_interest, m ? m->cm->signature.c_str() : "-");
+		}
+	});
 	// DE_CCreature::IsAlive: GlobalInterest() != 0 (a fighter drops its interest when it dies).
-	reg("CCreature::bool IsAlive()", [](const NativeContext &c) { auto *o = c.self(); c.ret_bool(o && c.world.global_interest_of(o) != 0); });
+	reg("CCreature::bool IsAlive()", [](const NativeContext &c) {
+		auto *o = c.self();
+		bool alive = o && c.world.global_interest_of(o) != 0;
+		static const bool dbg = getenv("OPENBG_DEBUG_INTEREST") != nullptr;
+		if (dbg) fprintf(stderr, "[alive %u] %s#%x: %d own %.2f\n", c.world.frame(), o ? o->name.c_str() : "null", o ? o->handle : 0, alive, o ? o->global_interest : 0.f);
+		c.ret_bool(alive);
+	});
 	// DE_COMF2Fighter::GlobalInterest (0x3502ae40): see World::global_interest_of.
 	reg("CActor::float GlobalInterest()", [](const NativeContext &c) { c.ret_f32(global_interest(c.world, c.self())); });
 	// AttackBestEnemy(current, aggression) (0x3504d370): over the owners of the creature's known

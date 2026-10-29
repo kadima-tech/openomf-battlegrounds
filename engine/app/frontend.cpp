@@ -291,7 +291,10 @@ int main(int argc, char **argv) {
 					SDL_GetWindowSize(win, &ww, &wh);
 					SDL_GL_GetDrawableSize(win, &dw, &dh);
 					float px = float(e.motion.x) * float(dw) / float(ww), py = float(e.motion.y) * float(dh) / float(wh);
-					app.mouse_move((px - float(vpt.x)) / float(vpt.w), (py - float(dh - vpt.y - vpt.h)) / float(vpt.h));
+					float mx = (px - float(vpt.x)) / float(vpt.w), my = (py - float(dh - vpt.y - vpt.h)) / float(vpt.h);
+					app.mouse_move(mx, my);
+					world.mouse_x = mx;
+					world.mouse_y = 1 - my;
 				}
 				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
@@ -314,7 +317,11 @@ int main(int argc, char **argv) {
 			}
 			for (auto &m : mouse_script) {
 				if (m.frame != fr) continue;
-				if (m.kind == 0) app.mouse_move(m.x, m.y);
+				if (m.kind == 0) {
+					app.mouse_move(m.x, m.y);
+					world.mouse_x = m.x;
+					world.mouse_y = 1 - m.y;
+				}
 				else app.mouse_button(m.kind == 1);
 			}
 			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI.

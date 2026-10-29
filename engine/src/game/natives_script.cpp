@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "game/session.h"
+#include "game/descriptions.h"
 
 #include "de/value.h"
 
@@ -138,6 +139,34 @@ GameObject *World::music_player_actor() {
 
 void register_script_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
+	// FindMasterObject(GUID): the data's object with that GUID (not a copy).
+	reg("CObject::class CObject FindMasterObject(class CGUID)", [](const NativeContext &c) {
+		uint32_t g = c.arg<uint32_t>(0);
+		de::Guid guid;
+		if (g) memcpy(guid.bytes, c.mem().ptr(g, 16), 16);
+		c.ret_object(g ? c.world.global_object(c.world.data().by_guid(guid)) : nullptr);
+	});
+	reg("CEnvironmentDescription::int MinimumRecommendedPlayers()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		c.ret_u32(uint32_t(o && o->file ? environment_players({o->file, o->index}).first : 0));
+	});
+	reg("CEnvironmentDescription::int MaximumRecommendedPlayers()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		c.ret_u32(uint32_t(o && o->file ? environment_players({o->file, o->index}).second : 0));
+	});
+	reg("CObject::float MouseScreenPositionX()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_x); });
+	reg("CObject::float MouseScreenPositionY()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_y); });
+	reg("CObject::float ScreenAspectRatio()", [](const NativeContext &c) { c.ret_f32(c.world.screen_aspect); });
+	reg("CDescription::Unlock(dword)", [](const NativeContext &c) {
+		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index});
+	});
+	// IsUserSelectionValidCaller (Core 0x701f11d0): description vtable +0x130, true but for match
+	// descriptions (DE_CMatchDescription::IsUserSelectionValid), which no shipped list gathers.
+	reg("CDescription::bool IsUserSelectable()", [](const NativeContext &c) { c.ret_bool(true); });
+	reg("CDescription::bool IsLocked()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		c.ret_bool(o && o->file && description_locked(c.world, {o->file, o->index}));
+	});
 	auto stub = [&](const char *key) { w.register_native(key, [](const NativeContext &) {}); };
 
 	// --- Generic events ---------------------------------------------------------------------------
@@ -193,7 +222,13 @@ void register_script_natives(World &w) {
 			c.mem().set<int32_t>(e + kInt1, 1);
 			return;
 		}
+		static const char *dbg = getenv("OPENBG_DEBUG_SENDS");
+		int32_t before = c.mem().get<int32_t>(e + kInt1);
 		c.world.send_event(t, e);
+		if (dbg) {
+			std::string h = c.world.read_string(c.mem().get<uint32_t>(e + kHandle));
+			if (h.find(dbg) != std::string::npos) fprintf(stderr, "[send %u] %s -> %s INT1 %d -> %d\n", c.world.frame(), h.c_str(), t->name.c_str(), before, c.mem().get<int32_t>(e + kInt1));
+		}
 	});
 	// ProcessEventCaller (Core 0x70046230): the object's own ProcessEvent (vtable +0x70). For an
 	// actor (DE_CActor::ProcessEvent 0x70090ed0) that is each property's in turn (the script
@@ -267,6 +302,18 @@ void register_script_natives(World &w) {
 		v.erase(std::remove(v.begin(), v.end(), g), v.end());
 		set_pool(c, v);
 	});
+	reg("CObject::CGUIDPool::(opp =)(class CGUIDPool)", [set_pool](const NativeContext &c) {
+		std::vector<std::array<uint8_t, 16>> v;
+		if (uint32_t o = c.arg<uint32_t>(0)) {
+			uint32_t data = c.mem().get<uint32_t>(o), n = c.mem().get<uint32_t>(o + 4);
+			for (uint32_t i = 0; i < n; ++i) {
+				std::array<uint8_t, 16> g;
+				memcpy(g.data(), c.mem().ptr(data + i * 16, 16), 16);
+				v.push_back(g);
+			}
+		}
+		set_pool(c, v);
+	});
 	reg("CObject::CGUIDPool::int Num()", [pool](const NativeContext &c) { c.ret_u32(uint32_t(pool(c).size())); });
 
 	// --- Arrays -----------------------------------------------------------------------------------
@@ -323,6 +370,15 @@ void register_script_natives(World &w) {
 		if (!a) return;
 		auto e = elements(c.mem(), a);
 		e.erase(std::remove(e.begin(), e.end(), v), e.end());
+		assign(c.mem(), a, e);
+	});
+	// SingleDimensionReferenceShuffleCaller (Core 0x7014d220): from the last element down, each
+	// swapped with one picked at random from the whole array.
+	reg(ra + "Shuffle()", [](const NativeContext &c) {
+		uint32_t a = c.self_handle();
+		if (!a) return;
+		auto e = elements(c.mem(), a);
+		for (int i = int(e.size()) - 1; i >= 0; --i) std::swap(e[size_t(i)], e[size_t(rand() % int(e.size()))]);
 		assign(c.mem(), a, e);
 	});
 	reg(ra + "bool IsPresent(class CReferenceTarget)", [](const NativeContext &c) {
@@ -387,6 +443,10 @@ void register_script_natives(World &w) {
 	reg("CObject::SetFLOATValue(string,float)", [set_bits](const NativeContext &c) { set_bits(c, c.arg<uint32_t>(1)); });
 	reg("CObject::SetValue(string,string)", [](const NativeContext &c) {
 		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].text = c.arg_string(1);
+	});
+	reg("CObject::SetValue(string,class CText)", [](const NativeContext &c) {
+		uint32_t t = c.arg<uint32_t>(1);
+		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].text = t ? c.world.read_string(c.mem().get<uint32_t>(t)) : std::string();
 	});
 	reg("CObject::SetObjectReferenceValue(string,class CObject)", [](const NativeContext &c) {
 		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].objects.push_back(c.arg<uint32_t>(1));
@@ -527,7 +587,6 @@ void register_script_natives(World &w) {
 	};
 	reg("CObject::DeleteThisLater()", later);
 	reg("CObject::Die()", later);
-	reg("CObject::class CSession SubSessionOwner()", [](const NativeContext &c) { c.ret_u32(0); });
 	stub("CImpulseRobot::SetDefaultHotkey(string,byte,bool,bool,bool)");
 	stub("CImpulseRobot::AttachToImpulse(string,class CReferenceTarget)");
 	reg("CImpulseRobot::bool IsImpulseEvent(class CEvent,string)", [](const NativeContext &c) { c.ret_bool(false); });

@@ -384,7 +384,7 @@ bool DescriptionSelector::key(AppManager &app, int sym) {
 }
 
 bool AppManager::is_locked(const de::ObjectRef &d) const {
-	return read_description(world.data(), d).locked_by_default && !registry_bool("Unlocked " + d.info().guid.str());
+	return description_locked(world, d);
 }
 
 bool UIManager::begin(AppManager &) {
@@ -738,9 +738,8 @@ void AppManager::key(int sym) {
 	}
 }
 
-std::string AppManager::registry_string(const std::string &name) const {
-	auto it = registry.find(name);
-	return it == registry.end() ? std::string() : it->second;
-}
+std::string AppManager::registry_string(const std::string &name) const { return world.registry_string(name); }
+
+void AppManager::set_registry_string(const std::string &name, const std::string &v) { world.registry[name] = v; }
 
 }  // namespace game::ui
