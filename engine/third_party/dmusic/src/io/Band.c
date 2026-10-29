@@ -23,6 +23,8 @@ static void DmBand_parseInstrument(DmInstrument* slf, DmRiff* rif) {
 			DmRiff_readByte(&cnk, &slf->volume);
 			DmRiff_readShort(&cnk, &slf->transpose);
 			DmRiff_readDword(&cnk, &slf->channel_priority);
+			slf->pitch_bend_range = 2;
+			if (cnk.len - cnk.pos >= 2) DmRiff_readShort(&cnk, &slf->pitch_bend_range);
 
 			slf->pan = min_u8(slf->pan, DmBand_MAX_PAN);
 			slf->volume = min_u8(slf->volume, DmBand_MAX_VOLUME);

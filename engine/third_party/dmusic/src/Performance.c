@@ -446,10 +446,13 @@ DmPattern_generateControlChangeCurve(DmCurve* curve, uint32_t time, uint32_t cha
 		return DmResult_SUCCESS;
 	}
 
+	// The curve's values every few ticks, then its end value at its end (an instant or very short
+	// curve is just that), as DirectMusic's curve playback lands on the end value.
 	float prev = (float) curve->start_value - 1;
-	for (uint32_t k = 0; k < (curve->duration / DmInt_CURVE_SPACING); ++k) {
-		uint32_t offset = k * DmInt_CURVE_SPACING;
-		float phase = (float) offset / (float) curve->duration;
+	uint32_t steps = curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration / DmInt_CURVE_SPACING;
+	for (uint32_t k = 0; k <= steps; ++k) {
+		uint32_t offset = k == steps ? (curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration) : k * DmInt_CURVE_SPACING;
+		float phase = k == steps || curve->duration == 0 ? 1.f : (float) offset / (float) curve->duration;
 		float value = DmCurve_lerp(curve, phase);
 
 		DmMessage msg;
@@ -479,10 +482,11 @@ DmPattern_generateControlChangeCurve(DmCurve* curve, uint32_t time, uint32_t cha
 }
 
 static DmResult DmPattern_generatePitchBendCurve(DmCurve* curve, uint32_t time, uint32_t channel, DmMessageQueue* out) {
-	int prev = curve->start_value;
-	for (uint32_t k = 0; k < (curve->duration / DmInt_CURVE_SPACING); ++k) {
-		uint32_t offset = k * DmInt_CURVE_SPACING;
-		float phase = (float) offset / (float) curve->duration;
+	int prev = curve->start_value - 1;
+	uint32_t steps = curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration / DmInt_CURVE_SPACING;
+	for (uint32_t k = 0; k <= steps; ++k) {
+		uint32_t offset = k == steps ? (curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration) : k * DmInt_CURVE_SPACING;
+		float phase = k == steps || curve->duration == 0 ? 1.f : (float) offset / (float) curve->duration;
 		float value = DmCurve_lerp(curve, phase);
 
 		DmMessage msg;
@@ -492,7 +496,7 @@ static DmResult DmPattern_generatePitchBendCurve(DmCurve* curve, uint32_t time, 
 		msg.pitch_bend.value = (int) value;
 		msg.pitch_bend.channel = channel;
 		msg.pitch_bend.reset = curve->flags & DmCurveFlags_RESET;
-		msg.pitch_bend.reset_value = (int) value;
+		msg.pitch_bend.reset_value = curve->reset_value;
 
 		// Optimization: Don't emit a message if the value is the same as the previous one.
 		if (msg.pitch_bend.value == prev) {

@@ -1,6 +1,7 @@
 #include "game/ui.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -216,8 +217,9 @@ private:
 class RulesDisplayPage : public UIManager {
 public:
 	explicit RulesDisplayPage(GameObject *rules) : UIManager("Rules", "SinglePlayerLoading"), rules_(rules) {
-		autopause = false;      // +0xb4
-		show_backdrop = false;  // +0xb0
+		autopause = false;        // +0xb4
+		show_backdrop = false;    // +0xb0
+		show_main_frame = false;  // +0xac: SetupControls clears it for SinglePlayerLoading
 	}
 
 	bool begin(AppManager &app) override {
@@ -255,17 +257,21 @@ public:
 	}
 	void draw(AppManager &app, std::vector<DrawItem> &out) override {
 		auto &r = app.world.rules_displays[rules_];
-		auto text = [&](Control *c, const std::string &t, int height) {
+		// The robot's text controls (DE_CRulesDisplayRobot, OMF 0x35063520): heights in virtual
+		// pixels and colours as it sets them.
+		auto text = [&](Control *c, const std::string &t, int height, std::array<float, 4> rgba) {
 			if (!c || t.empty()) return;
 			ControlLayout l;
 			l.kind = ControlLayout::Text;
 			l.text = t;
 			l.text_height = height;
+			size_t from = out.size();
 			flow(app, l, c->left + 0.005f, c->top + 0.005f, c->right - c->left - 0.01f, c->bottom, out);
+			for (size_t i = from; i < out.size(); ++i) std::copy(rgba.begin(), rgba.end(), out[i].rgba);
 		};
-		text(name_box_, title_, 22);
-		text(commentary_box_, commentary_, 15);
-		text(next_box_, next_, 15);
+		text(name_box_, title_, 19, {1, 1, 0.65f, 1});
+		text(commentary_box_, commentary_, 14, {1, 0.75f, 0.8f, 1});
+		text(next_box_, next_, 16, {0.8f, 0.8f, 0.8f, 1});
 		if (progress_box_) {
 			DrawItem d;
 			d.kind = DrawItem::Text;

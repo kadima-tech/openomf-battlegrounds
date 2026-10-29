@@ -94,6 +94,9 @@ typedef enum DmInstrumentFlags {
 	/// \brief The `channel_priority` member is valid
 	DmInstrument_VALID_CHANNEL_PRIORITY = (1 << 11),
 
+	/// \brief The `pitch_bend_range` member is valid (DMUS_IO_INST_PITCHBENDRANGE)
+	DmInstrument_VALID_PITCH_BEND_RANGE = (1 << 13),
+
 	/// \brief The instrument is from the General MIDI collection
 	DmInstrument_GENERAL_MIDI = (1 << 8),
 
@@ -166,6 +169,9 @@ typedef struct DmInstrument {
 	///
 	/// \note Original name: `dwChannelPriority`
 	uint32_t channel_priority;
+
+	/// \brief The pitch bend range in semitones (DX8 `nPitchBendRange`).
+	int16_t pitch_bend_range;
 
 	DmReference reference;
 

@@ -69,6 +69,7 @@ typedef struct DmMsArticulation {  // CSourceArticulation
 
 typedef struct DmMsRegion {  // CSourceRegion + CSourceSample
 	uint8_t key_low, key_high, group;
+	uint8_t vel_low, vel_high;  // DLS2 velocity range (rgnh RangeVelocity)
 	bool allow_overlap;
 	VREL attenuation;
 	PREL fine_tune;
@@ -867,6 +868,9 @@ static DmMsInstrument* DmMsEngine_instrument(DmMsEngine* e, DmDls* dls, DmDlsIns
 		DmMsRegion* r = &mi->regions[i];
 		r->key_low = (uint8_t) src->range_low;
 		r->key_high = (uint8_t) src->range_high;
+		// An unset velocity range (0-0, as old DLS1 regions leave it) takes every velocity.
+		r->vel_low = (uint8_t) (src->velocity_high ? src->velocity_low : 0);
+		r->vel_high = (uint8_t) (src->velocity_high ? src->velocity_high : 127);
 		r->allow_overlap = src->nonexclusive;
 		r->group = (uint8_t) src->key_group;
 		DmMsArticulation_init(&r->art);
@@ -921,12 +925,17 @@ static DmMsInstrument* DmMsEngine_instrument(DmMsEngine* e, DmDls* dls, DmDlsIns
 	return mi;
 }
 
-// CInstrument::ScanForRegion: the first region whose key range holds the note.
-static DmMsRegion const* DmMsInstrument_region(DmMsInstrument const* mi, int key) {
-	for (uint32_t i = 0; i < mi->region_count; ++i) {
-		if (key >= mi->regions[i].key_low && key <= mi->regions[i].key_high) return &mi->regions[i];
+// The regions a note plays: every region whose key and velocity ranges hold it. DDKSynth's
+// CInstrument::ScanForRegion (DLS1) takes the first by key alone; the DLS2 synth the game ran on
+// selects by velocity too and sounds every layer that matches (the theme's instruments choose
+// their samples by velocity: 127, 126, 125 and below).
+static uint32_t DmMsInstrument_regions(DmMsInstrument const* mi, int key, int velocity, DmMsRegion const** out, uint32_t max) {
+	uint32_t n = 0;
+	for (uint32_t i = 0; i < mi->region_count && n < max; ++i) {
+		DmMsRegion const* r = &mi->regions[i];
+		if (key >= r->key_low && key <= r->key_high && velocity >= r->vel_low && velocity <= r->vel_high) out[n++] = r;
 	}
-	return NULL;
+	return n;
 }
 
 // --- The synth -------------------------------------------------------------------------------------
@@ -1044,6 +1053,7 @@ void DmSynth_sendBandUpdate(DmSynth* slf, DmBand* band) {
 		}
 		if (ins->options & DmInstrument_VALID_TRANSPOSE) c->transpose = ins->transpose;
 		if (ins->options & DmInstrument_VALID_CHANNEL_PRIORITY) c->priority = ins->channel_priority;
+		if (ins->options & DmInstrument_VALID_PITCH_BEND_RANGE) c->bend_range = ins->pitch_bend_range * 100;
 	}
 }
 
@@ -1152,6 +1162,10 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 	if (slf == NULL || engine_of(slf) == NULL || channel >= slf->channels_len) {
 		return;
 	}
+	// OPENBG_MUSIC_SOLO=<pchannel>: only that channel sounds (debugging).
+	static int solo = -2;
+	if (solo == -2) solo = getenv("OPENBG_MUSIC_SOLO") ? atoi(getenv("OPENBG_MUSIC_SOLO")) : -1;
+	if (solo >= 0 && (int) channel != solo) return;
 	DmMsEngine* e = engine_of(slf);
 	struct DmSynthChannel* c = &slf->channels[channel];
 	int key = note + c->transpose;
@@ -1161,31 +1175,37 @@ void DmSynth_sendNoteOn(DmSynth* slf, uint32_t channel, uint8_t note, uint8_t ve
 		return;
 	}
 	if (c->instrument == NULL) return;
-	DmMsRegion const* r = DmMsInstrument_region(c->instrument, key);
-	if (r == NULL) return;
-	if (!r->allow_overlap) {
+	DmMsRegion const* layers[16];
+	uint32_t count = DmMsInstrument_regions(c->instrument, key, velocity, layers, 16);
+	if (count == 0) return;
+	bool exclusive = false;
+	for (uint32_t i = 0; i < count; ++i) exclusive = exclusive || !layers[i]->allow_overlap;
+	if (exclusive) {
 		for (DmMsVoice* v = e->in_use; v; v = v->next) {
 			if (v->channel == c && v->key == key) DmMsVoice_quickStop(v, e->time);
 		}
 	}
-	if (r->group != 0) {
-		for (DmMsVoice* v = e->in_use; v; v = v->next) {
-			if (v->group == r->group && v->channel == c && v->program == c->instrument) DmMsVoice_quickStop(v, e->time);
+	for (uint32_t i = 0; i < count; ++i) {
+		DmMsRegion const* r = layers[i];
+		if (r->group != 0) {
+			for (DmMsVoice* v = e->in_use; v; v = v->next) {
+				if (v->group == r->group && v->channel == c && v->program == c->instrument) DmMsVoice_quickStop(v, e->time);
+			}
 		}
-	}
-	DmMsVoice* v = DmMsEngine_free(e);
-	if (v == NULL) v = DmMsEngine_steal(e, c->priority);
-	if (v == NULL) return;  // a lost note
-	PREL pitch = c->fine_tune;
-	if (!c->drums) pitch += c->coarse_tune;
-	memset(v, 0, sizeof *v);
-	v->key = (uint8_t) key;
-	v->channel = c;
-	v->program = c->instrument;
-	v->priority = c->priority;
-	if (DmMsVoice_start(e, v, r, e->time, key, velocity, pitch)) {
-		v->in_use = true;
-		DmMsEngine_queue(e, v);
+		DmMsVoice* v = DmMsEngine_free(e);
+		if (v == NULL) v = DmMsEngine_steal(e, c->priority);
+		if (v == NULL) return;  // a lost note
+		PREL pitch = c->fine_tune;
+		if (!c->drums) pitch += c->coarse_tune;
+		memset(v, 0, sizeof *v);
+		v->key = (uint8_t) key;
+		v->channel = c;
+		v->program = c->instrument;
+		v->priority = c->priority;
+		if (DmMsVoice_start(e, v, r, e->time, key, velocity, pitch)) {
+			v->in_use = true;
+			DmMsEngine_queue(e, v);
+		}
 	}
 }
 
