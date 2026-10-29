@@ -1839,9 +1839,62 @@ void AppManager::mouse_move(float x, float y) {
 
 // DE_CButtonRobot: a button clicks when released over itself; the actor robot sends GUISelect
 // (ProcessButtonClick 0x701ed640) and the page's robot acts on it.
+AppManager::NotificationLayout AppManager::notification_layout() const {
+	NotificationLayout l{};
+	if (notifications.empty()) return l;
+	// In screen heights (the reference: a 1049 x 364 box at 1424 high), x scaled by 3/4.
+	const float hx = 0.75f;
+	float w = 0.737f * hx, frame = 0.0056f, title = 0.049f, icon = 0.115f;
+	l.frame = frame;
+	l.text_size = 0.03f;
+	l.line = l.text_size * 1.35f;
+	l.text_left = 0.5f - w / 2 + frame + icon * hx + 0.012f;
+	l.text_right = 0.5f + w / 2 - frame - 0.01f;
+	// SplitNewLine, then lines broken at the text's width.
+	std::string text = notifications.front().text;
+	for (size_t p = 0; p <= text.size();) {
+		size_t nl = text.find('\n', p);
+		std::string para = text.substr(p, nl == std::string::npos ? std::string::npos : nl - p), line;
+		for (size_t q = 0; q <= para.size();) {
+			size_t sp = para.find(' ', q);
+			std::string word = para.substr(q, sp == std::string::npos ? std::string::npos : sp - q);
+			std::string test = line.empty() ? word : line + " " + word;
+			if (!line.empty() && text_width && text_width(test, l.text_size) > l.text_right - l.text_left) {
+				l.lines.push_back(line);
+				line = word;
+			} else {
+				line = test;
+			}
+			if (sp == std::string::npos) break;
+			q = sp + 1;
+		}
+		l.lines.push_back(line);
+		if (nl == std::string::npos) break;
+		p = nl + 1;
+	}
+	float ok_h = 0.066f, body = std::max(0.19f, 0.02f + l.line * float(l.lines.size()) + ok_h + 0.04f);
+	float h = frame * 2 + title + body;
+	l.x0 = 0.5f - w / 2, l.x1 = 0.5f + w / 2, l.y0 = 0.5f - h / 2, l.y1 = 0.5f + h / 2;
+	l.title_bottom = l.y0 + frame + title;
+	float cs = title * 0.88f;
+	l.close[0] = l.x1 - frame - 0.003f - cs * hx, l.close[1] = l.y0 + frame + 0.003f, l.close[2] = l.x1 - frame - 0.003f, l.close[3] = l.close[1] + cs;
+	l.icon[0] = l.x0 + frame + 0.009f, l.icon[1] = l.title_bottom + 0.008f, l.icon[2] = l.icon[0] + icon * hx, l.icon[3] = l.icon[1] + icon;
+	l.text_top = l.title_bottom + 0.02f + l.line / 2;
+	float bw = 0.29f * w;
+	l.ok[0] = l.x1 - frame - 0.03f * w - bw, l.ok[2] = l.x1 - frame - 0.03f * w;
+	l.ok[1] = std::max(l.text_top + l.line * float(l.lines.size()) - l.line / 2 + 0.008f, l.title_bottom + 0.06f), l.ok[3] = l.ok[1] + ok_h;
+	return l;
+}
+
 void AppManager::mouse_button(bool down, int clicks) {
 	if (!notifications.empty()) {
-		if (!down) notifications.erase(notifications.begin());
+		// The dialog is modal: only OK or the close box (on release over the one pressed) closes it.
+		auto l = notification_layout();
+		auto over = [&](const float *r) { return mouse_x_ >= r[0] && mouse_x_ < r[2] && mouse_y_ >= r[1] && mouse_y_ < r[3]; };
+		bool on = over(l.ok) || over(l.close);
+		if (down) notification_press_ = on;
+		else if (notification_press_ && on) notifications.erase(notifications.begin());
+		if (!down) notification_press_ = false;
 		return;
 	}
 	if (!current || !current->activated) return;

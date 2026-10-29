@@ -235,6 +235,16 @@ public:
 		std::string title, text;
 	};
 	std::vector<Notification> notifications;
+	// DE_CDialog3d::UserInformation's dialog for the front notification, in screen fractions (y
+	// down), measured from the original at 4:3: the box, its title bar and close box, the icon,
+	// the text's lines and the OK button.
+	struct NotificationLayout {
+		float x0, y0, x1, y1, title_bottom, frame;
+		float close[4], icon[4], ok[4];
+		float text_left, text_right, text_top, text_size, line;
+		std::vector<std::string> lines;
+	};
+	NotificationLayout notification_layout() const;
 	// A screen this port does not have yet: says so instead of guessing.
 	void not_ported(const std::string &what);
 
@@ -284,6 +294,7 @@ private:
 
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
+	bool notification_press_ = false;
 	bool first_ui_ = true;
 	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_;
 };

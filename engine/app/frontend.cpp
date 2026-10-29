@@ -85,33 +85,6 @@ Viewport gui_viewport(int dw, int dh) {
 	return v;
 }
 
-// A notification's text in lines of about `width` characters.
-std::vector<std::string> wrap(const std::string &text, size_t width) {
-	std::vector<std::string> lines;
-	size_t p = 0;
-	while (p <= text.size()) {
-		size_t nl = text.find('\n', p);
-		std::string para = text.substr(p, nl == std::string::npos ? std::string::npos : nl - p);
-		std::string line;
-		size_t q = 0;
-		while (q < para.size()) {
-			size_t sp = para.find(' ', q);
-			std::string word = para.substr(q, sp == std::string::npos ? std::string::npos : sp - q);
-			if (!line.empty() && line.size() + 1 + word.size() > width) {
-				lines.push_back(line);
-				line.clear();
-			}
-			line += (line.empty() ? "" : " ") + word;
-			if (sp == std::string::npos) break;
-			q = sp + 1;
-		}
-		lines.push_back(line);
-		if (nl == std::string::npos) break;
-		p = nl + 1;
-	}
-	return lines;
-}
-
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -607,15 +580,44 @@ int main(int argc, char **argv) {
 			actors_r.draw(world.data(), doors, vp, eye);
 			render::g_lighting = game_lighting;
 			if (!app.notifications.empty()) {
+				// DE_CDialog3d::UserInformation, as the original draws it: a light grey bevelled frame,
+				// a navy title bar shading darker to the left with the title and a close box, a black
+				// body with the user-information icon, the text centred, and OK in a blue frame.
 				auto &n = app.notifications.front();
-				auto lines = wrap(n.text, 52);
-				float h = 0.12f + 0.035f * float(lines.size()), y0 = 0.5f - h / 2;
-				const float back[4] = {0.05f, 0.08f, 0.12f, 0.9f}, edge[4] = {0.55f, 0.75f, 0.9f, 0.9f};
-				overlay.rect(0.18f, y0 - 0.004f, 0.82f, y0 + h + 0.004f, edge, vpt.w, vpt.h);
-				overlay.rect(0.185f, y0, 0.815f, y0 + h, back, vpt.w, vpt.h);
-				overlay.label(n.title, 0.5f, y0 + 0.035f, 0.035f, white, vpt.w, vpt.h);
-				for (size_t i = 0; i < lines.size(); ++i) overlay.label(lines[i], 0.5f, y0 + 0.08f + 0.035f * float(i), 0.026f, white, vpt.w, vpt.h);
-				overlay.label("OK", 0.5f, y0 + h - 0.025f, 0.026f, edge, vpt.w, vpt.h);
+				auto l = app.notification_layout();
+				const float frame_hi[4] = {0.86f, 0.86f, 0.85f, 1}, frame_lo[4] = {0.45f, 0.44f, 0.45f, 1}, black[4] = {0, 0, 0, 1};
+				overlay.rect(l.x0, l.y0, l.x1, l.y1, frame_lo, vpt.w, vpt.h);
+				overlay.rect(l.x0, l.y0, l.x1 - l.frame * 0.4f, l.y1 - l.frame * 0.4f, frame_hi, vpt.w, vpt.h);
+				float fx = l.frame * 0.75f;
+				overlay.rect(l.x0 + fx, l.y0 + l.frame, l.x1 - fx, l.y1 - l.frame, black, vpt.w, vpt.h);
+				const int strips = 32;
+				for (int k = 0; k < strips; ++k) {
+					float t = (float(k) + 0.5f) / strips;
+					const float c[4] = {0, 0, 0.08f + 0.6f * t, 1};
+					float a0 = l.x0 + fx + (l.x1 - l.x0 - 2 * fx) * float(k) / strips, a1 = l.x0 + fx + (l.x1 - l.x0 - 2 * fx) * float(k + 1) / strips;
+					overlay.rect(a0, l.y0 + l.frame, a1, l.title_bottom, c, vpt.w, vpt.h);
+				}
+				const float sep[4] = {0.43f, 0.45f, 0.47f, 1};
+				overlay.rect(l.x0 + fx, l.title_bottom, l.x1 - fx, l.title_bottom + 0.004f, sep, vpt.w, vpt.h);
+				overlay.label(n.title, l.x0 + l.frame + 0.012f, (l.y0 + l.frame + l.title_bottom) / 2, 0.034f, white, vpt.w, vpt.h, false);
+				const float close_face[4] = {0.31f, 0.31f, 0.51f, 1};
+				overlay.rect(l.close[0], l.close[1], l.close[2], l.close[3], frame_hi, vpt.w, vpt.h);
+				overlay.rect(l.close[0] + 0.002f, l.close[1] + 0.003f, l.close[2] - 0.002f, l.close[3] - 0.003f, close_face, vpt.w, vpt.h);
+				overlay.label("X", (l.close[0] + l.close[2]) / 2, (l.close[1] + l.close[3]) / 2, 0.04f, black, vpt.w, vpt.h);
+				if (const de::ObjectsFile *core = world.data().file("COREImages")) {
+					for (uint32_t i = 0; i < core->objects().size(); ++i) {
+						if (core->objects()[i].name != "Not_UserInformation") continue;
+						overlay.image_rect({core, i}, l.icon[0], l.icon[1], l.icon[2], l.icon[3], vpt.w, vpt.h);
+						break;
+					}
+				}
+				for (size_t i = 0; i < l.lines.size(); ++i) {
+					overlay.label(l.lines[i], (l.text_left + l.text_right) / 2, l.text_top + l.line * float(i), l.text_size, white, vpt.w, vpt.h);
+				}
+				const float ok_frame[4] = {0.17f, 0.16f, 0.57f, 1}, ok_face[4] = {0.27f, 0.27f, 0.31f, 1};
+				overlay.rect(l.ok[0], l.ok[1], l.ok[2], l.ok[3], ok_frame, vpt.w, vpt.h);
+				overlay.rect(l.ok[0] + 0.004f, l.ok[1] + 0.005f, l.ok[2] - 0.004f, l.ok[3] - 0.005f, ok_face, vpt.w, vpt.h);
+				overlay.label("OK", (l.ok[0] + l.ok[2]) / 2, (l.ok[1] + l.ok[3]) / 2, 0.03f, white, vpt.w, vpt.h);
 			}
 			glViewport(0, 0, dw, dh);
 			// The VCR's Snapshot (TakeScreenShot): the drawn frame, saved to the Pictures folder.
