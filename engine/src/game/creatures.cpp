@@ -14,13 +14,6 @@ namespace game {
 void register_creature_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
 
-	// DE_CCreature::DeltaTick (Creature 0x15016700): once per scene time, restores a replayed state
-	// (network replication), ticks the creature's command manager (+0x118) unless the scene is
-	// paused, and calls its surface-change hooks when the surface under it changed. Only the
-	// observer camera calls it (BObserverCamera::Tick); its command executors (mouse-axis
-	// navigation, digital-orientation propulsion, teleport: its autopilot) are not ported, so
-	// there is nothing to run.
-	reg("CCreature::DeltaTick(float)", [](const NativeContext &) {});
 	reg("CCreature::int SceneTicksPerUpdate()", [](const NativeContext &c) { c.ret_u32(c.world.creature_rate(c.self())); });
 	reg("CCreature::dword CreationTime()", [](const NativeContext &c) {
 		GameObject *o = c.self();

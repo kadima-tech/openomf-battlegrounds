@@ -5,6 +5,7 @@
 #include "game/forces.h"
 #include "game/music.h"
 #include "game/particles.h"
+#include "game/observer.h"
 #include "game/simple_physics.h"
 #include "game/navigation.h"
 #include "game/session.h"
@@ -199,6 +200,7 @@ World::World(const std::filesystem::path &dir) : data_(dir) {
 	forces = std::make_shared<ForceSystem>(*this);
 	music = std::make_shared<MusicSystem>(*this);
 	simple_physics = std::make_shared<SimplePhysicsSystem>(*this);
+	observers = std::make_shared<ObserverSystem>(*this);
 	navigation = std::make_shared<Navigation>(*this);
 	// Line of sight and segment tests against the arena's fighting surfaces (DE_CScene::
 	// TestLineSegment on group 0x200000).
@@ -220,6 +222,7 @@ World::World(const std::filesystem::path &dir) : data_(dir) {
 	register_need_natives(*this);
 	register_music_natives(*this);
 	register_simple_physics_natives(*this);
+	register_observer_natives(*this);
 	// OPENBG_LIST_NATIVES=<file>: every registered native key, one a line (for the docs' inventory).
 	if (const char *path = getenv("OPENBG_LIST_NATIVES")) {
 		if (FILE *f = fopen(path, "w")) {
@@ -1242,14 +1245,21 @@ void World::creature_tick(GameObject &o) {
 // age by one per tick. Only the manager bound to a device records: the user's fighter's (the
 // others' have none). `manager` 0 is the stand-in for a user fighter without one.
 void World::input_tick(uint32_t manager) {
+	// The one history is the fighters': the observer's view-switching pad reads the keys itself.
+	auto records = [](const GameObject *x) {
+		if (!x || x->input_device < 0) return false;
+		for (const GameObject *p = x; p; p = p->parent) {
+			if (p->fighter) return true;
+		}
+		return false;
+	};
 	if (manager) {
-		GameObject *m = object(manager);
-		if (!m || m->input_device < 0) return;  // no device bound: nothing to record
+		if (!records(object(manager))) return;  // no device bound: nothing to record
 	} else {
 		for (auto &s : temporal_sets_) {
 			for (auto &e : s.elements) {
 				if (e.kind != Temporal::Input || !e.handle) continue;
-				if (GameObject *x = object(e.handle); x && x->input_device >= 0) return;  // the bound one records
+				if (records(object(e.handle))) return;  // the bound one records
 			}
 		}
 	}

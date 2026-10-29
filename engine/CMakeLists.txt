@@ -83,6 +83,7 @@ add_library(game STATIC
 	src/game/needs.cpp
 	src/game/music.cpp
 	src/game/simple_physics.cpp
+	src/game/observer.cpp
 	src/game/navigation.cpp
 	src/game/session.cpp
 	src/game/replay.cpp
