@@ -596,6 +596,33 @@ SessionState *session_of(World &w, const GameObject *o) {
 	return nullptr;
 }
 
+// DE_CSession::End deletes the session's scene (+0x6c): here every game-scene root (not the
+// GUI's, not the application's music player) goes when the session that owns the scene -- the
+// one with the environment -- ends.
+static void end_scene_of(World &w, SessionState &s) {
+	if (!s.environment) return;
+	for (GameObject *r : std::vector<GameObject *>(w.scene_roots)) {
+		if (r && !r->gui && r != w.music_player) w.clean_later(r);
+	}
+}
+
+void destroy_all_sessions(World &w) {
+	for (auto &sp : w.sessions) {
+		SessionState &s = *sp;
+		if (s.ended) continue;
+		s.ended = true;
+		for (auto &cl : s.clients) w.clean_later(cl->obj);
+		for (auto &sl : s.slots) {
+			if (sl->creature) w.clean_later(sl->creature);
+			w.clean_later(sl->obj);
+		}
+		if (s.environment) w.clean_later(s.environment);
+		end_scene_of(w, s);
+		for (GameObject *m : s.modifiers) w.clean_later(m);
+		w.clean_later(s.obj);
+	}
+}
+
 void add_session_modifier(World &w, GameObject *m) {
 	auto &s = *w.session;
 	m->parent = s.obj;
@@ -1096,6 +1123,7 @@ void register_session_natives(World &w) {
 			w.clean_later(sl->obj);
 		}
 		if (s->environment) w.clean_later(s->environment);
+		end_scene_of(w, *s);
 		for (GameObject *m : s->modifiers) w.clean_later(m);
 		w.clean_later(s->obj);
 	});

@@ -111,6 +111,8 @@ struct SessionState {
 // Create the session with its modifiers (master first; their own attached modifiers follow) and
 // an environment (the arena description's resource, or null to let a picker choose).
 SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifiers);
+// DE_CAppManager::DestroyAllLocalSessions (Core 0x7019bf00): every session ends and is deleted.
+void destroy_all_sessions(World &w);
 // The session an object belongs to (a session, its modifiers, slots and clients), if any.
 SessionState *session_of(World &w, const GameObject *o);
 // DE_CDescription::NewResource: the description's resource (fighter, pilot, environment,

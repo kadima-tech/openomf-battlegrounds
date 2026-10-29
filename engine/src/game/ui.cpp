@@ -289,6 +289,48 @@ private:
 	Control *commentary_box_ = nullptr, *next_box_ = nullptr, *name_box_ = nullptr, *progress_box_ = nullptr;
 };
 
+// DE_CInGameMenuUIManager (OMF ObjInitContents 0x35059460, SetupControls 0x35059490, click
+// 0x35059a00): over the match, no door transition and no main frame; its folder is chosen by the
+// session (InGameMenuSinglePlayer / Server / Client / DedicatedServer).
+class InGameMenu : public UIManager {
+public:
+	InGameMenu() : UIManager("InGameMenu", "InGameMenuSinglePlayer") {
+		uses_transition = false;
+		show_main_frame = false;
+		persistent = true;
+	}
+	void setup_controls(AppManager &app) override {
+		main_menu_ = button(app, "Main Menu", "MainMenu");
+		change_ = folder != "InGameMenuSinglePlayer" ? button(app, "Change Fighter", "ChangeFighter") : nullptr;
+		add_bot_ = folder == "InGameMenuServer" || folder == "InGameMenuDedicatedServer" ? button(app, "Add AI Bot", "AddBot") : nullptr;
+		resume_ = button(app, "Resume", "Resume");
+		resume_->keys = {kKeyEscape};
+		quit_ = button(app, "Quit", "Quit");
+		options_ = button(app, "Options", "Options");
+		help_ = button(app, "Help", "Help");
+	}
+	void click(AppManager &app, Control &c) override {
+		if (&c == add_bot_) {
+			app.menu_select(7);
+		} else if (&c == main_menu_) {
+			destroy_all_sessions(app.world);
+			app.set_next(app.main_menu(), true);
+		} else if (&c == change_) {
+			app.not_ported(c.text);
+		} else if (&c == quit_) {
+			app.set_next(app.quit_menu(), true);
+		} else if (&c == resume_) {
+			app.delete_stack(true);
+		} else if (&c == options_ || &c == help_) {
+			app.not_ported(c.text);
+		}
+	}
+
+private:
+	Control *main_menu_ = nullptr, *change_ = nullptr, *add_bot_ = nullptr, *resume_ = nullptr, *quit_ = nullptr, *options_ = nullptr,
+	        *help_ = nullptr;
+};
+
 // DE_CQuitMenuUIManager (OMF 0x350611d0, 0x35061210, 0x35061610).
 class QuitMenu : public UIManager {
 public:
@@ -558,6 +600,27 @@ bool AppManager::autopaused() const {
 
 UIPtr AppManager::rules_display(GameObject *rules) { return std::make_shared<RulesDisplayPage>(rules); }
 
+// DE_CInGameMenuUIManagerFactory::ProcessEvent (OMF 0x35059150), the "In Game Menu" impulse (Esc):
+// with any page up, an in-game menu that is showing closes; otherwise, over a sequenced local
+// session, the menu opens in the session's folder.
+bool AppManager::in_game_menu_impulse() {
+	if (current || next) {
+		if (in_game_menu_ && in_game_menu_->activated && current == in_game_menu_) {
+			set_next(nullptr, false);
+			return true;
+		}
+		return false;
+	}
+	if (world.sessions.empty()) return false;
+	SessionState *s = world.sessions.back().get();
+	while (s->owner) s = s->owner;
+	if (!in_game_menu_) in_game_menu_ = std::make_shared<InGameMenu>();
+	in_game_menu_->folder = s->single_player ? "InGameMenuSinglePlayer" : "InGameMenuServer";
+	delete_stack(true);
+	set_next(in_game_menu_, true);
+	return true;
+}
+
 UIPtr AppManager::quit_menu() {
 	if (!quit_menu_) quit_menu_ = std::make_shared<QuitMenu>();
 	return quit_menu_;
@@ -713,6 +776,10 @@ void AppManager::update() {
 	} else if ((current && current->uses_transition && page_finished) || (next && next->uses_transition)) {
 		set_active(transition, true);
 	}
+	// The standard session overlay (+0x9c) tints a rendering session's scene under a page that
+	// wants it (+0xc8).
+	bool under_session = session_scene_rendering && session_scene_rendering();
+	set_active(session_overlay, current && under_session && current->show_overlay);
 	if (transition_state != 0 || (current && page_finished) || next || page_finished) transition_ui();
 	if (!next || next->begun) {
 		if (current) {
@@ -822,6 +889,7 @@ void AppManager::key(int sym) {
 		if (sym == kKeyReturn || sym == kKeyEscape) notifications.erase(notifications.begin());
 		return;
 	}
+	if (sym == kKeyEscape && in_game_menu_impulse()) return;
 	if (!current || !current->activated) return;
 	if (UIPtr page = current; page->key(*this, sym)) return;
 	for (Control &c : current->controls) {

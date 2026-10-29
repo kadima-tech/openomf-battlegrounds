@@ -811,7 +811,8 @@ void register_script_natives(World &w) {
 	reg(pr + "SetTexture(class CImage)", [text](const NativeContext &c) { if (auto *t = text(c)) t->texture = c.arg_object(0); });
 	reg(pr + "SetAsOverlay()", [text](const NativeContext &c) { if (auto *t = text(c)) t->overlay = true; });
 	reg(pr + "SetBlendUnsortedTranslucentAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = false; });
-	reg(pr + "SetBlendAddAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = true; });
+	reg(pr + "SetBlendAddAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = true, t->modulate = false; });
+	reg(pr + "SetBlendModulate()", [text](const NativeContext &c) { if (auto *t = text(c)) t->modulate = true, t->additive = false; });
 	auto set_color = [text](const NativeContext &c) {
 		auto *t = text(c);
 		uint32_t a = c.arg<uint32_t>(0);
@@ -823,7 +824,8 @@ void register_script_natives(World &w) {
 		reg(std::string(cls) + "SetColor(class CColorRGBA)", set_color);
 		reg(std::string(cls) + "SetTexture(class CImage)", [text](const NativeContext &c) { if (auto *t = text(c)) t->texture = c.arg_object(0); });
 		reg(std::string(cls) + "SetAsOverlay()", [text](const NativeContext &c) { if (auto *t = text(c)) t->overlay = true; });
-		reg(std::string(cls) + "SetBlendAddAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = true; });
+		reg(std::string(cls) + "SetBlendAddAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = true, t->modulate = false; });
+		reg(std::string(cls) + "SetBlendModulate()", [text](const NativeContext &c) { if (auto *t = text(c)) t->modulate = true, t->additive = false; });
 		reg(std::string(cls) + "SetBlendUnsortedTranslucentAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = false; });
 		reg(std::string(cls) + "SetSortValue(int)", [text](const NativeContext &c) { if (auto *t = text(c)) t->sort = c.arg<int32_t>(0); });
 	}

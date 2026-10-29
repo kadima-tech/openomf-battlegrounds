@@ -10,7 +10,7 @@
 // it launches pick those (testing); --headless N runs N frames without a window and lists the
 // natives still missing.
 //
-// MOUSE="x,y@frame;down@frame;up@frame;key@frame;..." scripts the mouse (and Enter) in screenshot runs (x, y fractions
+// MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;..." scripts the mouse (and Enter, Esc) in screenshot runs (x, y fractions
 // of the 4:3 GUI area, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
 
@@ -128,6 +128,7 @@ int main(int argc, char **argv) {
 			else if (sscanf(item.c_str(), "down@%d", &f) == 1) mouse_script.push_back({f, 1, 0, 0});
 			else if (sscanf(item.c_str(), "up@%d", &f) == 1) mouse_script.push_back({f, 2, 0, 0});
 			else if (sscanf(item.c_str(), "key@%d", &f) == 1) mouse_script.push_back({f, 3, 0, 0});
+			else if (sscanf(item.c_str(), "esc@%d", &f) == 1) mouse_script.push_back({f, 4, 0, 0});
 			if (q == std::string::npos) break;
 			p = q + 1;
 		}
@@ -150,6 +151,8 @@ int main(int argc, char **argv) {
 		app.backdrop = persistent("V.Backdrop");
 		app.main_frame = persistent("V.MainFrame");
 		app.transition = persistent("V.MainDoors");
+		app.session_overlay = persistent("V.StandardSceneOverlay");
+		app.set_active(app.session_overlay, false);
 		app.set_active(app.backdrop, false);
 		app.set_active(app.main_frame, false);
 		app::GameView view(world);
@@ -210,7 +213,7 @@ int main(int argc, char **argv) {
 		};
 		app.has_local_session = [&] { return world.session != nullptr; };
 		app.session_fully_sequenced = [] { return true; };
-		app.session_scene_rendering = [&] { return view.has_arena(); };
+		app.session_scene_rendering = [&] { return world.session != nullptr && view.has_arena(); };
 		if (!launch.empty()) {
 			de::ObjectRef d = world.data().find("Description\\SessionMaster", launch);
 			if (!d) {
@@ -235,6 +238,7 @@ int main(int argc, char **argv) {
 			for (int fr = 0; fr < frames; ++fr) {
 				for (auto &m : mouse_script) {
 					if (m.frame == fr && m.kind == 3) app.key(13);
+					if (m.frame == fr && m.kind == 4) app.key(27);
 				}
 				app.update();
 				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
@@ -344,6 +348,7 @@ int main(int argc, char **argv) {
 					world.mouse_y = 1 - m.y;
 				}
 				else if (m.kind == 3) app.key(13);
+				else if (m.kind == 4) app.key(27);
 				else app.mouse_button(m.kind == 1);
 			}
 			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI.

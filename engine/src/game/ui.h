@@ -132,7 +132,7 @@ public:
 	World &world;
 	std::string transfer_agent = "OMFBGGUI";
 	// The launcher's InitGUI choices (not readable; FINDINGS 125 inference).
-	GameObject *main_frame = nullptr, *transition = nullptr, *backdrop = nullptr;
+	GameObject *main_frame = nullptr, *transition = nullptr, *backdrop = nullptr, *session_overlay = nullptr;
 
 	UIPtr current, next, last;
 	std::vector<UIPtr> stack;
@@ -155,6 +155,8 @@ public:
 	// The instances the launcher and screens use.
 	UIPtr main_menu();
 	UIPtr quit_menu();
+	// The in-game menu's Esc impulse; true when it acted.
+	bool in_game_menu_impulse();
 
 	// <transfer agent>\<name>: a new copy (GetObjectByValueString / ConstructObject).
 	GameObject *construct(const std::string &name);
@@ -211,7 +213,7 @@ private:
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
 	bool first_ui_ = true;
-	UIPtr main_menu_, quit_menu_;
+	UIPtr main_menu_, quit_menu_, in_game_menu_;
 };
 
 }  // namespace ui

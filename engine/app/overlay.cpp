@@ -193,7 +193,8 @@ void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
 		glDrawArrays(GL_TRIANGLES, 0, GLsizei(v.size() / 5));
 	};
 	for (auto *t : order) {
-		glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+		if (t->modulate) glBlendFunc(GL_DST_COLOR, GL_ZERO);
+		else glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 		if (t->overlay) glDisable(GL_DEPTH_TEST);
 		else glEnable(GL_DEPTH_TEST);
 		auto mode = [&](int m) { glUniform1i(glGetUniformLocation(prog3_, "mode"), m); };
@@ -238,6 +239,7 @@ void OverlayRenderer::draw(const game::World &world, int width, int height, cons
 	for (auto &[obj, t] : world.texts) {
 		if (!world.screen_space_meshes.count(t.mesh) || t.rgba[3] <= 0.01f) continue;
 		if (t.kind == game::World::Primitive::Text && t.text.empty()) continue;
+		if (!game::in_scene(*t.mesh)) continue;  // its actor left the scene (a deactivated overlay)
 		// A fighter's HUD shows for the fighter in focus only (stand-in for the renderer's
 		// camera test).
 		if (const auto *f = fighter_of(t.mesh); f && f != focus) continue;
@@ -247,7 +249,8 @@ void OverlayRenderer::draw(const game::World &world, int width, int height, cons
 	std::stable_sort(order.begin(), order.end(), [](auto *a, auto *b) { return a->sort > b->sort; });
 	auto mode = [&](int m) { glUniform1i(glGetUniformLocation(prog_, "mode"), m); };
 	for (auto *t : order) {
-		glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+		if (t->modulate) glBlendFunc(GL_DST_COLOR, GL_ZERO);
+		else glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 		if (t->kind == game::World::Primitive::Text) {
 			const FontGL *f = font_for(*t);
 			if (!f) break;

@@ -576,6 +576,7 @@ public:
 		float uv[4] = {0, 0, 1, 1};                  // UVAsBox
 		float box[4] = {0, 0, 0, 0};                 // PositionAsBox / StatusBar SetPosition (x0 y0 x1 y1)
 		bool additive = false;                       // SetBlendAddAlpha (else translucent alpha)
+		bool modulate = false;                       // SetBlendModulate: the screen times the primitive
 		float value = 0;                             // status bar fill, 0..1
 		bool bottom_to_top = false;                  // status bar direction (else left to right)
 	};

@@ -300,6 +300,15 @@ void World::destroy(GameObject *o) {
 		if (b->brain) b->brain->inst.shut_down = true;
 		gone.insert(b->handle);
 	}
+	// Its primitives (text, quads, bars) go with it.
+	for (auto it = texts.begin(); it != texts.end();) {
+		if (gone.count(it->first->handle) || (it->second.mesh && gone.count(it->second.mesh->handle))) {
+			screen_space_meshes.erase(it->second.mesh);
+			it = texts.erase(it);
+		} else {
+			++it;
+		}
+	}
 	// RefNotifyDestroyingTarget: reference members (DE_CSingleReference, ops 62/64) naming a
 	// destroyed object read as null from now on.
 	for (auto &bp : brains_) {
