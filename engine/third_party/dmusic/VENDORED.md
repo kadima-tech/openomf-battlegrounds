@@ -38,3 +38,14 @@ Local changes:
   stereo waves; the theme's strings and some drums use them).
 - Note-off releases every layer of the note-on it stops, as dmsynth does (each voice carries its
   note-on's serial); DDKSynth stopped one voice per note-off, leaving the other layers sounding.
+- The DLS2 low-pass filter, as dmsynth does it (re/FINDINGS 150): a region's `art2` cutoff (0x500)
+  and Q (0x501) pick a column and resonance row of the 2-pole coefficient tables, which the build reads
+  from the game disc's dmsynth.dll (Microsoft's data, so not kept here: `re/scripts/dmsynth_filter_tables.py`
+  writes `build/generated/_MsFilterTables.h`; without the disc the filter is left out), CC74
+  moves the cutoff by (CC74 − 64) × 100 cents, and the coefficients ramp between control points
+  like the volumes; the filter runs on the interpolated sample before the volume. The theme's
+  `pad2` and Snakeirons' `seq` use it. LFO, EG2, velocity and key modulation of the cutoff are not
+  ported (no instrument in the game uses them).
+- `DmPerformance_loadBand`, `DmPerformance_applyBand`, `DmPerformance_releaseBand` (and a public
+  `DmBand` type): a band from its RIFF, applied at once, for a segment without a band track (the
+  game plays its container's band first; re/FINDINGS 150).

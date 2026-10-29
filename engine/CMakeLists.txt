@@ -20,6 +20,17 @@ set_target_properties(dmusic PROPERTIES C_STANDARD 11)
 target_include_directories(dmusic PUBLIC third_party/dmusic/include PRIVATE third_party/dmusic/src)
 target_compile_definitions(dmusic PUBLIC DM_STATIC=1 PRIVATE DM_BUILD=1)
 target_compile_options(dmusic PRIVATE -w)
+# The synth's DLS2 filter tables are read from the game disc's dmsynth.dll at build time (they
+# are Microsoft's data); without the disc the filter is left out.
+set(OPENBG_GAME_ISO "${CMAKE_CURRENT_SOURCE_DIR}/../source/Battlegrounds.iso" CACHE FILEPATH "the game disc image")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(DMSYNTH_TABLES ${CMAKE_CURRENT_BINARY_DIR}/generated/_MsFilterTables.h)
+add_custom_command(OUTPUT ${DMSYNTH_TABLES}
+	COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../re/scripts/dmsynth_filter_tables.py ${DMSYNTH_TABLES} --iso ${OPENBG_GAME_ISO}
+	DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../re/scripts/dmsynth_filter_tables.py
+	COMMENT "Reading the DLS2 filter tables from dmsynth.dll")
+target_sources(dmusic PRIVATE ${DMSYNTH_TABLES})
+target_include_directories(dmusic PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 # openindeo (github.com/kadima-tech/openindeo, MIT): Indeo 4/5 video, the Image\AVI textures
 # Cinepak does not cover. A checkout next to this repository is used when there is one

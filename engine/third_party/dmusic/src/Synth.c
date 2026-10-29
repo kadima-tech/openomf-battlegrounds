@@ -17,6 +17,7 @@
 // PREL pitch in cents; PFRACT pitch ratios and VFRACT amplitudes with 12 fractional bits.
 #include "_Internal.h"
 #include "_MsSynthTables.h"
+#include "_MsFilterTables.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -67,6 +68,10 @@ typedef struct DmMsArticulation {  // CSourceArticulation
 	DmMsEg pitch_eg, volume_eg;
 	DmMsLfo lfo;
 	int32_t default_pan;
+	// dmsynth's DLS2 filter: the table column x 100 (cutoff - the output rate's cents + 10688) and
+	// the resonance row (Q / 15 cB, rounded); off while the cutoff is 0x7FFF.
+	bool filter_on;
+	int32_t filter_index, filter_qrow;
 } DmMsArticulation;
 
 typedef struct DmMsRegion {  // CSourceRegion + CSourceSample
@@ -152,6 +157,7 @@ static void DmMsArticulation_verify(DmMsArticulation* a) {
 // CSourceArticulation::Download, DLS level 1 connections.
 static void DmMsArticulation_load(DmMsArticulation* a, DmDlsArticulator const* art, uint32_t count) {
 	uint32_t rate = DmMs_SAMPLE_RATE;
+	int32_t cutoff = 0x7FFF, q = 0;
 	for (uint32_t k = 0; k < count; ++k) {
 		for (uint32_t i = 0; i < art[k].connection_count; ++i) {
 			struct DmDlsArticulatorConnection const* c = &art[k].connections[i];
@@ -170,6 +176,8 @@ static void DmMsArticulation_load(DmMsArticulation* a, DmDlsArticulator const* a
 				case DmDlsArticulatorDestination_EG2_SUSTAIN_LEVEL: a->pitch_eg.sustain = scale >> 16; break;
 				case DmDlsArticulatorDestination_EG2_RELEASE_TIME: a->pitch_eg.release = timecents_to_samples(scale, rate); break;
 				case DmDlsArticulatorDestination_PAN: a->default_pan = (int32_t) ((scale >> 12) / 125); break;
+				case DmDlsArticulatorDestination_FILTER_CUTOFF: cutoff = scale >> 16; break;
+				case DmDlsArticulatorDestination_FILTER_Q: q = scale >> 16; break;
 				default: break;
 				}
 				break;
@@ -198,6 +206,12 @@ static void DmMsArticulation_load(DmMsArticulation* a, DmDlsArticulator const* a
 			}
 		}
 	}
+	// dmsynth FUN_77486b10 / FUN_774864d0: the raw cutoff and Q set the column and row; the clamp
+	// that follows does not recompute them. 13676 = 1200 log2(22050 / 440) + 6900.
+	a->filter_on = cutoff != 0x7FFF && DmMs_FILTER_TABLES;
+	a->filter_index = cutoff - 13676 + 10688;
+	a->filter_qrow = (int32_t) ((float) q * (1.f / 15.f) + 0.5f);
+	a->filter_qrow = a->filter_qrow < 0 ? 0 : a->filter_qrow > 15 ? 15 : a->filter_qrow;
 	DmMsArticulation_verify(a);
 }
 
@@ -211,6 +225,7 @@ struct DmSynthChannel {
 	uint32_t priority;
 
 	uint8_t volume, expression, pan, mod_wheel;
+	uint8_t brightness;  // CC74: moves a filtered voice's cutoff by (CC74 - 64) x 100 cents (dmsynth)
 	int32_t pitch_bend;   // 0..0x3FFF
 	PREL bend_range;      // RPN 0
 	PREL fine_tune, coarse_tune;
@@ -257,6 +272,9 @@ typedef struct DmMsVoice {
 	int64_t sample_pos;  // 12 fractional bits
 	int64_t loop_start, loop_end, sample_length;
 	bool one_shot;
+	// The DLS2 filter (dmsynth): Q30 coefficients as last set, and the mono output history.
+	bool filter_on;
+	int32_t filter_k, filter_b1, filter_b2, filter_y1, filter_y2;
 
 	struct DmMsVoice* next;  // in the in-use queue
 } DmMsVoice;
@@ -458,10 +476,27 @@ static int32_t sample_at(DmMsVoice const* v, int64_t i) {
 	return (uint64_t) i == r->real ? r->pad : 0;
 }
 
+// dmsynth FUN_77489d80: the coefficients for the channel's CC74 now, linear between columns.
+static void DmMsVoice_filterCoefficients(DmMsVoice const* v, int32_t* k, int32_t* b1, int32_t* b2) {
+	DmMsArticulation const* a = &v->region->art;
+	int32_t total = a->filter_index + (v->channel->brightness - 64) * 100;
+	int32_t const *K = DmMs_FILTER_K[a->filter_qrow], *B1 = DmMs_FILTER_B1[a->filter_qrow], *B2 = DmMs_FILTER_B2[a->filter_qrow];
+	if (total < 0) {
+		*k = K[0], *b1 = B1[0], *b2 = B2[0];
+	} else if (total / 100 >= 88) {
+		*k = K[88], *b1 = B1[88], *b2 = B2[88];
+	} else {
+		int32_t i = total / 100, f = total % 100;
+		*k = K[i] + (int32_t) ((int64_t) (K[i + 1] - K[i]) * f / 100);
+		*b1 = B1[i] - (int32_t) ((int64_t) (B1[i] - B1[i + 1]) * f / 100);
+		*b2 = B2[i] - (int32_t) ((int64_t) (B2[i] - B2[i + 1]) * f / 100);
+	}
+}
+
 // CDigitalAudio::Mix16 / Mix8 (the C path): linear interpolation, the volumes and pitch stepped
 // every `period` samples. Returns the samples mixed (fewer when a one-shot ends or a loop wraps).
 static uint32_t DmMsVoice_mixSamples(DmMsVoice* v, int16_t* buf, uint32_t len, uint32_t period, VFRACT dlv, VFRACT drv,
-                                     PFRACT dp, int64_t end, int64_t loop_len) {
+                                     PFRACT dp, int32_t const* dfilter, int64_t end, int64_t loop_len) {
 	uint32_t inc = period;
 	int64_t pos = v->sample_pos;
 	VFRACT lvol = v->last_lvfract, rvol = v->last_rvfract;
@@ -483,6 +518,9 @@ static uint32_t DmMsVoice_mixSamples(DmMsVoice* v, int16_t* buf, uint32_t len, u
 			lvol = lfract >> 8;
 			rfract += drv;
 			rvol = rfract >> 8;
+			v->filter_k += dfilter[0];
+			v->filter_b1 += dfilter[1];
+			v->filter_b2 += dfilter[2];
 		}
 		int64_t idx = pos >> 12;
 		int32_t frac = (int32_t) (pos & 0xFFF);
@@ -490,6 +528,11 @@ static uint32_t DmMsVoice_mixSamples(DmMsVoice* v, int16_t* buf, uint32_t len, u
 		int32_t a = sample_at(v, idx);
 		int32_t m = ((sample_at(v, idx + 1) - a) * frac) >> 12;
 		m += a;
+		if (v->filter_on) {  // dmsynth FUN_77491c20: after the interpolation, before the volume
+			int64_t acc = (int64_t) m * v->filter_k - (int64_t) v->filter_y2 * v->filter_b2 + (int64_t) v->filter_y1 * v->filter_b1;
+			v->filter_y2 = v->filter_y1;
+			v->filter_y1 = m = (int32_t) (acc >> 30);
+		}
 		int32_t l = m * lvol, r = m * rvol;
 		l >>= eight ? 5 : 13;  // the signal bumps up to 15 bits
 		r >>= eight ? 5 : 13;
@@ -504,6 +547,7 @@ static uint32_t DmMsVoice_mixSamples(DmMsVoice* v, int16_t* buf, uint32_t len, u
 // CDigitalAudio::Mix
 static bool DmMsVoice_mixAudio(DmMsVoice* v, int16_t* buf, uint32_t len, VREL lvol, VREL rvol, PREL pitch) {
 	if (len == 0) {  // instant attack
+		if (v->filter_on) DmMsVoice_filterCoefficients(v, &v->filter_k, &v->filter_b1, &v->filter_b2);
 		v->last_pitchfract = (PFRACT) (((int64_t) v->base_pitch * prel_to_pfract(pitch)) >> 12);
 		v->last_lvfract = vrel_to_vfract(v->base_lvolume + lvol);
 		v->last_rvfract = vrel_to_vfract(v->base_rvolume + rvol);
@@ -537,6 +581,13 @@ static bool DmMsVoice_mixAudio(DmMsVoice* v, int16_t* buf, uint32_t len, VREL lv
 	VFRACT nl = vrel_to_vfract(v->base_lvolume + lvol), nr = vrel_to_vfract(v->base_rvolume + rvol);
 	VFRACT dl = muldiv(nl - v->last_lvfract, (int32_t) period << 8, (int32_t) len);
 	VFRACT dr = muldiv(nr - v->last_rvfract, (int32_t) period << 8, (int32_t) len);
+	int32_t dfilter[3] = {0, 0, 0}, fk = 0, fb1 = 0, fb2 = 0;
+	if (v->filter_on) {
+		DmMsVoice_filterCoefficients(v, &fk, &fb1, &fb2);
+		dfilter[0] = muldiv(fk - v->filter_k, (int32_t) period, (int32_t) len);
+		dfilter[1] = muldiv(fb1 - v->filter_b1, (int32_t) period, (int32_t) len);
+		dfilter[2] = muldiv(fb2 - v->filter_b2, (int32_t) period, (int32_t) len);
+	}
 
 	uint32_t start = 0;
 	for (;;) {
@@ -549,7 +600,7 @@ static bool DmMsVoice_mixAudio(DmMsVoice* v, int16_t* buf, uint32_t len, VREL lv
 			loop_len = v->loop_end - v->loop_start;
 			if (loop_len <= new_pitch) return false;
 		}
-		uint32_t done = DmMsVoice_mixSamples(v, buf + start * 2, len, period, dl, dr, dp, end, loop_len);
+		uint32_t done = DmMsVoice_mixSamples(v, buf + start * 2, len, period, dl, dr, dp, dfilter, end, loop_len);
 		if (v->one_shot) {
 			if (done < len) return false;
 			break;
@@ -562,6 +613,7 @@ static bool DmMsVoice_mixAudio(DmMsVoice* v, int16_t* buf, uint32_t len, VREL lv
 	v->last_lvfract = nl;
 	v->last_rvfract = nr;
 	v->last_pitchfract = new_pitch;
+	if (v->filter_on) v->filter_k = fk, v->filter_b1 = fb1, v->filter_b2 = fb2;
 	return true;
 }
 
@@ -653,6 +705,9 @@ static bool DmMsVoice_start(DmMsEngine* e, DmMsVoice* v, DmMsRegion const* r, ST
 	if (r->data == NULL) return false;
 
 	v->region = r;
+	v->filter_on = r->art.filter_on;
+	v->filter_y1 = v->filter_y2 = 0;
+	if (v->filter_on) DmMsVoice_filterCoefficients(v, &v->filter_k, &v->filter_b1, &v->filter_b2);
 	v->last_lvfract = vrel_to_vfract(DmMs_MIN_VOLUME);
 	v->last_rvfract = vrel_to_vfract(DmMs_MIN_VOLUME);
 	v->last_lvolume = v->last_rvolume = 0;
@@ -1012,6 +1067,7 @@ static void DmSynthChannel_init(struct DmSynthChannel* c, uint32_t index) {
 	c->volume = 100;
 	c->expression = 127;
 	c->pan = 64;
+	c->brightness = 64;
 	c->pitch_bend = 0x2000;
 	c->bend_range = 200;
 	c->rpn = 0x3FFF;
@@ -1118,8 +1174,10 @@ void DmSynth_sendControl(DmSynth* slf, uint32_t channel, uint8_t control, float 
 			}
 		}
 		break;
+	case 74: c->brightness = (uint8_t) v; break;
 	case 121:  // reset all controllers
 		c->mod_wheel = 0;
+		c->brightness = 64;
 		c->expression = 127;
 		c->pitch_bend = 0x2000;
 		break;
