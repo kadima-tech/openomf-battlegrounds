@@ -79,69 +79,240 @@ DmPart* DmStyle_findPart(DmStyle* slf, DmPartReference* pref) {
 	return NULL;
 }
 
-static uint32_t Dm_toEmbellishmentFlagset(DmCommandType cmd) {
-	uint32_t f = 0;
+enum {
+	DmPatternTag_ALIVE = 0,
+	DmPatternTag_DROPPED = -1,
+	DmPatternTag_LENGTH = 10,
+	DmPatternTag_SIGNATURE = 11,
+	DmPattern_MOTIF = 0x10,
+};
 
-	if (cmd & DmCommand_FILL) {
-		f |= 1;
-	}
-
-	if (cmd & DmCommand_INTRO) {
-		f |= 2;
-	}
-
-	if (cmd & DmCommand_BREAK) {
-		f |= 4;
-	}
-
-	if (cmd & DmCommand_END) {
-		f |= 8;
-	}
-
-	return f;
+static DmTimeSignature DmPattern_getTimeSignature(DmPattern const* slf, DmStyle const* sty) {
+	return slf->time_signature.beat != 0 ? slf->time_signature : sty->time_signature;
 }
 
-// See: https://documentation.help/DirectMusic/howmusicvariesduringplayback.htm
-DmPattern* DmStyle_getRandomPattern(DmStyle* slf, uint32_t groove, DmCommandType cmd) {
-	uint32_t embellishment = Dm_toEmbellishmentFlagset(cmd);
+// dmstyle FUN_77407b9e
+static bool DmPattern_matchesGroove(DmPattern const* slf, DmPatternCommand const* cmd) {
+	if (slf->embellishment & DmPattern_MOTIF) {
+		return false;
+	}
 
-	// Select a random pattern according to the current groove level.
-	// TODO(lmichaelis): This behaviour seems to be associated with DX < 8 only, newer versions should
-	//                   have some way of defining how to select the pattern if more than 1 choice is available
-	//                   but I couldn't find it.
+	uint32_t half = cmd->groove_range >> 1;
+	uint32_t lo = cmd->groove_level < half ? 1 : cmd->groove_level - half;
+	uint32_t hi = cmd->groove_level + half > 100 ? 100 : cmd->groove_level + half;
+	return hi >= slf->groove_bottom && lo <= slf->groove_top;
+}
 
-	int64_t index = Dm_rand() % (uint32_t) slf->patterns.length;
-	bool found_one = false;
-	do {
-		for (size_t i = 0; i < slf->patterns.length; ++i) {
-			DmPattern* pttn = &slf->patterns.data[i];
+// dmstyle FUN_77407be5
+static bool DmPattern_matchesEmbellishment(DmPattern const* slf, DmPatternCommand const* cmd) {
+	uint16_t emb = slf->embellishment;
+	if (emb & DmPattern_MOTIF) {
+		return false;
+	}
 
-			// Ignore patterns outside the current groove level.
-			if (groove < pttn->groove_bottom || groove > pttn->groove_top) {
-				continue;
-			}
+	if ((emb >> 8) != 0) {
+		return (emb >> 8) == cmd->command;
+	}
 
-			// Patterns with a differing embellishment are not supported
-			if (pttn->embellishment != embellishment && !(pttn->embellishment & embellishment)) {
-				continue;
-			}
+	switch (cmd->command) {
+	case DmCommand_GROOVE:
+		return emb == 0;
+	case DmCommand_FILL:
+		return (emb & 1) != 0;
+	case DmCommand_INTRO:
+		return (emb & 4) != 0;
+	case DmCommand_BREAK:
+		return (emb & 2) != 0;
+	case DmCommand_END:
+		return (emb & 8) != 0;
+	default:
+		return false;
+	}
+}
 
-			// Fix for Gothic 2 in which some patterns are empty but have a groove range of 1-100 with no embellishment
-			// set.
-			if (pttn->embellishment == DmCommand_GROOVE && pttn->length_measures == 1) {
-				continue;
-			}
+// dmstyle FUN_77408c2a: a measure that only continues the first measure's groove needs no match.
+static bool DmPattern_matchesCommands(DmPattern const* slf, DmPatternCommand const* cmds, uint32_t len) {
+	if (slf->embellishment & DmPattern_MOTIF) {
+		return false;
+	}
 
-			if (index == 0) {
-				return pttn;
-			}
-
-			index -= 1;
-			found_one = true;
+	uint32_t n = len < slf->length_measures ? len : slf->length_measures;
+	for (uint32_t i = 0; i < n; ++i) {
+		bool continues = i > 0 && cmds[i].command == DmCommand_GROOVE && cmds[i].groove_level == cmds[0].groove_level;
+		if (!continues && !(DmPattern_matchesEmbellishment(slf, &cmds[i]) && DmPattern_matchesGroove(slf, &cmds[i]))) {
+			return false;
 		}
-	} while (found_one);
+	}
 
-	return NULL;
+	return true;
+}
+
+static bool DmStyle_anyAlive(int8_t const* tags, size_t len) {
+	for (size_t i = 0; i < len; ++i) {
+		if (tags[i] == DmPatternTag_ALIVE) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// dmstyle FUN_774061a2
+static void DmStyle_restoreTag(int8_t* tags, size_t len, int8_t tag) {
+	for (size_t i = 0; i < len; ++i) {
+		if (tags[i] == tag) {
+			tags[i] = DmPatternTag_ALIVE;
+		} else if (tags[i] == DmPatternTag_ALIVE) {
+			tags[i] = DmPatternTag_DROPPED;
+		}
+	}
+}
+
+// dmstyle FUN_7740b74f: criteria 2..5 (1 is 2 without a chord rhythm), each tried on the longest
+// patterns first, one time-signature group at a time; the survivors' pick is FUN_7741619d.
+DmPattern* DmStyle_getRandomPattern(DmStyle* slf, DmPatternQuery const* query) {
+	if (slf == NULL || slf->patterns.length == 0) {
+		return NULL;
+	}
+
+	size_t len = slf->patterns.length;
+	uint32_t longest = 0;
+	for (size_t i = 0; i < len; ++i) {
+		if (slf->patterns.data[i].length_measures > longest) {
+			longest = slf->patterns.data[i].length_measures;
+		}
+	}
+
+	if (longest == 0) {
+		return NULL;
+	}
+
+	int8_t* tags = Dm_alloc(len);
+	DmPatternCommand* cmds = Dm_alloc(sizeof *cmds * longest);
+	if (tags == NULL || cmds == NULL) {
+		Dm_free(tags);
+		Dm_free(cmds);
+		return &slf->patterns.data[0];
+	}
+
+	uint32_t cmds_len = 1;
+	static int8_t const CRITERIA[] = {2, 3, 4, 5};
+	for (size_t c = 0; c < sizeof CRITERIA; ++c) {
+		int8_t criterion = CRITERIA[c];
+		memset(tags, DmPatternTag_ALIVE, len);
+
+		for (;;) {
+			uint32_t max_measures = 0;
+			for (size_t i = 0; i < len; ++i) {
+				if (tags[i] == DmPatternTag_ALIVE && slf->patterns.data[i].length_measures > max_measures) {
+					max_measures = slf->patterns.data[i].length_measures;
+				}
+			}
+			for (size_t i = 0; i < len; ++i) {
+				if (tags[i] == DmPatternTag_ALIVE && slf->patterns.data[i].length_measures != max_measures) {
+					tags[i] = DmPatternTag_LENGTH;
+				}
+			}
+
+			for (;;) {
+				// The longest measure (beats / beat), then the most beats.
+				DmTimeSignature best = {0};
+				for (size_t i = 0; i < len; ++i) {
+					if (tags[i] != DmPatternTag_ALIVE) continue;
+					DmTimeSignature sig = DmPattern_getTimeSignature(&slf->patterns.data[i], slf);
+					uint32_t lhs = (uint32_t) sig.beats_per_measure * best.beat;
+					uint32_t rhs = (uint32_t) best.beats_per_measure * sig.beat;
+					if (lhs > rhs || (lhs == rhs && sig.beats_per_measure > best.beats_per_measure)) {
+						best = sig;
+					}
+				}
+
+				DmPattern* first = NULL;
+				for (size_t i = 0; i < len; ++i) {
+					if (tags[i] != DmPatternTag_ALIVE) continue;
+					DmTimeSignature sig = DmPattern_getTimeSignature(&slf->patterns.data[i], slf);
+					if (sig.beats_per_measure != best.beats_per_measure || sig.beat != best.beat) {
+						tags[i] = DmPatternTag_SIGNATURE;
+					} else if (first == NULL) {
+						first = &slf->patterns.data[i];
+					}
+				}
+
+				uint32_t measure = first ? Dm_getMeasureLength(DmPattern_getTimeSignature(first, slf)) : 0;
+
+				// FUN_77416235: measures left before the next command, rounded up for DX8 styles.
+				uint32_t measures_left =
+				    measure == 0 ? 0 : (query->until_command + measure - 1) / measure;
+
+				if (query->until_end != 0 && measure != 0) {
+					cmds_len = query->until_end / measure;
+					if (cmds_len == 0) cmds_len = 1;
+				}
+				if (cmds_len > longest) cmds_len = longest;
+				query->commands(query->context, measure, cmds_len, cmds);
+
+				for (size_t i = 0; i < len; ++i) {
+					if (tags[i] != DmPatternTag_ALIVE) continue;
+					DmPattern const* p = &slf->patterns.data[i];
+
+					bool ok = false;
+					switch (criterion) {
+					case 2:
+						ok = DmPattern_matchesCommands(p, cmds, cmds_len) &&
+						    !(cmds_len != 0 && cmds_len < p->length_measures) &&
+						    !(measures_left != 0 && measures_left < p->length_measures);
+						break;
+					case 3:
+						ok = DmPattern_matchesCommands(p, cmds, 1);
+						break;
+					case 4:
+						ok = DmPattern_matchesEmbellishment(p, &cmds[0]);
+						break;
+					case 5:
+						ok = DmPattern_matchesGroove(p, &cmds[0]) && p->embellishment == 0;
+						break;
+					}
+
+					if (!ok) {
+						tags[i] = criterion;
+					}
+				}
+
+				if (DmStyle_anyAlive(tags, len)) {
+					goto found;
+				}
+
+				DmStyle_restoreTag(tags, len, DmPatternTag_SIGNATURE);
+				if (!DmStyle_anyAlive(tags, len)) break;
+			}
+
+			DmStyle_restoreTag(tags, len, DmPatternTag_LENGTH);
+			if (!DmStyle_anyAlive(tags, len)) break;
+		}
+	}
+
+	Dm_free(tags);
+	Dm_free(cmds);
+	return &slf->patterns.data[0];
+
+found:;
+	// Repeat modes other than RANDOM (FUN_7740b58e) are not used by the game's data.
+	uint32_t alive = 0;
+	for (size_t i = 0; i < len; ++i) {
+		alive += tags[i] == DmPatternTag_ALIVE;
+	}
+
+	uint32_t pick = Dm_rand() % alive;
+	DmPattern* pttn = NULL;
+	for (size_t i = 0; i < len; ++i) {
+		if (tags[i] == DmPatternTag_ALIVE && pick-- == 0) {
+			pttn = &slf->patterns.data[i];
+			break;
+		}
+	}
+
+	Dm_free(tags);
+	Dm_free(cmds);
+	return pttn;
 }
 
 void DmPart_init(DmPart* slf) {

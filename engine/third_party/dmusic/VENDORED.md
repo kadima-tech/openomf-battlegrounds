@@ -49,3 +49,14 @@ Local changes:
 - `DmPerformance_loadBand`, `DmPerformance_applyBand`, `DmPerformance_releaseBand` (and a public
   `DmBand` type): a band from its RIFF, applied at once, for a segment without a band track (the
   game plays its container's band first; re/FINDINGS 150).
+- Pattern selection as dmstyle does it (`FUN_7740b74f`, re/FINDINGS 151): no skip of one-measure
+  groove patterns and no groove randomisation; criteria 2 → 5 on the longest patterns first, one
+  time-signature group at a time, a random pick (`rand() % n`) among the survivors, the style's first
+  pattern as the last resort. Executor, WTMI, SongNine and Snakeirons segments that were silent play.
+  Not ported: criterion 1 (chord rhythm; no chord tracks), criterion 7 (destination groove, always
+  1-100 in the data), repeat modes 1-5 (unused).
+- Curves use dmime's 193-step LINEAR / SINE / LOG / EXP shapes (read from the game disc's dmime.dll
+  at build time into `build/generated/_MsCurveTables.h`; without it every shape is linear) and send
+  a value every max(16, duration × k / |Δ|) ticks (k 100 for pitch bend, 3 otherwise), landing on the
+  end value; reset values are sent only when a segment is stopped within the curve's reset duration.
+- Band items read DX8 `bd2h` and play at their physical time (the theme's second band, tick 380927).

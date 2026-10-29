@@ -38,6 +38,7 @@
 #define DM_FOURCC_LBDL DM_FOURCC('l', 'b', 'd', 'l')
 #define DM_FOURCC_LBND DM_FOURCC('l', 'b', 'n', 'd')
 #define DM_FOURCC_BDIH DM_FOURCC('b', 'd', 'i', 'h')
+#define DM_FOURCC_BD2H DM_FOURCC('b', 'd', '2', 'h')
 #define DM_FOURCC_DMBD DM_FOURCC('D', 'M', 'B', 'D')
 #define DM_FOURCC_LBIL DM_FOURCC('l', 'b', 'i', 'l')
 #define DM_FOURCC_LBIN DM_FOURCC('l', 'b', 'i', 'n')

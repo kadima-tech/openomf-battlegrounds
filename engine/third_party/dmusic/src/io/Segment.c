@@ -175,6 +175,11 @@ static DmResult DmSegment_parseBandItem(DmMessage_Band* slf, DmRiff* rif) {
 	while (DmRiff_readChunk(rif, &cnk)) {
 		if (DmRiff_is(&cnk, DM_FOURCC_BDIH, 0)) {
 			DmRiff_readDword(&cnk, &slf->time);
+		} else if (DmRiff_is(&cnk, DM_FOURCC_BD2H, 0)) {
+			// DMUS_IO_BAND_ITEM_HEADER2 {lBandTimeLogical, lBandTimePhysical}: the band plays at the physical time.
+			uint32_t logical = 0;
+			DmRiff_readDword(&cnk, &logical);
+			DmRiff_readDword(&cnk, &slf->time);
 		} else if (DmRiff_is(&cnk, DM_FOURCC_RIFF, DM_FOURCC_DMBD)) {
 			DmResult rv = DmBand_create(&slf->band);
 			if (rv != DmResult_SUCCESS) {

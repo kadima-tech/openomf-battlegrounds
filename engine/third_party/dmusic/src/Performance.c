@@ -1,6 +1,7 @@
 // Copyright © 2024. GothicKit Contributors
 // SPDX-License-Identifier: MIT-Modern-Variant
 #include "_Internal.h"
+#include "_MsCurveTables.h"
 
 #include <string.h>
 #include <math.h>
@@ -49,6 +50,7 @@ DmResult DmPerformance_create(DmPerformance** slf, uint32_t rate) {
 	new->time_signature.beat = 4;
 	new->time_signature.grids_per_beat = 2;
 	DmPerformance_setDefaultChord(new);
+	DmCurveResetList_init(&new->curve_resets);
 
 	DmSynth_init(&new->synth, new->sample_rate);
 
@@ -100,6 +102,7 @@ void DmPerformance_release(DmPerformance* slf) {
 	DmSegment_release(slf->segment);
 	DmStyle_release(slf->style);
 	DmBand_release(slf->band);
+	DmCurveResetList_free(&slf->curve_resets);
 	DmSynth_free(&slf->synth);
 	Dm_free(slf);
 }
@@ -358,8 +361,6 @@ static int DmPerformance_musicValueToMidi(struct DmSubChord chord, DmPlayModeFla
 	return note_value;
 }
 
-#define DmInt_CURVE_SPACING 5
-
 static DmResult DmPattern_generateNoteMessages(DmPart* part,
                                                struct DmSubChord chord,
                                                uint32_t time,
@@ -435,98 +436,109 @@ static DmResult DmPattern_generateNoteMessages(DmPart* part,
 	return DmResult_SUCCESS;
 }
 
-static float DmCurve_lerp(DmCurve* curve, float phase) {
+// dmime FUN_773043bb
+static int DmCurve_valueAt(DmCurve const* curve, uint32_t elapsed) {
+	int16_t const* table;
 	switch (curve->curve_shape) {
 	case DmCurveShape_LINEAR:
-		return lerp(phase, curve->start_value, curve->end_value);
-	case DmCurveShape_INSTANT:
-		return curve->end_value;
+		table = DmMs_CURVE_LINEAR;
+		break;
 	case DmCurveShape_EXP:
-		return lerp(powf(phase, 4), curve->start_value, curve->end_value);
+		table = DmMs_CURVE_EXP;
+		break;
 	case DmCurveShape_LOG:
-		return lerp(sqrtf(phase), curve->start_value, curve->end_value);
-	case DmCurveShape_SINE: {
-		phase = (sinf((phase - 0.5f) * (float) M_PI) + 1) * 0.5f;
-		return lerp(phase, curve->start_value, curve->end_value);
-	}
+		table = DmMs_CURVE_LOG;
+		break;
+	case DmCurveShape_SINE:
+		table = DmMs_CURVE_SINE;
+		break;
+	default:
+		return curve->end_value;
 	}
 
-	return curve->start_value;
+	if (curve->duration == 0 || elapsed >= curve->duration) {
+		return curve->end_value;
+	}
+
+	uint32_t i = (uint32_t) (((uint64_t) elapsed * 193) / curve->duration);
+	if (i >= 192) {
+		return curve->end_value;
+	}
+
+	return (curve->end_value - curve->start_value) * table[i] / 19200 + curve->start_value;
 }
 
-static DmResult
-DmPattern_generateControlChangeCurve(DmCurve* curve, uint32_t time, uint32_t channel, DmMessageQueue* out) {
-	// Some MIDI control curves have invalid ranges (e.g. -22000 to 127)
-	bool start_in_range = curve->start_value >= 0 && curve->start_value <= 127;
-	bool end_in_range = curve->end_value >= 0 && curve->end_value <= 127;
-	if (!(start_in_range && end_in_range)) {
-		Dm_report(DmLogLevel_DEBUG, "DmPerformance: Curve is out-of-range");
-		return DmResult_SUCCESS;
-	}
-
-	// The curve's values every few ticks, then its end value at its end (an instant or very short
-	// curve is just that), as DirectMusic's curve playback lands on the end value.
-	float prev = (float) curve->start_value - 1;
-	uint32_t steps = curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration / DmInt_CURVE_SPACING;
-	for (uint32_t k = 0; k <= steps; ++k) {
-		uint32_t offset = k == steps ? (curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration) : k * DmInt_CURVE_SPACING;
-		float phase = k == steps || curve->duration == 0 ? 1.f : (float) offset / (float) curve->duration;
-		float value = DmCurve_lerp(curve, phase);
-
-		DmMessage msg;
-		msg.time = 0;
-
-		msg.type = DmMessage_CONTROL;
-		msg.control.control = curve->cc_data;
-		msg.control.channel = channel;
-		msg.control.value = value / 127.f;
-		msg.control.reset = curve->flags & DmCurveFlags_RESET;
-		msg.control.reset_value = curve->reset_value / 127.f;
-
-		// Optimization: Don't emit a message if the value is the same as the previous one.
-		if (msg.control.value == prev) {
-			continue;
-		}
-
-		DmResult rv = DmMessageQueue_add(out, &msg, time + offset, DmQueueConflict_APPEND);
-		if (rv != DmResult_SUCCESS) {
-			return rv;
-		}
-
-		prev = msg.control.value;
-	}
-
-	return DmResult_SUCCESS;
+// dmime FUN_77304367; the PMSG keeps the step in a WORD.
+static uint32_t DmCurve_getStep(DmCurve const* curve) {
+	uint32_t k = curve->event_type == DmCurveType_PITCH_BEND ? 100 : 3;
+	int delta = curve->end_value - curve->start_value;
+	uint32_t span = delta == 0 ? 1 : (uint32_t) abs(delta);
+	uint32_t step = (curve->duration * k) / span;
+	if ((int32_t) step < 16) step = 16;
+	step &= 0xFFFF;
+	return step == 0 ? 0x10000 : step;
 }
 
-static DmResult DmPattern_generatePitchBendCurve(DmCurve* curve, uint32_t time, uint32_t channel, DmMessageQueue* out) {
-	int prev = curve->start_value - 1;
-	uint32_t steps = curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration / DmInt_CURVE_SPACING;
-	for (uint32_t k = 0; k <= steps; ++k) {
-		uint32_t offset = k == steps ? (curve->curve_shape == DmCurveShape_INSTANT ? 0 : curve->duration) : k * DmInt_CURVE_SPACING;
-		float phase = k == steps || curve->duration == 0 ? 1.f : (float) offset / (float) curve->duration;
-		float value = DmCurve_lerp(curve, phase);
+static void DmCurve_fillMessage(DmCurve const* curve, uint32_t channel, int value, bool last, DmMessage* msg) {
+	msg->time = 0;
 
-		DmMessage msg;
-		msg.time = 0;
+	// FUN_7730ac73 requeues a RESET curve at its end + mtResetDuration; only a flush in between sends nResetValue.
+	uint32_t reset_duration = last && (curve->flags & DmCurveFlags_RESET) && (int32_t) curve->reset_duration > 0
+	    ? curve->reset_duration
+	    : 0;
 
-		msg.type = DmMessage_PITCH_BEND;
-		msg.pitch_bend.value = (int) value;
-		msg.pitch_bend.channel = channel;
-		msg.pitch_bend.reset = curve->flags & DmCurveFlags_RESET;
-		msg.pitch_bend.reset_value = curve->reset_value;
+	if (curve->event_type == DmCurveType_PITCH_BEND) {
+		msg->type = DmMessage_PITCH_BEND;
+		msg->pitch_bend.value = value;
+		msg->pitch_bend.channel = channel;
+		msg->pitch_bend.reset_duration = reset_duration;
+		msg->pitch_bend.reset_value = curve->reset_value;
+	} else {
+		msg->type = DmMessage_CONTROL;
+		msg->control.control = curve->cc_data;
+		msg->control.channel = channel;
+		msg->control.value = (float) value / 127.f;
+		msg->control.reset_duration = reset_duration;
+		msg->control.reset_value = curve->reset_value;
+	}
+}
 
-		// Optimization: Don't emit a message if the value is the same as the previous one.
-		if (msg.pitch_bend.value == prev) {
-			continue;
+static DmResult DmPattern_generateCurve(DmCurve* curve, uint32_t time, uint32_t channel, DmMessageQueue* out) {
+	if (curve->event_type == DmCurveType_CONTROL_CHANGE) {
+		// Some MIDI control curves have invalid ranges (e.g. -22000 to 127)
+		bool start_in_range = curve->start_value >= 0 && curve->start_value <= 127;
+		bool end_in_range = curve->end_value >= 0 && curve->end_value <= 127;
+		if (!(start_in_range && end_in_range)) {
+			Dm_report(DmLogLevel_DEBUG, "DmPerformance: Curve is out-of-range");
+			return DmResult_SUCCESS;
+		}
+	}
+
+	bool instant = curve->curve_shape == DmCurveShape_INSTANT;
+	uint32_t step = instant ? 0 : DmCurve_getStep(curve);
+	int prev = INT32_MIN;
+
+	for (uint32_t elapsed = 0;;) {
+		bool last = instant || elapsed >= curve->duration;
+		int value = DmCurve_valueAt(curve, elapsed);
+
+		// Resending an unchanged value has no effect on the synth.
+		if (value != prev || last) {
+			DmMessage msg;
+			DmCurve_fillMessage(curve, channel, value, last, &msg);
+
+			DmResult rv = DmMessageQueue_add(out, &msg, time + elapsed, DmQueueConflict_APPEND);
+			if (rv != DmResult_SUCCESS) {
+				return rv;
+			}
+			prev = value;
 		}
 
-		DmResult rv = DmMessageQueue_add(out, &msg, time + offset, DmQueueConflict_APPEND);
-		if (rv != DmResult_SUCCESS) {
-			return rv;
+		if (last) {
+			break;
 		}
 
-		prev = msg.pitch_bend.value;
+		elapsed = elapsed + step < curve->duration ? elapsed + step : curve->duration;
 	}
 
 	return DmResult_SUCCESS;
@@ -550,10 +562,8 @@ static DmResult DmPattern_generateCurveMessages(DmPart* part,
 		DmResult rv = DmResult_SUCCESS;
 		switch (curve.event_type) {
 		case DmCurveType_PITCH_BEND:
-			rv = DmPattern_generatePitchBendCurve(&curve, time + start, channel, out);
-			break;
 		case DmCurveType_CONTROL_CHANGE:
-			rv = DmPattern_generateControlChangeCurve(&curve, time + start, channel, out);
+			rv = DmPattern_generateCurve(&curve, time + start, channel, out);
 			break;
 		case DmCurveType_MONO_AFTERTOUCH:
 		case DmCurveType_POLY_AFTERTOUCH:
@@ -684,21 +694,68 @@ static DmResult DmPerformance_playPattern(DmPerformance* slf, DmPattern* pttn) {
 	return DmResult_SUCCESS;
 }
 
+typedef struct DmCommandCursor {
+	DmPerformance* performance;
+	DmMessage_Command const* current;
+	uint32_t position;
+} DmCommandCursor;
+
+static DmPatternCommand DmPatternCommand_of(DmMessage_Command const* msg) {
+	DmPatternCommand cmd;
+	cmd.command = msg->command;
+	cmd.groove_level = (uint8_t) clamp_s32(msg->groove_level, 1, 100);
+	cmd.groove_range = msg->groove_range;
+	return cmd;
+}
+
+// A later measure without a command of its own continues the current groove.
+static void DmCommandCursor_commands(void* ctx, uint32_t measure_length, uint32_t count, DmPatternCommand* out) {
+	DmCommandCursor* cur = ctx;
+	DmSegment* sgt = cur->performance->segment;
+
+	for (uint32_t i = 0; i < count; ++i) {
+		out[i] = DmPatternCommand_of(cur->current);
+		if (i == 0) continue;
+		out[i].command = DmCommand_GROOVE;
+
+		if (sgt == NULL) continue;
+		uint32_t at = cur->position + i * measure_length;
+		uint32_t best = cur->position;
+		for (size_t j = 0; j < sgt->messages.length; ++j) {
+			DmMessage const* m = &sgt->messages.data[j];
+			if (m->type != DmMessage_COMMAND || m->time <= best || m->time > at) continue;
+			best = m->time;
+			out[i] = DmPatternCommand_of(&m->command);
+			if (m->time + measure_length <= at) out[i].command = DmCommand_GROOVE;
+		}
+	}
+}
+
 static void DmPerformance_handleCommandMessage(DmPerformance* slf, DmMessage_Command* msg) {
 	if (msg->command == DmCommand_GROOVE) {
 		slf->groove = msg->groove_level;
 		slf->groove_range = msg->groove_range;
-
-		// Randomize the groove level
-		if (msg->groove_range != 0) {
-			int32_t new_groove = slf->groove + Dm_randRange(msg->groove_range);
-			slf->groove = clamp_s32(new_groove, 0, 100);
-		}
 	} else if (msg->command == DmCommand_END_AND_INTRO) {
 		Dm_report(DmLogLevel_WARN, "DmPerformance: Command message with command %d not implemented", msg->command);
 	}
 
-	DmPattern* pttn = DmStyle_getRandomPattern(slf->style, slf->groove, msg->command);
+	DmCommandCursor cursor = {slf, msg, 0};
+	DmPatternQuery query = {DmCommandCursor_commands, &cursor, 0, 0};
+
+	DmSegment* sgt = slf->segment;
+	if (sgt != NULL) {
+		cursor.position = slf->time - slf->segment_start + slf->segment_play_start;
+		uint32_t end = sgt->length > cursor.position ? sgt->length : cursor.position;
+		uint32_t next = end;
+		for (size_t j = 0; j < sgt->messages.length; ++j) {
+			DmMessage const* m = &sgt->messages.data[j];
+			if (m->type == DmMessage_COMMAND && m->time > cursor.position && m->time < next) next = m->time;
+		}
+		query.until_command = next - cursor.position;
+		query.until_end = end - cursor.position;
+	}
+
+	DmPattern* pttn = DmStyle_getRandomPattern(slf->style, &query);
 	if (pttn == NULL) {
 		Dm_report(DmLogLevel_INFO, "DmPerformance: No suitable pattern found. Silence ensues ...", msg->command);
 		return;
@@ -707,10 +764,59 @@ static void DmPerformance_handleCommandMessage(DmPerformance* slf, DmMessage_Com
 	DmPerformance_playPattern(slf, pttn);
 }
 
+static void DmPerformance_openCurveReset(DmPerformance* slf,
+                                         uint32_t channel,
+                                         uint8_t control,
+                                         bool pitch_bend,
+                                         int value,
+                                         uint32_t duration) {
+	DmCurveReset reset = {channel, control, pitch_bend, value, slf->time + duration};
+
+	DmCurveResetList* list = &slf->curve_resets;
+	size_t kept = 0;
+	for (size_t i = 0; i < list->length; ++i) {
+		DmCurveReset* r = &list->data[i];
+		bool same = r->channel == channel && r->pitch_bend == pitch_bend && r->control == control;
+		if (!same && r->until > slf->time) {
+			list->data[kept++] = *r;
+		}
+	}
+	list->length = kept;
+
+	(void) DmCurveResetList_add(list, reset);
+}
+
+// The rebase keeps the windows on the performance clock, which restarts at each segment.
+static void DmPerformance_flushCurveResets(DmPerformance* slf, bool send, uint32_t rebase) {
+	DmCurveResetList* list = &slf->curve_resets;
+	size_t kept = 0;
+	for (size_t i = 0; i < list->length; ++i) {
+		DmCurveReset r = list->data[i];
+		if (r.until <= slf->time) continue;
+
+		if (send) {
+			if (r.pitch_bend) {
+				DmSynth_sendPitchBend(&slf->synth, r.channel, r.value);
+			} else {
+				DmSynth_sendControl(&slf->synth, r.channel, r.control, (float) r.value / 127.f);
+			}
+			continue;
+		}
+
+		r.until -= rebase;
+		list->data[kept++] = r;
+	}
+	list->length = kept;
+}
+
 static void DmPerformance_handleSegmentMessage(DmPerformance* slf, DmMessage_SegmentChange* msg) {
 	DmSegment* sgt = msg->segment;
 	DmPerformance_setDefaultChord(slf);
 	DmSegment_release(slf->segment);
+
+	// Stopping flushes the curves, which sends the reset values whose mtResetDuration is still open
+	// (dmime FUN_7730ac73). Whether a following segment's start flushes them too is not known.
+	DmPerformance_flushCurveResets(slf, sgt == NULL, slf->time);
 
 	// Get rid of the currently playing segment.
 	DmMessageQueue_clear(&slf->control_queue);
@@ -777,6 +883,7 @@ static void DmPerformance_handleSegmentMessage(DmPerformance* slf, DmMessage_Seg
 
 	slf->segment = DmSegment_retain(sgt);
 	slf->segment_start = slf->time;
+	slf->segment_play_start = start;
 
 	// If required, schedule to loop this segment.
 	if (msg->loop < sgt->repeats) {
@@ -873,12 +980,14 @@ static void DmPerformance_handleMessage(DmPerformance* slf, DmMessage* msg) {
 
 		DmSynth_sendControl(&slf->synth, msg->control.channel, msg->control.control, msg->control.value);
 
-		if (msg->control.reset) {
-			DmSynth_sendControlReset(&slf->synth, msg->control.channel, msg->control.control, msg->control.reset_value);
-		} else {
-			DmSynth_sendControlReset(&slf->synth, msg->control.channel, msg->control.control, msg->control.value);
+		if (msg->control.reset_duration != 0) {
+			DmPerformance_openCurveReset(slf,
+			                             msg->control.channel,
+			                             msg->control.control,
+			                             false,
+			                             msg->control.reset_value,
+			                             msg->control.reset_duration);
 		}
-
 		break;
 	case DmMessage_PITCH_BEND:
 		Dm_report(DmLogLevel_TRACE,
@@ -888,10 +997,14 @@ static void DmPerformance_handleMessage(DmPerformance* slf, DmMessage* msg) {
 		          msg->pitch_bend.value);
 
 		DmSynth_sendPitchBend(&slf->synth, msg->pitch_bend.channel, msg->pitch_bend.value);
-		if (msg->pitch_bend.reset) {
-			DmSynth_sendPitchBendReset(&slf->synth, msg->pitch_bend.channel, msg->pitch_bend.reset_value);
+		if (msg->pitch_bend.reset_duration != 0) {
+			DmPerformance_openCurveReset(slf,
+			                             msg->pitch_bend.channel,
+			                             0,
+			                             true,
+			                             msg->pitch_bend.reset_value,
+			                             msg->pitch_bend.reset_duration);
 		}
-
 		break;
 	default:
 		Dm_report(DmLogLevel_ERROR, "DmPerformance: Message type %d not implemented", msg->type);

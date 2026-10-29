@@ -427,8 +427,9 @@ typedef struct DmMessage_Control {
 	float value;
 	uint32_t channel;
 
-	bool reset;
-	float reset_value;
+	/// \brief Set on a curve's last value: how long a stop still sends #reset_value.
+	uint32_t reset_duration;
+	int reset_value;
 } DmMessage_Control;
 
 typedef struct DmMessage_PitchBend {
@@ -438,7 +439,7 @@ typedef struct DmMessage_PitchBend {
 	uint32_t channel;
 	int value;
 
-	bool reset;
+	uint32_t reset_duration;
 	int reset_value;
 } DmMessage_PitchBend;
 
@@ -460,6 +461,16 @@ typedef union DmMessage {
 } DmMessage;
 
 DmArray_DEFINE(DmMessageList, DmMessage);
+
+typedef struct DmCurveReset {
+	uint32_t channel;
+	uint8_t control;
+	bool pitch_bend;
+	int value;
+	uint32_t until;
+} DmCurveReset;
+
+DmArray_DEFINE(DmCurveResetList, DmCurveReset);
 
 // A performance channel's state in the synthesizer (Synth.c).
 typedef struct DmSynthChannel DmSynthChannel;
@@ -537,9 +548,11 @@ struct DmPerformance {
 
 	DmSegment* segment;
 	uint32_t segment_start;
+	uint32_t segment_play_start;
 	DmStyle* style;
 	DmBand* band;
 	DmSynth synth;
+	DmCurveResetList curve_resets;
 
 	uint32_t sample_rate;
 	uint32_t variation;
@@ -643,7 +656,22 @@ DMINT void DmStyle_release(DmStyle* slf);
 DMINT DmResult DmStyle_parse(DmStyle* slf, void* buf, size_t len);
 DMINT DmResult DmStyle_download(DmStyle* slf, DmLoader* loader);
 DMINT DmPart* DmStyle_findPart(DmStyle* slf, DmPartReference* pref);
-DMINT DmPattern* DmStyle_getRandomPattern(DmStyle* slf, uint32_t groove, DmCommandType cmd);
+typedef struct DmPatternCommand {
+	DmCommandType command;
+	uint8_t groove_level;
+	uint8_t groove_range;
+} DmPatternCommand;
+
+typedef struct DmPatternQuery {
+	void (*commands)(void* context, uint32_t measure_length, uint32_t count, DmPatternCommand* out);
+	void* context;
+
+	/// \brief Ticks until the next command, or the segment's end if there is none.
+	uint32_t until_command;
+	uint32_t until_end;
+} DmPatternQuery;
+
+DMINT DmPattern* DmStyle_getRandomPattern(DmStyle* slf, DmPatternQuery const* query);
 
 DMINT void DmPart_init(DmPart* slf);
 DMINT void DmPart_free(DmPart* slf);
