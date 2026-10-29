@@ -227,7 +227,7 @@ void register_script_natives(World &w) {
 		c.world.send_event(t, e);
 		if (dbg) {
 			std::string h = c.world.read_string(c.mem().get<uint32_t>(e + kHandle));
-			if (h.find(dbg) != std::string::npos) fprintf(stderr, "[send %u] %s -> %s INT1 %d -> %d\n", c.world.frame(), h.c_str(), t->name.c_str(), before, c.mem().get<int32_t>(e + kInt1));
+			if (h.find(dbg) != std::string::npos) fprintf(stderr, "[send %u] %s -> %s/%s INT1 %d -> %d\n", c.world.frame(), h.c_str(), t->parent ? t->parent->name.c_str() : "-", t->name.c_str(), before, c.mem().get<int32_t>(e + kInt1));
 		}
 	});
 	// ProcessEventCaller (Core 0x70046230): the object's own ProcessEvent (vtable +0x70). For an
@@ -538,6 +538,13 @@ void register_script_natives(World &w) {
 	auto set_text = [](const NativeContext &c, const std::string &s) {
 		if (uint32_t t = c.self_handle()) c.mem().set<uint32_t>(t, c.world.string(s));
 	};
+	// ReplaceCaller (Core 0x7014bd40): DE_CString::Replace, every occurrence.
+	reg("CObject::CText::Replace(string,string)", [text_of, set_text](const NativeContext &c) {
+		std::string t = text_of(c), from = c.arg_string(0), to = c.arg_string(1);
+		if (from.empty()) return;
+		for (size_t p = t.find(from); p != std::string::npos; p = t.find(from, p + to.size())) t.replace(p, from.size(), to);
+		set_text(c, t);
+	});
 	reg("CObject::CText::int Length()", [text_of](const NativeContext &c) { c.ret_u32(uint32_t(text_of(c).size())); });
 	// GetValue(name, text): a String value's text into the CText (left alone without one).
 	reg("CObject::GetValue(string,class CText)", [](const NativeContext &c) {
@@ -712,9 +719,31 @@ void register_script_natives(World &w) {
 	reg("CObject::class CRulesDisplay NewRulesDisplay()", [](const NativeContext &c) {
 		c.ret_object(c.world.create_child(nullptr, "RulesDisplay", "UIManager\\RulesDisplay"));
 	});
-	stub("CRulesDisplay::Begin(class CScene)");
-	stub("CRulesDisplay::SetCurrentTask(string)");
-	reg("CRulesDisplay::bool IsAuthorizedToContinue()", [](const NativeContext &c) { c.ret_bool(true); });
+	// DE_CRulesDisplay::Begin (OMF 0x350630f0): it shows itself; the front end draws it.
+	reg("CRulesDisplay::Begin(class CScene)", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o) return;
+		auto &r = c.world.rules_displays[o];
+		r.session = c.world.session ? c.world.session->obj : nullptr;
+		if (c.world.show_rules) {
+			r.shown = true;
+			c.world.show_rules(o);
+		}
+	});
+	reg("CRulesDisplay::SetCurrentTask(string)", [](const NativeContext &c) {
+		if (GameObject *o = c.self()) c.world.rules_displays[o].task = c.arg_string(0);
+	});
+	// IsAuthorizedToContinueCaller (OMF 0x35062ec0): asking while unauthorized brings up the prompt.
+	reg("CRulesDisplay::bool IsAuthorizedToContinue()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o) {
+			c.ret_bool(true);
+			return;
+		}
+		auto &r = c.world.rules_displays[o];
+		if (!r.authorized) r.prompted = true;
+		c.ret_bool(r.authorized);
+	});
 
 	// --- Colours and text primitives ------------------------------------------------------------
 	reg("CObject::CColorRGBA::Set(float,float,float,float)", [](const NativeContext &c) {

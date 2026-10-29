@@ -1,5 +1,6 @@
 #include "game_view.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -182,10 +183,21 @@ de::Transform GameView::ear() const {
 
 void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (!gl_ready_) return;
-	if (arena.empty()) {
+	if (arena.empty() || follow_scene) {
+		// The session's environment came or went (a match began or ended).
 		std::string a = find_arena();
-		if (!a.empty()) load_arena(a);
+		if (a != arena) {
+			if (a.empty()) {
+				arena.clear();
+				fighters.clear();
+				player = nullptr;
+			} else {
+				load_arena(a);
+			}
+		}
 	}
+	fighters.erase(std::remove_if(fighters.begin(), fighters.end(), [this](Fighter *f) { return !world.object(f->actor->handle); }), fighters.end());
+	if (player && std::find(fighters.begin(), fighters.end(), player) == fighters.end()) player = nullptr;
 	load_renderers();
 	glViewport(0, 0, dw, dh);
 	glEnable(GL_DEPTH_TEST);

@@ -54,6 +54,9 @@ public:
 	std::vector<Fighter *> fighters;
 	Fighter *player = nullptr;
 	bool free_camera = false;
+	// Follow the scene's environment as sessions come and go (the front end), rather than keep the
+	// arena given once.
+	bool follow_scene = false;
 	const float fighter_radius = 60;  // camera framing
 	float yaw = 0.6f, pitch = 0.18f, distance = fighter_radius * 5.0f;
 	bool dragging = false;

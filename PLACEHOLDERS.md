@@ -25,8 +25,10 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | Controls | Stand-in | Buttons are hit rectangles at the `PositionControl` rectangles with their labels drawn by the overlay, not `DE_CControl3d` meshes in a frame-control scene. Label colour is white (the colour every screen passes to `NewButtonControl`; the launcher's `ColorButtonText` override is not readable). The GUI is drawn 4:3, pillar- or letterboxed. |
 | Notifications (`NewUserInformation`) | Stand-in | Our own panel (title, wrapped text, OK; Enter, Esc or a click closes it), not `DE_CDialog3d::UserInformation`'s dialog. |
 | Registry | Stand-in | Values the menus keep (`SinglePlayerPlayed`, the main menu's last choice) live for the run only. |
-| Screens | Missing | Options, Help, Replays, Credits and Join (session browser) say "not ported yet". The in-game menu and rules display are not ported. |
+| Screens | Missing | Options, Help, Replays, Credits and Join (session browser) say "not ported yet". The in-game menu is not ported. |
 | Classes without bytecode | Missing | Six shipped classes have no VMC2 and the original compiles them from their behaviours' source when loading (`DE_CClass::PrepareForExecution`, FINDINGS 21/23): Training's and Practice's sub-session classes, Trophy Room's, `PSlidingText`, `PCarManager` and `PBoulder`. Without a compiler for the script language, Training, Practice and Trophy Room stop when their first match starts ("class PSubSession has no compiled VMCode"); the other tournaments run. |
+| Session player limit | Approximation | Front-end sessions allow 4 player clients (the most any tournament match uses); the original's `DE_CSessionInfo::MaxPlayers` (+0x7c) is set by something not found yet. Loading waits only on slots that have a client. |
+| Rules display | Approximation | The match name, commentary, next-match text and progress (or "Press any key to continue") are drawn in their markers' rectangles at our own text sizes; the match snapshot (`MatchScreenShot`, captured by `SubSessionCaptureSnapshot`) is not shown. |
 | Choose Creature | Approximation | Shown as a plain description selector: no Model combo box or View button (the 3D model picker). `ChosenModel` is null, so the fighter's default model is used. |
 | Pilot panel | Approximation | Name, photo and the four stats as bars; the stat rows' icons and `DE_CPilotStatsRobot`'s exact layout are not ported. |
 | Next button's text box | Approximation | Renders solid white in the 3D scene (the `TextBoxNext` mesh's material); not looked into yet. |
@@ -43,6 +45,7 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 
 | What | Kind | Notes |
 |---|---|---|
+| Blade Pit's look | Open | The arena renders washed out, nearly white (standalone and in the front end alike): its lighting or glow passes are off. |
 | Blade Pit's blades during the warm-up | Open | The spinning blades (BSpinningBlade, always live by design) cut an idle fighter to death during "Prepare To Fight" (standalone and tournament alike), so either the spawn points or the blades' collision are placed wrongly. The North American Open's first match is in the Blade Pit. |
 | `CSession::IsSinglePlayer` | Fixed answer | Always true; the original reads the session info's +0xdc (FINDINGS 127). Matters only for multiplayer. |
 | Main menu theme's lead timbre | Open | Reported as choppy / a different instrument sound than in the game, with the right notes. Checked and faithful: the band (every channel a DLS instrument from "!theme dls", none falling back to GM), the instruments' loops and articulations, voice allocation (no steals; 29 voices at most), the synth's 22050 Hz default (InitAudio passes no audio parameters), the mix loop, LFO routing, tempo (135 BPM) and note scheduling. The soundtrack MP3s are studio mixes, so they cannot settle timbre; a recording of the original game's menu would. |

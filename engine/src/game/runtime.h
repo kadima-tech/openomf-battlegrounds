@@ -529,6 +529,18 @@ public:
 	// the front end shows it (its pool and title are the session's UiManager record) and
 	// completes it with complete_ui (session.h).
 	std::function<void(GameObject *ui)> launch_ui;
+	// CRulesDisplay (OMF DE_CRulesDisplay; FINDINGS 127): what the session scripts set, and the
+	// front end's screen for it (shown by CRulesDisplay::Begin, closed by CloseUIManagerStack).
+	struct RulesDisplay {
+		std::string task;              // SetCurrentTask
+		GameObject *session = nullptr;  // the session of the scene it was begun with
+		bool authorized = true;        // +0x120
+		bool prompted = false;         // +0x124: IsAuthorizedToContinue was asked while not authorized
+		bool shown = false;
+	};
+	std::map<const GameObject *, RulesDisplay> rules_displays;
+	std::function<void(GameObject *rules)> show_rules;
+	std::function<void()> close_ui_stack;
 	int ai_difficulty = 0;  // DE_COMF2Manager::AIDifficulty (registry default 0, Rookie) for pilots the session creates
 	struct ObjectValue {
 		uint32_t bits = 0;  // BOOL / INT / FLOAT

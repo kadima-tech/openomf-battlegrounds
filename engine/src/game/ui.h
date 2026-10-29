@@ -79,6 +79,7 @@ public:
 	// Input the page takes before its buttons: `what` 0 move, 1 press, 2 release, 3 double click.
 	virtual bool mouse(AppManager &, float, float, int) { return false; }
 	virtual bool key(AppManager &, int) { return false; }
+	virtual void deactivated(AppManager &) {}
 
 	void activate(AppManager &app);
 	void deactivate(AppManager &app);
@@ -144,6 +145,12 @@ public:
 	std::function<bool()> has_local_session;
 	std::function<bool()> session_fully_sequenced;
 	std::function<bool()> session_scene_rendering;
+
+	// DE_CAppManager::IsUIManagerAutopaused (Core 0x7019b260): a page that autopauses is up or
+	// stacked; the scene then passes no time (DE_CScene::PassTime).
+	bool autopaused() const;
+	// DE_CRulesDisplay: the screen for a session script's rules display.
+	UIPtr rules_display(GameObject *rules);
 
 	// The instances the launcher and screens use.
 	UIPtr main_menu();

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <optional>
 
@@ -201,6 +202,91 @@ private:
 	int nags_ = 0;  // robot +0x78
 	Control *options_ = nullptr, *replays_ = nullptr, *single_ = nullptr, *join_ = nullptr, *host_ = nullptr, *help_ = nullptr,
 	        *quit_ = nullptr;
+};
+
+// DE_CRulesDisplay + robot (OMF ObjInitContents 0x35062ef0, SetupControls 0x35063140, robot
+// 0x35063520, ProcessPreDraw 0x350643d0): the single-player loading screen. Under a sub-session
+// owner it shows the owner's MatchCommentary, NextMatchDescription and NextMatchName (each falling
+// back to the owner's master description's value of that name, then its name); in single player
+// it is not authorized until a key is pressed once "Press any key to continue" shows.
+class RulesDisplayPage : public UIManager {
+public:
+	explicit RulesDisplayPage(GameObject *rules) : UIManager("Rules", "SinglePlayerLoading"), rules_(rules) {
+		autopause = false;      // +0xb4
+		show_backdrop = false;  // +0xb0
+	}
+
+	bool begin(AppManager &app) override {
+		UIManager::begin(app);
+		World &w = app.world;
+		auto &r = w.rules_displays[rules_];
+		SessionState *s = session_of(w, r.session);
+		SessionState *owner = s ? s->owner : nullptr;
+		auto value = [&](const char *name) -> std::string {
+			if (!owner) return {};
+			if (auto *v = w.object_value(owner->obj, name); v && !v->text.empty()) return v->text;
+			if (owner->master_description) {
+				if (auto *v = w.object_value(owner->master_description, name); v && !v->text.empty()) return v->text;
+			}
+			return {};
+		};
+		if (owner) {
+			commentary_ = value("MatchCommentary");
+			next_ = value("NextMatchDescription");
+			title_ = value("NextMatchName");
+			if (title_.empty() && owner->master_description) title_ = owner->master_description->name;
+			if (owner->single_player) r.authorized = false;
+		} else if (s && s->master_description) {
+			if (auto *v = w.object_value(s->master_description, "Description")) commentary_ = v->text;
+			if (commentary_.empty()) commentary_ = "Game Description";
+			title_ = s->master_description->name;
+		}
+		return true;
+	}
+	void setup_controls(AppManager &app) override {
+		commentary_box_ = button(app, "", "CommentaryText");
+		next_box_ = button(app, "", "NextTextBox");
+		name_box_ = button(app, "", "MatchName");
+		progress_box_ = button(app, "", "Progress");
+	}
+	void draw(AppManager &app, std::vector<DrawItem> &out) override {
+		auto &r = app.world.rules_displays[rules_];
+		auto text = [&](Control *c, const std::string &t, int height) {
+			if (!c || t.empty()) return;
+			ControlLayout l;
+			l.kind = ControlLayout::Text;
+			l.text = t;
+			l.text_height = height;
+			flow(app, l, c->left + 0.005f, c->top + 0.005f, c->right - c->left - 0.01f, c->bottom, out);
+		};
+		text(name_box_, title_, 22);
+		text(commentary_box_, commentary_, 15);
+		text(next_box_, next_, 15);
+		if (progress_box_) {
+			DrawItem d;
+			d.kind = DrawItem::Text;
+			d.x0 = (progress_box_->left + progress_box_->right) / 2, d.y0 = (progress_box_->top + progress_box_->bottom) / 2;
+			d.size = 16.0f / 600.0f, d.centered = true;
+			if (r.prompted && !r.authorized) {
+				d.text = "Press any key to continue";
+				d.rgba[3] = 0.55f + 0.45f * std::sin(float(app.world.frame()) * 0.15f);
+			} else {
+				d.text = r.task;
+			}
+			out.push_back(d);
+		}
+	}
+	bool key(AppManager &app, int) override {
+		auto &r = app.world.rules_displays[rules_];
+		if (r.prompted && !r.authorized) r.authorized = true;
+		return true;
+	}
+	void deactivated(AppManager &app) override { app.world.rules_displays[rules_].shown = false; }
+
+private:
+	GameObject *rules_;
+	std::string title_, commentary_, next_;
+	Control *commentary_box_ = nullptr, *next_box_ = nullptr, *name_box_ = nullptr, *progress_box_ = nullptr;
 };
 
 // DE_CQuitMenuUIManager (OMF 0x350611d0, 0x35061210, 0x35061610).
@@ -420,6 +506,7 @@ void UIManager::activate(AppManager &app) {
 
 // DE_CUIManager::Deactivate (Core 0x701eb6e0).
 void UIManager::deactivate(AppManager &app) {
+	deactivated(app);
 	if (root_) app.world.clean_later(root_);
 	root_ = nullptr;
 	ve_actors_.clear();
@@ -462,6 +549,14 @@ UIPtr AppManager::main_menu() {
 	}
 	return main_menu_;
 }
+
+bool AppManager::autopaused() const {
+	if (stack.empty() && !current) return false;
+	if (current && current->autopause) return true;
+	return std::any_of(stack.begin(), stack.end(), [](const UIPtr &m) { return m->autopause; });
+}
+
+UIPtr AppManager::rules_display(GameObject *rules) { return std::make_shared<RulesDisplayPage>(rules); }
 
 UIPtr AppManager::quit_menu() {
 	if (!quit_menu_) quit_menu_ = std::make_shared<QuitMenu>();

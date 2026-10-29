@@ -731,12 +731,19 @@ static void update_one(World &w, SessionState &s) {
 		auto ask = [&](const char *handle, int32_t initial) {
 			uint32_t e = new_event(w, handle);
 			w.memory().set<int32_t>(e + 4, initial);
+			static const bool dbg = getenv("OPENBG_DEBUG_LOADING") != nullptr;
 			w.send_event(s.obj, e);
-			for (size_t k = 0; k < s.slots.size(); ++k) w.send_event(s.slots[k]->obj, e);
+			if (dbg && w.memory().get<int32_t>(e + 4) != initial) fprintf(stderr, "[loading %u] %s: session %d -> %d\n", w.frame(), handle, initial, w.memory().get<int32_t>(e + 4));
+			for (size_t k = 0; k < s.slots.size(); ++k) {
+				int32_t before = w.memory().get<int32_t>(e + 4);
+				w.send_event(s.slots[k]->obj, e);
+				if (dbg && w.memory().get<int32_t>(e + 4) != before) fprintf(stderr, "[loading %u] %s: slot %zu (client %d) %d -> %d\n", w.frame(), handle, k, s.slots[k]->client != nullptr, before, w.memory().get<int32_t>(e + 4));
+			}
 			return w.memory().get<int32_t>(e + 4);
 		};
-		bool clients = true;
-		for (auto &sl : s.slots) clients &= sl->client != nullptr;
+		// The slots that have a client (empty ones are not waited for).
+		bool clients = false;
+		for (auto &sl : s.slots) clients |= sl->client != nullptr;
 		int32_t required = clients ? ask("SessionQuerryIsLoadingRequired", 0) : 0;
 		if (required > 0 && ask("SlotQuerryUserChoicesComplete", 1) && ask("SessionQuerryIsReadyToLoad", 1)) {
 			for (int32_t k = 0; k < required; ++k) ask("SessionLoadElements", 1);
@@ -1062,7 +1069,12 @@ void register_session_natives(World &w) {
 	});
 
 	// --- The session (CSession / CStandardSession) ----------------------------------------------
-	reg("CSession::int MaxPlayerClients()", [S](const NativeContext &c) { c.ret_u32(S(c) ? uint32_t(S(c)->max_player_clients) : 2); });
+	// DE_CSession::MaxPlayerClients (Core 0x70010f80): the top-level session's session info's.
+	reg("CSession::int MaxPlayerClients()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		while (s && s->owner) s = s->owner;
+		c.ret_u32(s ? uint32_t(s->max_player_clients) : 2);
+	});
 	reg("CSession::bool IsReplaying()", [](const NativeContext &c) { c.ret_bool(false); });
 	reg("CSession::bool IsLocal()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsReadyToLoad()", [](const NativeContext &c) { c.ret_bool(true); });
@@ -1303,6 +1315,7 @@ void register_session_natives(World &w) {
 		}
 	});
 	auto shown = [S](const NativeContext &c, GameObject *ui) {
+		if (auto it = c.world.rules_displays.find(ui); ui && it != c.world.rules_displays.end()) return it->second.shown;
 		auto *s = S(c);
 		auto it = s && ui ? s->ui.find(ui) : decltype(s->ui.end()){};
 		return s && ui && it != s->ui.end() && it->second.shown;
@@ -1372,7 +1385,9 @@ void register_session_natives(World &w) {
 			v.push_back(g);
 		}
 	});
-	stub("CObject::CloseUIManagerStack()");
+	reg("CObject::CloseUIManagerStack()", [](const NativeContext &c) {
+		if (c.world.close_ui_stack) c.world.close_ui_stack();
+	});
 
 	// --- Descriptions (Core DE_CDescription::NewResource 0x701f2170, OMF
 	// DE_CFighterDescription::NewResource 0x35033080) ------------------------------------------

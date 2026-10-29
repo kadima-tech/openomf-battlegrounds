@@ -10,7 +10,7 @@
 // it launches pick those (testing); --headless N runs N frames without a window and lists the
 // natives still missing.
 //
-// MOUSE="x,y@frame;down@frame;up@frame;..." scripts the mouse in screenshot runs (x, y fractions
+// MOUSE="x,y@frame;down@frame;up@frame;key@frame;..." scripts the mouse (and Enter) in screenshot runs (x, y fractions
 // of the 4:3 GUI area, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
 
@@ -127,6 +127,7 @@ int main(int argc, char **argv) {
 			if (sscanf(item.c_str(), "%f,%f@%d", &x, &y, &f) == 3) mouse_script.push_back({f, 0, x, y});
 			else if (sscanf(item.c_str(), "down@%d", &f) == 1) mouse_script.push_back({f, 1, 0, 0});
 			else if (sscanf(item.c_str(), "up@%d", &f) == 1) mouse_script.push_back({f, 2, 0, 0});
+			else if (sscanf(item.c_str(), "key@%d", &f) == 1) mouse_script.push_back({f, 3, 0, 0});
 			if (q == std::string::npos) break;
 			p = q + 1;
 		}
@@ -163,7 +164,10 @@ int main(int argc, char **argv) {
 				return;
 			}
 			printf("launching %s (%s)%s\n", desc.info().name.c_str(), res[0].info().name.c_str(), single_player ? ", single player" : "");
-			game::start_session(world, {res[0]});
+			auto &ss = game::start_session(world, {res[0]});
+			ss.master_description = world.global_object(desc);
+			ss.single_player = single_player;
+			ss.max_player_clients = 4;  // the session info's MaxPlayers (where the original sets it is not found)
 			game::add_client(world, true, "User");
 			game::begin_session(world);
 			app.set_registry_bool("SinglePlayerPlayed", true);
@@ -191,6 +195,19 @@ int main(int argc, char **argv) {
 			}
 			app.set_next(sel, true);
 		};
+		// DE_CRulesDisplay::Begin: SetNextUIManager(this), the same manager each time (a no-op
+		// while it is still current or next).
+		std::map<game::GameObject *, game::ui::UIPtr> rules_pages;
+		world.show_rules = [&](game::GameObject *rules) {
+			auto &page = rules_pages[rules];
+			if (!page) page = app.rules_display(rules);
+			if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] rules display %x shown\n", world.frame(), rules->handle);
+			app.set_next(page, true);
+		};
+		world.close_ui_stack = [&] {
+			if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] close stack (current %s, next %s, state %d)\n", world.frame(), app.current ? app.current->name.c_str() : "-", app.next ? app.next->name.c_str() : "-", app.transition_state);
+			app.close_stack();
+		};
 		app.has_local_session = [&] { return world.session != nullptr; };
 		app.session_fully_sequenced = [] { return true; };
 		app.session_scene_rendering = [&] { return view.has_arena(); };
@@ -216,8 +233,11 @@ int main(int argc, char **argv) {
 			de::Transform ear;
 			ear.t = {0.5f, 0.375f, 0.866f};
 			for (int fr = 0; fr < frames; ++fr) {
+				for (auto &m : mouse_script) {
+					if (m.frame == fr && m.kind == 3) app.key(13);
+				}
 				app.update();
-				world.tick();
+				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
 				if (offline) {
 					offline->play_requests(world, view.player ? view.ear() : ear);
 					offline->update_music(world);
@@ -258,6 +278,7 @@ int main(int argc, char **argv) {
 		SDL_GL_SetSwapInterval(1);
 		if (shot) glu::offscreen(W, H);
 		view.init_gl();
+		view.follow_scene = true;
 		render::ActorMeshRenderer actors_r;
 		render::ParticleRenderer particles_r;
 		particles_r.load();
@@ -265,8 +286,8 @@ int main(int argc, char **argv) {
 		overlay.load(world.data());
 		audio::Mixer mixer;
 		if (!shot && !mixer.open()) fprintf(stderr, "no audio device: %s\n", SDL_GetError());
-		if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
-		world.render_ticks_per_frame = shot != nullptr;
+		// Render ticks pass real time even while the scene is autopaused (the renderer's clock).
+		world.render_ticks_per_frame = false;
 		auto gui_only = [](const game::GameObject *o) { return game::in_gui(*o); };
 		Viewport vpt = gui_viewport(W, H);
 		app.text_width = [&](const std::string &t, float size) { return overlay.text_width(t, size, vpt.w, vpt.h); };
@@ -322,6 +343,7 @@ int main(int argc, char **argv) {
 					world.mouse_x = m.x;
 					world.mouse_y = 1 - m.y;
 				}
+				else if (m.kind == 3) app.key(13);
 				else app.mouse_button(m.kind == 1);
 			}
 			// The launcher's first control event 0x3a: DE_CAppManager::BeginUI.
@@ -329,14 +351,33 @@ int main(int argc, char **argv) {
 				ui_begun = true;
 				app.begin_ui();
 			}
+			// The user's creature hears the keyboard unless a page is up that disables its input
+			// (DE_CAppManager::IsUIManagerDisableUserCreatureInput).
+			world.input = {};
+			if (!shot && !(app.current && app.current->input_off)) {
+				const Uint8 *k = SDL_GetKeyboardState(nullptr);
+				world.input.up = k[SDL_SCANCODE_UP];
+				world.input.down = k[SDL_SCANCODE_DOWN];
+				world.input.left = k[SDL_SCANCODE_LEFT];
+				world.input.right = k[SDL_SCANCODE_RIGHT];
+				world.input.left_punch = k[SDL_SCANCODE_A];
+				world.input.right_punch = k[SDL_SCANCODE_S];
+				world.input.left_kick = k[SDL_SCANCODE_Z];
+				world.input.right_kick = k[SDL_SCANCODE_X];
+				world.input.jump = k[SDL_SCANCODE_SPACE];
+				world.input.evade = k[SDL_SCANCODE_LSHIFT];
+				world.input.duck = k[SDL_SCANCODE_C];
+			}
 			app.update();
-			world.tick(frame_ms);
+			// Autopause: the scene passes no time while a page that autopauses is up (the
+			// sessions still update).
+			world.tick(app.autopaused() && world.session ? 0 : frame_ms);
 			++fr;
-			mixer.play_requests(world, listener);
+			mixer.play_requests(world, view.player ? view.ear() : listener);
 			mixer.update_music(world);
-			if (!shot) {
+			{
 				Uint64 t = SDL_GetPerformanceCounter();
-				float ms = float(double(t - last_render) * 1000.0 / double(SDL_GetPerformanceFrequency()));
+				float ms = shot ? float(game::World::kFrameMs) : float(double(t - last_render) * 1000.0 / double(SDL_GetPerformanceFrequency()));
 				last_render = t;
 				game::render_tick(world, std::fmin(ms, 100.0f));
 			}
@@ -345,8 +386,18 @@ int main(int argc, char **argv) {
 			if (!shot) SDL_GL_GetDrawableSize(win, &dw, &dh);
 			vpt = gui_viewport(dw, dh);
 			glViewport(0, 0, dw, dh);
-			glClearColor(0, 0, 0, 1);
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			// A session's scene (DE_CSceneViewerControl3d over the whole window), then the GUI.
+			bool game_shown = world.session != nullptr;
+			if (game_shown) {
+				view.draw(dw, dh, fr, shot != nullptr);
+				game_shown = view.has_arena();
+			}
+			if (!game_shown) {
+				glClearColor(0, 0, 0, 1);
+				glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			} else {
+				glClear(GL_DEPTH_BUFFER_BIT);
+			}
 			glViewport(vpt.x, vpt.y, vpt.w, vpt.h);
 			glEnable(GL_DEPTH_TEST);
 			float vfov = 2.0f * std::atan(std::tan(hfov / 2) / aspect) / 0.017453292f;
@@ -355,6 +406,8 @@ int main(int argc, char **argv) {
 			glu::perspective(proj, vfov, aspect, 0.01f, 100.0f);
 			glu::look_view(view, eye, fwd, up);
 			glu::mul(vp, proj, view);
+			render::Lighting game_lighting = render::g_lighting;
+			if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
 			render::FrameLights lights = render::collect_lights(world, fr, gui_only);
 			std::vector<render::ActorMeshRenderer::Item> items;
 			for (game::GameObject *o : world.scene_objects()) {
@@ -367,8 +420,11 @@ int main(int argc, char **argv) {
 			actors_r.texture_version = world.texture_override_version;
 			actors_r.draw(world.data(), items, vp, eye);
 			particles_r.draw(world, vp, view, eye);
-			overlay.draw_world(world, vp);
-			overlay.draw(world, vpt.w, vpt.h, nullptr);
+			if (!game_shown) {
+				overlay.draw_world(world, vp);
+				overlay.draw(world, vpt.w, vpt.h, nullptr);
+			}
+			render::g_lighting = game_lighting;
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};
