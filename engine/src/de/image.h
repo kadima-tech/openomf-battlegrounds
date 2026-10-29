@@ -20,6 +20,7 @@ struct Image {
 	std::string name;
 	int32_t type = 0;
 	int32_t width = 0, height = 0;
+	bool mipmap = true;  // +0x4c: the texture gets a mip chain
 	std::map<int32_t, std::vector<uint8_t>> channels;  // channel id -> width*height bytes
 
 	// Interleave into RGBA8: channels 0,1,2 colour, 3 alpha (default 255), 4 luminance.

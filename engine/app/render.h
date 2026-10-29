@@ -152,6 +152,8 @@ public:
 		const void *light_owner = nullptr;  // see SceneLight::reaches
 	};
 	void draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye);
+	// Their glow and specular-glow passes, for the meshes `draw` built.
+	void draw_glow(const std::vector<Item> &actors, const float *vp, const float *eye);
 	// The pilot colours an image is painted with when a script gave it a fighter's paint filter
 	// (CImage::AddFilter); none for an unfiltered image. Asked once per image.
 	std::function<std::optional<std::array<std::array<float, 3>, 3>>(const de::ObjectRef &image)> paint_of;

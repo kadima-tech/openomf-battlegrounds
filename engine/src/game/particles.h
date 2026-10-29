@@ -85,6 +85,8 @@ struct ParticleInstance {
 	};
 	std::vector<PerModifier> per_modifier;
 	std::vector<Particle> particles;
+	// A billboard's colour mode 0: each quad slot's colour, set when the live count first reached it.
+	mutable std::vector<std::array<float, 4>> slot_color;
 	float time = -1, dt = 0;
 	bool spawning = true;  // +0x58 (Enable/DisableParticleSpawning)
 	bool interpolate_position = false, interpolate_rotation = false;  // +0x5c / +0x60
@@ -139,6 +141,7 @@ struct SparkBurst {
 	float life = 1, light_intensity = 0;  // process +0x2c, +0x28
 	bool setup = false;
 	float last_ms = 0;  // instance +0x14
+	float next_tick = -1;  // the spark process's next temporal tick (scene ms; -1 before the first)
 	struct Spark {
 		std::array<float, 3> pos{}, vel{};  // world, units per ms
 		float width = 0, life = 0, decay = 0;

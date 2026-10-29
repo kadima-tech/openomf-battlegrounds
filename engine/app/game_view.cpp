@@ -375,8 +375,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	arena_r.draw(vp, eye);
 	// Actors made at run time (pickups, jets, spawned props), where they are now: shown,
 	// active, and not a fighter's own body.
+	std::vector<render::ActorMeshRenderer::Item> items = moving_items;
 	{
-		std::vector<render::ActorMeshRenderer::Item> items = moving_items;
 		for (game::GameObject *o : world.scene_objects()) {
 			if (!o->copied || !o->is_actor || o->fighter || !o->file || o->meshes_disabled || game::in_gui(*o)) continue;
 			// The arena's own actors are the static scene ArenaRenderer draws.
@@ -458,6 +458,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (!no_glow && world.glow_enabled) {
 		glow_r.begin();
 		arena_r.draw_glow(vp, eye);
+		// Moved and run-time actors keep their glow passes (DE_CShader::GetShader is per mesh).
+		if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
 		{
 			for (auto *fi : fighters) {
 				if (fi->actor->spawned && fi->renderer_loaded) fi->renderer.draw_glow(vp, eye);

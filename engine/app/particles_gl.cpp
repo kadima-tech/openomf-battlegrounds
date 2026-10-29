@@ -30,7 +30,7 @@ out vec4 frag;
 void main() {
 	vec4 t = texture(tex, v_uv);
 	// Additive quads are premultiplied: the texture's alpha scales the colour it adds.
-	frag = additive == 1 ? vec4(t.rgb * t.a * v_rgba.rgb, 1.0) : t * v_rgba;
+	frag = additive == 1 ? vec4(t.rgb * t.a * v_rgba.rgb * v_rgba.a, 1.0) : t * v_rgba;
 })";
 
 using Vec = std::array<float, 3>;
@@ -108,7 +108,7 @@ GLuint ParticleRenderer::image(const de::ObjectRef &r) {
 // of 20 segments, vertex = pos + sin(a) r A + cos(a) r B + h N in the plane mode's frame (A, B, N),
 // from the inner edge (radius and height curves at the particle's age, times its size; inner
 // colour) to the outer edge. U runs detail x (rotation + i / 20) round the ring, V 0 inner to 1 outer.
-void ParticleRenderer::ring(const game::ParticleInstance &in, const std::array<float, 3> &right, const std::array<float, 3> &up,
+void ParticleRenderer::ring(const game::ParticleInstance &in, const std::array<float, 3> &right, const std::array<float, 3> &up, const float *view, float focal_px,
                             std::map<std::pair<GLuint, bool>, Batch> &batches) {
 	const de::ParticleRendererDef &d = *in.def;
 	if (d.ring_plane < 0 || d.ring_plane > 3) return;
@@ -138,6 +138,11 @@ void ParticleRenderer::ring(const game::ParticleInstance &in, const std::array<f
 		float r0 = d.inner_radius.eval(p.age) * p.size, r1 = d.outer_radius.eval(p.age) * p.size;
 		float h0 = 0, h1 = 0;
 		if (d.ring_plane != 3) h0 = d.inner_height.eval(p.age) * p.size, h1 = d.outer_height.eval(p.age) * p.size;
+		if (d.ring_plane == 3) {
+			// The screen-space ring is skipped when camera z plus its outer radius in pixels is under 5.
+			float z = -(view[2] * c[0] + view[6] * c[1] + view[10] * c[2] + view[14]);
+			if (z == 0 || z + r1 * focal_px / z < 5) continue;
+		}
 		auto c0 = d.inner_color.eval(p.age), c1 = d.outer_color.eval(p.age);
 		if (additive) {
 			c0 = {c0[0] * c0[3], c0[1] * c0[3], c0[2] * c0[3], 1};
@@ -296,7 +301,7 @@ void ParticleRenderer::triangles(const game::World &world, const game::ParticleI
 	b.tex = image(d.image);
 	b.additive = additive;
 	const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
-	const Vec cam_axis[3] = {{view[0], view[4], view[8]}, {view[1], view[5], view[9]}, {view[2], view[6], view[10]}};
+	const bool oriented = d.generator.channels[de::kChOrientation];
 	for (const game::Particle &p : in.particles) {
 		Vec c = local ? at.apply(p.pos) : p.pos;
 		float age = std::clamp(p.age, 0.0f, 1.0f);
@@ -307,17 +312,25 @@ void ParticleRenderer::triangles(const game::World &world, const game::ParticleI
 			col = {col[0] * col[3], col[1] * col[3], col[2] * col[3], 1};
 			edge = {0, 0, 0, 1};
 		}
+		// Process (0x400145d0): facing 0 turns the corners by the particle's orientation (again, after
+		// birth) in the mesh's space; facings 1-3 face the camera about the mesh space's axis f - 1,
+		// the third row against its Y. A world generator's centre there also gets the actor's
+		// position added (the original adds ActorViewPosition to an already-world position).
 		Vec rx{1, 0, 0}, ry{0, 1, 0}, rz{0, 0, 1};
 		if (d.tri_facing >= 1 && d.tri_facing <= 3) {
+			const int f = d.tri_facing - 1;
+			Vec a = local ? row(at.r, f) : Vec{f == 0 ? 1.0f : 0.0f, f == 1 ? 1.0f : 0.0f, f == 2 ? 1.0f : 0.0f};
+			Vec yref = local ? row(at.r, 1) : Vec{0, 1, 0};
+			if (!local) c = add(c, Vec{at.t[0], at.t[1], at.t[2]});
 			Vec dir = norm(sub(c, cam));
-			Vec a = cam_axis[d.tri_facing - 1];
 			rx = norm(cross(dir, a));
 			ry = a;
-			rz = cross(rx, cam_axis[1]);
-		} else if (local) {
-			rx = row(at.r, 0);
-			ry = row(at.r, 1);
-			rz = row(at.r, 2);
+			rz = cross(rx, yref);
+		} else if (d.tri_facing == 0) {
+			if (oriented) rx = row(p.orientation, 0), ry = row(p.orientation, 1), rz = row(p.orientation, 2);
+			if (local) rx = at.rotate(rx), ry = at.rotate(ry), rz = at.rotate(rz);
+		} else {
+			continue;  // other facings leave the centre stale
 		}
 		Vec q[4];
 		for (int k = 0; k < 3; ++k) {
@@ -417,16 +430,40 @@ void ParticleRenderer::trail(const game::World &world, const game::Trail &t, con
 void ParticleRenderer::draw(const game::World &world, const float *vp, const float *view, const float *eye, bool glow_layer) {
 	if (!prog_) return;
 	const Vec right{view[0], view[4], view[8]}, up{view[1], view[5], view[9]};
+	// The render area's focal length in pixels (DE_CStandardRenderer::SetupCameraView:
+	// ((ResX - 1) / 2) / tan(fovx / 2)), for screen-pixel terms.
+	GLint viewport[4];
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	const float focal_px = float(viewport[2] - 1) / 2 * std::sqrt(vp[0] * vp[0] + vp[4] * vp[4] + vp[8] * vp[8]);
 	const Vec cam{eye[0], eye[1], eye[2]};
-	std::map<std::pair<GLuint, bool>, Batch> batches;
+	using Batches = std::map<std::pair<GLuint, bool>, Batch>;
+	std::map<const void *, Batches> per_element;
+	auto element = [&](const void *id, const game::GameObject *actor, bool particle_renderer) -> Batches & {
+		auto [it, made] = elements_.try_emplace(id);
+		Element &e = it->second;
+		if (made) {
+			float g = 0;
+			if (particle_renderer) {
+				auto [mi, fresh] = master_index_.try_emplace(actor, int(master_index_.size()));
+				g = float(mi->second) * 1000 + float(++root_counter_[actor]);
+			}
+			e.key = g + 1;
+			order_.push_back(id);
+			order_dirty_ = true;
+		}
+		e.actor = actor;
+		e.seen = world.frame();
+		return per_element[id];
+	};
 	if (!glow_layer) {
 		for (auto &t : world.particles->trails()) {
-			if (t->stepped == world.frame() && !t->actor->meshes_disabled && (!only || only(t->actor))) trail(world, *t, view, batches);
+			if (t->stepped == world.frame() && !t->actor->meshes_disabled && (!only || only(t->actor))) trail(world, *t, view, element(t.get(), t->actor, false));
 		}
 	}
 	for (auto &inp : world.particles->instances()) {
 		const game::ParticleInstance &in = *inp;
 		if (in.particles.empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled || (only && !only(in.actor))) continue;
+		Batches &batches = element(&in, in.actor, true);
 		const de::ParticleRendererDef &d = *in.def;
 		// The glow layer: only renderers with a GlowFactor, scaled by a quarter of it (clamped to 1),
 		// in black exponential fog (density 0.0007; DE_CGenericShader::ActivateAndDrawPatches flag
@@ -434,7 +471,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 		if (glow_layer && d.glow_factor <= 0) continue;
 		if (d.kind == "Ring") {
 			if (glow_layer) continue;
-			ring(in, right, up, batches);
+			ring(in, right, up, view, focal_px, batches);
 			continue;
 		}
 		if (d.kind == "StreamParticleRenderer") {
@@ -481,6 +518,10 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 		// bare size unless width or height differs from 1.
 		const bool use_wh = d.width != 1 || d.height != 1;
 		auto camera_depth = [&](const Vec &w) { return -(view[2] * w[0] + view[6] * w[1] + view[10] * w[2] + view[14]); };
+		if (d.color_mode == 0) {
+			while (in.slot_color.size() < in.particles.size()) in.slot_color.push_back(base);
+		}
+		size_t drawn = 0;
 		for (const game::Particle &p : in.particles) {
 			if (d.mode == 8 || d.mode == 10 || d.mode == 12 || d.mode < 0 || d.mode > 23) break;
 			Vec c = local ? at.apply(p.pos) : p.pos;
@@ -509,7 +550,8 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 				break;
 			default: break;
 			}
-			if (additive) col = {col[0] * col[3], col[1] * col[3], col[2] * col[3], 1};
+			if (additive && d.color_mode != 0) col = {col[0] * col[3], col[1] * col[3], col[2] * col[3], 1};
+			if (d.color_mode == 0 && drawn < in.slot_color.size()) col = in.slot_color[drawn];
 			if (glow_layer) {
 				float k = std::fmin(d.glow_factor * 0.25f, 1.0f) * std::exp(-0.0007f * len(sub(c, cam)));
 				for (int j = 0; j < 3; ++j) col[size_t(j)] *= k;
@@ -634,14 +676,18 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 					r = add(mul(right, cs), mul(up, sn));
 					u = sub(mul(up, cs), mul(right, sn));
 				}
-				quad(add(c, add(mul(r, d.offset[0] * hw), mul(u, d.offset[1] * hh))), mul(r, hw), mul(u, hh));
+				// Mode 0 adds a second offset of size pixels (unprojected) per unit of offset.
+				float px = d.mode == 0 ? p.size * pz / focal_px : 0;
+				quad(add(c, add(mul(r, d.offset[0] * (hw + px)), mul(u, d.offset[1] * (hh + px)))), mul(r, hw), mul(u, hh));
 				// The z offset (+0x80) moves only the depth: along the view ray, keeping the footprint.
 				if (d.offset[2] != 0) {
 					float k = std::max(pz + d.offset[2], d.near_limit) / pz;
 					for (Vec &v : q) v = add(cam, mul(sub(v, cam), k));
 				}
 			}
-			float uv[4][2] = {{u0, v0 + dv}, {u0 + du, v0 + dv}, {u0 + du, v0}, {u0, v0}};
+			// The original's corner UVs: v0 (1, 1), v1 (0, 1), v2 (0, 0), v3 (1, 0), so the image is
+			// mirrored left to right on screen.
+			float uv[4][2] = {{u0 + du, v0 + dv}, {u0, v0 + dv}, {u0, v0}, {u0 + du, v0}};
 			for (int k : {0, 1, 2, 0, 2, 3}) {
 				Vertex v;
 				for (int j = 0; j < 3; ++j) v.pos[j] = q[k][size_t(j)];
@@ -650,6 +696,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 				for (int j = 0; j < 4; ++j) v.rgba[j] = col[size_t(j)];
 				b.v.push_back(v);
 			}
+			++drawn;
 		}
 	}
 	// Hit sparks (DE_CSparks::DE_CInstanceInfo::Process): a kite per live spark in view space from
@@ -659,7 +706,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	if (!glow_layer) {
 		for (const game::SparkBurst &sb : world.particles->sparks()) {
 			if (!sb.setup || !sb.image) continue;
-			Batch &b = batches[{image(sb.image), true}];
+			Batch &b = element(sb.actor, sb.actor, false)[{image(sb.image), true}];
 			b.tex = image(sb.image);
 			b.additive = true;
 			for (const auto &sp : sb.sparks) {
@@ -691,7 +738,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	for (auto &[fighter, set] : world.particles->trailers()) {
 		for (const game::AttackTrailer &t : set) {
 			if (t.points.size() < 2) continue;
-			Batch &b = batches[{image(t.image), true}];
+			Batch &b = element(&t, fighter, false)[{image(t.image), true}];
 			b.tex = image(t.image);
 			b.additive = true;
 			float ua = t.reverse_uv ? 1.0f : 0.0f, ub = 1 - ua;
@@ -713,7 +760,32 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 			}
 		}
 	}
-	if (batches.empty()) return;
+	// Re-sort on a join, with the depths of the elements' last draws; then this draw's depths.
+	if (order_dirty_ && !glow_layer) {
+		std::stable_sort(order_.begin(), order_.end(), [&](const void *a, const void *b) {
+			const Element &ea = elements_[a], &eb = elements_[b];
+			return ea.key + ea.z > eb.key + eb.z;
+		});
+		order_dirty_ = false;
+	}
+	if (!glow_layer) {
+		for (auto &[id, batches] : per_element) {
+			Element &e = elements_[id];
+			if (!e.actor) continue;
+			auto t = const_cast<game::GameObject *>(e.actor)->world().t;
+			e.z = view[2] * t[0] + view[6] * t[1] + view[10] * t[2] + view[14];
+		}
+		// Elements gone for a while leave the layer (the original keeps a destroyed element's slot
+		// only until the element goes).
+		if (world.frame() % 300 == 0) {
+			for (auto it = elements_.begin(); it != elements_.end();) {
+				if (world.frame() - it->second.seen < 600) { ++it; continue; }
+				order_.erase(std::remove(order_.begin(), order_.end(), it->first), order_.end());
+				it = elements_.erase(it);
+			}
+		}
+	}
+	if (per_element.empty()) return;
 	glUseProgram(prog_);
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "vp"), 1, GL_FALSE, vp);
 	glUniform1i(glGetUniformLocation(prog_, "tex"), 0);
@@ -724,10 +796,11 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	glDepthMask(GL_FALSE);
 	glDisable(GL_CULL_FACE);
 	glActiveTexture(GL_TEXTURE0);
-	// Alpha-blended effects first, the additive ones over them.
-	for (bool pass_additive : {false, true}) {
-		for (auto &[key, b] : batches) {
-			if (b.additive != pass_additive || b.v.empty()) continue;
+	for (const void *id : order_) {
+		auto it = per_element.find(id);
+		if (it == per_element.end()) continue;
+		for (auto &[key, b] : it->second) {
+			if (b.v.empty()) continue;
 			glBlendFunc(b.additive ? GL_ONE : GL_SRC_ALPHA, b.additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 			glUniform1i(glGetUniformLocation(prog_, "additive"), b.additive ? 1 : 0);
 			glBindTexture(GL_TEXTURE_2D, b.tex);

@@ -260,6 +260,7 @@ namespace {
 // Every GL texture made from an Image\AVI, with the video's decoded frames.
 struct AnimatedTexture {
 	de::AviVideo video;
+	bool mipmap = true;
 	std::vector<GLuint> textures;
 	size_t shown = 0;
 };
@@ -269,6 +270,31 @@ std::vector<uint8_t> rgb_to_rgba(const std::vector<uint8_t> &rgb) {
 	std::vector<uint8_t> out(rgb.size() / 3 * 4, 255);
 	for (size_t i = 0, n = rgb.size() / 3; i < n; ++i) memcpy(&out[i * 4], &rgb[i * 3], 3);
 	return out;
+}
+
+// DE_CD3DTexture::CreateTextureFromImage (Direct3D 0x2001bce0) for an AVI: one level, or a full
+// chain whose level k is the frame's top-left (W >> k) x (H >> k) crop (DE_CImage::SetMipMapLevel
+// is not overridden, so every level reads the full-size frame).
+void upload_avi_frame(GLuint t, const AnimatedTexture &a, const std::vector<uint8_t> &px, bool create) {
+	glBindTexture(GL_TEXTURE_2D, t);
+	const int w = a.video.width, h = a.video.height;
+	for (int k = 0;; ++k) {
+		int lw = std::max(1, w >> k), lh = std::max(1, h >> k);
+		std::vector<uint8_t> level(size_t(lw) * lh * 4);
+		for (int y = 0; y < lh; ++y) memcpy(&level[size_t(y) * lw * 4], &px[size_t(y) * w * 4], size_t(lw) * 4);
+		if (create) glTexImage2D(GL_TEXTURE_2D, k, GL_RGBA8, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, level.data());
+		else glTexSubImage2D(GL_TEXTURE_2D, k, 0, 0, lw, lh, GL_RGBA, GL_UNSIGNED_BYTE, level.data());
+		if (!a.mipmap || (lw == 1 && lh == 1)) {
+			if (create) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, k);
+			break;
+		}
+	}
+	if (create) {
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, a.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	}
 }
 
 }  // namespace
@@ -281,11 +307,7 @@ void update_animated_textures(const std::map<std::pair<const de::ObjectsFile *, 
 		if (f == a.shown) continue;
 		a.shown = f;
 		auto px = rgb_to_rgba(a.video.frames[f]);
-		for (GLuint t : a.textures) {
-			glBindTexture(GL_TEXTURE_2D, t);
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, a.video.width, a.video.height, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-			glGenerateMipmap(GL_TEXTURE_2D);
-		}
+		for (GLuint t : a.textures) upload_avi_frame(t, a, px, false);
 	}
 }
 
@@ -301,10 +323,14 @@ GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint>
 	try {
 		if (r.info().class_path == "Image\\AVI") {
 			AnimatedTexture &a = g_animated[k];
-			if (a.textures.empty()) a.video = de::decode_avi(de::avi_of_image(r.file->object_data(r.info()).contents));
+			if (a.textures.empty()) {
+				a.video = de::decode_avi(de::avi_of_image(r.file->object_data(r.info()).contents));
+				a.mipmap = de::read_image_header(r.file->object_data(r.info()).contents).mipmap;
+			}
 			if (a.video.decoded()) {
 				auto px = rgb_to_rgba(a.video.frames[a.shown]);
-				t = glu::texture_rgba(a.video.width, a.video.height, px.data());
+				glGenTextures(1, &t);
+				upload_avi_frame(t, a, px, true);
 				a.textures.push_back(t);
 			} else {
 				g_animated.erase(k);
@@ -1072,6 +1098,19 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		float m[16] = {t.r[0], t.r[1], t.r[2], 0, t.r[3], t.r[4], t.r[5], 0, t.r[6], t.r[7], t.r[8], 0, t.t[0], t.t[1], t.t[2], 1};
 		glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, m);
 		draw_batches(prog_, it->second, -1, &t.t, a.light_owner);
+	}
+}
+
+void ActorMeshRenderer::draw_glow(const std::vector<Item> &actors, const float *vp, const float *eye) {
+	if (!prog_) return;
+	use_mesh_program(prog_, vp, eye);
+	for (const Item &a : actors) {
+		auto it = meshes_.find(std::make_pair(a.actor.file, a.actor.index));
+		if (it == meshes_.end() || it->second.empty()) continue;
+		const de::Transform &t = a.world;
+		float m[16] = {t.r[0], t.r[1], t.r[2], 0, t.r[3], t.r[4], t.r[5], 0, t.r[6], t.r[7], t.r[8], 0, t.t[0], t.t[1], t.t[2], 1};
+		glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, m);
+		draw_glow_batches(prog_, it->second, &t.t, a.light_owner);
 	}
 }
 

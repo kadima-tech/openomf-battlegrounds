@@ -266,16 +266,28 @@ void ParticleSystem::step_trails(float now) {
 void ParticleSystem::step_sparks(float now) {
 	for (size_t i = 0; i < sparks_.size();) {
 		SparkBurst &b = sparks_[i];
-		// DE_CSparkProcess::Tick.
-		b.life -= 0.005f;
+		// DE_CSparkProcess::Tick (OMF 0x3502f890): once when made, then as a temporal at the
+		// fighter's rate (16 ms) on the scene clock's multiples of it.
+		auto tick = [&] {
+			b.life -= 0.005f;
+			if (b.light) {
+				b.light_intensity = std::max(0.0f, b.light_intensity - 0.05f);
+				lights_[b.light].intensity = b.light_intensity;
+			}
+		};
+		constexpr float kRate = 16;
+		if (b.next_tick < 0) {
+			tick();
+			b.next_tick = (std::floor(now / kRate) + 1) * kRate;
+		}
+		while (now >= b.next_tick && b.life >= 0) {
+			tick();
+			b.next_tick += kRate;
+		}
 		if (b.life < 0 || !b.actor || w_.object(b.actor->handle) != b.actor) {
 			if (b.actor && w_.object(b.actor->handle) == b.actor) w_.destroy(b.actor);
 			sparks_.erase(sparks_.begin() + long(i));
 			continue;
-		}
-		if (b.light) {
-			b.light_intensity = std::max(0.0f, b.light_intensity - 0.05f);
-			lights_[b.light].intensity = b.light_intensity;
 		}
 		de::Transform t = b.actor->world();
 		if (!b.setup) {
