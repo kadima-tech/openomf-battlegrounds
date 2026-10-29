@@ -82,12 +82,10 @@ float center_rand(World &w, float x) { return (random01(w) - 0.5f) * x; }  // MA
 
 constexpr uint32_t kRelative = 2, kAlive = 4, kNew = 8, kLooping = 0x10;
 
-bool shown(const GameObject *o) {
-	for (; o; o = o->parent) {
-		if (!o->visible) return false;
-	}
-	return true;
-}
+// DE_CRendererDirect3D::MarkVisibleMeshElemets: an element is processed (stepped) while its own
+// actor is renderable (+0x108, SetRendered / SetUnrendered: not inherited) and its mesh properties
+// are enabled.
+bool shown(const GameObject *o) { return o->visible && !o->meshes_disabled; }
 
 // The actor's momentum as DE_CActor::Momentum reports it (units per millisecond).
 Vec actor_momentum(const GameObject *a) {

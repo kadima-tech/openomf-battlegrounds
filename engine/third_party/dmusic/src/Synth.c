@@ -1345,6 +1345,42 @@ static void DmMsEngine_mix(DmMsEngine* e, int16_t* out, uint32_t frames) {
 // linearly. Each call mixes the synth frames it needs in one CSynth::Mix (the performance renders
 // up to each event, so a call is the stretch between events, as the DirectSound sink's buffers
 // were); events between calls take effect at the synth's current frame.
+// The 22050 Hz synth output to the device rate. The original's converter (WDM's kernel mixer or the
+// card) is not on the disc; 4-point Hermite matches a recording of the shipped game best (its
+// passband and its images, re/FINDINGS 154). OPENBG_SRC=linear (dsound's emulated mixer) or
+// =sinc (a Kaiser-windowed sinc, 16 taps a side) for comparison.
+#define DmMs_SRC_TAPS 16
+#define DmMs_SRC_PHASES 256
+static float DmMs_src_table[DmMs_SRC_PHASES + 1][DmMs_SRC_TAPS * 2];
+
+static double bessel_i0(double x) {
+	double sum = 1, term = 1;
+	for (int k = 1; k < 32; ++k) {
+		term *= (x / (2 * k)) * (x / (2 * k));
+		sum += term;
+	}
+	return sum;
+}
+
+static void DmMs_src_init(void) {
+	static bool done = false;
+	if (done) return;
+	done = true;
+	const double beta = 8.0, cutoff = 0.95;
+	for (int p = 0; p <= DmMs_SRC_PHASES; ++p) {
+		double frac = (double) p / DmMs_SRC_PHASES, sum = 0;
+		for (int k = 0; k < DmMs_SRC_TAPS * 2; ++k) {
+			double x = (double) (k - DmMs_SRC_TAPS + 1) - frac;
+			double sinc = x == 0 ? cutoff : sin(M_PI * cutoff * x) / (M_PI * x);
+			double w = x / DmMs_SRC_TAPS;
+			double win = fabs(w) >= 1 ? 0 : bessel_i0(beta * sqrt(1 - w * w)) / bessel_i0(beta);
+			DmMs_src_table[p][k] = (float) (sinc * win);
+			sum += sinc * win;
+		}
+		for (int k = 0; k < DmMs_SRC_TAPS * 2; ++k) DmMs_src_table[p][k] = (float) (DmMs_src_table[p][k] / sum);
+	}
+}
+
 size_t DmSynth_render(DmSynth* slf, void* buf, size_t len, DmRenderOptions fmt) {
 	int channels = (fmt & DmRender_STEREO) ? 2 : 1;
 	size_t frames = len / (size_t) channels;
@@ -1354,8 +1390,27 @@ size_t DmSynth_render(DmSynth* slf, void* buf, size_t len, DmRenderOptions fmt) 
 		return bytes;
 	}
 	double step = (double) DmMs_SAMPLE_RATE / (double) slf->rate;
-	// The synth frames up to the one after the last output frame's.
-	size_t need = (size_t) (e->pos + step * (double) (frames - 1)) + 2;
+	static int linear = -1, cubic = 0;
+	if (linear < 0) {
+		const char* m = getenv("OPENBG_SRC");
+		linear = m && !strcmp(m, "linear");
+		cubic = !m || !strcmp(m, "cubic");
+	}
+	DmMs_src_init();
+	// The synth frames up to the last tap of the last output frame. The buffer starts
+	// DmMs_SRC_TAPS - 1 frames before the playback position (silence at first).
+	if (e->buffer_len == 0 && !linear) {
+		if (e->buffer_cap < 4096) {
+			Dm_free(e->buffer);
+			e->buffer = Dm_alloc(sizeof(int16_t) * 2 * 4096);
+			e->buffer_cap = e->buffer ? 4096 : 0;
+			if (!e->buffer) return bytes;
+		}
+		memset(e->buffer, 0, sizeof(int16_t) * 2 * (DmMs_SRC_TAPS - 1));
+		e->buffer_len = DmMs_SRC_TAPS - 1;
+		e->pos += DmMs_SRC_TAPS - 1;
+	}
+	size_t need = (size_t) (e->pos + step * (double) (frames - 1)) + 2 + (linear ? 0 : DmMs_SRC_TAPS);
 	if (need > e->buffer_len) {
 		if (need > e->buffer_cap) {
 			size_t cap = e->buffer_cap ? e->buffer_cap : 1024;
@@ -1373,8 +1428,34 @@ size_t DmSynth_render(DmSynth* slf, void* buf, size_t len, DmRenderOptions fmt) 
 	for (size_t f = 0; f < frames; ++f) {
 		size_t i0 = (size_t) e->pos;
 		double t = e->pos - (double) i0;
-		float l = (float) (e->buffer[i0 * 2] + (e->buffer[(i0 + 1) * 2] - e->buffer[i0 * 2]) * t) / 32768.f;
-		float r = (float) (e->buffer[i0 * 2 + 1] + (e->buffer[(i0 + 1) * 2 + 1] - e->buffer[i0 * 2 + 1]) * t) / 32768.f;
+		float l, r;
+		if (linear) {
+			l = (float) (e->buffer[i0 * 2] + (e->buffer[(i0 + 1) * 2] - e->buffer[i0 * 2]) * t) / 32768.f;
+			r = (float) (e->buffer[i0 * 2 + 1] + (e->buffer[(i0 + 1) * 2 + 1] - e->buffer[i0 * 2 + 1]) * t) / 32768.f;
+		} else if (cubic) {
+			// 4-point Hermite between i0 and i0 + 1.
+			int16_t const* s = e->buffer + (i0 - 1) * 2;
+			float o[2];
+			for (int c = 0; c < 2; ++c) {
+				float y0 = s[c], y1 = s[2 + c], y2 = s[4 + c], y3 = s[6 + c], x = (float) t;
+				float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2 * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+				o[c] = ((c3 * x + c2) * x + c1) * x + y1;
+			}
+			l = o[0] / 32768.f;
+			r = o[1] / 32768.f;
+		} else {
+			double ph = t * DmMs_SRC_PHASES;
+			int p = (int) ph;
+			float u = (float) (ph - p), sl = 0, sr = 0;
+			int16_t const* s = e->buffer + (i0 + 1 - DmMs_SRC_TAPS) * 2;
+			for (int k = 0; k < DmMs_SRC_TAPS * 2; ++k) {
+				float c = DmMs_src_table[p][k] + (DmMs_src_table[p + 1][k] - DmMs_src_table[p][k]) * u;
+				sl += c * s[k * 2];
+				sr += c * s[k * 2 + 1];
+			}
+			l = sl / 32768.f;
+			r = sr / 32768.f;
+		}
 		l *= slf->volume;
 		r *= slf->volume;
 		if (channels == 1) {
@@ -1390,8 +1471,9 @@ size_t DmSynth_render(DmSynth* slf, void* buf, size_t len, DmRenderOptions fmt) 
 		}
 		e->pos += step;
 	}
-	// Drop the synth frames behind us.
-	size_t drop = (size_t) e->pos;
+	// Drop the synth frames behind us (keeping the filter's history).
+	size_t keep = linear ? 0 : DmMs_SRC_TAPS - 1;
+	size_t drop = (size_t) e->pos > keep ? (size_t) e->pos - keep : 0;
 	if (drop > 0 && drop <= e->buffer_len) {
 		memmove(e->buffer, e->buffer + drop * 2, sizeof(int16_t) * 2 * (e->buffer_len - drop));
 		e->buffer_len -= drop;

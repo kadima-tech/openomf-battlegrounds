@@ -63,8 +63,14 @@ void Mixer::mix(float *out, int frames) {
 			size_t k = size_t(v.pos);
 			float frac = float(v.pos - double(k));
 			auto at = [&](size_t f, int ch) { return f < n ? float(s.samples[f * size_t(s.channels) + size_t(ch)]) / 32768.0f : 0.0f; };
-			float l = at(k, 0) * (1 - frac) + at(k + 1, 0) * frac;
-			float r = s.channels > 1 ? at(k, 1) * (1 - frac) + at(k + 1, 1) * frac : l;
+			// The same 4-point Hermite as the music's conversion (dmusic Synth.c, FINDINGS 154).
+			auto hermite = [&](int ch) {
+				float y0 = k ? at(k - 1, ch) : 0.0f, y1 = at(k, ch), y2 = at(k + 1, ch), y3 = at(k + 2, ch);
+				float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2 * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+				return ((c3 * frac + c2) * frac + c1) * frac + y1;
+			};
+			float l = hermite(0);
+			float r = s.channels > 1 ? hermite(1) : l;
 			out[i * 2] += l * v.left;
 			out[i * 2 + 1] += r * v.right;
 			v.pos += v.step;

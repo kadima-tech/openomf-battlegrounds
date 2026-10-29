@@ -60,3 +60,6 @@ Local changes:
   a value every max(16, duration × k / |Δ|) ticks (k 100 for pitch bend, 3 otherwise), landing on the
   end value; reset values are sent only when a segment is stopped within the curve's reset duration.
 - Band items read DX8 `bd2h` and play at their physical time (the theme's second band, tick 380927).
+- `DmSynth_render` converts the 22050 Hz mix to the output rate with a 4-point Hermite (the fit to a
+  recording of the shipped game, re/FINDINGS 154; upstream interpolated linearly);
+  `OPENBG_SRC=linear` or `sinc` selects the others.
