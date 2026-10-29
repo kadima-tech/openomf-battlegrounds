@@ -71,6 +71,8 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 
 ## Effects, sound and music
 
+Sound and music are accepted as close enough to the original (2026-10-30): the remaining fits below stay as they are.
+
 | What | Kind | Notes |
 |---|---|---|
 | Music | Ported | Music plays. The game side runs Music.DEObjects' `MusicPlayer` actor and its `BMusicPlayer` behaviour, the `CSpeaker` natives, the session's moods and the mood jumps between segments (`game/music.h`). `app/music_player.cpp` renders the segments with GothicKit dmusic (`third_party/dmusic`), resolving their style and DLS references against the song's `DirectMusicContainer`. Timing and level follow AudioPlayer (FINDINGS 120): the almost-end notification comes DirectMusic's default prepare time (1000 ms; the game never sets it) before a segment and its repeats end, the next segment is played with `DMUS_SEGF_SEGMENTEND` so it starts at the end, and the music plays at −7.6 dB (the speaker volume curve with the global music volume's default of 0.6). dmusic's synthesizer has been replaced by a C port of Microsoft's DirectMusic software synthesizer (the WDK DDKSynth sample, MIT): its envelopes, LFOs, control-point ramps, curves, voice priorities and stealing, DLS1 articulation and 22050 Hz mix, with what the game's own synth (DirectX 9.0b `dmsynth.dll`, on the disc) does beyond it: DLS2 velocity layers, stereo waves, layered note-offs, the DLS2 low-pass filter with CC74 (FINDINGS 133, 135, 150); we then resample linearly to the device rate. The main menu theme has been checked against a recording of the shipped game (see Open questions). Compared with the soundtrack MP3s (omf.niraj.ws; Crystal Cold and Where the Mind Is, FINDINGS 122): tempo matches exactly and tuning is within 5 cents; we have 6-15 dB less treble above 1 kHz, which comes from the game's instrument samples (mostly 11 or 22 kHz) and the 22050 Hz synth, as the MP3s are studio renders rather than recordings of the game. Their mastering (peaks over full scale) also makes them no guide to the in-game level. The style player picks patterns, shapes curves and times band items as dmstyle / dmime do (FINDINGS 151); left out are the chord-rhythm and destination-groove criteria and repeat modes 1-5, which the data does not exercise, and whether a segment-end transition flushes curve resets is not known. A segment without a band track (every song's) plays on its container's first band, applied before it whenever it differs from the last, as AudioPlayer does (FINDINGS 150); the songs had been playing on the theme's leftover instruments. `OPENBG_DEBUG_MUSIC=1` traces it. |
@@ -114,7 +116,7 @@ is not decrypted). What used to be listed here is settled:
 
 | Native | Kind | Notes |
 |---|---|---|
-| `CObject::NewGenericDescriptionSelector()`, `NewChooseFighterUIManager()`, `NewRulesDisplay()` | Stand-in | Real intrinsics; their classes are Core's (`DE_CGenericDescriptionSelector`) and OMF's (`DE_CChooseFighterUIManager`, `DE_CRulesDisplay`). They wait on the front end (see above). |
+| `CObject::NewGenericDescriptionSelector()`, `NewChooseFighterUIManager()`, `NewRulesDisplay()` | Ported | Real intrinsics; their classes are Core's (`DE_CGenericDescriptionSelector`) and OMF's (`DE_CChooseFighterUIManager`, `DE_CRulesDisplay`), ported with the front end (FINDINGS 125–127, 134, 136). |
 
 `CStandardSessionSlot::IsCreatureActive` and `CStandardSessionModifier::RegisterUrgentState` have no
 registration in the DLLs either, but their methods are in Session.ModuleDLL and match ours
