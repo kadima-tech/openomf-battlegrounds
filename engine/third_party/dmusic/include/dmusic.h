@@ -305,6 +305,9 @@ typedef struct DmLoader DmLoader;
 /// \brief Represents a DirectMusic Performance.
 typedef struct DmPerformance DmPerformance;
 
+/// \brief Represents a DirectMusic Band (openbg addition).
+typedef struct DmBand DmBand;
+
 /// \addtogroup DmSegmentGroup
 /// \{
 
@@ -561,6 +564,16 @@ DMAPI void DmPerformance_release(DmPerformance* slf);
 ///
 /// \see DmPerformance_playTransition
 DMAPI DmResult DmPerformance_playSegment(DmPerformance* slf, DmSegment* sgt, DmTiming timing);
+
+/// \brief openbg: parse a band's RIFF (`DMBD`) and download its instruments through \p loader.
+DMAPI DmResult DmPerformance_loadBand(DmLoader* loader, void const* data, size_t len, DmBand** out);
+
+/// \brief openbg: make \p band the performance's band and send its patches and controls to the synth
+/// now, as playing a band segment does (`IDirectMusicBand::CreateSegment`).
+DMAPI void DmPerformance_applyBand(DmPerformance* slf, DmBand* band);
+
+/// \brief openbg: release a band from #DmPerformance_loadBand.
+DMAPI void DmPerformance_releaseBand(DmBand* band);
 
 /// \brief Schedule a new segment to play by the given performance with a transition.
 ///

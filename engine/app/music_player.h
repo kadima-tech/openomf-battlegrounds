@@ -22,6 +22,7 @@
 struct DmLoader;
 struct DmPerformance;
 struct DmSegment;
+struct DmBand;
 
 namespace audio {
 
@@ -48,6 +49,14 @@ private:
 	std::map<std::string, std::vector<uint8_t>> files_;  // lower-case name without extension
 	std::map<const game::GameObject *, DmSegment *> segments_;
 	std::map<const game::GameObject *, bool> containers_;
+	// AudioPlayer's band (DE_CDirectXNoiseElement::CheckForReload 0x100055d0): a segment's own band
+	// track, else its container's first band (GetDefaultBandInterface), played before the segment
+	// when it differs from the last one played (Activate 0x10004460). Null: the segment has its own.
+	std::map<const game::GameObject *, std::string> container_band_;
+	std::map<std::string, DmBand *> bands_;
+	std::map<DmSegment *, DmBand *> segment_band_;
+	DmBand *last_band_ = nullptr;
+	void play(DmSegment *seg);
 
 	// Main thread state.
 	uint32_t serial_ = 0;

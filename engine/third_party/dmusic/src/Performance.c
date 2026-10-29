@@ -1029,3 +1029,29 @@ void DmPerformance_setVolume(DmPerformance* slf, float vol) {
 
 	DmSynth_setVolume(&slf->synth, vol);
 }
+
+DmResult DmPerformance_loadBand(DmLoader* loader, void const* data, size_t len, DmBand** out) {
+	if (loader == NULL || data == NULL || out == NULL) return DmResult_INVALID_ARGUMENT;
+	DmRiff rif;
+	if (!DmRiff_init(&rif, data, len)) return DmResult_INVALID_ARGUMENT;
+	DmResult rv = DmBand_create(out);
+	if (rv != DmResult_SUCCESS) return rv;
+	rv = DmBand_parse(*out, &rif);
+	if (rv == DmResult_SUCCESS) rv = DmBand_download(*out, loader);
+	if (rv != DmResult_SUCCESS) {
+		DmBand_release(*out);
+		*out = NULL;
+	}
+	return rv;
+}
+
+void DmPerformance_applyBand(DmPerformance* slf, DmBand* band) {
+	if (slf == NULL || band == NULL) return;
+	DmBand_release(slf->band);
+	slf->band = DmBand_retain(band);
+	DmSynth_sendBandUpdate(&slf->synth, band);
+}
+
+void DmPerformance_releaseBand(DmBand* band) {
+	DmBand_release(band);
+}

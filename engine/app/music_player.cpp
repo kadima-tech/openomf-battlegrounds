@@ -91,6 +91,7 @@ void MusicPlayer::set_volume(float global) {
 
 MusicPlayer::~MusicPlayer() {
 	for (auto &[o, s] : segments_) DmSegment_release(s);
+	for (auto &[n, b] : bands_) DmPerformance_releaseBand(b);
 	DmPerformance_release(perf_);
 	DmLoader_release(loader_);
 }
@@ -129,6 +130,7 @@ void MusicPlayer::add_container(game::World &world, const game::GameObject *cont
 					if (!memcmp(p + r, "RIFF", 4) && r + 8 + m <= n) {
 						std::string name = lower(form_name(p + r, m + 8));
 						if (!name.empty()) files_[name].assign(p + r, p + r + 8 + m);
+						if (!name.empty() && !memcmp(p + r + 8, "DMBD", 4) && !container_band_.count(container)) container_band_[container] = name;
 						if (kDebug) fprintf(stderr, "music: %s holds %.4s \"%s\"\n", container->name.c_str(), (const char *)p + r + 8, name.c_str());
 					}
 					r += 8 + m + (m & 1);
@@ -152,7 +154,28 @@ DmSegment *MusicPlayer::segment(game::World &world, const game::GameObject *nois
 		fprintf(stderr, "music: cannot load segment %s\n", noise->name.c_str());
 		s = nullptr;
 	}
+	// GetParam(GUID_BandParam) succeeds only with a band track (a DMBT form).
+	const auto &riff = files_[key];
+	bool own_band = false;
+	for (size_t i = 0; i + 4 <= riff.size() && !own_band; ++i) own_band = !memcmp(&riff[i], "DMBT", 4);
+	DmBand *band = nullptr;
+	if (s && !own_band) {
+		auto cb = container_band_.find(world.music->container(noise));
+		if (cb != container_band_.end()) {
+			auto [bi, fresh] = bands_.try_emplace(cb->second, nullptr);
+			if (fresh) {
+				const auto &data = files_[cb->second];
+				if (DmPerformance_loadBand(loader_, data.data(), data.size(), &bi->second) != DmResult_SUCCESS) bi->second = nullptr;
+				if (kDebug) fprintf(stderr, "music: band %s for %s%s\n", cb->second.c_str(), noise->name.c_str(), bi->second ? "" : " (failed)");
+			}
+			band = bi->second;
+		}
+	}
 	files_.erase(key);
+	if (s) {
+		std::lock_guard<std::mutex> g(lock_);
+		segment_band_[s] = band;
+	}
 	return s;
 }
 
@@ -201,11 +224,21 @@ void MusicPlayer::update(game::World &world) {
 	else if (almost) world.music->segment_almost_over(s);
 }
 
+void MusicPlayer::play(DmSegment *seg) {
+	if (seg) {
+		auto it = segment_band_.find(seg);
+		DmBand *band = it == segment_band_.end() ? nullptr : it->second;
+		if (band && band != last_band_) DmPerformance_applyBand(perf_, band);
+		last_band_ = band;
+	}
+	DmPerformance_playSegment(perf_, seg, DmTiming_INSTANT);
+}
+
 void MusicPlayer::mix(float *out, int frames) {
 	if (!perf_) return;
 	std::lock_guard<std::mutex> g(lock_);
 	if (stop_now_ && sounding_) DmPerformance_playSegment(perf_, nullptr, DmTiming_INSTANT);
-	if (start_now_) DmPerformance_playSegment(perf_, current_, DmTiming_INSTANT);
+	if (start_now_) play(current_);
 	sounding_ = start_now_ || (sounding_ && !stop_now_);
 	start_now_ = stop_now_ = false;
 	scratch_.resize(size_t(frames) * 2);
@@ -229,7 +262,7 @@ void MusicPlayer::mix(float *out, int frames) {
 				ended_ = true;
 			}
 			pos_ = 0;
-			DmPerformance_playSegment(perf_, current_, DmTiming_INSTANT);
+			play(current_);
 			sounding_ = current_ != nullptr;
 		}
 	}
