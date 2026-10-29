@@ -193,7 +193,9 @@ public:
 			app.set_registry_string("MainMenu", "Singleplayer");
 		} else if (&c == quit_) {
 			app.set_next(app.quit_menu(), true);
-		} else if (&c == help_ || &c == options_ || &c == replays_) {
+		} else if (&c == help_) {
+			app.set_next(app.help_menu(), true);
+		} else if (&c == options_ || &c == replays_) {
 			app.not_ported(c.text);
 		}
 	}
@@ -321,7 +323,9 @@ public:
 			app.set_next(app.quit_menu(), true);
 		} else if (&c == resume_) {
 			app.delete_stack(true);
-		} else if (&c == options_ || &c == help_) {
+		} else if (&c == help_) {
+			app.set_next(app.help_menu(), true);
+		} else if (&c == options_) {
 			app.not_ported(c.text);
 		}
 	}
@@ -350,6 +354,10 @@ private:
 
 }  // namespace
 
+namespace {
+constexpr float kRow = 20.0f / 600.0f, kListText = 16.0f / 600.0f;  // DE_CListControl3dEx entry height 0x14
+}
+
 bool DescriptionSelector::begin(AppManager &app) {
 	UIManager::begin(app);
 	chosen = {};
@@ -362,6 +370,7 @@ bool DescriptionSelector::begin(AppManager &app) {
 	}
 	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
 	selected_ = entries_.empty() ? -1 : 0;
+	scroll_ = 0;
 	// Begin (0x701e4d40): a pool of one is chosen without showing; backing out passes through.
 	if (pool.size() == 1) {
 		choose(app, pool[0]);
@@ -378,18 +387,31 @@ bool DescriptionSelector::begin(AppManager &app) {
 void DescriptionSelector::setup_controls(AppManager &app) {
 	list_ = button(app, "", "ListWindow");
 	window_ = button(app, "", "Window");
-	next_ = button(app, "Next", "NEXT");
-	next_->keys = {kKeyReturn};
+	if (!next_label.empty()) {
+		next_ = button(app, next_label, "NEXT");
+		next_->keys = {kKeyReturn};
+	}
 	back_ = button(app, "Back", "BACK");
 	back_->keys = {kKeyEscape};
 	select(app, selected_);
 }
 
 // The robot's ProcessSelectedObjects (0x701e5370): Next reads "Locked" for a locked one.
+int DescriptionSelector::visible_rows() const {
+	if (!list_) return 0;
+	return std::max(1, int((list_->bottom - list_->top - 0.01f) / kRow - 1.5f));
+}
+
+// The list control (DE_CListControl3dEx) scrolls to keep the selection in view.
 void DescriptionSelector::select(AppManager &app, int i) {
 	if (i < 0 || i >= int(entries_.size())) return;
 	selected_ = i;
-	if (next_) next_->text = app.is_locked(entries_[size_t(i)]) ? "Locked" : "Next";
+	int rows = visible_rows();
+	if (rows > 0) {
+		if (i < scroll_) scroll_ = i;
+		if (i >= scroll_ + rows) scroll_ = i - rows + 1;
+	}
+	if (next_) next_->text = app.is_locked(entries_[size_t(i)]) ? "Locked" : next_label;
 }
 
 void DescriptionSelector::choose(AppManager &app, const de::ObjectRef &d) {
@@ -410,9 +432,6 @@ void DescriptionSelector::click(AppManager &app, Control &c) {
 	}
 }
 
-namespace {
-constexpr float kRow = 20.0f / 600.0f, kListText = 16.0f / 600.0f;  // DE_CListControl3dEx entry height 0x14
-}
 
 void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 	if (!list_ || !window_) return;
@@ -423,8 +442,8 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 	t.x0 = (list_->left + list_->right) / 2, t.y0 = list_->top + pad + kRow / 2, t.size = kListText * 1.15f, t.centered = true, t.text = title;
 	std::copy(white, white + 4, t.rgba);
 	out.push_back(t);
-	for (size_t i = 0; i < entries_.size(); ++i) {
-		float y = list_->top + pad + kRow * float(i + 1.5f);
+	for (size_t i = size_t(std::max(0, scroll_)); i < entries_.size(); ++i) {
+		float y = list_->top + pad + kRow * (float(i) - float(scroll_) + 1.5f);
 		if (y + kRow > list_->bottom) break;
 		if (int(i) == selected_) {
 			DrawItem r;
@@ -497,11 +516,16 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 bool DescriptionSelector::mouse(AppManager &app, float x, float y, int what) {
 	if (!list_ || !list_->contains(x, y) || (what != 1 && what != 3)) return false;
 	float pad = 0.01f;
-	int row = int(std::floor((y - list_->top - pad) / kRow - 1.5f));
+	int row = int(std::floor((y - list_->top - pad) / kRow - 1.5f)) + scroll_;
 	if (row < 0 || row >= int(entries_.size())) return true;
 	select(app, row);
 	if (what == 3 && next_) click(app, *next_);
 	return true;
+}
+
+void DescriptionSelector::wheel(AppManager &, int dy) {
+	int rows = visible_rows();
+	scroll_ = std::clamp(scroll_ - dy, 0, std::max(0, int(entries_.size()) - rows));
 }
 
 bool DescriptionSelector::key(AppManager &app, int sym) {
@@ -619,6 +643,29 @@ bool AppManager::in_game_menu_impulse() {
 	delete_stack(true);
 	set_next(in_game_menu_, true);
 	return true;
+}
+
+// DE_CHelpUIManager (OMF ObjInitContents 0x350587e0, GetAvailableDescriptions 0x350589b0): a
+// description selector over the master descriptions in COREMeshes\HelpEntry, on ChooserListBack
+// with no Next.
+UIPtr AppManager::help_menu() {
+	if (!help_menu_) {
+		auto sel = std::make_shared<DescriptionSelector>("Help");
+		sel->folder = "ChooserListBack";
+		sel->next_label = "";
+		de::ObjectRef cast = world.data().find("Description\\Cast", "HelpEntry");
+		for (const auto &[stem, f] : world.data().files()) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				if (f->objects()[i].class_path.rfind("Description", 0) != 0) continue;
+				de::ObjectRef d{f.get(), i};
+				for (auto &c : read_description(world.data(), d).casts) {
+					if (cast && c.info().guid.str() == cast.info().guid.str()) sel->pool.push_back(d);
+				}
+			}
+		}
+		help_menu_ = sel;
+	}
+	return help_menu_;
 }
 
 UIPtr AppManager::quit_menu() {
@@ -899,6 +946,10 @@ void AppManager::key(int sym) {
 		page->click(*this, c);
 		return;
 	}
+}
+
+void AppManager::wheel(int dy) {
+	if (notifications.empty() && current && current->activated) current->wheel(*this, dy);
 }
 
 std::string AppManager::registry_string(const std::string &name) const { return world.registry_string(name); }

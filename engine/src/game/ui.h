@@ -79,6 +79,7 @@ public:
 	// Input the page takes before its buttons: `what` 0 move, 1 press, 2 release, 3 double click.
 	virtual bool mouse(AppManager &, float, float, int) { return false; }
 	virtual bool key(AppManager &, int) { return false; }
+	virtual void wheel(AppManager &, int) {}
 	virtual void deactivated(AppManager &) {}
 
 	void activate(AppManager &app);
@@ -105,6 +106,7 @@ public:
 
 	std::string title = "Choose";  // +0x64
 	std::string autoselect_key;     // +0x138
+	std::string next_label = "Next";  // +0x6c; empty: no Next button (Help)
 	std::vector<de::ObjectRef> pool;
 	de::ObjectRef chosen;           // +0x128 (ChosenDescription)
 	std::function<void(AppManager &, DescriptionSelector &)> on_complete;
@@ -115,13 +117,16 @@ public:
 	void draw(AppManager &app, std::vector<DrawItem> &out) override;
 	bool mouse(AppManager &app, float x, float y, int what) override;
 	bool key(AppManager &app, int sym) override;
+	void wheel(AppManager &app, int dy) override;
 
 private:
 	void choose(AppManager &app, const de::ObjectRef &d);
 	void select(AppManager &app, int i);
+	int visible_rows() const;
 
 	std::vector<de::ObjectRef> entries_;
 	int selected_ = -1;
+	int scroll_ = 0;  // the first entry shown
 	Control *list_ = nullptr, *window_ = nullptr, *next_ = nullptr, *back_ = nullptr;
 };
 
@@ -155,6 +160,7 @@ public:
 	// The instances the launcher and screens use.
 	UIPtr main_menu();
 	UIPtr quit_menu();
+	UIPtr help_menu();
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 
@@ -202,6 +208,7 @@ public:
 	void mouse_move(float x, float y);
 	void mouse_button(bool down, int clicks = 1);
 	void key(int sym);
+	void wheel(int dy);
 
 private:
 	void transition_ui();
@@ -213,7 +220,7 @@ private:
 	Control *pressed_ = nullptr;
 	float mouse_x_ = -1, mouse_y_ = -1;
 	bool first_ui_ = true;
-	UIPtr main_menu_, quit_menu_, in_game_menu_;
+	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_;
 };
 
 }  // namespace ui

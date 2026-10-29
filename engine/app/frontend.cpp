@@ -38,6 +38,35 @@
 
 namespace {
 
+// The game's registry (HKCU\Software\Diversions Ent\One Must Fall Battlegrounds in the original),
+// kept as "name=value" lines in the user's Application Support folder.
+std::string registry_path() {
+	const char *home = getenv("HOME");
+	return std::string(home ? home : ".") + "/Library/Application Support/openbg/registry.txt";
+}
+bool load_registry(std::map<std::string, std::string> &reg) {
+	FILE *f = fopen(registry_path().c_str(), "r");
+	if (!f) return false;
+	char line[1024];
+	while (fgets(line, sizeof line, f)) {
+		std::string l = line;
+		while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+		size_t eq = l.find('=');
+		if (eq != std::string::npos) reg[l.substr(0, eq)] = l.substr(eq + 1);
+	}
+	fclose(f);
+	return true;
+}
+void save_registry(const std::map<std::string, std::string> &reg) {
+	std::string dir = registry_path().substr(0, registry_path().rfind('/'));
+	std::string cmd = "mkdir -p '" + dir + "'";
+	if (system(cmd.c_str()) != 0) return;
+	FILE *f = fopen(registry_path().c_str(), "w");
+	if (!f) return;
+	for (auto &[k, v] : reg) fprintf(f, "%s=%s\n", k.c_str(), v.c_str());
+	fclose(f);
+}
+
 // The GUI's viewport: 4:3, as the layout's 4/3 (DE_CUIManager::SetupControlArea) assumes,
 // pillar- or letterboxed in the window.
 struct Viewport {
@@ -137,6 +166,8 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
 		game::ui::AppManager app(world);
+		if (!shot && !headless) load_registry(world.registry);
+		auto saved_registry = world.registry;
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
 		auto persistent = [&](const char *name) {
@@ -324,6 +355,11 @@ int main(int argc, char **argv) {
 				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
 				if (e.type == SDL_KEYDOWN) app.key(int(e.key.keysym.sym));
+				if (e.type == SDL_MOUSEWHEEL) app.wheel(e.wheel.y);
+			}
+			if (world.registry != saved_registry) {
+				save_registry(world.registry);
+				saved_registry = world.registry;
 			}
 			if (app.quit_requested) break;
 			Uint64 now = SDL_GetPerformanceCounter();
