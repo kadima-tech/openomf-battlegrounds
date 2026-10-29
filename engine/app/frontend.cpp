@@ -471,7 +471,7 @@ int main(int argc, char **argv) {
 			render::Lighting game_lighting = render::g_lighting;
 			if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
 			render::FrameLights lights = render::collect_lights(world, fr, gui_only);
-			std::vector<render::ActorMeshRenderer::Item> items;
+			std::vector<render::ActorMeshRenderer::Item> items, doors;
 			for (game::GameObject *o : world.scene_objects()) {
 				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !game::in_gui(*o)) continue;
 				bool live = true;
@@ -486,7 +486,9 @@ int main(int argc, char **argv) {
 					float x = m[0] * t[0] + m[4] * t[1] + m[8] * t[2] + m[12], y = m[1] * t[0] + m[5] * t[1] + m[9] * t[2] + m[13], ww = m[3] * t[0] + m[7] * t[1] + m[11] * t[2] + m[15];
 					fprintf(stderr, "[gui] %s under %s at %.2f %.2f\n", o->name.c_str(), o->parent ? o->parent->name.c_str() : "-", (x / ww + 1) / 2, 1 - (y / ww + 1) / 2);
 				}
-				if (live) items.push_back({{o->file, o->index}, o->world(), lights.owner_of(o)});
+				bool door = false;
+				for (const game::GameObject *p = o; p && !door; p = p->parent) door = p == app.transition;
+				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o)});
 			}
 			render::update_animated_textures(world.image_phases);
 			actors_r.texture_version = world.texture_override_version;
@@ -496,7 +498,6 @@ int main(int argc, char **argv) {
 				overlay.draw_world(world, vp);
 				overlay.draw(world, vpt.w, vpt.h, nullptr);
 			}
-			render::g_lighting = game_lighting;
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};
@@ -512,6 +513,9 @@ int main(int argc, char **argv) {
 					overlay.label(c.text, (c.left + c.right) / 2, (c.top + c.bottom) / 2, 16.0f / 600.0f, white, vpt.w, vpt.h);
 				}
 			}
+			// The doors close over the page's controls, which are 3D controls behind them in the original.
+			actors_r.draw(world.data(), doors, vp, eye);
+			render::g_lighting = game_lighting;
 			if (!app.notifications.empty()) {
 				auto &n = app.notifications.front();
 				auto lines = wrap(n.text, 52);

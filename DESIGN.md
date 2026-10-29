@@ -18,7 +18,8 @@ to present that data, and the few places where the look is our own.
   high, white, centred in the button.
 - **Page changes.** The doors (`V.MainDoors`) slide shut (350 ms), the page is swapped behind them,
   and they slide open (500 ms). The main frame shows on every page except the main menu and in-game
-  menus.
+  menus. The doors cover everything on the page, its text, images and bars included; only
+  notifications draw over them.
 - **Notifications (our own look).** A centred panel, dark blue-grey (0.05, 0.08, 0.12) at 90%
   opacity inside a pale blue (0.55, 0.75, 0.9) edge; the title at 0.035 screen heights, the text
   wrapped at about 52 characters at 0.026, and "OK" in the edge colour. The original's dialog is
