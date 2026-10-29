@@ -150,7 +150,6 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 	auto requests = std::move(world.sound_requests);
 	world.sound_requests.clear();
 	if ((!dev_ && !offline_) || getenv("OPENBG_NO_SOUND")) return;
-	std::uniform_real_distribution<float> unit(0.0f, 1.0f);
 	{
 		std::lock_guard<std::mutex> g(lock_);
 		for (auto &v : voices_) update(v, listener, float(world.frame_ms()));
@@ -162,8 +161,8 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 		const de::Sound *s = sound(world.data(), ref);
 		if (!s) continue;
 		// DE_CNoise::GetNoiseToPlay: an alternate, with the alternate chance (percent).
-		if (!s->alternates.empty() && unit(rng_) * 100.0f < s->alternate_chance) {
-			auto &alt = s->alternates[size_t(unit(rng_) * float(s->alternates.size())) % s->alternates.size()];
+		if (!s->alternates.empty() && game::random01(world) * 100.0f < s->alternate_chance) {
+			auto &alt = s->alternates[size_t(game::random01(world) * float(s->alternates.size())) % s->alternates.size()];
 			if (const de::Sound *a = sound(world.data(), alt)) s = a;
 		}
 		Voice v;
@@ -183,7 +182,7 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 		if (std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) >= v.falloff || sfx_volume_ * v.volume == 0) continue;
 		v.rate = std::min(1.0f, float(s->length_ms) / 7000.0f + 0.1f);
 		// NewNoisePlayerSphere: frequency x noise frequency x (1 + CenterRand(variance)).
-		float freq = r.frequency * s->frequency * (1 + (unit(rng_) * 2 - 1) * s->frequency_variance);
+		float freq = r.frequency * s->frequency * (1 + (game::random01(world) * 2 - 1) * s->frequency_variance);
 		v.step = double(s->rate) * double(std::max(0.05f, freq)) / double(rate_);
 		v.left = v.right = 0;
 		update(v, listener, 0);

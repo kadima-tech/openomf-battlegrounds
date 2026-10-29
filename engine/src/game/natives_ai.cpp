@@ -33,12 +33,20 @@ float distance(const std::array<float, 3> &a, const std::array<float, 3> &b) {
 
 }  // namespace
 
-// A small deterministic generator so headless runs repeat exactly.
+namespace {
+uint32_t g_holdrand = 1;
+}  // namespace
+
+int crt_rand() {
+	g_holdrand = g_holdrand * 214013u + 2531011u;
+	return int((g_holdrand >> 16) & 0x7fff);
+}
+
+void crt_srand(uint32_t seed) { g_holdrand = seed; }
+
 float random01(World &w) {
-	static uint32_t state = 0x2097;
 	(void)w;
-	state = state * 1664525u + 1013904223u;
-	return float(state >> 8) / float(1u << 24);
+	return float(crt_rand()) / 32768.0f;
 }
 
 namespace {
@@ -1166,7 +1174,8 @@ void register_ai_natives(World &w) {
 		c.ret_f32((random01(c.world) - 0.5f) * c.arg<float>(0));
 	});
 	reg("CObject::int Random(int)", [](const NativeContext &c) {
-		c.ret_u32(uint32_t(int32_t(random01(c.world) * float(c.arg<int32_t>(0)))));
+		int32_t v = crt_rand() * c.arg<int32_t>(0);  // MATH::Rand(int) 0x70025ea0
+		c.ret_u32(uint32_t((v + ((v >> 31) & 0x7fff)) >> 15));
 	});
 }
 

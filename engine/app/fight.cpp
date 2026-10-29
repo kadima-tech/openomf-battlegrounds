@@ -193,6 +193,7 @@ int main(int argc, char **argv) {
 	try {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
+		if (const char *seed = getenv("OPENBG_SEED")) game::crt_srand(uint32_t(strtoul(seed, nullptr, 0)));
 		world.all_ai = watch;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
 		static std::deque<game::Pilot> pilots;

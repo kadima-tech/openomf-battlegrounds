@@ -147,6 +147,10 @@ int main(int argc, char **argv) {
 	try {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
+		// DE_GLOBAL::SystemInit: srand(time(NULL)). Screenshot and headless runs keep the CRT's
+		// start value (1) so they repeat; OPENBG_SEED picks one.
+		if (const char *seed = getenv("OPENBG_SEED")) game::crt_srand(uint32_t(strtoul(seed, nullptr, 0)));
+		else if (!shot && !headless) game::crt_srand(uint32_t(time(nullptr)));
 		game::ui::AppManager app(world);
 		// DE_GLOBAL::FirstRun: Core's DE_CRegistry found no registry yet.
 		bool first_run = false;

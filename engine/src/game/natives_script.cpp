@@ -165,8 +165,6 @@ void register_script_natives(World &w) {
 	reg("CPilotDescription::UnlockStatDescriptions(int)", [](const NativeContext &c) {
 		GameObject *o = c.self();
 		if (!o || !o->file) return;
-		static uint32_t seed = 1;
-		auto crt_rand = [] { seed = seed * 214013u + 2531011u; return int((seed >> 16) & 0x7fff); };
 		int ids[22];
 		for (int k = 0; k < 22; ++k) ids[k] = k;
 		for (int k = 21; k >= 0; --k) std::swap(ids[crt_rand() % 22], ids[k]);

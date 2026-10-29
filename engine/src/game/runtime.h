@@ -844,7 +844,11 @@ GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r);
 void register_simple_physics_natives(World &w);
 // Active collision testers (natives_combat.cpp), once per tick.
 void tick_collision_tester(World &w, uint32_t handle);
-// 0..1 from the engine's deterministic generator (MATH::Rand stands on it: Rand(x) = x * random01).
+// MSVCRT rand() on the main thread: one stream that Core, Creature, OMF and Particles all draw
+// from (Core MATH::Rand / CenterRand stand on it); DE_GLOBAL::SystemInit seeds it with the time.
+int crt_rand();
+void crt_srand(uint32_t seed);
+// MATH::Rand(1): rand() / 32768.
 float random01(World &w);
 
 // DE_CQuaternion::SphericalLinearInterpolate between two rotations (rows), t of the way.

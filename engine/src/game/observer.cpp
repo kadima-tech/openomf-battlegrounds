@@ -38,14 +38,9 @@ struct Box {
 	Vec size() const { return sub(mx, mn); }
 };
 
-// MSVCRT rand() and Core MATH::Rand (0x70025e70 float, 0x70025ea0 int), on a stream of the
-// observer's own.
+// Core MATH::Rand (0x70025e70 float, 0x70025ea0 int) on the shared rand() stream.
 struct Rand {
-	uint32_t seed = 1;
-	int next() {
-		seed = seed * 214013u + 2531011u;
-		return int((seed >> 16) & 0x7fff);
-	}
+	int next() { return crt_rand(); }
 	float f(float x) { return float(next()) * x / 32768.0f; }
 	int i(int n) { return (next() * n) >> 15; }
 };
@@ -170,22 +165,9 @@ struct ObserveCommand : Command {
 	}
 
 	bool live(GameObject *o) const { return o && w->object(o->handle) == o && in_scene(*o); }
-	// GlobalInterest (creature vtable +0x158) without refreshing a fighter's cached value, so that
-	// watching never shifts when the fighters' own AI sees theirs change.
-	float interest_of(GameObject *o) const {
-		if (!o->fighter) return o->global_interest;
-		uint32_t now = uint32_t(w->scene_ms());
-		uint32_t since = now > o->interest_time ? now - o->interest_time : o->interest_time - now;
-		if (since <= 300) return o->interest_cached;
-		float v = o->global_interest;
-		auto p = pos(o);
-		auto list = w->enemies_of(*o);
-		for (auto it = list.rbegin(); it != list.rend(); ++it) {
-			float d = len(sub(p, pos(*it)));
-			if (d < 900) v *= 900 - d + 1;
-		}
-		return v;
-	}
+	// GlobalInterest (creature vtable +0x158, OMF 0x3502ae40): a read refreshes a fighter's cached
+	// value once 300 ms have passed, so watching re-phases what the fighters' own AI reads.
+	float interest_of(GameObject *o) const { return w->global_interest_of(o); }
 	bool blocked(const Vec &a, const Vec &b) const { return w->segment_blocked(a, b); }
 
 	// PositionWatchQuality (0x150223f0): lower is better, 1 at best.

@@ -5,8 +5,8 @@
 // ObserverCamera creature from what the executors leave: the PropelOffsetX/Y/Z values and the
 // mouse controller's analog axes. Fighters keep World::run_commands (hooks).
 //
-// The observer only reads the simulation (positions, GlobalInterest, line of sight) and draws
-// from its own MSVCRT rand() stream, so it never changes what a match or a replay does.
+// As in the original, its GlobalInterest reads refresh the fighters' cached values and it draws
+// from the shared rand() stream, so watching can shift the fighters' AI.
 #pragma once
 
 #include <array>

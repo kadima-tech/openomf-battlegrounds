@@ -199,7 +199,7 @@ void SimplePhysicsSystem::bounce(GameObject &, SimplePhysics &s, const std::vect
 			s.momentum = mul(dir, left);
 			if (s.multiplier_on_bounce != 1) s.momentum = mul(s.momentum, 1 - (1 - s.multiplier_on_bounce) * d);
 			if (s.variation_on_bounce != 0) {
-				for (auto &v : s.momentum) v += float(std::rand()) * s.variation_on_bounce / 32768.0f - s.variation_on_bounce * 0.5f;
+				for (auto &v : s.momentum) v += float(crt_rand()) * s.variation_on_bounce / 32768.0f - s.variation_on_bounce * 0.5f;
 			}
 		} else {
 			s.momentum = {0, 0, 0};
