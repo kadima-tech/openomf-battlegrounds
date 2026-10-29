@@ -564,25 +564,47 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 	columns = {{"", -1}};
 	viewer = add<PageViewer>();
 	body_ = viewer->page;
-	viewer->page_height = [this](float) { return float(rows.size()) * entry_h; };
+	viewer->page_height = [this](float) { return float(shown_.size()) * entry_h; };
 	viewer->page_width = [this](float w) {
 		if (columns.size() > 1) return w;
 		float widest = 0;
-		for (auto &r : rows) {
-			if (!r.cells.empty()) widest = std::max(widest, gui.text_width(r.cells[0], text_px) + gui.vx(6));
+		for (int i : shown_) {
+			const Row &r = rows[size_t(i)];
+			if (r.cells.empty()) continue;
+			// CEntry::CalcMinSize (0x700a6260): (depth + 1) x 20 + 5 + the text in a tree.
+			float tw = gui.text_width(r.cells[0], text_px);
+			widest = std::max(widest, tree ? indent(i) + 5 + tw : tw + gui.vx(6));
 		}
 		return std::max(w, widest);
 	};
 	body_->on_paint = [this](Painter &p) {
 		float pw = body_->w();
 		float top_vis = viewer->cy0, bottom_vis = viewer->cy1;
-		for (size_t i = 0; i < rows.size(); ++i) {
-			float y = body_->y0 + float(i) * entry_h;
+		for (size_t n = 0; n < shown_.size(); ++n) {
+			int i = shown_[n];
+			float y = body_->y0 + float(n) * entry_h;
 			if (y + entry_h < top_vis || y > bottom_vis) continue;
-			const Row &r = rows[i];
+			const Row &r = rows[size_t(i)];
+			if (tree) {
+				// CEntry::SetupHierarchy / PositionEntry (0x700a72d0 / 0x700a6320): a 10-pixel
+				// "Minus" / "Plus" image (filled white) at depth x 20 + 5; the cell and its highlight
+				// hug the text from (depth + 1) x 20 (CalcMinSize).
+				const std::string &t = r.cells.empty() ? std::string() : r.cells[0];
+				float tx = body_->x0 + indent(i), tw = gui.text_width(t, text_px) + 5;
+				if (i == selected) p.rect(tx, y, tx + tw, y + entry_h, theme::kListSelection);
+				else if (i == hover && r.selectable) p.rect(tx, y, tx + tw, y + entry_h, {0, 0, 0.5f, 0.5f});
+				if (has_kids_[size_t(i)]) {
+					float bx = tx - 15, by = y + (entry_h - 10) / 2;
+					p.image(gui.image(expanded_[size_t(i)] ? "Minus" : "Plus"), bx, by, bx + 10, by + 10, {1, 1, 1, 1});
+				}
+				Rgba c = r.color;
+				if (!r.selectable) c.a *= 0.5f;
+				p.text(t, tx, y + (entry_h - text_px) / 2, text_px, c);
+				continue;
+			}
 			// CColEntry::ShowAsSelected (0x700a7510) and the hover (control 0x25): the highlight's alpha.
-			if (int(i) == selected) p.rect(body_->x0, y, body_->x1, y + entry_h, theme::kListSelection);
-			else if (int(i) == hover && r.selectable) p.rect(body_->x0, y, body_->x1, y + entry_h, {0, 0, 0.5f, 0.5f});
+			if (i == selected) p.rect(body_->x0, y, body_->x1, y + entry_h, theme::kListSelection);
+			else if (i == hover && r.selectable) p.rect(body_->x0, y, body_->x1, y + entry_h, {0, 0, 0.5f, 0.5f});
 			float x = body_->x0;
 			for (size_t k = 0; k < columns.size() && k < r.cells.size(); ++k) {
 				float cw = columns[k].width < 0 ? body_->x1 - x : columns[k].width * pw;
@@ -595,18 +617,37 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 			}
 		}
 	};
-	body_->on_down = [this](float, float y, int clicks) {
-		down_row_ = row_at(y);
+	// In a tree only the box and the text's highlight take clicks (CEntry::ProcessEvent 0x700a6590).
+	auto part = [this](float x, int r) {
+		if (!tree || r < 0) return 1;
+		float tx = body_->x0 + indent(r);
+		if (has_kids_[size_t(r)] && x >= tx - 15 && x < tx - 5) return 2;
+		const std::string &t = rows[size_t(r)].cells.empty() ? std::string() : rows[size_t(r)].cells[0];
+		return x >= tx && x < tx + gui.text_width(t, text_px) + 5 ? 1 : 0;
+	};
+	body_->on_down = [this, part](float x, float y, int clicks) {
+		int r = row_at(y);
+		down_row_ = -1;
 		gui.set_focus(this);
+		if (part(x, r) == 2) {
+			expanded_[size_t(r)] = !expanded_[size_t(r)];
+			rebuild();
+			return;
+		}
+		if (part(x, r) == 0) return;
+		down_row_ = r;
 		// DE_CCloseListOnDoubleClickRobot (0x70098dc0).
 		if (clicks >= 2 && down_row_ >= 0 && down_row_ == selected && on_double) on_double(selected);
 	};
-	body_->on_up = [this](float, float y, bool over) {
+	body_->on_up = [this, part](float x, float y, bool over) {
 		int r = row_at(y);
-		if (over && r >= 0 && r == down_row_ && rows[size_t(r)].selectable && r != selected) select(r);
+		if (over && r >= 0 && r == down_row_ && part(x, r) == 1 && rows[size_t(r)].selectable && r != selected) select(r);
 		down_row_ = -1;
 	};
-	body_->on_move = [this](float, float y) { hover = row_at(y); };
+	body_->on_move = [this, part](float x, float y) {
+		int r = row_at(y);
+		hover = part(x, r) == 1 ? r : -1;
+	};
 	body_->on_leave = [this] { hover = -1; };
 }
 
@@ -634,51 +675,87 @@ void List::paint_self(Painter &p) {
 
 int List::row_at(float y) const {
 	if (y < viewer->cy0 || y >= viewer->cy1) return -1;
-	int r = int(std::floor((y - body_->y0) / entry_h));
-	return r >= 0 && r < int(rows.size()) ? r : -1;
+	int n = int(std::floor((y - body_->y0) / entry_h));
+	return n >= 0 && n < int(shown_.size()) ? shown_[size_t(n)] : -1;
+}
+
+// PositionAllEntries (0x700a5c40): roots, then each expanded row's children under it.
+void List::rebuild() {
+	size_t n = rows.size();
+	shown_.clear();
+	depth_.assign(n, 0);
+	pos_.assign(n, -1);
+	has_kids_.assign(n, 0);
+	expanded_.resize(n, 0);
+	auto parent = [&](size_t i) { return tree && rows[i].parent >= 0 && size_t(rows[i].parent) < n ? rows[i].parent : -1; };
+	std::vector<std::vector<int>> kids(n);
+	std::vector<int> roots;
+	for (size_t i = 0; i < n; ++i) {
+		int p = parent(i);
+		if (p >= 0) kids[size_t(p)].push_back(int(i)), has_kids_[size_t(p)] = 1;
+		else roots.push_back(int(i));
+	}
+	std::function<void(int, int)> add = [&](int i, int d) {
+		depth_[size_t(i)] = d;
+		pos_[size_t(i)] = int(shown_.size());
+		shown_.push_back(i);
+		if (expanded_[size_t(i)]) {
+			for (int k : kids[size_t(i)]) add(k, d + 1);
+		}
+	};
+	for (int r : roots) add(r, 0);
 }
 
 void List::set_rows(std::vector<Row> r) {
 	rows = std::move(r);
+	expanded_.assign(rows.size(), 0);
+	rebuild();
 	selected = -1, hover = -1;
 	viewer->scroll_top();
 }
 
+// SetAsSelected / ScrollToObject (0x700a8920 / 0x700aaab0), opening its parents (AssureExpanded).
 void List::select(int i, bool notify) {
 	if (rows.empty()) return;
 	i = std::clamp(i, 0, int(rows.size()) - 1);
+	bool opened = false;
+	for (int p = tree ? rows[size_t(i)].parent : -1; p >= 0 && size_t(p) < rows.size(); p = rows[size_t(p)].parent) {
+		if (!expanded_[size_t(p)]) expanded_[size_t(p)] = 1, opened = true;
+	}
+	if (opened) rebuild();
 	selected = i;
-	viewer->scroll_to(float(i) * entry_h, float(i + 1) * entry_h);
+	float at = float(std::max(0, pos_[size_t(i)]));
+	viewer->scroll_to(at * entry_h, (at + 1) * entry_h);
 	if (notify && on_select) on_select(i);
 }
 
 // ProcessEvent (0x7009e7a0).
 bool List::key(int sym) {
-	if (rows.empty()) return false;
+	if (shown_.empty()) return false;
+	int count = int(shown_.size());
 	int page = std::max(1, int(std::lround((viewer->cy1 - viewer->cy0) / entry_h)));
-	int s = selected;
-	if (sym == kKeyUp) s = std::max(0, selected - 1);
-	else if (sym == kKeyDown) s = selected + 1;
+	int at = selected >= 0 ? pos_[size_t(selected)] : -1, s = at;
+	if (sym == kKeyUp) s = std::max(0, at - 1);
+	else if (sym == kKeyDown) s = at + 1;
 	else if (sym == kKeyHome) s = 0;
-	else if (sym == kKeyEnd) s = int(rows.size()) - 1;
-	else if (sym == kKeyPageUp) s = std::max(0, selected - page);
-	else if (sym == kKeyPageDown) s = selected + page;
+	else if (sym == kKeyEnd) s = count - 1;
+	else if (sym == kKeyPageUp) s = std::max(0, at - page);
+	else if (sym == kKeyPageDown) s = at + page;
 	else if (sym < 128 && std::isalnum(sym)) {
 		// SelectNextWithChar: the next row starting with the letter.
-		int n = int(rows.size());
-		for (int k = 1; k <= n; ++k) {
-			int r = (std::max(0, selected) + k) % n;
+		for (int k = 1; k <= count; ++k) {
+			int r = shown_[size_t((std::max(0, at) + k) % count)];
 			const std::string &c = rows[size_t(r)].cells.empty() ? std::string() : rows[size_t(r)].cells[0];
 			if (!c.empty() && std::tolower(static_cast<unsigned char>(c[0])) == std::tolower(sym)) {
-				s = r;
+				s = pos_[size_t(r)];
 				break;
 			}
 		}
 	} else {
 		return false;
 	}
-	s = std::clamp(s, 0, int(rows.size()) - 1);
-	if (s != selected) select(s);
+	s = std::clamp(s, 0, count - 1);
+	if (s != at) select(shown_[size_t(s)]);
 	return true;
 }
 
@@ -916,11 +993,19 @@ void Edit::paint_self(Painter &p) {
 namespace {
 
 // DE_CFocusTitleBarRobot (0x700c4a90): the active caption shading from c x 0.8 on the left to
-// c x 1.2 on the right.
+// c x 1.2 on the right. The bar's client drags the dialog by the mouse's movement (control actor
+// +0x188 relays 0x21/0x22 to it, DE_CControlActor3d::ProcessEvent 0x700ea330; the dialog's frame
+// control moves by the delta, DE_CTitleBarRobot::ProcessControlEvent 0x700db1b0).
 class TitleBar : public Ctl {
 public:
 	TitleBar(Gui &g, std::string t) : Ctl(g), title(std::move(t)) {}
 	std::string title;
+	bool takes_mouse() const override { return true; }
+	void mouse_down(float x, float y, int) override { last_x_ = x, last_y_ = y; }
+	void mouse_drag(float x, float y) override {
+		if (auto *d = dynamic_cast<Dialog *>(parent)) d->moved_x += x - last_x_, d->moved_y += y - last_y_;
+		last_x_ = x, last_y_ = y;
+	}
 	void paint_self(Painter &p) override {
 		Rgba dark = scaled(theme::kCaption, 0.8f), light = scaled(theme::kCaption, 1.2f);
 		const Rgba face[4] = {dark, dark, light, light};
@@ -928,6 +1013,9 @@ public:
 		float px = std::floor(h() * 0.5f);
 		p.text(title, x0 + 2 + 5, (y0 + y1) / 2 - px / 2, px, theme::kText);
 	}
+
+private:
+	float last_x_ = 0, last_y_ = 0;
 };
 
 class CloseBox : public Button {
@@ -1153,7 +1241,9 @@ void Gui::layout() {
 	root_->place(0, 0, W, H);
 	for (auto &d : dialogs_) {
 		d->pre_draw_tree();
-		d->layout(0, 0, W, H);
+		float mx = 0, my = 0;
+		if (auto *dlg = dynamic_cast<Dialog *>(d.get())) mx = dlg->moved_x, my = dlg->moved_y;
+		d->layout(mx, my, W + mx, H + my);
 	}
 	if (popup_) {
 		popup_->pre_draw_tree();

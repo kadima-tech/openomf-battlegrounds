@@ -20,6 +20,7 @@ struct Font {
 	};
 	std::array<Glyph, 256> glyphs;
 	float height = 0;  // tallest extent of all letters (CFontInfo +0x24)
+	float base = 0;    // the lowest letter's bottom in the mesh (CFontInfo +0x2c), added back by CFontInfo::Update
 	ObjectRef image;
 };
 

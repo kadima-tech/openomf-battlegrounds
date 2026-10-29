@@ -75,6 +75,7 @@ Font read_font(const World &w, const std::string &mesh_name) {
 	float lo = 1e30f, hi = -1e30f;
 	for (auto &l : letters) lo = std::min(lo, l.g.y0), hi = std::max(hi, l.g.y1);
 	font.height = hi - lo;
+	font.base = lo;
 	for (size_t c = 0; c < letters.size() && c < 256; ++c) {
 		Font::Glyph g = letters[c].g;
 		g.y0 -= lo, g.y1 -= lo;  // CLetter::FixUp

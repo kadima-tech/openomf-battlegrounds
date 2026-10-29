@@ -9,8 +9,8 @@ to present that data, and the few places where the look is our own.
 - **Scene.** The 3D GUI scene in OMFBGGUI.DEObjects: persistent `V.*` actors (the frame, the
   transition doors, the tunnel backdrop, the environment) and one `F.<Screen>` folder per page, its
   `VE.*` actors the buttons. Their meshes, materials, lights, particles and scripts are the game's.
-- **Frame.** The GUI is laid out in a 4:3 field (x 0..1, y 0..0.75) and is drawn 4:3, pillar- or
-  letterboxed in the window, through a 60° horizontal field of view looking down −Z (FINDINGS 126).
+- **Frame.** The GUI is laid out in a 4:3 field (x 0..1, y 0..0.75), drawn through a 60° horizontal
+  field of view looking down −Z and stretched to fill the window (FINDINGS 126, 161).
 - **Buttons.** A hit rectangle over each button's `DisplayArea` mesh. Hover, leave and click go to
   the button's script (`GUIEnter`, `GUILeave`, `GUISelect`), which spins its rotors, lights its
   lightning and sparks and plays `MouseEnter` / `ButtonClick`.
@@ -62,7 +62,10 @@ to present that data, and the few places where the look is our own.
 ## In game
 
 - **HUD and messages.** Drawn from the scripts' screen-space primitives (text in `Font_Ariel` or the
-  in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them.
+  in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them. One font
+  unit is the text size; HUD letters stretch with the screen's shape (x by its width, y by its height).
+- **Help.** A tree list: Plus / Minus icons 10 px wide at depth × 20 + 5, text at (depth + 1) × 20,
+  branches collapsed at first, no tree lines.
 - **Shadows (off by default).** Each robot's silhouette darkens the floor under it to about half (Medium, High), from the static lights' direction (High adds one from the moving lights); Low casts one from straight above, darker.
 - **Camera.** The game's fight camera (the player's `CameraActor`, 70.5° horizontal at 4:3) while the
   player fights. Before and between rounds, after the player's fighter is beaten, and through a whole

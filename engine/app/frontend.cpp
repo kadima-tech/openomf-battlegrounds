@@ -11,7 +11,7 @@
 // natives still missing.
 //
 // MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
-// of the 4:3 GUI area, y down); SHOTS="40,80" also writes <out>-<frame>.png.
+// of the window, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
 
 #include <algorithm>
@@ -70,18 +70,15 @@ void save_registry(const std::map<std::string, std::string> &reg) {
 	fclose(f);
 }
 
-// The GUI's viewport: 4:3, as the layout's 4/3 (DE_CUIManager::SetupControlArea) assumes,
-// pillar- or letterboxed in the window.
+// The GUI's viewport: the whole window. InitGUI (2004 build 0x408b20) hangs the UI parent actor,
+// scaled (1, 4/3, 1), under the PostSceneView control that fills the window, so the 0..1 x 0..0.75
+// GUI scene is stretched to the window's shape, which is the 4:3 view drawn into it.
 struct Viewport {
 	int x = 0, y = 0, w = 1, h = 1;
 };
 Viewport gui_viewport(int dw, int dh) {
 	Viewport v;
-	if (dw * 3 > dh * 4) {
-		v.h = dh, v.w = dh * 4 / 3, v.x = (dw - v.w) / 2;
-	} else {
-		v.w = dw, v.h = dw * 3 / 4, v.y = (dh - v.h) / 2;
-	}
+	v.w = dw, v.h = dh;
 	return v;
 }
 
@@ -367,7 +364,7 @@ int main(int argc, char **argv) {
 
 		// The UI parent frame: local x 0..1 across the width and y 0..0.75 up, one unit from the
 		// 60-degree frame-control camera, which looks down -Z (DE_CTopControl3d::AdjustRootActor,
-		// AssureRenderObjects; FINDINGS 126).
+		// AssureRenderObjects; FINDINGS 126), drawn 4:3 and stretched to the window (gui_viewport).
 		const float hfov = 60.0f * 0.017453292f, aspect = 4.0f / 3.0f;
 		const float cam_d = 0.5f / std::tan(hfov / 2);
 		de::Transform listener;
@@ -744,11 +741,11 @@ int main(int argc, char **argv) {
 				}
 				const float sep[4] = {0.43f, 0.45f, 0.47f, 1};
 				overlay.rect(l.x0 + fx, l.title_bottom, l.x1 - fx, l.title_bottom + 0.004f, sep, vpt.w, vpt.h);
-				overlay.label(n.title, l.x0 + l.frame + 0.012f, (l.y0 + l.frame + l.title_bottom) / 2, 0.034f, white, vpt.w, vpt.h, false);
+				overlay.label(n.title, l.x0 + l.frame + 0.012f, (l.y0 + l.frame + l.title_bottom) / 2, 0.024f, white, vpt.w, vpt.h, false);
 				const float close_face[4] = {0.31f, 0.31f, 0.51f, 1};
 				overlay.rect(l.close[0], l.close[1], l.close[2], l.close[3], frame_hi, vpt.w, vpt.h);
 				overlay.rect(l.close[0] + 0.002f, l.close[1] + 0.003f, l.close[2] - 0.002f, l.close[3] - 0.003f, close_face, vpt.w, vpt.h);
-				overlay.label("X", (l.close[0] + l.close[2]) / 2, (l.close[1] + l.close[3]) / 2, 0.04f, black, vpt.w, vpt.h);
+				overlay.label("X", (l.close[0] + l.close[2]) / 2, (l.close[1] + l.close[3]) / 2, 0.0284f, black, vpt.w, vpt.h);
 				if (const de::ObjectsFile *core = world.data().file("COREImages")) {
 					for (uint32_t i = 0; i < core->objects().size(); ++i) {
 						if (core->objects()[i].name != "Not_UserInformation") continue;
@@ -762,7 +759,7 @@ int main(int argc, char **argv) {
 				const float ok_frame[4] = {0.17f, 0.16f, 0.57f, 1}, ok_face[4] = {0.27f, 0.27f, 0.31f, 1};
 				overlay.rect(l.ok[0], l.ok[1], l.ok[2], l.ok[3], ok_frame, vpt.w, vpt.h);
 				overlay.rect(l.ok[0] + 0.004f, l.ok[1] + 0.005f, l.ok[2] - 0.004f, l.ok[3] - 0.005f, ok_face, vpt.w, vpt.h);
-				overlay.label("OK", (l.ok[0] + l.ok[2]) / 2, (l.ok[1] + l.ok[3]) / 2, 0.03f, white, vpt.w, vpt.h);
+				overlay.label("OK", (l.ok[0] + l.ok[2]) / 2, (l.ok[1] + l.ok[3]) / 2, 0.0213f, white, vpt.w, vpt.h);
 			}
 			glViewport(0, 0, dw, dh);
 			// The VCR's Snapshot (TakeScreenShot): the drawn frame, saved to the Pictures folder.

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <optional>
 
@@ -801,6 +802,7 @@ public:
 	}
 	void setup_controls(AppManager &app) override {
 		Gui &g = *gui;
+		app_ = &app;
 		play_ = button(app, "Play", "NEXT");
 		play_->enabled = false;  // ReadOnlyOn until a record is selected
 		back_ = button(app, "Back", "BACK");
@@ -858,13 +860,40 @@ private:
 		Gui &g = *gui;
 		info_ = window_->add<Ctl>();
 		Ctl *left = info_->add<Ctl>()->scale(0, 0, 0.5f, 1), *right = info_->add<Ctl>()->scale(0.5f, 0, 1, 1);
-		Ctl *a = left->add<Ctl>()->scale(0.3f, 0, 1, 0.3f);
-		auto *name = left->add<Text>(cells_of(*r)[1], g.vy(18), theme::kText, 0);
-		name->hug();
-		name->from_left = 3;
-		auto *rules = a->add<Text>("Rules and Mods:", g.vy(12), theme::kText, 0);
-		rules->hug();
-		rules->from_left = 3, rules->from_top = g.vy(40);
+		// DE_CSessionInfoInGameRobot (OMF 0x3501aae0) over DE_CSessionRecord::NewSessionInfoControl's
+		// info (Core 0x70203d00): the master description, the record's modifiers, no second description.
+		const de::World &data = app_->world.data();
+		if (de::ObjectRef master = data.by_guid(r->master)) {
+			Ctl *a = left->add<Ctl>()->scale(0.3f, 0, 1, 0.3f);
+			auto *name = left->add<Text>(cells_of(*r)[1], g.vy(18), theme::kText, 0);
+			name->hug();
+			name->from_left = g.vx(3);
+			auto *rules = a->add<Text>("Rules and Mods:", g.vy(12), theme::kText, 0);
+			rules->hug();
+			rules->from_left = g.vx(3), rules->from_top = g.vy(40);
+			// NewMediumRepresentation (Core 0x701f2020): the image on white.
+			de::ObjectRef medium = read_description(data, master).medium;
+			if (medium && medium.info().class_path.rfind("Image", 0) == 0) {
+				Ctl *m = left->add<Ctl>()->scale(0, 0.2f, 0.3f, 1);
+				m->set_fill({1, 1, 1, 1});
+				m->image = medium;
+			}
+		}
+		// "RulesAndModsHolder": each modifier's NewIcon (Core 0x701f1db0), 45 pixels square, 50 apart.
+		Ctl *holder = left->add<Ctl>()->scale(0.3f, 0.55f, 1, 1);
+		std::vector<de::Guid> seen;
+		float x = g.vx(6);
+		for (const de::Guid &id : r->modifiers) {
+			if (std::any_of(seen.begin(), seen.end(), [&](const de::Guid &o) { return std::memcmp(o.bytes, id.bytes, 16) == 0; })) continue;
+			seen.push_back(id);
+			de::ObjectRef d = data.by_guid(id);
+			if (!d || d.info().class_path.rfind("Description", 0) != 0) continue;
+			Ctl *icon = holder->add<Ctl>();
+			icon->len_x = g.vx(45), icon->len_y = g.vy(45), icon->from_left = x;
+			icon->set_fill({1, 1, 1, 1});
+			icon->image = read_description(data, d).icon;
+			x += g.vx(50);
+		}
 		Ctl *b = right->add<Ctl>()->scale(0.6f, 0, 1, 1);
 		auto *del = b->add<Button>("Delete");
 		del->sb = 0.25f;
@@ -920,6 +949,7 @@ public:
 private:
 	std::vector<std::shared_ptr<SessionRecord>> records_;
 	int selected_ = -1;
+	AppManager *app_ = nullptr;
 	Control *play_ = nullptr, *back_ = nullptr;
 	List *list_ = nullptr;
 	Ctl *window_ = nullptr, *info_ = nullptr;
@@ -1108,11 +1138,26 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 	back_ = button(app, "Back", "BACK");
 	if (!choose_fighter) back_->keys = {kKeyEscape};
 	list_ = g.place(list_rect_)->add<List>();
+	list_->tree = hierarchy;
 	std::vector<List::Row> rows;
+	std::map<const de::ObjectsFile *, std::vector<int32_t>> parents;
 	for (auto &e : entries_) {
 		List::Row r{{e.info().name}};
 		if (app.is_locked(e)) r.color = {0.6f, 0.6f, 0.6f, 1};
+		if (hierarchy) {
+			// GetEntriesWithParent (Core 0x7004c280): under its parent object when that is listed too.
+			auto it = parents.find(e.file);
+			if (it == parents.end()) it = parents.emplace(e.file, e.file->parents()).first;
+			int32_t p = it->second[e.index];
+			for (size_t k = 0; p >= 0 && k < entries_.size(); ++k) {
+				if (entries_[k].file == e.file && entries_[k].index == uint32_t(p)) r.parent = int(k);
+			}
+		}
 		rows.push_back(r);
+	}
+	if (hierarchy && selected_ >= 0) {
+		while (size_t(selected_) < rows.size() && rows[size_t(selected_)].parent >= 0) ++selected_;
+		if (size_t(selected_) >= rows.size()) selected_ = 0;
 	}
 	list_->set_rows(rows);
 	list_->on_select = [this, &app](int i) { select(app, i); };
@@ -1288,7 +1333,7 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 				}
 				DrawItem t;
 				t.kind = DrawItem::Text;
-				t.x0 = xi + 0.01f * (x1 - xi), t.y0 = y + row * 0.25f, t.size = 10.0f / 600.0f * 1.6f, t.text = names[k];
+				t.x0 = xi + 0.01f * (x1 - xi), t.y0 = y + row * 0.25f, t.size = 10.0f / 600.0f, t.text = names[k];
 				out.push_back(t);
 				DrawItem frame, well, fill;
 				frame.x0 = xi, frame.x1 = x1, frame.y0 = y + row * 0.5f, frame.y1 = y + row * 0.95f;
@@ -1307,7 +1352,7 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 			float y = top + 0.73f * rh, ch = 0.27f * rh;
 			DrawItem c;
 			c.kind = DrawItem::Text;
-			c.x0 = (x0 + x1) / 2, c.y0 = y + ch * 0.16f, c.size = 10.0f / 600.0f * 1.6f, c.text = "Colors", c.centered = true;
+			c.x0 = (x0 + x1) / 2, c.y0 = y + ch * 0.16f, c.size = 10.0f / 600.0f, c.text = "Colors", c.centered = true;
 			out.push_back(c);
 			float gap = 4.0f / 800.0f, sw = (x1 - x0 - 2 * gap) / 3;
 			for (int k = 0; k < 3; ++k) {
@@ -1586,12 +1631,13 @@ bool AppManager::in_game_menu_impulse() {
 
 // DE_CHelpUIManager (OMF ObjInitContents 0x350587e0, GetAvailableDescriptions 0x350589b0): a
 // description selector over the master descriptions in COREMeshes\HelpEntry, on ChooserListBack
-// with no Next.
+// with no Next, its list a tree (+0x124).
 UIPtr AppManager::help_menu() {
 	if (!help_menu_) {
 		auto sel = std::make_shared<DescriptionSelector>("Help");
 		sel->folder = "ChooserListBack";
 		sel->next_label = "";
+		sel->hierarchy = true;
 		de::ObjectRef cast = world.data().find("Description\\Cast", "HelpEntry");
 		for (const auto &[stem, f] : world.data().files()) {
 			for (uint32_t i = 0; i < f->objects().size(); ++i) {
@@ -1913,6 +1959,9 @@ void AppManager::not_ported(const std::string &what) { notify(what, "This screen
 // DE_CTopControl3d's control under the mouse (control events 0x25 / 0x26) and
 // DE_CUIManagerActorButtonRobot::ProcessMouseEnter / Leave (Core 0x701ed540 / 0x701ed480).
 void AppManager::mouse_move(float x, float y) {
+	if (notification_drag_ && !notifications.empty()) {
+		notifications.front().moved_x += x - mouse_x_, notifications.front().moved_y += y - mouse_y_;
+	}
 	mouse_x_ = x, mouse_y_ = y;
 	if (!current || !current->activated) return;
 	UIPtr page = current;
@@ -1939,8 +1988,8 @@ AppManager::NotificationLayout AppManager::notification_layout() const {
 	const float hx = 0.75f;
 	float w = 0.737f * hx, frame = 0.0056f, title = 0.049f, icon = 0.115f;
 	l.frame = frame;
-	l.text_size = 0.03f;
-	l.line = l.text_size * 1.35f;
+	l.text_size = 0.0213f;
+	l.line = 0.0405f;
 	l.text_left = 0.5f - w / 2 + frame + icon * hx + 0.012f;
 	l.text_right = 0.5f + w / 2 - frame - 0.01f;
 	// SplitNewLine, then lines broken at the text's width.
@@ -1976,6 +2025,10 @@ AppManager::NotificationLayout AppManager::notification_layout() const {
 	float bw = 0.29f * w;
 	l.ok[0] = l.x1 - frame - 0.03f * w - bw, l.ok[2] = l.x1 - frame - 0.03f * w;
 	l.ok[1] = std::max(l.text_top + l.line * float(l.lines.size()) - l.line / 2 + 0.008f, l.title_bottom + 0.06f), l.ok[3] = l.ok[1] + ok_h;
+	const float mx = notifications.front().moved_x, my = notifications.front().moved_y;
+	for (float *r : {l.close, l.icon, l.ok}) r[0] += mx, r[1] += my, r[2] += mx, r[3] += my;
+	l.x0 += mx, l.x1 += mx, l.y0 += my, l.y1 += my, l.title_bottom += my;
+	l.text_left += mx, l.text_right += mx, l.text_top += my;
 	return l;
 }
 
@@ -1985,6 +2038,9 @@ void AppManager::mouse_button(bool down, int clicks) {
 		auto l = notification_layout();
 		auto over = [&](const float *r) { return mouse_x_ >= r[0] && mouse_x_ < r[2] && mouse_y_ >= r[1] && mouse_y_ < r[3]; };
 		bool on = over(l.ok) || over(l.close);
+		// The title bar left of the close box drags the dialog (DE_CTitleBarRobot, Core 0x700db1b0).
+		const float bar[4] = {l.x0, l.y0, l.close[0], l.title_bottom};
+		notification_drag_ = down && !on && over(bar);
 		if (down) notification_press_ = on;
 		else if (notification_press_ && on) notifications.erase(notifications.begin());
 		if (!down) notification_press_ = false;

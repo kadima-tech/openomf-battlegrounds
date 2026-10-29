@@ -140,26 +140,23 @@ void OverlayRenderer::quad(float x0, float y0, float x1, float y1, float u0, flo
 	glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::World::Primitive &t, float aspect, float dx,
+std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::World::Primitive &t, float sx, float sy, float dx,
                                                   float dy) const {
 	std::vector<float> v;
 	const de::Font &font = f.font;
 	if (font.height <= 0 || t.text.empty()) return v;
-	float scale = t.height / font.height;  // primitive units (of the height) per font unit
-	const float spacing = 0;               // DE_CFlatText3 +0x9c letter spacing (default 0): letters advance by their width
+	const float spacing = 0;  // DE_CFlatText3 +0x9c letter spacing (default 0): letters advance by their width
 	float total = 0;
 	for (unsigned char ch : t.text) {
 		auto &g = font.glyphs[ch];
 		total += (g.present ? g.x1 - g.x0 : 0.5f) + spacing;
 	}
-	// Widths are in height units: in screen space convert x by the aspect ratio.
-	float sx = scale / aspect;
 	float x = t.x - (t.centered ? total * sx * 0.5f : t.snap_right ? total * sx : 0) + dx;
 	for (unsigned char ch : t.text) {
 		auto &g = font.glyphs[ch];
 		float w = g.present ? g.x1 - g.x0 : 0.5f;
 		if (g.present && ch != ' ') {
-			float x0 = x, x1 = x + w * sx, y0 = t.y + g.y0 * scale + dy, y1 = t.y + g.y1 * scale + dy;
+			float x0 = x, x1 = x + w * sx, y0 = t.y + (g.y0 + font.base) * sy + dy, y1 = t.y + (g.y1 + font.base) * sy + dy;
 			// Image rows run top to bottom: the glyph's top gets the smaller v.
 			float q[6][4] = {{x0, y1, g.u0, g.v0}, {x1, y1, g.u1, g.v0}, {x1, y0, g.u1, g.v1},
 			                 {x0, y1, g.u0, g.v0}, {x1, y0, g.u1, g.v1}, {x0, y0, g.u0, g.v1}};
@@ -170,8 +167,8 @@ std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::W
 	return v;
 }
 
-void OverlayRenderer::text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float dx, float dy) {
-	std::vector<float> v = text_vertices(f, t, aspect_, dx, dy);
+void OverlayRenderer::text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float sx, float dx, float dy) {
+	std::vector<float> v = text_vertices(f, t, sx, t.height, dx, dy);
 	if (v.empty()) return;
 	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(float)), v.data(), GL_STREAM_DRAW);
@@ -228,12 +225,13 @@ void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
 			if (!f) break;
 			glBindTexture(GL_TEXTURE_2D, f->tex);
 			mode(f->alpha ? 0 : 1);
+			float k = t->height / std::max(1e-6f, f->font.height), lift = -f->font.base * k;
 			if (t->shadow) {
 				float shadow[4] = {0, 0, 0, t->rgba[3] * 0.5f};
-				float off = 0.06f * t->height / std::max(1e-6f, f->font.height);
-				submit(*t, text_vertices(*f, *t, 1, off, -off), shadow);
+				float off = 0.06f * k;
+				submit(*t, text_vertices(*f, *t, k, k, off, lift - off), shadow);
 			}
-			submit(*t, text_vertices(*f, *t, 1, 0, 0), t->rgba);
+			submit(*t, text_vertices(*f, *t, k, k, 0, lift), t->rgba);
 			continue;
 		}
 		GLuint tex = image(t->texture);
@@ -279,13 +277,15 @@ void OverlayRenderer::draw(const game::World &world, int width, int height) {
 			if (!f) break;
 			glBindTexture(GL_TEXTURE_2D, f->tex);
 			mode(f->alpha ? 0 : 1);
+			// CalcScreenCoordinates (0x701cdb30): font units times the size, in fractions of the screen's width
+			// across and its height up.
 			if (t->shadow) {
 				// TextSetShadowOnCaller: 0.06 font units right and down, black at half alpha.
 				float shadow[4] = {0, 0, 0, t->rgba[3] * 0.5f};
-				float off = 0.06f * t->height / std::max(1e-6f, f->font.height);
-				text(*f, *t, shadow, off / aspect_, -off);
+				float off = 0.06f * t->height;
+				text(*f, *t, shadow, t->height, off, -off);
 			}
-			text(*f, *t, t->rgba, 0, 0);
+			text(*f, *t, t->rgba, t->height, 0, 0);
 			continue;
 		}
 		GLuint tex = image(t->texture);
@@ -348,7 +348,7 @@ void OverlayRenderer::label(const std::string &str, float x, float y, float size
 	const FontGL *f = font_for(t);
 	if (!f) return;
 	begin_screen(width, height);
-	std::vector<float> v = text_vertices(*f, t, aspect_, 0, 0);
+	std::vector<float> v = text_vertices(*f, t, size / aspect_, size, 0, 0);
 	float lo = 1e9f, hi = -1e9f;
 	for (size_t i = 1; i < v.size(); i += 4) lo = std::min(lo, v[i]), hi = std::max(hi, v[i]);
 	if (!v.empty()) {
@@ -392,7 +392,7 @@ float OverlayRenderer::text_width(const std::string &str, float size, int width,
 	t.height = size;
 	const FontGL *f = font_for(t);
 	if (!f) return 0;
-	std::vector<float> v = text_vertices(*f, t, float(width) / float(std::max(1, height)), 0, 0);
+	std::vector<float> v = text_vertices(*f, t, size * float(std::max(1, height)) / float(std::max(1, width)), size, 0, 0);
 	float lo = 1e9f, hi = -1e9f;
 	for (size_t i = 0; i < v.size(); i += 4) lo = std::min(lo, v[i]), hi = std::max(hi, v[i]);
 	return v.empty() ? 0 : hi - lo;
@@ -411,7 +411,7 @@ void OverlayRenderer::label_cell(const std::string &str, float x, float y, float
 	begin_screen(width, height);
 	glBindTexture(GL_TEXTURE_2D, f->tex);
 	glUniform1i(glGetUniformLocation(prog_, "mode"), f->alpha ? 0 : 1);
-	text(*f, t, rgba, 0, 0);
+	text(*f, t, rgba, size / aspect_, 0, 0);
 	end_screen();
 }
 
@@ -421,7 +421,7 @@ std::vector<float> OverlayRenderer::char_offsets(const std::string &str, float s
 	t.height = size;
 	const FontGL *f = font_for(t);
 	if (!f || f->font.height <= 0) return std::vector<float>(str.size() + 1, 0.0f);
-	float sx = size / f->font.height / (float(width) / float(std::max(1, height)));
+	float sx = size * float(std::max(1, height)) / float(std::max(1, width));
 	for (unsigned char ch : str) {
 		auto &g = f->font.glyphs[ch];
 		o.push_back(o.back() + (g.present ? g.x1 - g.x0 : 0.5f) * sx);

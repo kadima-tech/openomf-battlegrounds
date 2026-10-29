@@ -147,6 +147,7 @@ public:
 	std::string title = "Choose";  // +0x64
 	std::string autoselect_key;     // +0x138
 	std::string next_label = "Next";  // +0x6c; empty: no Next button (Help)
+	bool hierarchy = false;            // +0x124: the list shows each description under its parent (Help)
 	std::vector<de::ObjectRef> pool;
 	de::ObjectRef chosen;           // +0x128 (ChosenDescription)
 	// DE_CChooseFighterUIManager (OMF 0x35056420..0x350574b0): the highlighted fighter's models
@@ -185,7 +186,8 @@ public:
 
 	World &world;
 	std::string transfer_agent = "OMFBGGUI";
-	// The launcher's InitGUI choices (not readable; FINDINGS 125 inference).
+	// The launcher's InitGUI (2004 build 0x408b20): SetMainFrame, SetTransitionActor, SetBackdropActor,
+	// SetStandardSessionOverlayActor.
 	GameObject *main_frame = nullptr, *transition = nullptr, *backdrop = nullptr, *session_overlay = nullptr;
 
 	UIPtr current, next, last;
@@ -241,6 +243,7 @@ public:
 	void notify(const std::string &title, const std::string &text);
 	struct Notification {
 		std::string title, text;
+		float moved_x = 0, moved_y = 0;  // dragged by the title bar, screen fractions
 	};
 	std::vector<Notification> notifications;
 	// DE_CDialog3d::UserInformation's dialog for the front notification, in screen fractions (y
@@ -328,7 +331,7 @@ public:
 	float mouse_y() const { return mouse_y_; }
 
 private:
-	bool notification_press_ = false;
+	bool notification_press_ = false, notification_drag_ = false;
 	bool first_ui_ = true;
 	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_;
 };

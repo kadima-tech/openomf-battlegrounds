@@ -311,9 +311,13 @@ public:
 		std::vector<std::string> cells;
 		bool selectable = true;
 		Rgba color = theme::kText;
+		int parent = -1;  // tree: the row it is listed under
 	};
 	std::vector<Column> columns;
 	std::vector<Row> rows;
+	// The entry manager's hierarchy (+0x88, the list's +0x234): rows under their parents,
+	// collapsed at first, each level in row order.
+	bool tree = false;
 	std::string title;
 	float entry_h = 20;  // SetMinEntrySize, pixels
 	float text_px;       // SizeListControlEntryText
@@ -333,8 +337,13 @@ private:
 	float title_h() const { return title.empty() ? 0 : entry_h; }
 	float header_h() const { return columns.size() > 1 ? entry_h : 0; }
 	int row_at(float y) const;
+	void rebuild();
+	float indent(int row) const { return float(depth_[size_t(row)] + 1) * 20; }
 	Canvas *body_;
 	int down_row_ = -1;
+	std::vector<int> shown_, depth_;  // the rows in display order; each row's depth
+	std::vector<char> expanded_, has_kids_;
+	std::vector<int> pos_;  // each row's display position, -1 hidden
 };
 
 // DE_CComboBoxControl3d (0x700dddb0..): the selected entry in a down frame, the ArrowDown button
@@ -410,6 +419,7 @@ public:
 	Ctl *body;
 	std::function<void()> on_close;  // the close box, Esc
 	std::function<bool(int)> on_key;
+	float moved_x = 0, moved_y = 0;  // dragged by the title bar, pixels
 	void close();
 	bool key(int sym) override;
 };

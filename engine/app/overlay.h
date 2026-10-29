@@ -24,7 +24,8 @@ public:
 	// its units), depth-tested unless the primitive is an overlay.
 	void draw_world(const game::World &world, const float *vp);
 	// The front end's controls (game/ui.h), in screen fractions with y down: a filled rectangle,
-	// and a flat-text label (Font_Ariel) of `size` screen heights centred on (x, y).
+	// and a flat-text label (Font_Ariel) of text size `size` screen heights (one font unit, as
+	// DE_CFlatText3 sizes text) whose letters are centred on (x, y).
 	void rect(float x0, float y0, float x1, float y1, const float *rgba, int width, int height);
 	// centred on x, or starting there.
 	void label(const std::string &text, float x, float y, float size, const float *rgba, int width, int height, bool centered = true);
@@ -33,7 +34,8 @@ public:
 	void texture_rect(GLuint tex, float x0, float y0, float x1, float y1, int width, int height);
 	// The width of a label, in screen widths.
 	float text_width(const std::string &text, float size, int width, int height);
-	// A label whose glyph cell (`size` screen heights) has its top at y, starting at x or centred on it.
+	// A label of text size `size` screen heights whose font origin is at the bottom of a box `size`
+	// high with its top at y (DE_CTextSizeRobot places that box), starting at x or centred on it.
 	void label_cell(const std::string &text, float x, float y, float size, const float *rgba, int width, int height, bool centered = false);
 	// Where each letter starts and the last ends (DE_CFlatText3::CalculateCharOffsets), in screen widths.
 	std::vector<float> char_offsets(const std::string &text, float size, int width, int height);
@@ -47,9 +49,10 @@ private:
 		GLuint tex = 0;
 		bool alpha = false;  // the image has an alpha channel (else luminance is used)
 	};
-	void text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float dx, float dy);
-	// The text's glyph quads (x, y, u, v per vertex), x widths divided by `aspect`.
-	std::vector<float> text_vertices(const FontGL &f, const game::World::Primitive &t, float aspect, float dx, float dy) const;
+	void text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float sx, float dx, float dy);
+	// The text's glyph quads (x, y, u, v per vertex): each letter at its font coordinates, `sx`
+	// across and `sy` up per font unit, from the font origin at (t.x, t.y).
+	std::vector<float> text_vertices(const FontGL &f, const game::World::Primitive &t, float sx, float sy, float dx, float dy) const;
 	const FontGL *font_for(const game::World::Primitive &t) const;
 	void begin_screen(int width, int height);
 	void end_screen();
