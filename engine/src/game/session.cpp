@@ -1553,7 +1553,8 @@ void register_session_natives(World &w) {
 		if (SessionState *s = session_of(c.world, caller_scene(c))) s->watchers_active = true;
 	});
 	// IsPausedCaller (Core 0x7006de90): the scene's +0xf0, set by ObjInitContents and Pause, cleared by
-	// Genesis and Continue. A session's scene starts when a modifier owns the environment.
+	// Genesis and Continue. A session's scene starts when a modifier owns the environment; counting a
+	// page's autopause is a stand-in that lets Practice's rules display close (FINDINGS 201).
 	reg("CScene::bool IsPaused()", [caller_scene](const NativeContext &c) {
 		if (World::gui_scene_view(c.self()) >= 0) {
 			c.ret_bool(false);

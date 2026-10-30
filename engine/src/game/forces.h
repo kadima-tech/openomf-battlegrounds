@@ -51,12 +51,12 @@ std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &targe
 // branch's fighter), in the scene's affector order (DE_CAffector::IsTouching 0x7007b900 does not
 // sort; scripts ask for SortByTouchDistance when they want the nearest first).
 std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups);
-// The nearest mesh or box surface in `groups` the segment a-b meets.
+// The nearest mesh or flat box surface in `groups` the segment a-b meets.
 std::optional<Contact> segment(World &w, const std::array<float, 3> &a, const std::array<float, 3> &b, uint32_t groups);
 // DE_CScene::TestLineSegment (Core 0x700731b0): the scene's ray cone (penumbra 0, far end the
 // length) against every active affector in `groups`, in scene order: each mesh face it crosses
 // from behind, in face order, facing the start (only the first with `one_per_mesh`,
-// NoRepeatOwners); one collision for any other shape.
+// NoRepeatOwners); one collision for a sphere or a flat box (only its touch point).
 std::vector<Contact> segment_hits(World &w, const std::array<float, 3> &a, const std::array<float, 3> &b, uint32_t groups, bool one_per_mesh = false);
 // Strength of a sphere / cone / box affector at a point (DE_CAffector vtable +0x164): the falloff
 // profile times its "Intensity" value (1 unless set).
