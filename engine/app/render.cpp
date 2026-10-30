@@ -594,6 +594,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		bt.late = late;
 		bt.lighting = lighting;
 		bt.two_sided = (mesh.flags & 0x4000) != 0;
+		bt.placement = mesh.placement_times;
 		for (auto *l : pass) {
 			if (l->environment && l->cube) {
 				bt.cube = cube_texture(l->cube);
@@ -808,7 +809,7 @@ void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase,
 				                   g_item_live = &live;
 				                   draw_batch_list(prog, {pb}, -1, where ? &*where : nullptr, owner);
 				                   g_item_live = nullptr;
-			                   }});
+			                   }, pb->placement, std::max(1, pb->stages)});
 			continue;
 		}
 		list.push_back(&b);

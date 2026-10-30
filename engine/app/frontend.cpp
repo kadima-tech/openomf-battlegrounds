@@ -177,6 +177,7 @@ int main(int argc, char **argv) {
 			world.system_clock = [t0] { return uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()); };
 		}
 		game::ui::AppManager app(world);
+		game::ui::system_time = [&world] { return world.system_ms(); };
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);
 		// OPENBG_SET="name=value;..." sets registry values for this run (testing).
@@ -243,6 +244,7 @@ int main(int argc, char **argv) {
 			sel->title = u.description;
 			sel->autoselect_key = u.autoselect;
 			sel->choose_fighter = u.choose_fighter;
+			sel->script = ui;
 			for (auto &g : u.pool) {
 				if (de::ObjectRef d = world.data().by_guid(g)) sel->pool.push_back(d);
 			}
@@ -269,7 +271,7 @@ int main(int argc, char **argv) {
 		std::map<game::GameObject *, game::ui::UIPtr> rules_pages;
 		world.show_rules = [&](game::GameObject *rules) {
 			auto &page = rules_pages[rules];
-			if (!page) page = app.rules_display(rules);
+			if (!page || page->deleted) page = app.rules_display(rules);
 			if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] rules display %x shown\n", world.frame(), rules->handle);
 			app.set_next(page, true);
 		};
@@ -510,7 +512,10 @@ int main(int argc, char **argv) {
 			app.update();
 			rules_displayed();
 			world.tick_gui(0, frame_ms);
-			if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, frame_ms);
+			if (auto *picker = dynamic_cast<game::ui::ModelPicker *>(app.current.get())) {
+				world.tick_gui(1, picker->scene_paused ? 0 : frame_ms);
+				picker->scene_paused = false;
+			}
 			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
 			++fr;
 			static const int state_every = getenv("OPENBG_DEBUG_STATE") ? std::max(1, atoi(getenv("OPENBG_DEBUG_STATE"))) : 0;

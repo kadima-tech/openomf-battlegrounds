@@ -106,6 +106,10 @@ static float noise_volume(float dist, float hotspot, float falloff, float global
 }
 
 void Mixer::update(Voice &v, const de::Transform &listener, float ms) {
+	if (v.on_camera) {
+		auto o = listener.rotate({0, 0, -10000});
+		v.at = {listener.t[0] + o[0], listener.t[1] + o[1], listener.t[2] + o[2]};
+	}
 	std::array<float, 3> d{v.at[0] - listener.t[0], v.at[1] - listener.t[1], v.at[2] - listener.t[2]};
 	float dist = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
 	// Far speakers update less often: the falloff over the distance, times the rate
@@ -181,7 +185,9 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 			v.hotspot = r.hotspot;
 			v.falloff = r.falloff;
 		} else {
-			// DE_CScene::PlayNoiseAmbient: a sphere at the origin with a 1e7 hotspot and falloff.
+			// DE_CScene::PlayNoiseAmbient (Core 0x20076b10): a 1e7 sphere at (0, 0, -10000) under
+			// the renderer's camera, so it follows the listener and stays centred.
+			v.on_camera = true;
 			v.hotspot = v.falloff = 1e7f;
 		}
 		// DE_CDirectXSpeakerElement::Play: a speaker at or beyond its falloff is not started,
@@ -189,8 +195,9 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 		std::array<float, 3> d{v.at[0] - listener.t[0], v.at[1] - listener.t[1], v.at[2] - listener.t[2]};
 		if (std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) >= v.falloff || sfx_volume_ * v.volume == 0) continue;
 		v.rate = std::min(1.0f, float(s->length_ms) / 7000.0f + 0.1f);
-		// NewNoisePlayerSphere: frequency x noise frequency x (1 + CenterRand(variance)).
-		float freq = r.frequency * s->frequency * (1 + (game::random01(world) * 2 - 1) * s->frequency_variance);
+		// DE_CSpeaker::SetActiveNoise (Core 0x202226a0): (1 + CenterRand(variance)) x speaker
+		// frequency x noise frequency, at most 1.5.
+		float freq = std::min(1.5f, r.frequency * s->frequency * (1 + (game::random01(world) * 2 - 1) * s->frequency_variance));
 		if (!audible) continue;
 		v.step = double(s->rate) * double(std::max(0.05f, freq)) / double(rate_);
 		v.left = v.right = 0;

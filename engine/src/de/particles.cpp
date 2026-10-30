@@ -329,6 +329,9 @@ ParticleRendererDef read_particle_renderer(const World &w, const ObjectRef &r) {
 	try {
 		Contents c(d.contents);
 		Chunk mesh = begin_chunk(c);
+		c.block();
+		if (mesh.version >= 3) c.u32();
+		if (mesh.version >= 4) p.placement_times = std::clamp(c.i32(), -127, 128);
 		c.seek(mesh.end);
 		Chunk pr = begin_chunk(c);
 		if (pr.version == 2) p.blend = c.i32();

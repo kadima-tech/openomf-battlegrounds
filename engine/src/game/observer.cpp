@@ -133,7 +133,7 @@ struct ObserveCommand : Command {
 	int placement = 1;                 // +0xb4: 0 orbit, 1 vantage point, 2 follow watched[0]
 	float threshold = 0.5f;            // +0xcc
 	float interest = 0;                // +0xd0
-	float orbit_angle = 0, orbit_radius = 70, orbit_height = 17.5f, orbit_speed = 0;  // +0xe0..+0xec
+	float orbit_angle = 0, orbit_radius = 70, orbit_height = 13, orbit_speed = 0;  // +0xe0..+0xec
 	float watch_diagonal = 0;          // +0xf0
 	float last_major = 0;              // +0xf4
 	float extent = 0;                  // +0xf8
@@ -142,9 +142,7 @@ struct ObserveCommand : Command {
 	Box box;                           // +0x104
 	float evaluate_timer = 0;          // +0x11c
 	float major_timer = 0;             // +0x120
-	// +0x124 is never initialised in the original (operator new, not zeroed); 0 is what a block
-	// from fresh zeroed pages holds, and keeps step 9 to occluded views and the quotes path.
-	float best_quality = 0;
+	float best_quality = 0;            // +0x124 (ObjInitContents zeroes it from 2.123)
 	int sample = 0;                    // +0x128
 	float quality = 0;                 // +0x12c
 	float fov = 60, fov_rate = 0, framing = 1;  // +0x130, +0x134, +0x138
@@ -170,11 +168,15 @@ struct ObserveCommand : Command {
 	float interest_of(GameObject *o) const { return w->global_interest_of(o); }
 	bool blocked(const Vec &a, const Vec &b) const { return w->segment_blocked(a, b); }
 
-	// PositionWatchQuality (0x150223f0): lower is better, 1 at best.
+	// PositionWatchQuality (2.123 Creature 0x10222510): lower is better, 1 at best; steep views
+	// cost more.
 	float watch_quality(const Vec &p) const {
-		float d = len(sub(p, box.center()));
+		Vec v = sub(p, box.center());
+		float d = len(v);
 		float ideal = len(box.size()) * 0.9f + 40;
-		float q = d > ideal ? (d - ideal) / ideal + 1 : 2 * (ideal - d) / ideal + 1;
+		float q = d > ideal ? (d - ideal) / ideal + 1 : 3 * (ideal - d) / ideal + 1;
+		float ny = v[1] / d;
+		q += std::fabs(ny * ny * 1.2f);
 		for (GameObject *c : watched) {
 			Vec cp = add(pos(c), {0, 15, 0});
 			if (blocked(p, cp)) q *= 2;
@@ -222,7 +224,14 @@ struct ObserveCommand : Command {
 		major_timer = -3000;
 	}
 
-	// MajorMove (0x15022780).
+	// DesiredViewAngle (2.123 Creature 0x10224d50).
+	float desired_view_angle() const {
+		Vec v = sub(pos(creature), box.center());
+		float d = len(v);
+		return std::atan(len(box.size()) / d) * 57.29578f * (std::fabs(v[1] / d) * 0.2f + framing * 0.92f);
+	}
+
+	// MajorMove (2.123 Creature 0x10222900).
 	void major_move(ObserverSystem::Manager &m) {
 		evaluate();
 		if (gather) {
@@ -247,6 +256,7 @@ struct ObserveCommand : Command {
 			float q = watch_quality(pos(d));
 			if (q < best) best = q, vantage = d;
 		}
+		best_quality = 2;
 		if (vantage) {
 			Vec v = sub(pos(vantage), box.center());
 			orbit_angle = std::atan2(v[0], v[2]);
@@ -273,7 +283,7 @@ struct ObserveCommand : Command {
 		}
 		fov_rate = (g_rand.f(1.5f) + 1) * 0.0006f;
 		framing = g_rand.f(0.15f) + 1;
-		fov = std::atan(len(box.size()) / orbit_radius) * 57.29578f * framing * 1.2f;
+		fov = desired_view_angle();
 		framing *= 1.1f;
 		if (placement == 2) {
 			framing = 0.7f, fov_rate = 0, fov = 60;
@@ -291,7 +301,7 @@ struct ObserveCommand : Command {
 		}
 	}
 
-	// Update (0x15023400).
+	// Update (2.123 Creature 0x10223610).
 	void update(ObserverSystem::Manager &m, float delta) {
 		if (!live(creature)) return;
 		auto prune = [&](std::vector<GameObject *> &v) { v.erase(std::remove_if(v.begin(), v.end(), [&](GameObject *o) { return !live(o); }), v.end()); };
@@ -306,7 +316,7 @@ struct ObserveCommand : Command {
 		}
 		if (!move) {
 			auto c = std::make_unique<Command>();
-			c->type = 2, c->required = 20, c->is_sub = true;
+			c->type = 2, c->required = 12, c->is_sub = true;
 			move = c.get();
 			m.receive(std::move(c));
 		}
@@ -318,8 +328,7 @@ struct ObserveCommand : Command {
 		}
 		if (!creature->user_controlled) autopilot(m, delta, h);
 		if (GameObject *l = find_lens()) {
-			float want = std::atan(len(box.size()) / orbit_radius) * 57.29578f * framing * 1.2f;
-			fov += (want - fov) * fov_rate * delta;
+			fov += (desired_view_angle() - fov) * fov_rate * delta;
 			l->camera_fov = creature->user_controlled ? 60 : fov;
 		}
 	}
@@ -340,13 +349,14 @@ struct ObserveCommand : Command {
 		}
 		Vec me = pos(creature);
 		quality = watch_quality(me);
-		major_timer -= delta;
+		major_timer = major_timer - quality / best_quality * delta * 0.5f - delta * 0.5f;
 		box.reset();
 		for (GameObject *c : watched) {
 			Vec p = add(pos(c), {0, h, 0});
 			box.grow(p);
 			if (blocked(me, p)) major_timer -= 5 * delta;
 			if (blocked(p, me)) major_timer -= 5 * delta;
+			if (interest_of(c) < threshold) evaluate_timer = -10000;
 		}
 		if (watched.empty()) {
 			placement = 1;
@@ -374,10 +384,11 @@ struct ObserveCommand : Command {
 		float r = std::clamp((len(sub(t, me)) + diag) * 0.05f, 5.0f, 200.0f);
 		t[1] += r;
 		// Lower quality is better, yet it moves when the current one beats the best sampled.
-		if (major_timer < 0 && std::fabs(now - last_major) > 2000 && (1 + 0.5f * (major_timer / 15000)) * quality < best_quality) {
+		if (major_timer < 0 && std::fabs(now - last_major) > 2000 && (major_timer / 15000 * 0.5f + 1.1f) * quality < best_quality) {
 			major_move(m);
 			snap = reissue = true;
 		}
+		if (major_timer < 0) major_timer = -1;
 		float s = 0;
 		for (GameObject *c : watched) s += interest_of(c);
 		for (GameObject *c : ignored) s += interest_of(c);
@@ -444,18 +455,16 @@ void set_float(World &w, GameObject &o, const char *name, float v) {
 	w.values[&o][name].bits = bits;
 }
 
-// DE_CDigitalOrientationPropulsionExecutor::Tick (0x15029500): the local offset to the
-// destination, less what the momentum will still carry (0.5 / 0.0004 x the local momentum) and
-// 0.9 x the required distance, as the PropelOffsetX/Y/Z values; the 8-way pad orientation.
+// DE_CDigitalOrientationPropulsionExecutor::Tick (2.123 Creature 0x102298e0): the local offset
+// to the destination, shortened by 0.9 x the required distance, as the PropelOffsetX/Y/Z values;
+// the 8-way pad orientation from it less what the momentum will still carry (0.5 / 0.0004 x the
+// local momentum).
 void propulsion(World &w, GameObject &creature, GameObject &ctrl, const Command &cmd) {
 	if (cmd.type != 2) return;
 	float eps = 0.9f * cmd.required;
 	de::Transform cw = creature.world();
 	Vec p = cw.inverse_rotate(sub(cmd.point, cw.t));
 	Vec a = mul(cw.inverse_rotate(creature_momentum(w, creature)), 0.5f / 0.0004f);
-	for (size_t k = 0; k < 3; ++k) {
-		if (std::fabs(p[k] - a[k]) < eps) p[k] = 0;
-	}
 	float l = len(p);
 	p = l <= eps ? Vec{0, 0, 0} : mul(p, (l - eps) / l);
 	set_float(w, creature, "PropelOffsetX", p[0]);

@@ -11,6 +11,8 @@
 
 namespace game::ui {
 
+std::function<uint32_t()> system_time;
+
 namespace {
 
 constexpr int kKeyReturn = 13, kKeyEscape = 27, kKeyBackspace = 8, kKeyDelete = 127;
@@ -903,7 +905,7 @@ void Edit::focus(bool on) {
 	if (on == focused_) return;
 	focused_ = on;
 	if (on) {
-		since_ = std::chrono::steady_clock::now();
+		since_ = system_time ? system_time() : 0;
 		anchor_ = 0, caret_ = str.size();
 		keep_selection_ = true;
 	} else {
@@ -929,7 +931,7 @@ void Edit::mouse_down(float x, float, int) {
 		return;
 	}
 	caret_ = anchor_ = at(x);
-	since_ = std::chrono::steady_clock::now();
+	since_ = system_time ? system_time() : 0;
 }
 
 void Edit::mouse_drag(float x, float) {
@@ -942,7 +944,7 @@ void Edit::insert(const std::string &t) {
 	if (max_len >= 0 && int(s.size()) > max_len) return;
 	str = s;
 	caret_ = anchor_ = a + t.size();
-	since_ = std::chrono::steady_clock::now();
+	since_ = system_time ? system_time() : 0;
 }
 
 // DE_CEditTextFilter (0x700b5420).
@@ -952,7 +954,7 @@ bool Edit::key(int sym) {
 	auto move = [&](size_t to) {
 		caret_ = to;
 		if (!shift) anchor_ = caret_;
-		since_ = std::chrono::steady_clock::now();
+		since_ = system_time ? system_time() : 0;
 	};
 	if (sym == kKeyLeft) move(caret_ > 0 ? caret_ - 1 : 0);
 	else if (sym == kKeyRight) move(std::min(str.size(), caret_ + 1));
@@ -1000,7 +1002,7 @@ void Edit::paint_self(Painter &p) {
 	}
 	p.text(str, tx0 - scroll_, top, px, theme::kText);
 	if (focused_) {
-		auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since_).count();
+		uint32_t ms = (system_time ? system_time() : 0) - since_;
 		if ((ms / 550) % 2 == 0) {
 			float cw = 0.05f * w();
 			p.rect(tx0 - scroll_ + cx, top, tx0 - scroll_ + cx + cw, top + px, {1, 1, 0, 0.8f});
@@ -1326,8 +1328,9 @@ void Gui::user_information(const std::string &title, const std::string &text, co
 		auto *t = panel->add<Text>(lines[i], f, theme::kText, 4);
 		t->from_top = 10 + row * float(i), t->len_y = row, t->from_left = icon_w;
 	}
+	// The strip's length is VPU of the icon column's already converted VPU 60 (2.123 Core 0x200f8b57).
 	Ctl *strip = panel->add<Ctl>();
-	strip->from_bottom = 0, strip->len_y = vy(100);
+	strip->from_bottom = 0, strip->len_y = vy(vy(60));
 	auto *box = strip->add<ButtonOverlay>();
 	box->len_y = vy(38), box->from_right = vx(10), box->len_x = vx(120), box->align = 2;
 	auto *ok = box->add<Button>("OK", Button::Plain, vy(15));

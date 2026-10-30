@@ -5,7 +5,6 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -23,6 +22,9 @@ class Gui;
 struct Rgba {
 	float r = 1, g = 1, b = 1, a = 1;
 };
+
+// SystemTime (Core gTime, World::system_ms) for the controls' timers; the app sets it.
+extern std::function<uint32_t()> system_time;
 
 // The launcher's colours (2004 exe 0x4010e0..0x4011c0) over the Windows Classic system colours.
 namespace theme {
@@ -412,7 +414,7 @@ private:
 	size_t caret_ = 0, anchor_ = 0;
 	float scroll_ = 0;
 	bool focused_ = false, keep_selection_ = false;
-	std::chrono::steady_clock::time_point since_;
+	uint32_t since_ = 0;
 };
 
 // DE_CDialog3d (0x700f0d80..): a modal frame with a title bar and its close box.

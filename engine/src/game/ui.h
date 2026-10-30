@@ -73,6 +73,8 @@ public:
 	bool auto_select = false;      // +0x94
 	bool backed_out = false;       // +0x60
 	bool persistent = false;       // the factory's persistent instance: never deleted
+	bool deleted = false;          // DeleteThisLater'd: never shown again
+	GameObject *script = nullptr;  // the DE_CUIManager object the scripts hold, if any
 
 	std::vector<Control> controls;
 	// The page's 3D controls (built by setup_controls, gone when it deactivates).
@@ -133,6 +135,9 @@ public:
 	// The robot (+0x94): a copy of LoadScene\FighterTemplate under RobotPedistal holding the last
 	// selected pilot and a CreatureModel with the model description's FighterModel.
 	GameObject *robot = nullptr;
+	// UpdateModel pauses the picker's scene (DE_CScene::Pause, +0x104) and the robot's next idle
+	// event continues it (2.123 OMF 0x10756780 / 0x10756760): that frame passes no scene time.
+	bool scene_paused = false;
 	static const GameObject *robot_model(const GameObject *robot);
 	static const GameObject *robot_pilot(const GameObject *robot);
 
@@ -200,7 +205,8 @@ public:
 
 	UIPtr current, next, last;
 	std::vector<UIPtr> stack;
-	int transition_state = 0;  // +0x74
+	int transition_state = 1;  // +0x74, 1 from ObjInitContents (FINDINGS 225)
+	bool first_transition = true;  // m_FirstTransition (Core 0x20356188)
 	bool page_finished = false;  // +0x78
 	bool auto_select_mode = false;  // +0x7c
 	bool quit_requested = false;  // g_QuiteOnNextUpdate
@@ -240,6 +246,10 @@ public:
 	static bool is_active(const GameObject *actor);
 
 	void set_next(const UIPtr &mgr, bool push);
+	// NextUIManager (Core 0x201a1570) and GetUIManager as the scripts see them (the 2.101 natives
+	// NextUIManager(), CurrentUIManager()): the queued / current page's script object.
+	GameObject *next_ui_object() const { return next ? next->script : nullptr; }
+	GameObject *current_ui_object() const { return current ? current->script : nullptr; }
 	void set_last();
 	void delete_stack(bool close_current);
 	void close_stack();

@@ -45,11 +45,12 @@ private:
 	               std::map<std::pair<GLuint, bool>, Batch> &batches);
 	void trail(const game::World &world, const game::Trail &t, const float *view, std::map<std::pair<GLuint, bool>, Batch> &batches);
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> images_;
-	// The transparent layer's order (DE_CClipVolume::DrawLayer, layer 8): each element's static key
-	// (master object index x 1000 + its root's shader counter + the shader index for particle
-	// renderers, the shader index otherwise) plus its actor's view-space z at its last draw,
-	// sorted highest first only when an element joins.
+	// The transparent layers' order (DE_CClipVolume::DrawLayer, layers 6 then 8): each element's
+	// static key (1000 x the placement times per stage + master object index x 1000 + its root's
+	// shader counter + the shader index for particle renderers, the shader index otherwise) plus
+	// its actor's view-space z at its last draw, sorted highest first only when an element joins.
 	struct Element {
+		int layer = 8;
 		float key = 0, z = 0;
 		const game::GameObject *actor = nullptr;
 		uint32_t seen = 0;

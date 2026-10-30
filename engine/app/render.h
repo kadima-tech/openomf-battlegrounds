@@ -35,6 +35,8 @@ struct DeferredDraw {
 	const void *id;
 	std::array<float, 3> origin;
 	std::function<void()> draw;
+	int placement = 0;  // positive: layer 6, drawn before layer 8
+	int stages = 1;
 };
 void set_transparent_sink(std::vector<DeferredDraw> *sink);
 
@@ -63,6 +65,7 @@ struct MeshBatch {
 	bool stand_in_light = false;      // faces in no material: an untextured stand-in, shaded by a fixed light
 	bool overlay = false;             // drawn over the material's earlier passes (no depth writes)
 	bool late = false;                // the material starts with a blended pass: drawn after the opaque ones
+	int placement = 0;                // the mesh's placement times (DE_CMesh +0x44)
 	// The mesh's lighting (DE_CMesh +0x40, DE_CRendererDirect3D::CreateNewMesh): 0 unlit, 1 D3D
 	// vertex lighting, 2 lit by light projector passes.
 	int lighting = 0;
