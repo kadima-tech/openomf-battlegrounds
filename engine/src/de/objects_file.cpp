@@ -1,5 +1,8 @@
 #include "de/objects_file.h"
 
+#include <cstring>
+#include <random>
+
 namespace de {
 
 namespace {
@@ -178,6 +181,80 @@ std::optional<ObjectsFile::EXPayload> ObjectsFile::ex_payload(const ObjectData &
 		}
 	}
 	return std::nullopt;
+}
+
+namespace {
+
+// DE_CTransferObjectInfo::GenerateHeader (Core 0x70055690, v4), then the WinFile extension
+// (0x7004fd20): the contents' file offset.
+void info_header(ContentsWriter &c, const std::string &name, const std::string &class_path, const Guid &guid,
+                 uint32_t flags, uint32_t offset) {
+	size_t at = c.begin_chunk(4);
+	c.string(name);
+	c.string(class_path);
+	c.guid(guid);
+	c.boolean(false);
+	c.i32(0);
+	c.u32(flags);
+	c.end_chunk(at);
+	c.u8(4);
+	c.u32(offset);
+}
+
+}  // namespace
+
+Guid new_guid() {
+	static std::mt19937_64 rng{std::random_device{}()};
+	Guid g;
+	for (int i = 0; i < 16; i += 8) {
+		uint64_t v = rng();
+		memcpy(g.bytes + i, &v, 8);
+	}
+	return g;
+}
+
+std::vector<uint8_t> write_objects_file(const std::string &agent_name, const Guid &agent_guid,
+                                        const std::vector<NewObject> &objects) {
+	// DE_CTransferAgent::GenerateHeader (0x70055990): v9, the agent's own info, its contents
+	// (ObjGenerateContents 0x700544e0: v1 block, GUID, GUID pool, BOOL +0x108 = 1), the infos.
+	auto header = [&](const std::vector<uint32_t> &offsets) {
+		ContentsWriter c;
+		size_t at = c.begin_chunk(9);
+		info_header(c, agent_name, "TransferAgent\\Win\\File", agent_guid, 0, 0);
+		size_t own = c.begin_chunk(1);
+		c.u32(0);
+		c.guid(Guid{});
+		c.guid_pool({});
+		c.boolean(true);
+		c.end_chunk(own);
+		c.i32(int32_t(objects.size()));
+		for (size_t i = 0; i < objects.size(); ++i) {
+			const NewObject &o = objects[i];
+			info_header(c, o.name, o.class_path, o.guid, o.flags, offsets[i]);
+		}
+		c.end_chunk(at);
+		return c.take();
+	};
+	ContentsWriter f;
+	f.string(kSignature2);
+	f.u8(2);
+	f.u32(0);  // the agent's extended data header: no entries
+	std::vector<uint32_t> offsets(objects.size(), 0);
+	// The offsets are fixed-width, so the header's size does not depend on them.
+	uint32_t pos = uint32_t(f.size() + 4 + header(offsets).size());
+	for (size_t i = 0; i < objects.size(); ++i) {
+		offsets[i] = pos;
+		const NewObject &o = objects[i];
+		pos += uint32_t(12 + o.contents.size() + o.references.size() + o.hierarchy.size() + 4);
+	}
+	f.block(header(offsets));
+	for (const NewObject &o : objects) {
+		f.block(o.contents);
+		f.block(o.references);
+		f.block(o.hierarchy);
+		f.u32(0);
+	}
+	return f.take();
 }
 
 }  // namespace de

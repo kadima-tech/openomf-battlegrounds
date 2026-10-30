@@ -535,6 +535,9 @@ int main(int argc, char **argv) {
 					p = c + 1;
 				}
 			}
+			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
+			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
+			if (fr == quit_session) game::destroy_all_sessions(world);
 			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
 			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
 			if (fr == test_snapshot) {

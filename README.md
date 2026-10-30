@@ -84,7 +84,7 @@ Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space
   dmusic, vendored in `engine/third_party/dmusic`, MIT, through a port of Microsoft's software synthesizer).
   The game's own HUD and messages are drawn (fonts from Core.ModuleDLL) and also printed in the
   terminal, and the view is the game's fight camera (`--free-camera` for a mouse-orbit camera); `OPENBG_DEBUG_SESSION=1` lists the session's modifiers,
-  `OPENBG_DEBUG_EVENTS=1` traces event handle checks. In `openbg` screenshot runs, `OPENBG_AUTOPLAY=<frame>` hands the player's fighter to the AI from that frame (the scripts still see it as the user's) and `OPENBG_KO=<frame>,...` drains every computer fighter's health then. Attacks land:
+  `OPENBG_DEBUG_EVENTS=1` traces event handle checks. In `openbg` screenshot runs, `OPENBG_AUTOPLAY=<frame>` hands the player's fighter to the AI from that frame (the scripts still see it as the user's) and `OPENBG_KO=<frame>,...` drains every computer fighter's health then. `OPENBG_QUIT_SESSION=<frame>` leaves the session then as the in-game menu's Main Menu does (closing a recording), `OPENBG_DEBUG_REPLAY=1` traces a recording's or replay's state managers and fighter positions, and `OPENBG_DEBUG_REWIND=<frame>:<ms>` sets a replay's clock back then. Attacks land:
   hits run each robot's own damage, reaction and knockback scripts, and standing still (or walking
   back) blocks attacks from the front. `OPENBG_DEBUG_HITS=1` logs hits and knockback,
   `OPENBG_DEBUG_DANGER=1` the danger each robot perceives. Robots stand, walk and land on the arena's

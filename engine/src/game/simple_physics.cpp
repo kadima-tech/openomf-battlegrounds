@@ -66,7 +66,8 @@ SimplePhysics &SimplePhysicsSystem::state(GameObject &p) {
 			s.multiplier_on_bounce = c.f32();
 			s.variation_on_bounce = c.f32();
 			s.groups = c.u32();
-			c.squeezed(), c.squeezed();
+			s.pack_momentum = c.squeezed() == 1;
+			c.squeezed();
 			s.push_from_surfaces = c.boolean();
 		}
 		// References (DE_CSimplePhysics::ObjProcessReferences, Core 0x701db8b0): [object][physics]

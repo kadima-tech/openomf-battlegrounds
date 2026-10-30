@@ -364,14 +364,16 @@ void register_core_natives(World &w) {
 	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CActor::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CCreature::bool IsLocallyControlled()", [](const NativeContext &c) { c.ret_bool(true); });
+	// +0x1f8: SetupCreatureControl leaves it clear in a replay (Session 0x4501a9b0).
+	reg("CCreature::bool IsLocallyControlled()", [](const NativeContext &c) { c.ret_bool(!replaying(c.world)); });
 	// IsLowAuthoritySimulationCaller (Creature): false on the server.
 	// InvalidateOrientationCaller: marks cached world orientations stale; ours are computed on use.
 	reg("CCreature::InvalidateOrientation()", [](const NativeContext &) {});
 	reg("CCreature::bool IsLowAuthoritySimulation()", [](const NativeContext &c) { c.ret_bool(false); });
-	// SetInstanceNumberCaller appends the number to the creature's ID suffix (+0x1ec), which only
-	// DE_CCreature::BuildID (replication) reads.
-	reg("CCreature::SetInstanceNumber(int)", [](const NativeContext &) {});
+	// SetInstanceNumberCaller appends the number to the creature's ID suffix (+0x1ec).
+	reg("CCreature::SetInstanceNumber(int)", [](const NativeContext &c) {
+		if (auto *o = c.self()) set_instance_number(*o, c.arg<int32_t>(0));
+	});
 	reg("CCreature::bool IsUserControlled()", [](const NativeContext &c) {
 		auto *o = c.self();
 		c.ret_bool(o && (o->user_controlled || o->autoplayed));
@@ -1034,7 +1036,8 @@ void register_core_natives(World &w) {
 	                      "CCreature::RegisterLowSignificanceState()", "CCreature::RegisterMediumSignificanceState()",
 	                      "CCreature::RegisterGuaranteedSignificanceState()", "COMF2Fighter::RegisterGetHitState()",
 	                      "COMF2Fighter::RegisterStandardAttack()", "COMF2Fighter::RegisterRecoveryState()"}) {
-		reg(k, [](const NativeContext &c) { register_state(c.world, c.self()); });
+		bool got_hit = !strcmp(k, "COMF2Fighter::RegisterGetHitState()");
+		reg(k, [got_hit](const NativeContext &c) { register_state(c.world, c.self(), got_hit); });
 	}
 	for (const char *k : {"CCreature::RegisterLastStateNoReplicate()", "CCreature::RegisterLastStateAsRequiredCorrection()",
 	                      "CCreature::RegisterLastStateNoInterrupt()", "CCreature::RegisterLastStateAsCorrection()",

@@ -96,6 +96,50 @@ Guid Contents::guid() {
 	return g;
 }
 
+void ContentsWriter::u16(uint16_t v) {
+	uint8_t b[2] = {uint8_t(v), uint8_t(v >> 8)};
+	bytes(b, 2);
+}
+void ContentsWriter::u32(uint32_t v) {
+	uint8_t b[4] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)};
+	bytes(b, 4);
+}
+void ContentsWriter::f32(float v) {
+	uint32_t u;
+	memcpy(&u, &v, 4);
+	u32(u);
+}
+void ContentsWriter::block(std::span<const uint8_t> b) {
+	u32(uint32_t(b.size()));
+	bytes(b);
+}
+void ContentsWriter::string(const std::string &s) {
+	if (s.empty()) {
+		u32(0);
+		return;
+	}
+	u32(uint32_t(s.size() + 1));
+	bytes(s.data(), s.size() + 1);
+}
+void ContentsWriter::guid_pool(const std::vector<Guid> &pool) {
+	u8(1);
+	u16(uint16_t(pool.size()));
+	for (const Guid &g : pool) guid(g);
+}
+size_t ContentsWriter::begin_chunk(uint8_t version) {
+	u8(version);
+	return data_.size();
+}
+void ContentsWriter::end_chunk(size_t at) {
+	size_t n = data_.size() - at;
+	if (n < 0xFF) {
+		data_.insert(data_.begin() + long(at), uint8_t(n));
+		return;
+	}
+	uint8_t b[5] = {0xFF, uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), uint8_t(n >> 24)};
+	data_.insert(data_.begin() + long(at), b, b + 5);
+}
+
 std::vector<uint8_t> Contents::decompress(std::span<const uint8_t> packed) {
 	Contents c(std::vector<uint8_t>(packed.begin(), packed.end()));
 	uint32_t method = c.squeezed();

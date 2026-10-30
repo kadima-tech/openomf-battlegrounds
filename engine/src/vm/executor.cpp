@@ -444,7 +444,7 @@ int Executor::continue_execution() {
 			case 110: { uint32_t s = u32(), t = u32(); if (get<int16_t>(s) == 0) jump(t); break; }
 			case 111: { uint32_t s = u32(), t = u32(); if (get<uint8_t>(s) == 0) jump(t); break; }
 			case 112: jump(u32()); break;
-			case 113: { uint32_t t = u32(); if (!inst_.master) jump(t); break; }
+			case 113: { uint32_t t = u32(); if (!inst_.master || !inst_.controlled) jump(t); break; }
 			case 114: {  // string equality
 				uint32_t a = u32(), b = u32();
 				uint32_t pa = get<uint32_t>(a), pb = get<uint32_t>(b);

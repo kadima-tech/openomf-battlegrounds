@@ -37,6 +37,7 @@ public:
 	// when the game's Engine directory sits next to it.
 	explicit World(const std::filesystem::path &data_dir);
 
+	const std::filesystem::path &dir() const { return dir_; }
 	const ObjectsFile *file(const std::string &stem) const;
 	const std::map<std::string, std::unique_ptr<ObjectsFile>> &files() const { return files_; }
 	ObjectRef resolve(const ObjectsFile &from, const Reference &r) const;
@@ -53,6 +54,7 @@ public:
 
 private:
 	void add(const std::string &stem, std::vector<uint8_t> data);
+	std::filesystem::path dir_;
 	std::map<std::string, std::unique_ptr<ObjectsFile>> files_;
 	std::map<std::array<uint8_t, 16>, ObjectRef> guids_;
 };
