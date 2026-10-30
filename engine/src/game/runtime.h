@@ -481,6 +481,10 @@ public:
 	double passed_ms = 0;
 	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
 	uint32_t scene_step(float real_ms);
+	// One creature tick with the scene clock at `at_ms` (DE_CCreature::SetTime's re-ticks).
+	void retick(GameObject &o, uint32_t at_ms);
+	// Runs `f` with the scene clock at `at_ms` (DE_CScene +0x1ac / +0x1b0).
+	void at_scene_ms(uint32_t at_ms, const std::function<void()> &f);
 	// The GUI's own scenes: the top control's (GameObject::view 0) and a GUI scene viewer's (view 1,
 	// the model picker's). Neither autopauses (DE_CScene +0x1c0 / +0x1bc), so the app passes them
 	// real time: the first every frame, the second while its page is up (the robot's idle event).
@@ -847,6 +851,7 @@ public:
 	void register_brain(Brain *b);
 private:
 	void advance(TemporalSet &set);
+	void reset_clock();
 	void creature_tick(GameObject &o);
 	void input_tick(uint32_t manager);
 
@@ -879,6 +884,8 @@ const Pilot *pilot_of(GameObject *o);
 // The copy of data object `r` nearest `from` (its own subtree, then each ancestor's).
 GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r);
 void register_simple_physics_natives(World &w);
+// A CData's bytes (DE_CDataBlock), by its block in script memory.
+std::vector<uint8_t> &cdata_bytes(uint32_t block);
 // Active collision testers (natives_combat.cpp), once per tick.
 void tick_collision_tester(World &w, uint32_t handle);
 // MSVCRT rand() on the main thread: one stream that Core, Creature, OMF and Particles all draw

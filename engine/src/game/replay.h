@@ -68,15 +68,24 @@ bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec);
 // Once per session update (DE_CSession::Update): managers join, the recorder's end time follows the
 // scene, a replay's managers take their newest recorded state, and a replay past its end ends.
 void replay_update(World &w);
-// Register*State (CreateCurrentState): the owner's current state goes into the record;
-// RegisterGetHitState also marks the fighter hit for its next state.
+// Register*State (CreateCurrentState): the owner's current state joins its manager's history,
+// to be recorded as it ages out; RegisterGetHitState also marks the fighter hit.
 void register_state(World &w, GameObject *owner, bool got_hit = false);
+// The pre-destruction of `o` (and its branch): their managers' histories go into the record.
+void replay_destroying(World &w, GameObject &o);
 // CCreature::SetInstanceNumber: part of the creature's ID.
 void set_instance_number(GameObject &o, int32_t n);
 // DE_CStateManager +0x78: driven by a record (IsSimulating / IsStateAlterable false).
 bool replay_driven(World &w, const GameObject *o);
-// A replayed creature after the clock went back, until its next state: no physics or brain.
+// DE_CCreature::Tick in a replay, at its start: true when the creature skips its physics and
+// brain this tick (held since the clock went back, or re-taking this tick's state).
+bool replay_tick(World &w, GameObject &o);
+// Held (+0x2fc == 2): a fighter's guide and trailers wait too.
 bool replay_held(World &w, const GameObject &o);
+// DE_CCreature::SetTime after the replay's clock jumped: re-ticks up to it or rewinds.
+void replay_set_time(World &w, GameObject &o, uint32_t ms);
+// DE_CScene::TemporalUpdate: restored creatures whose SetTime was deferred.
+void replay_temporal_update(World &w);
 bool replaying(World &w);
 // The replay's recorded end (scene ms), 0 when not replaying.
 uint32_t replay_end_ms(World &w);

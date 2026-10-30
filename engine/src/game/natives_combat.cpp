@@ -82,12 +82,7 @@ std::map<uint32_t, std::pair<uint32_t, size_t>> g_collision_infos;  // info hand
 std::map<const GameObject *, std::vector<std::string>> g_hit_names;  // fighter +0x490
 std::map<const GameObject *, DangerTiming> g_danger_timing;
 uint32_t g_next_attack_id = 1;
-struct PackedHit {
-	uint8_t damage = 0, flags = 0;
-	uint32_t effect = 0, reaction = 0, attack = 0;
-	std::array<float, 3> point{}, dir{}, dir2{};
-};
-std::map<uint32_t, PackedHit> g_packed_hits;  // by CData block
+std::map<uint32_t, std::vector<uint8_t>> g_cdata;  // a CData's bytes, by its block
 
 float length(const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
@@ -329,6 +324,8 @@ GameObject *danger_property(GameObject &a) {
 }
 
 }  // namespace
+
+std::vector<uint8_t> &cdata_bytes(uint32_t block) { return g_cdata[block]; }
 
 // DE_CCollisionTester::Tick: an active tester tests every scene tick and sends its notify methods
 // a collision event when something touched.
@@ -1353,30 +1350,49 @@ void register_combat_natives(World &w) {
 	reg("CObject::CAttackInfo::PackForGetHitEffect(class CData)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c), d = c.arg<uint32_t>(0);
 		if (!a || !d) return;
-		auto &pk = g_packed_hits[d];
-		float dmg = std::clamp(c.mem().get<float>(a + kDamage), 0.0f, 50.0f);
-		pk.damage = uint8_t(int32_t(dmg * 255));
-		pk.effect = c.mem().get<uint32_t>(a + kEffectType);
-		pk.reaction = c.mem().get<uint32_t>(a + kReactionType);
-		pk.attack = c.mem().get<uint32_t>(a + kAttackType);
-		pk.point = read_vec(c.mem(), a + kConnectPoint);
-		pk.dir = read_vec(c.mem(), a + kEffectDirection);
-		pk.dir2 = read_vec(c.mem(), a + kEffectDirection2);
-		pk.flags = c.mem().get<uint8_t>(a + kFlags);
+		auto &b = g_cdata[d];
+		b.clear();
+		auto raw = [&](const void *p, size_t n) { b.insert(b.end(), (const uint8_t *)p, (const uint8_t *)p + n); };
+		auto squeezed = [&](uint32_t v) {
+			uint8_t m = v < 0xFE ? uint8_t(v) : v < 0xFFFF ? 0xFE : 0xFF;
+			raw(&m, 1);
+			if (m == 0xFE) raw(&v, 2);
+			else if (m == 0xFF) raw(&v, 4);
+		};
+		squeezed(1);
+		uint8_t dmg = uint8_t(int32_t(std::clamp(c.mem().get<float>(a + kDamage), 0.0f, 50.0f) * 255));
+		raw(&dmg, 1);
+		for (uint32_t off : {kEffectType, kReactionType, kAttackType}) squeezed(c.mem().get<uint32_t>(a + off));
+		for (uint32_t off : {kConnectPoint, kEffectDirection, kEffectDirection2}) raw(c.mem().ptr(a + off, 12), 12);
+		raw(c.mem().ptr(a + kFlags, 1), 1);
 	});
 	reg("CObject::CAttackInfo::UnpackForGetHitEffect(class CData)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c), d = c.arg<uint32_t>(0);
-		auto it = g_packed_hits.find(d);
-		if (!a || it == g_packed_hits.end()) return;
-		const auto &pk = it->second;
+		auto it = g_cdata.find(d);
+		if (!a || it == g_cdata.end()) return;
+		const auto &b = it->second;
+		size_t pos = 0;
+		auto take = [&](void *p, size_t n) {
+			memset(p, 0, n);
+			if (pos + n <= b.size()) memcpy(p, b.data() + pos, n);
+			pos = std::min(pos + n, b.size());
+		};
+		auto squeezed = [&] {
+			uint8_t m = 0;
+			uint32_t v = 0;
+			take(&m, 1);
+			if (m == 0xFE) take(&v, 2);
+			else if (m == 0xFF) take(&v, 4);
+			else v = m;
+			return v;
+		};
+		if (squeezed() != 1) return;
+		uint8_t dmg;
+		take(&dmg, 1);
 		c.mem().set<float>(a + kDamage, std::clamp(c.mem().get<float>(a + kDamage), 0.0f, 50.0f) / 255 * 50);
-		c.mem().set<uint32_t>(a + kEffectType, pk.effect);
-		c.mem().set<uint32_t>(a + kReactionType, pk.reaction);
-		c.mem().set<uint32_t>(a + kAttackType, pk.attack);
-		write_vec(c.mem(), a + kConnectPoint, pk.point);
-		write_vec(c.mem(), a + kEffectDirection, pk.dir);
-		write_vec(c.mem(), a + kEffectDirection2, pk.dir2);
-		c.mem().set<uint8_t>(a + kFlags, pk.flags);
+		for (uint32_t off : {kEffectType, kReactionType, kAttackType}) c.mem().set<uint32_t>(a + off, squeezed());
+		for (uint32_t off : {kConnectPoint, kEffectDirection, kEffectDirection2}) take(c.mem().ptr(a + off, 12), 12);
+		take(c.mem().ptr(a + kFlags, 1), 1);
 	});
 	// RegisterStandardComboAttackCaller (0x35022880): GuideToLastActorHit(frames, power)
 	// and RegisterStandardState (which only concerns replication here).
