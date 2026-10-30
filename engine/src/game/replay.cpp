@@ -23,6 +23,9 @@ namespace {
 struct Packer {
 	std::vector<uint8_t> data;
 	size_t pos = 0;
+	// DE_CLocalExecutorPacker: references as the object's handle, repacked when recorded.
+	bool local = false;
+	std::vector<std::pair<size_t, uint32_t>> refs;
 	void raw(const void *p, size_t n) { data.insert(data.end(), (const uint8_t *)p, (const uint8_t *)p + n); }
 	void u8(uint8_t v) { raw(&v, 1); }
 	void u16(uint16_t v) { raw(&v, 2); }
@@ -78,6 +81,16 @@ struct Packer {
 	}
 };
 
+// A state in a manager's history (DE_CStateManager::CState): packed with local references; the
+// fighter physics' part is repacked through a scratch physics when recorded.
+struct LocalState {
+	uint32_t time = 0;
+	std::vector<uint8_t> bytes;
+	std::vector<std::pair<size_t, uint32_t>> refs;
+	size_t phys_at = 0, phys_end = 0;
+};
+constexpr size_t kLocalRef = 7;  // v1 chunk, size 5, kind 3, u32 handle
+
 struct StateManager {
 	GameObject *owner = nullptr;
 	std::string id;
@@ -86,7 +99,24 @@ struct StateManager {
 	uint32_t applied = ~0u;    // +0x80
 	uint64_t joined = 0;       // the session's managers are searched newest first
 	bool got_hit = false;      // fighter +0x4a0: RegisterGetHitState since its last state
-	bool rewound = false;      // creature +0x2fc == 2: held since the clock went back
+	uint32_t window = 1000;    // CleanOldStates: 1000 / +0xb8 (a tick-based creature's rate)
+	uint32_t adds = 0;         // +0x64
+	bool keep_clock = false;   // +0xd0
+	bool connected = true;     // in the session's connector (ObjPrepare)
+	std::vector<LocalState> history;                               // +0x3c, while recording
+	std::vector<std::pair<uint32_t, std::vector<uint8_t>>> lagged;  // +0x3c, while replaying
+};
+
+// A tick-based creature's clock in a replay (DE_CCreature +0x1d4 is GameObject::creature_ticks).
+struct Clock {
+	// +0x1d8: tick k runs at base + (k + 1) x rate; ours follows the ticks the creature ran (none
+	// while out of the scene), which its recorded times count.
+	uint32_t base = 0;
+	int mode = 0;            // +0x2fc: 2 held since the clock went back
+	uint32_t until = 0;      // +0x1e4
+	uint32_t saved = 0;      // +0x1e8: the tick it was at when the hold began
+	uint32_t unpacking = 0;  // +0x214: the state being restored
+	bool ticked = false;     // +0x20c
 };
 
 struct ReplayWorld {
@@ -96,6 +126,10 @@ struct ReplayWorld {
 	uint64_t joins = 0;
 	uint32_t last_ms = 0;
 	std::map<uint32_t, uint32_t> prepared;  // "ScenePrepareTime" of the actors met while replaying
+	std::map<const StateRecord *, std::vector<uint32_t>> joined;  // DE_CStateManagerRecord +0x00
+	std::map<uint32_t, Clock> clocks;  // by creature handle
+	std::vector<uint32_t> deferred;    // DE_CScene +0x98: creatures whose SetTime waits
+	int reticking = 0;
 };
 
 std::map<const World *, ReplayWorld> g_worlds;
@@ -103,8 +137,48 @@ ReplayWorld &rw(World &w) { return g_worlds[&w]; }
 // DE_CCreature +0x1ec: SetInstanceNumber's suffix, by handle.
 std::map<uint32_t, std::pair<const GameObject *, std::string>> g_instance_numbers;
 
-bool has_state_manager(const GameObject &o) {
-	return std::any_of(o.children.begin(), o.children.end(), [](const GameObject *c) { return c->is("StateManager"); });
+GameObject *state_manager_object(const GameObject &o) {
+	for (GameObject *c : o.children) {
+		if (c->is("StateManager")) return c;
+	}
+	return nullptr;
+}
+bool has_state_manager(const GameObject &o) { return state_manager_object(o) != nullptr; }
+
+// DE_CStateManager contents (ObjProcessContents 0x701b1600; v2: its name, then the BOOLs +0x84,
+// +0x88, +0x8c, +0xbc, +0xc0, +0xa8 and +0xd0, defaults 0, 1, 1, 0, 1, 0, 0): the session takes a
+// manager with any of the first three set (DE_CStateManager::ObjPrepare 0x701b1920), and its
+// record only with +0x8c.
+struct ManagerFlags {
+	bool joins = true, record = true, keep_clock = false;  // keep_clock: +0xd0
+};
+ManagerFlags manager_flags(const GameObject &o) {
+	bool up = false, down = true, record = true, d0 = false;
+	GameObject *m = state_manager_object(o);
+	if (m && m->file) {
+		try {
+			de::Contents c(m->file->object_data(m->file->objects()[m->index]).contents);
+			de::Chunk ch = de::begin_chunk(c);
+			if (ch.version == 1 || ch.version == 2) {
+				c.block();
+				up = c.boolean();
+				down = c.boolean();
+				if (ch.version == 2) {
+					record = c.boolean();
+					c.boolean(), c.boolean(), c.boolean();
+					d0 = c.boolean();
+				}
+			}
+		} catch (const std::exception &) {
+		}
+	}
+	return {up || down || record, record, d0};
+}
+
+// DE_CCreature::LocalTime (Creature 0x15008300): a tick-based creature's ticks, else the scene's.
+uint32_t local_time(World &w, const GameObject &o) {
+	if (o.is("Actor\\Creature") && w.creature_rate(const_cast<GameObject *>(&o))) return o.creature_ticks;
+	return uint32_t(w.scene_ms());
 }
 
 // DE_CObject::GUID (Core 0x7003df30): its data object's, which copies share; none for others.
@@ -127,6 +201,7 @@ std::string guid_text(const de::Guid &g) {
 struct CreatureFlags {
 	uint32_t id = 0x16;
 	bool position = false, orientation = false;
+	uint32_t defer = 0;  // +0x1e0: a restored state's SetTime waits for the next scene update
 };
 CreatureFlags creature_flags(const GameObject &o) {
 	CreatureFlags f;
@@ -136,7 +211,9 @@ CreatureFlags creature_flags(const GameObject &o) {
 		c.seek(de::begin_chunk(c).end);
 		de::Chunk ch = de::begin_chunk(c);
 		if (ch.version < 2 || ch.version > 4) return f;
-		c.u32(), c.u32(), c.u32();
+		c.u32();
+		f.defer = c.u32();
+		c.u32();
 		if (ch.version == 4) {
 			f.id = c.u32();
 		} else {
@@ -153,10 +230,14 @@ CreatureFlags creature_flags(const GameObject &o) {
 	return f;
 }
 
-// DE_CObject::ObjPath (Core 0x7003a880): the names from the root down, "\" between.
-std::string path_of(const GameObject *o) {
+// DE_CObject::ObjPath (Core 0x7003a880): the names from the root down, "\" between; a scene's
+// root actor's parent is the scene, named "{No Name}" (DE_CScene::ObjInitContents 0x7006e8d0).
+std::string path_of(World &w, const GameObject *o) {
 	std::string p;
-	for (; o; o = o->parent) p = o->name + (p.empty() ? "" : "\\" + p);
+	const GameObject *root = o;
+	for (; o; root = o, o = o->parent) p = o->name + (p.empty() ? "" : "\\" + p);
+	if (root && !root->gui && std::find(w.scene_roots.begin(), w.scene_roots.end(), root) != w.scene_roots.end())
+		p = "{No Name}\\" + p;
 	return p;
 }
 
@@ -182,7 +263,7 @@ std::string build_id(World &w, GameObject &o) {
 		std::string id;
 		if (o.component_owner && o.component_owner != &o) id = build_id(w, *o.component_owner);
 		CreatureFlags f = creature_flags(o);
-		if (f.id & 0x40) id += path_of(&o) + '\0';
+		if (f.id & 0x40) id += path_of(w, &o) + '\0';
 		else if (f.id & 8) id += o.name + '\0';
 		auto it = g_instance_numbers.find(o.handle);
 		if (it != g_instance_numbers.end() && it->second.first == &o) id += it->second.second;
@@ -213,20 +294,30 @@ StateManager &join(World &w, GameObject &o) {
 	if (sm.owner == &o) return sm;
 	sm = StateManager{};
 	sm.owner = &o;
+	ManagerFlags flags = manager_flags(o);
+	sm.connected = flags.joins;
+	if (!sm.connected) return sm;
 	sm.id = build_id(w, o);
 	sm.joined = ++R.joins;
-	if (auto &rec = R.record; rec && !sm.id.empty()) {
+	// DE_CCreature::ObjPrepare (Creature 0x15016050): a tick-based creature's manager keeps a
+	// second of ticks.
+	if (uint32_t rate = o.is("Actor\\Creature") ? w.creature_rate(&o) : 0) sm.window = uint32_t(1000.0f / float(rate));
+	// An empty ID matches the first empty-ID record, so all such managers share one.
+	sm.keep_clock = flags.keep_clock;
+	if (auto &rec = R.record; rec && flags.record) {
 		sm.record = rec->find(sm.id);
 		if (!sm.record && rec->recording) {
 			sm.record = rec->managers.emplace_back(std::make_unique<StateRecord>()).get();
 			sm.record->id = sm.id;
 		}
 		sm.replay = sm.record && !rec->recording;
+		if (sm.record) R.joined[sm.record].push_back(o.handle);
 	}
 	if (getenv("OPENBG_DEBUG_REPLAY")) {
 		std::string shown;
 		for (char ch : sm.id) shown += ch >= 32 && ch < 127 ? ch : '.';
-		fprintf(stderr, "[replay %u] join %s (%s): %s\n", w.frame(), o.name.c_str(), shown.c_str(), sm.record ? (sm.replay ? "replayed" : "recorded") : "-");
+		fprintf(stderr, "[replay %u] join %s (%s): %s, window %u, defer %u\n", w.frame(), o.name.c_str(), shown.c_str(),
+		        sm.record ? (sm.replay ? "replayed" : "recorded") : "-", sm.window, creature_flags(o).defer);
 	}
 	return sm;
 }
@@ -235,11 +326,16 @@ StateManager &join(World &w, GameObject &o) {
 // a v1 chunk of a kind byte (0 an object no manager owns, 1 known, 2 null) and, when known, the
 // ID of the newest manager it owns.
 void add_element(World &w, Packer &p, uint32_t handle) {
+	if (p.local) {
+		p.refs.emplace_back(p.data.size(), handle);
+		p.u8(1), p.u8(5), p.u8(3), p.u32(handle);
+		return;
+	}
 	GameObject *o = handle ? w.object(handle) : nullptr;
 	const StateManager *best = nullptr;
 	if (o) {
 		for (auto &[h, sm] : rw(w).managers) {
-			if (sm.owner == o && (!best || sm.joined > best->joined)) best = &sm;
+			if (sm.owner == o && sm.connected && (!best || sm.joined > best->joined)) best = &sm;
 		}
 	}
 	Packer c;
@@ -260,12 +356,16 @@ void add_element(World &w, Packer &p, uint32_t handle) {
 uint32_t extract_element(World &w, Packer &p) {
 	size_t end = p.chunk_end();
 	uint32_t found = 0;
-	if (p.r8() == 1) {
+	uint8_t kind = p.r8();
+	if (kind == 3) {
+		found = p.r32();
+		if (!w.object(found)) found = 0;
+	} else if (kind == 1) {
 		auto b = p.rbytes();
 		std::string id(b.begin(), b.end());
 		uint64_t newest = 0;
 		for (auto &[h, sm] : rw(w).managers) {
-			if (sm.id == id && w.object(h) == sm.owner && sm.joined > newest) newest = sm.joined, found = h;
+			if (sm.connected && sm.id == id && w.object(h) == sm.owner && sm.joined > newest) newest = sm.joined, found = h;
 		}
 	}
 	p.pos = end;
@@ -306,7 +406,12 @@ void add_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 	case Value::Guid: v.raw(m.ptr(inst, 16), 16); break;
 	case Value::Vector: v.raw(m.ptr(inst, 12), 12); break;
 	case Value::Coordinates: v.raw(m.ptr(inst, 36), 36); break;
-	case Value::Data:  // ours holds a packed hit outside script memory: not carried
+	case Value::Data: {  // DataGenerateContentsCaller (Core 0x7014b5f0)
+		const auto &b = cdata_bytes(inst);
+		v.squeezed(uint32_t(b.size()));
+		v.raw(b.data(), b.size());
+		break;
+	}
 	case Value::Unknown: v.squeezed(0); break;
 	}
 	p.bytes(v.data);
@@ -330,6 +435,7 @@ void extract_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 		m.set<uint32_t>(inst + 4, n);
 		break;
 	}
+	case Value::Data: cdata_bytes(inst) = v.rn(v.rsqueezed()); break;
 	case Value::Guid:
 	case Value::Vector:
 	case Value::Coordinates: v.take(m.ptr(inst, uint32_t(v.data.size())), v.data.size()); break;
@@ -483,95 +589,158 @@ std::array<float, 9> compose(const std::array<float, 3> &a) {
 
 float length3(const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
-// DE_CFighterPhysics::PackState (OMF 0x3503a5d0): a u16 mask, then momentum (0x10), acceleration
-// (0x08), the position, the heading as a u16 turn, gravity and its recovery (0x04), turn rate
-// (0x100), forward speed (0x200), last hit (0x01) and hit by (0x02), the guide (0x0c00: its mode in
-// the mask, power, frames) and the invulnerable frames (0x1000).
-void pack_physics(World &w, Packer &p, GameObject &o, bool got_hit) {
+// DE_CFighterPhysics' packed fields (PackState / UnpackState, OMF 0x3503a5d0 / 0x3503a9d0).
+struct FighterState {
+	std::array<float, 3> momentum{}, accel{}, pos{};
+	uint16_t heading = 0;
+	float gravity = 1, recover = 1, turn_rate = 0, forward_speed = 0, guide_power = 0;
+	bool skip_friction = false, skip_push = false, on_floor = false;
+	uint32_t last_hit = 0, last_hit_by = 0;
+	int guide_mode = 0, guide_frames = -1, invulnerable = 0;
+};
+constexpr double kPi = 3.14159265358979323846;
+uint16_t heading_of(const std::array<float, 9> &r) {
+	return uint16_t(int64_t((std::atan2(double(r[0]), double(r[2])) + kPi + kPi / 2) / (2 * kPi) * 65536.0));
+}
+std::array<float, 9> yaw_of(uint16_t h) {
+	double th = h / 65536.0 * 2 * kPi + kPi / 65536.0;
+	float c = float(std::cos(th)), s = float(std::sin(th));
+	return {c, 0, -s, 0, 1, 0, s, 0, c};
+}
+
+// The live physics; momentum at or below 0.01 and acceleration at or below 0.001 are zeroed in it
+// as PackState does.
+FighterState capture_physics(World &w, GameObject &o) {
 	auto &fs = w.forces->surfaces(o);
+	if (length3(o.momentum) <= 0.01f) o.momentum = {0, 0, 0};
+	if (length3(fs.accel) <= 0.001f) fs.accel = {0, 0, 0};
+	FighterState s;
+	s.momentum = o.momentum;
+	s.accel = fs.accel;
+	s.pos = o.local.t;
+	s.heading = heading_of(o.local.r);
+	s.gravity = o.gravity;
+	s.recover = o.gravity_recover;
+	s.turn_rate = o.turn_rate;
+	s.forward_speed = o.forward_speed;
+	s.skip_friction = o.skip_friction || o.propelled;
+	s.skip_push = fs.skip_push;
+	s.on_floor = o.on_floor;
+	s.last_hit = o.last_hit ? o.last_hit->handle : 0;
+	s.last_hit_by = o.last_hit_by ? o.last_hit_by->handle : 0;
+	s.guide_mode = o.guide_mode;
+	s.guide_frames = o.guide_frames;
+	s.guide_power = o.guide_power;
+	s.invulnerable = o.invulnerable_frames;
+	return s;
+}
+
+// PackState: a u16 mask, then momentum (0x10), acceleration (0x08), the position, the heading as a
+// u16 turn, gravity and its recovery (0x04), turn rate (0x100), forward speed (0x200), last hit
+// (0x01) and hit by (0x02), the guide (0x0c00: its mode in the mask, power, frames) and the
+// invulnerable frames (0x1000). `got_hit` is the fighter's +0x4a0.
+void encode_physics(World &w, Packer &p, const FighterState &s, bool got_hit) {
 	uint16_t m = 0;
-	// Below these it zeroes the live values too.
-	if (length3(o.momentum) > 0.01f) m |= 0x10;
-	else o.momentum = {0, 0, 0};
-	if (length3(fs.accel) > 0.001f) m |= 0x08;
-	else fs.accel = {0, 0, 0};
-	if (o.skip_friction || o.propelled) m |= 0x20;
-	if (fs.skip_push) m |= 0x40;
-	if (o.on_floor) m |= 0x80;
-	if (o.gravity != 1.0f) m |= 0x04;
-	bool guide = o.guide_frames >= 0;
-	if (o.guide_mode == 1) {
-		if (o.last_hit) m |= 0x01;
+	if (length3(s.momentum) > 0.01f) m |= 0x10;
+	if (length3(s.accel) > 0.001f) m |= 0x08;
+	if (s.skip_friction) m |= 0x20;
+	if (s.skip_push) m |= 0x40;
+	if (s.on_floor) m |= 0x80;
+	if (s.gravity != 1.0f) m |= 0x04;
+	bool guide = s.guide_frames >= 0;
+	if (s.guide_mode == 1) {
+		if (s.last_hit) m |= 0x01;
 		else guide = false;
 	}
 	// As the binary tests it: mode 2 sends the hit-by only while there is none.
-	if ((o.guide_mode == 2 && !o.last_hit_by) || got_hit) m |= 0x02;
-	if (o.turn_rate != 0) m |= 0x100;
-	if (o.forward_speed != 0) m |= 0x200;
-	if (guide) m |= uint16_t((o.guide_mode & 3) << 10);
-	if (o.invulnerable_frames) m |= 0x1000;
+	if ((s.guide_mode == 2 && !s.last_hit_by) || got_hit) m |= 0x02;
+	if (s.turn_rate != 0) m |= 0x100;
+	if (s.forward_speed != 0) m |= 0x200;
+	if (guide) m |= uint16_t((s.guide_mode & 3) << 10);
+	if (s.invulnerable) m |= 0x1000;
 	p.u16(m);
-	if (m & 0x10) p.raw(o.momentum.data(), 12);
-	if (m & 0x08) p.raw(fs.accel.data(), 12);
-	p.raw(o.local.t.data(), 12);
-	const auto &r = o.local.r;
-	constexpr double kPi = 3.14159265358979323846;
-	double turn = (std::atan2(double(r[0]), double(r[2])) + kPi + kPi / 2) / (2 * kPi) * 65536.0;
-	p.u16(uint16_t(int64_t(turn)));
+	if (m & 0x10) p.raw(s.momentum.data(), 12);
+	if (m & 0x08) p.raw(s.accel.data(), 12);
+	p.raw(s.pos.data(), 12);
+	p.u16(s.heading);
 	if (m & 0x04) {
-		p.f32(o.gravity);
-		p.f32(o.gravity_recover);
+		p.f32(s.gravity);
+		p.f32(s.recover);
 	}
-	if (m & 0x100) p.f32(o.turn_rate);
-	if (m & 0x200) p.f32(o.forward_speed);
-	if (m & 0x01) add_element(w, p, o.last_hit ? o.last_hit->handle : 0);
-	if (m & 0x02) add_element(w, p, o.last_hit_by ? o.last_hit_by->handle : 0);
+	if (m & 0x100) p.f32(s.turn_rate);
+	if (m & 0x200) p.f32(s.forward_speed);
+	if (m & 0x01) add_element(w, p, s.last_hit);
+	if (m & 0x02) add_element(w, p, s.last_hit_by);
 	if (m & 0x0c00) {
-		p.f32(o.guide_power);
-		p.squeezed(uint32_t(o.guide_frames));
+		p.f32(s.guide_power);
+		p.squeezed(uint32_t(s.guide_frames));
 	}
-	if (o.invulnerable_frames) p.squeezed(uint32_t(o.invulnerable_frames));
+	if (s.invulnerable) p.squeezed(uint32_t(s.invulnerable));
 }
 
-// UnpackState (OMF 0x3503a9d0) sets each part outright (absent: its default; the heading as a pure
-// yaw); DE_COMF2Fighter::UnpackState (0x3502a500) then puts the actor where the physics is.
-void unpack_physics(World &w, Packer &p, GameObject &o) {
-	auto &fs = w.forces->surfaces(o);
+// UnpackState sets each part outright: absent, its default.
+FighterState decode_physics(World &w, Packer &p) {
+	FighterState s;
 	uint16_t m = p.r16();
-	o.momentum = {0, 0, 0};
-	fs.accel = {0, 0, 0};
-	if (m & 0x10) p.take(o.momentum.data(), 12);
-	if (m & 0x08) p.take(fs.accel.data(), 12);
-	p.take(o.local.t.data(), 12);
-	constexpr double kPi = 3.14159265358979323846;
-	double th = p.r16() / 65536.0 * 2 * kPi + kPi / 65536.0;
-	float c = float(std::cos(th)), s = float(std::sin(th));
-	o.local.r = {c, 0, -s, 0, 1, 0, s, 0, c};
-	o.gravity = o.gravity_recover = 1.0f;
+	if (m & 0x10) p.take(s.momentum.data(), 12);
+	if (m & 0x08) p.take(s.accel.data(), 12);
+	p.take(s.pos.data(), 12);
+	s.heading = p.r16();
 	if (m & 0x04) {
-		o.gravity = p.rf();
-		o.gravity_recover = p.rf();
+		s.gravity = p.rf();
+		s.recover = p.rf();
 	}
-	o.skip_friction = (m & 0x20) != 0;
-	fs.skip_push = (m & 0x40) != 0;
-	o.on_floor = (m & 0x80) != 0;
-	o.turn_rate = m & 0x100 ? p.rf() : 0;
-	o.forward_speed = m & 0x200 ? p.rf() : 0;
-	auto actor = [&](GameObject *&ref) {
+	s.skip_friction = (m & 0x20) != 0;
+	s.skip_push = (m & 0x40) != 0;
+	s.on_floor = (m & 0x80) != 0;
+	if (m & 0x100) s.turn_rate = p.rf();
+	if (m & 0x200) s.forward_speed = p.rf();
+	auto actor = [&] {
 		GameObject *a = w.object(extract_element(w, p));
-		ref = a && a->is("Actor") ? a : nullptr;
+		return a && a->is("Actor") ? a->handle : 0u;
 	};
-	if (m & 0x01) actor(o.last_hit);
-	if (m & 0x02) actor(o.last_hit_by);
-	o.guide_power = 0;
-	o.guide_frames = -1;
+	if (m & 0x01) s.last_hit = actor();
+	if (m & 0x02) s.last_hit_by = actor();
 	if (m & 0x0c00) {
-		o.guide_power = p.rf();
-		o.guide_frames = int(p.rsqueezed());
+		s.guide_power = p.rf();
+		s.guide_frames = int(p.rsqueezed());
 	}
-	o.guide_mode = (m >> 10) & 3;
-	o.invulnerable_frames = m & 0x1000 ? int(p.rsqueezed()) : 0;
+	s.guide_mode = (m >> 10) & 3;
+	if (m & 0x1000) s.invulnerable = int(p.rsqueezed());
+	return s;
 }
+
+// The orientation becomes a pure yaw; DE_COMF2Fighter::UnpackState (0x3502a500) then puts the actor
+// where the physics is.
+void apply_physics(World &w, GameObject &o, const FighterState &s) {
+	auto &fs = w.forces->surfaces(o);
+	o.momentum = s.momentum;
+	fs.accel = s.accel;
+	o.local.t = s.pos;
+	o.local.r = yaw_of(s.heading);
+	o.gravity = s.gravity;
+	o.gravity_recover = s.recover;
+	o.skip_friction = s.skip_friction;
+	fs.skip_push = s.skip_push;
+	o.on_floor = s.on_floor;
+	o.turn_rate = s.turn_rate;
+	o.forward_speed = s.forward_speed;
+	o.last_hit = s.last_hit ? w.object(s.last_hit) : nullptr;
+	o.last_hit_by = s.last_hit_by ? w.object(s.last_hit_by) : nullptr;
+	o.guide_power = s.guide_power;
+	o.guide_frames = s.guide_frames;
+	o.guide_mode = s.guide_mode;
+	o.invulnerable_frames = s.invulnerable;
+}
+
+// DE_CFighterPhysics::RepackState (OMF 0x3503aca0): unpacked into a scratch physics (+0x1ac) and
+// packed again, so the mask is recomputed, and the hit bit follows the live fighter's +0x4a0.
+void repack_physics(World &w, Packer &src, Packer &dst, bool got_hit) {
+	FighterState s = decode_physics(w, src);
+	s.heading = heading_of(yaw_of(s.heading));
+	encode_physics(w, dst, s, got_hit);
+}
+
 // The creature's physics (+0x1cc): a fighter's, else its first simple physics.
 GameObject *simple_physics_of(World &w, GameObject &o) {
 	auto ps = w.simple_physics->physics_of(o);
@@ -580,8 +749,9 @@ GameObject *simple_physics_of(World &w, GameObject &o) {
 
 // DE_CObject::PackState (Core 0x7003de40) / DE_CCreature::PackState (Creature 0x150150b0): each
 // executor instance's status back to back; for a creature then its position (+0x300), its
-// orientation as three angles (+0x304) and its physics' own state.
-void pack_state(World &w, Packer &p, GameObject &o, StateManager &sm) {
+// orientation as three angles (+0x304) and its physics' own state (a fighter's from `phys_at`).
+void pack_state(World &w, Packer &p, GameObject &o, StateManager &sm, size_t &phys_at, size_t &phys_end) {
+	phys_at = phys_end = 0;
 	for (Brain *b : brains_of(w, o)) generate_status(w, p, *b);
 	if (!o.is("Actor\\Creature")) return;
 	CreatureFlags f = creature_flags(o);
@@ -591,7 +761,11 @@ void pack_state(World &w, Packer &p, GameObject &o, StateManager &sm) {
 		p.raw(a.data(), 12);
 	}
 	if (o.fighter) {
-		pack_physics(w, p, o, sm.got_hit);
+		size_t refs = p.refs.size();
+		phys_at = p.data.size();
+		encode_physics(w, p, capture_physics(w, o), sm.got_hit);
+		phys_end = p.data.size();
+		p.refs.resize(refs);
 		sm.got_hit = false;  // DE_COMF2Fighter::PackState (OMF 0x3502a4e0)
 	} else if (GameObject *ph = simple_physics_of(w, o)) {
 		// DE_CSimplePhysics::PackState (Core 0x701dc5b0).
@@ -600,37 +774,145 @@ void pack_state(World &w, Packer &p, GameObject &o, StateManager &sm) {
 	}
 }
 
+void set_time(World &w, GameObject &o, uint32_t ms);
+
 // DE_CObject::UnpackState (Core 0x7003de80) / DE_CCreature::UnpackState (Creature 0x15015160):
-// every status first, then each restored instance whose executor runs states at once does so.
-void unpack_state(World &w, Packer &p, GameObject &o) {
+// every status first, then a creature's position and orientation; each restored instance whose
+// executor runs states at once does so (a creature's with the scene clock at the state's time);
+// then a creature's physics, and its clock is set to the scene's (SetTime), at once or, with
+// +0x1e0, at the next scene update.
+void unpack_state(World &w, Packer &p, GameObject &o, uint32_t t) {
+	bool creature = o.is("Actor\\Creature");
+	uint32_t rate = creature ? w.creature_rate(&o) : 0;
+	Clock *clock = rate ? &rw(w).clocks[o.handle] : nullptr;
+	if (clock) {
+		o.creature_ticks = t;
+		clock->unpacking = t;
+	}
 	std::vector<Brain *> run;
 	for (Brain *b : brains_of(w, o)) {
 		if (process_status(w, p, *b) && executes_states_instantly(w, *b)) run.push_back(b);
 	}
-	for (Brain *b : run) {
-		if (!b->exec || !b->exec->running() || b->exec->executing() || b->inst.shut_down) continue;
-		try {
-			b->exec->pulse();
-		} catch (const std::exception &e) {
-			w.log.push_back(o.name + ": " + e.what());
-			b->inst.shut_down = true;
-		}
-	}
-	if (!o.is("Actor\\Creature")) return;
-	CreatureFlags f = creature_flags(o);
+	CreatureFlags f = creature ? creature_flags(o) : CreatureFlags{};
 	if (f.position) p.take(o.local.t.data(), 12);
 	if (f.orientation) {
 		std::array<float, 3> a;
 		p.take(a.data(), 12);
 		o.local.r = compose(a);
 	}
-	if (o.fighter) {
-		unpack_physics(w, p, o);
-	} else if (GameObject *ph = simple_physics_of(w, o)) {
+	auto pulse = [&](Brain *b) {
+		if (!b->exec || !b->exec->running() || b->exec->executing() || b->inst.shut_down) return;
+		try {
+			b->exec->pulse();
+		} catch (const std::exception &e) {
+			w.log.push_back(o.name + ": " + e.what());
+			b->inst.shut_down = true;
+		}
+	};
+	for (Brain *b : run) {
+		if (creature) w.at_scene_ms(clock ? clock->base + t * rate : t, [&] { pulse(b); });
+		else pulse(b);
+	}
+	if (!creature) return;
+	if (clock) o.creature_ticks = t;
+	if (o.fighter) apply_physics(w, o, decode_physics(w, p));
+	else if (GameObject *ph = simple_physics_of(w, o)) {
 		auto &s = w.simple_physics->state(*ph);
 		if (s.pack_momentum) p.take(s.momentum.data(), 12);
 	}
+	if (clock) {
+		if (!f.defer) set_time(w, o, uint32_t(w.scene_ms()));
+		else if (std::find(rw(w).deferred.begin(), rw(w).deferred.end(), o.handle) == rw(w).deferred.end())
+			rw(w).deferred.push_back(o.handle);
+		clock->unpacking = 0;
+	}
 }
+
+// DE_CStateManagerRecord::Record (Core 0x70203fa0): a state at the same time as the last replaces
+// it; the record's first manager's owner repacks it (DE_CCreature::RepackState, Creature
+// 0x15015380): the bytes as they are, references as the newest manager ID of their object now,
+// a fighter's physics through RepackState. With that owner gone, nothing is recorded.
+void record_state(World &w, StateRecord &rec, const LocalState &ls) {
+	auto &R = rw(w);
+	if (!rec.states.empty() && rec.states.back().first == ls.time) rec.states.pop_back();
+	auto &joined = R.joined[&rec];
+	StateManager *first = nullptr;
+	if (!joined.empty()) {
+		auto it = R.managers.find(joined[0]);
+		if (it != R.managers.end() && w.object(joined[0]) == it->second.owner) first = &it->second;
+	}
+	if (!first) {
+		w.log.push_back("Object is dead while a state is still being recorded.");
+		return;
+	}
+	Packer out, src;
+	src.data = ls.bytes;
+	size_t pos = 0;
+	auto copy_to = [&](size_t end) {
+		out.raw(ls.bytes.data() + pos, end - pos);
+		pos = end;
+	};
+	for (auto &[at, h] : ls.refs) {
+		copy_to(at);
+		add_element(w, out, h);
+		pos += kLocalRef;
+	}
+	if (ls.phys_end > ls.phys_at) {
+		copy_to(ls.phys_at);
+		src.pos = ls.phys_at;
+		repack_physics(w, src, out, first->owner->fighter && first->got_hit);
+		pos = ls.phys_end;
+	}
+	copy_to(ls.bytes.size());
+	rec.states.emplace_back(ls.time, std::move(out.data));
+}
+
+// DE_CStateManager::CleanOldStates (Core 0x701b1c90): all of them, or those older than the
+// window behind the newest, keeping at most 22; DE_CStandardStateManager::CleanState records each.
+void clean_old_states(World &w, StateManager &sm, bool all) {
+	auto &h = sm.history;
+	if (h.empty()) return;
+	uint32_t newest = h.back().time;
+	int i = int(h.size()) - 1;
+	if (!all) {
+		if (newest <= sm.window) return;
+		i = int(h.size()) - 2;
+		if (i < 0) return;
+		for (int k = 0; newest - sm.window < h[size_t(i)].time && k < 0x15; ++k) {
+			if (--i < 0) return;
+		}
+	}
+	for (int k = 0; k <= i; ++k) {
+		if (sm.record && !sm.replay) record_state(w, *sm.record, h[size_t(k)]);
+	}
+	h.erase(h.begin(), h.begin() + i + 1);
+}
+
+// AddCurrentState (Core 0x70126250): AddToNewStateList and AddToStateList (0x701b1b40 /
+// 0x701b19f0) each count one and clean the old states past 40; a state at the same time replaces
+// the one in the history, which is not recorded.
+void add_current_state(World &w, StateManager &sm, LocalState ls) {
+	for (int k = 0; k < 2; ++k) {
+		if (++sm.adds > 40) {
+			clean_old_states(w, sm, false);
+			sm.adds = 0;
+		}
+	}
+	auto &h = sm.history;
+	size_t at = h.size();
+	while (at > 0 && h[at - 1].time >= ls.time) --at;
+	if (at < h.size() && h[at].time == ls.time) h[at] = std::move(ls);
+	else h.insert(h.begin() + long(at), std::move(ls));
+}
+
+// DE_CStateManager::UnjoinStateManagerRecord (Core 0x701b0e90).
+void unjoin(World &w, StateManager &sm) {
+	if (!sm.record) return;
+	auto &v = rw(w).joined[sm.record];
+	v.erase(std::remove(v.begin(), v.end(), sm.owner->handle), v.end());
+	sm.record = nullptr;
+}
+
 // DE_CSessionRecord::ObjGenerateContents (Core 0x70202890, v5), each DE_CStateManagerRecord as
 // GenerateContents (0x702042c0, v1) writes it.
 std::vector<uint8_t> record_contents(const SessionRecord &r) {
@@ -756,6 +1038,165 @@ std::vector<std::shared_ptr<SessionRecord>> read_records(const std::string &path
 	}
 }
 
+StateManager *replayed(World &w, const GameObject &o) {
+	StateManager *sm = manager_of(w, &o);
+	return sm && sm->replay ? sm : nullptr;
+}
+
+// A tick-based creature's clock; met first in a tick (`tick_ms`), its base is where that tick
+// puts it, else the last step of the creature's rate.
+Clock &clock_of(World &w, GameObject &o, uint32_t rate, int64_t tick_ms = -1) {
+	auto [it, made] = rw(w).clocks.try_emplace(o.handle);
+	if (made) {
+		uint32_t now = uint32_t(w.scene_ms());
+		uint32_t at = tick_ms >= 0 ? uint32_t(tick_ms) : now - now % rate;
+		it->second.base = at - (o.creature_ticks + (tick_ms >= 0 ? 1 : 0)) * rate;
+	}
+	return it->second;
+}
+
+// DE_CStandardStateManager::AddLaggedState (Core 0x701aec10) for a replayed state: it goes after
+// the newest state at or before its time, the newer ones discarded; the same state at the same
+// time is kept and not restored again. Past 40 adds the old ones are cleaned (not recorded).
+bool add_lagged_state(StateManager &sm, uint32_t t, const std::vector<uint8_t> &bytes) {
+	auto &h = sm.lagged;
+	size_t at = h.size();
+	while (at > 0 && h[at - 1].first > t) --at;
+	if (at > 0 && h[at - 1].first == t) {
+		if (h[at - 1].second == bytes) return false;
+		--at;
+	}
+	h.erase(h.begin() + long(at), h.end());
+	h.emplace_back(t, bytes);
+	if (++sm.adds > 40) {
+		uint32_t newest = h.back().first;
+		int i = int(h.size()) - 2;
+		if (newest > sm.window && i >= 0) {
+			bool keep = false;
+			for (int k = 0; newest - sm.window < h[size_t(i)].first && k < 0x15; ++k) {
+				if (--i < 0) {
+					keep = true;
+					break;
+				}
+			}
+			if (!keep) h.erase(h.begin(), h.begin() + i + 1);
+		}
+		sm.adds = 0;
+	}
+	return true;
+}
+
+void restore(World &w, StateManager &sm, const std::pair<uint32_t, std::vector<uint8_t>> &st) {
+	if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s takes its %u state\n", w.frame(), sm.owner->name.c_str(), st.first);
+	Packer p;
+	p.data = st.second;
+	unpack_state(w, p, *sm.owner, st.first);
+}
+
+// UpdateForReplay (Core 0x701af350): the newest recorded state at or before `t` (the owner's
+// local time), when not the last one taken, joins the history; the session's fixup then restores
+// it (SetupOwnerForState, 0x701af020).
+void update_for_replay(World &w, StateManager &sm, uint32_t t) {
+	if (!sm.record || sm.record->states.empty()) return;
+	auto &st = sm.record->states;
+	size_t &c = sm.record->cursor;
+	if (c >= st.size()) c = st.size() - 1;
+	while (c > 0 && st[c].first > t) --c;
+	while (c + 1 < st.size() && st[c + 1].first <= t) ++c;
+	if (st[c].first > t || st[c].first == sm.applied) return;
+	sm.applied = st[c].first;
+	if (add_lagged_state(sm, st[c].first, st[c].second)) restore(w, sm, sm.lagged.back());
+}
+
+void retick(World &w, GameObject &o, uint32_t at_ms) {
+	++rw(w).reticking;
+	w.retick(o, at_ms);
+	--rw(w).reticking;
+}
+
+// DE_CCreature::AssureSequenced (Creature 0x15015be0), as a hold ends: short of the tick it was
+// at, a replayed creature takes its record again and re-ticks from the newest state it holds;
+// past it, it re-ticks from there.
+void assure_sequenced(World &w, GameObject &o, Clock &c) {
+	if (c.mode != 2) return;
+	uint32_t now = o.creature_ticks;
+	if (now < c.saved) {
+		c.mode = 0;
+		StateManager *sm = manager_of(w, &o);
+		if (!sm) return;
+		if (sm->replay) update_for_replay(w, *sm, now);
+		uint32_t from = now;
+		for (auto it = sm->lagged.rbegin(); it != sm->lagged.rend(); ++it) {
+			if (it->first <= now) {
+				auto st = *it;
+				restore(w, *sm, st);
+				if (!sm->keep_clock) from = st.first;
+				break;
+			}
+		}
+		o.creature_ticks = from;
+		while (o.creature_ticks < now) retick(w, o, uint32_t(w.scene_ms()));
+	} else if (c.saved < now) {
+		o.creature_ticks = c.saved;
+		c.saved = now;
+		while (o.creature_ticks < c.saved) retick(w, o, uint32_t(w.scene_ms()));
+	}
+}
+
+// DE_CCreature::RewindTime (Creature 0x15015eb0): back to tick `to`, the creature holds (no physics
+// or brain) until its clock is back where it was.
+void rewind_time(World &w, GameObject &o, Clock &c, uint32_t to) {
+	uint32_t was = o.creature_ticks;
+	if (to > was) return;
+	if (was == to) {
+		if (c.mode) assure_sequenced(w, o, c);
+		c.mode = 0;
+		c.until = to;
+	} else {
+		if (c.mode != 2) c.saved = was, c.mode = 2;
+		c.until = was;
+	}
+	o.creature_ticks = to;
+}
+
+// DE_CCreature::SetTime (Creature 0x15015d20): to the tick of scene time `ms`; behind it the
+// creature re-ticks up to it, at most 100 ticks; ahead of it, it rewinds.
+void set_time(World &w, GameObject &o, uint32_t ms) {
+	uint32_t rate = w.creature_rate(&o);
+	if (!rate) return;
+	Clock &c = clock_of(w, o, rate);
+	if (ms < c.base) {
+		o.creature_ticks = 0;
+		return;
+	}
+	uint32_t tick = (ms - c.base) / rate, at = c.base + o.creature_ticks * rate;
+	if (ms <= at) {
+		if (tick < o.creature_ticks) rewind_time(w, o, c, tick);
+		return;
+	}
+	uint32_t n = (ms - at) / rate;
+	if (n > 100) {
+		n = 100;
+		o.creature_ticks = tick - 100;
+	}
+	for (; n; --n) retick(w, o, c.base + o.creature_ticks * rate);
+	o.creature_ticks = tick;
+	c.until = tick;
+}
+
+// The recorded or replayed session's: under it, or in its scene; outside both, anyone's.
+bool in_session(World &w, const GameObject *o) {
+	GameObject *own = rw(w).session ? rw(w).session->obj : nullptr;
+	const GameObject *root = o;
+	for (const GameObject *a = o; a; root = a, a = a->parent) {
+		for (auto &s : w.sessions) {
+			if (s->obj == a) return a == own;
+		}
+	}
+	if (std::find(w.scene_roots.begin(), w.scene_roots.end(), root) != w.scene_roots.end()) return w.scene_session_of(root) == own;
+	return true;
+}
+
 void forget(World &w) {
 	auto &R = rw(w);
 	if (R.record && !R.record->recording) {
@@ -764,6 +1205,9 @@ void forget(World &w) {
 		for (Brain *b : w.brains()) b->inst.controlled = true;
 	}
 	R.prepared.clear();
+	R.joined.clear();
+	R.clocks.clear();
+	R.deferred.clear();
 	R.last_ms = 0;
 	R.managers.clear();
 	R.record.reset();
@@ -863,6 +1307,15 @@ void replay_session_ended(World &w, SessionState &s) {
 	if (R.session != &s) return;
 	if (R.record && R.record->recording) {
 		SessionRecord &r = *R.record;
+		// Each record's first manager flushes its history into it and leaves it.
+		for (auto &m : r.managers) {
+			auto &joined = R.joined[m.get()];
+			if (joined.empty()) continue;
+			StateManager *sm = manager_of(w, w.object(joined[0]));
+			if (!sm) continue;
+			clean_old_states(w, *sm, true);
+			unjoin(w, *sm);
+		}
 		// +0x58: the session's class (its factory, a script class here).
 		if (s.obj && s.obj->file) r.factory = s.obj->file->objects()[s.obj->index].guid;
 		r.end_ms = uint32_t(w.scene_ms());
@@ -882,7 +1335,15 @@ void replay_session_ended(World &w, SessionState &s) {
 		std::filesystem::create_directories(recordings_dir(), ec);
 		r.path = recordings_dir() + "/" + stamp + ".DEObjects";
 		size_t states = 0;
-		for (auto &m : r.managers) states += m->states.size();
+		for (auto &m : r.managers) {
+			states += m->states.size();
+			if (!getenv("OPENBG_DEBUG_REPLAY")) continue;
+			std::string shown;
+			for (char ch : m->id) shown += ch >= 32 && ch < 127 ? ch : '.';
+			fprintf(stderr, "[record] %s:", shown.c_str());
+			for (auto &st : m->states) fprintf(stderr, " %u/%zu", st.first, st.second.size());
+			fprintf(stderr, "\n");
+		}
 		if (write_record(r)) printf("recorded %s: %zu managers, %zu states\n", r.path.c_str(), r.managers.size(), states);
 	}
 	s.record.reset();
@@ -924,9 +1385,11 @@ void replay_update(World &w) {
 		if (w.object(it->first) != it->second.owner) it = R.managers.erase(it);
 		else ++it;
 	}
-	// The scene's objects and the sessions' own (their modifiers and slots are not in the scene).
+	// DE_CStateManager::ObjPrepare adds a manager to its scene's session (DE_CScene +0xa8): the
+	// recorded session's scene objects and its own (its modifiers and slots are not in the scene).
+	GameObject *own = R.session->obj;
 	auto consider = [&](GameObject *o) {
-		if (!o->is("StateManager") && !in_gui(*o) && has_state_manager(*o)) join(w, *o);
+		if (!o->is("StateManager") && !in_gui(*o) && has_state_manager(*o) && in_session(w, o)) join(w, *o);
 	};
 	for (GameObject *o : w.scene_objects()) consider(o);
 	// Pilots and other objects that run scripts outside the scene.
@@ -937,13 +1400,11 @@ void replay_update(World &w) {
 		consider(o);
 		for (GameObject *c : o->children) walk(c);
 	};
-	for (auto &s : w.sessions) {
-		if (s->obj && w.object(s->obj->handle)) walk(s->obj);
-	}
+	if (own && w.object(own->handle)) walk(own);
 	uint32_t now = uint32_t(w.scene_ms());
 	if (getenv("OPENBG_DEBUG_REPLAY") && w.frame() % 30 == 0) {
 		for (GameObject *o : w.scene_objects()) {
-			if (o->fighter) fprintf(stderr, "[fighter %u ms] %s %.1f %.1f %.1f\n", now, o->name.c_str(), o->local.t[0], o->local.t[1], o->local.t[2]);
+			if (o->fighter) fprintf(stderr, "[fighter %u ms] %s %.1f %.1f %.1f tick %u\n", now, o->name.c_str(), o->local.t[0], o->local.t[1], o->local.t[2], o->creature_ticks);
 		}
 	}
 	// OPENBG_DEBUG_REWIND=<frame>:<ms>: a replay's clock goes back that far then (testing).
@@ -974,26 +1435,11 @@ void replay_update(World &w) {
 			auto it = R.prepared.find(o->handle);
 			if (it != R.prepared.end() && it->second > now && o->copied && !in_gui(*o)) w.clean_later(o);
 		}
-		// DE_CCreature::RewindTime (Creature 0x15015eb0): a creature holds still until a state comes.
-		for (auto &[h, sm] : R.managers) sm.rewound = sm.replay && sm.owner->is("Actor\\Creature");
 	}
 	R.last_ms = now;
 	for (GameObject *o : w.scene_objects()) R.prepared.emplace(o->handle, now);
-	// UpdateForReplay (Core 0x701af350) + SetupOwnerForState: the newest state at or before now.
 	for (auto &[h, sm] : R.managers) {
-		if (!sm.replay || !sm.record || sm.record->states.empty()) continue;
-		auto &st = sm.record->states;
-		size_t &c = sm.record->cursor;
-		if (c >= st.size()) c = st.size() - 1;
-		while (c > 0 && st[c].first > now) --c;
-		while (c + 1 < st.size() && st[c + 1].first <= now) ++c;
-		if (st[c].first > now || st[c].first == sm.applied) continue;
-		sm.applied = st[c].first;
-		sm.rewound = false;
-		if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s takes its %u ms state\n", w.frame(), sm.owner->name.c_str(), st[c].first);
-		Packer p;
-		p.data = st[c].second;
-		unpack_state(w, p, *sm.owner);
+		if (sm.replay) update_for_replay(w, sm, local_time(w, *sm.owner));
 	}
 }
 
@@ -1003,18 +1449,95 @@ void register_state(World &w, GameObject *owner, bool got_hit) {
 	// The state manager of the object (or of the creature it is a component of).
 	GameObject *o = owner;
 	while (o && !has_state_manager(*o)) o = o->component_owner && o->component_owner != o ? o->component_owner : o->parent;
-	if (!o || in_gui(*o)) return;
+	if (!o || in_gui(*o) || !in_session(w, o)) return;
 	StateManager &sm = join(w, *o);
-	if (!sm.record) return;
-	uint32_t t = uint32_t(w.scene_ms());
+	if (!sm.connected) return;
+	// CreateCurrentState (Core 0x701aeea0) at the owner's local time (RegisterExecutorState,
+	// Creature 0x15015650); the state is recorded when it ages out of the history.
 	Packer p;
-	pack_state(w, p, *o, sm);
+	p.local = true;
+	LocalState ls;
+	ls.time = local_time(w, *o);
+	pack_state(w, p, *o, sm, ls.phys_at, ls.phys_end);
+	ls.bytes = std::move(p.data);
+	ls.refs = std::move(p.refs);
+	add_current_state(w, sm, std::move(ls));
 	// RegisterGetHitState (OMF 0x350296b0) flags the fighter after registering.
 	sm.got_hit |= got_hit;
-	auto &st = sm.record->states;
-	// AddToStateList / Record: a state at the same time replaces the last.
-	if (!st.empty() && st.back().first == t) st.back().second = std::move(p.data);
-	else st.emplace_back(t, std::move(p.data));
+}
+
+// DE_CStateManager::ProcessEvent (Core 0x701b18c0): on its owner's pre-destruction event a
+// manager flushes its history into the record; it then leaves the record.
+void replay_destroying(World &w, GameObject &o) {
+	auto &R = rw(w);
+	if (R.managers.empty() && R.clocks.empty()) return;
+	std::vector<GameObject *> branch = {&o};
+	for (size_t i = 0; i < branch.size(); ++i) branch.insert(branch.end(), branch[i]->children.begin(), branch[i]->children.end());
+	for (GameObject *b : branch) {
+		R.clocks.erase(b->handle);
+		R.deferred.erase(std::remove(R.deferred.begin(), R.deferred.end(), b->handle), R.deferred.end());
+		StateManager *sm = manager_of(w, b);
+		if (!sm) continue;
+		if (R.record && R.record->recording) clean_old_states(w, *sm, true);
+		unjoin(w, *sm);
+		R.managers.erase(b->handle);
+	}
+}
+
+// DE_CCreature::Tick (Creature 0x15016870), its replay side: a held creature skips physics and
+// brain; a replayed one whose history holds a state for this very tick (not the one being
+// restored) takes it and skips them too. At the end of the tick a hold ends once the clock is
+// back where it was (AssureSequenced).
+bool replay_tick(World &w, GameObject &o) {
+	if (!replaying(w)) return false;
+	uint32_t rate = w.creature_rate(&o);
+	if (!rate) return false;
+	Clock &c = clock_of(w, o, rate, int64_t(w.scene_ms()));
+	if (o.creation_time) c.base = o.creation_time;
+	else if (!rw(w).reticking) c.base = uint32_t(w.scene_ms()) - (o.creature_ticks + 1) * rate;
+	bool skip = c.mode == 2;
+	if (!skip && c.mode == 0 && c.ticked && c.unpacking != o.creature_ticks) {
+		if (StateManager *sm = replayed(w, o)) {
+			for (auto &st : sm->lagged) {
+				if (st.first != o.creature_ticks) continue;
+				auto copy = st;
+				restore(w, *sm, copy);
+				skip = true;
+				break;
+			}
+		}
+	}
+	if (c.mode != 0) {
+		if (o.creature_ticks >= c.until) {
+			assure_sequenced(w, o, c);
+			c.mode = 0;
+			c.until = o.creature_ticks;
+		}
+	} else {
+		c.until = o.creature_ticks;
+	}
+	c.ticked = true;
+	return skip;
+}
+
+bool replay_held(World &w, const GameObject &o) {
+	auto &R = rw(w);
+	auto it = R.clocks.find(o.handle);
+	return it != R.clocks.end() && it->second.mode == 2;
+}
+
+void replay_set_time(World &w, GameObject &o, uint32_t ms) {
+	if (replaying(w)) set_time(w, o, ms);
+}
+
+// DE_CScene::TemporalUpdate (Core 0x70070710): the deferred SetTime of restored creatures.
+void replay_temporal_update(World &w) {
+	auto &R = rw(w);
+	auto list = std::move(R.deferred);
+	R.deferred.clear();
+	for (uint32_t h : list) {
+		if (GameObject *o = w.object(h)) set_time(w, *o, uint32_t(w.scene_ms()));
+	}
 }
 
 // SetInstanceNumberCaller (Creature 0x15014100): the number's digits join the ID suffix, which
@@ -1033,11 +1556,6 @@ bool replay_driven(World &w, const GameObject *o) {
 		if (StateManager *sm = manager_of(w, o)) return sm->replay;
 	}
 	return false;
-}
-
-bool replay_held(World &w, const GameObject &o) {
-	StateManager *sm = manager_of(w, &o);
-	return sm && sm->rewound;
 }
 
 bool replaying(World &w) {

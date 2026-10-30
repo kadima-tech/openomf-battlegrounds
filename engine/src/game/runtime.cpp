@@ -288,6 +288,7 @@ void World::housekeeping() {
 
 void World::destroy(GameObject *o) {
 	if (!o) return;
+	replay_destroying(*this, *o);
 	end_session_object(*this, o);
 	if (o->parent) {
 		auto &v = o->parent->children;
@@ -1255,6 +1256,9 @@ void World::register_creature(GameObject *o) {
 		if (rate == 0) return;
 		o->temporal_registered = true;
 		add_temporal(rate, {Temporal::Creature, o->handle, nullptr});
+		// DE_CCreature::ObjPrepare (Creature 0x15016050): one made earlier starts at the tick its
+		// creation time gives.
+		if (o->creation_time && o->creation_time < scene_ms_) o->creature_ticks = (scene_ms_ - o->creation_time) / rate;
 		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's
 		// order, joins this one's list (+0x334), and this one joins theirs.
 		if (o->fighter && !o->fighter_prepared) {
@@ -1318,25 +1322,39 @@ static void pulse(World &w, Brain *b) {
 // fighter's guide and attack trailer points, and for a computer-controlled fighter every 64th
 // update a step of its attack-range base.
 void World::creature_tick(GameObject &o) {
-	if (replay_held(*this, o)) return;
 	if (o.fighter) {
 		validate_animation(o);  // as InternalWorldUpdate does when something needs positions
 		run_commands(o);
-		physics_step(o);
 	}
+	// A replay's held creature, or one re-taking its state for this tick, skips physics and brain.
+	bool skip = replay_tick(*this, o);
+	if (o.fighter && !skip) physics_step(o);
 	for (auto &bp : brains_) {
 		if (bp->owner == &o) {
-			if (is_creature_behaviour(*this, *bp)) pulse(*this, bp.get());
+			if (!skip && is_creature_behaviour(*this, *bp)) pulse(*this, bp.get());
 			break;
 		}
 	}
 	++o.creature_ticks;
 	if (o.fighter) {
-		guide(o);
-		particles->tick_trailers(o);
-		if (o.invulnerable_frames > 0) --o.invulnerable_frames;
+		if (!skip && o.invulnerable_frames > 0) --o.invulnerable_frames;
+		if (!replay_held(*this, o)) {
+			guide(o);
+			particles->tick_trailers(o);
+		}
 		jitter_attack_range(o);
 	}
+}
+
+void World::retick(GameObject &o, uint32_t at_ms) {
+	at_scene_ms(at_ms, [&] { creature_tick(o); });
+}
+
+void World::at_scene_ms(uint32_t at_ms, const std::function<void()> &f) {
+	uint32_t now = scene_ms_;
+	scene_ms_ = at_ms;
+	f();
+	scene_ms_ = now;
 }
 
 // DE_CJoystickInputManager::Tick (Creature 0x150020c0): a record per input change; older records
@@ -1397,15 +1415,30 @@ void World::advance(TemporalSet &set) {
 	}
 }
 
+// DE_CScene::PassTime (Core 0x70070040) when the clock jumps: each set restarts at its last tick
+// before the new time and each element is set to it, newest first.
+void World::reset_clock() {
+	std::vector<uint32_t> creatures;
+	for (auto &s : temporal_sets_) {
+		if (s.scene || !s.rate) continue;
+		s.next = scene_ms_ / s.rate * s.rate + s.rate;
+		for (auto it = s.elements.rbegin(); it != s.elements.rend(); ++it) {
+			if (it->kind == Temporal::Creature) creatures.push_back(it->handle);
+		}
+	}
+	for (uint32_t h : creatures) {
+		if (GameObject *o = object(h); o && in_scene(*o)) replay_set_time(*this, *o, scene_ms_);
+	}
+}
+
 uint32_t World::scene_step(float real_ms) {
+	replay_temporal_update(*this);
 	scene_carry_ += double(real_ms) * time_scale + passed_ms;
 	passed_ms = 0;
 	if (scene_carry_ < 0) {
 		uint32_t back = uint32_t(std::min<double>(-scene_carry_, scene_ms_));
 		scene_ms_ -= back;
-		for (auto &s : temporal_sets_) {
-			if (!s.scene) s.next -= back;
-		}
+		reset_clock();
 		// What measures time since it last ran must not have run in the future.
 		simple_physics->clock_back(scene_ms_);
 		for (auto &o : objects_) {
@@ -1418,6 +1451,12 @@ uint32_t World::scene_step(float real_ms) {
 	}
 	uint32_t ms = uint32_t(scene_carry_);
 	scene_carry_ -= ms;
+	// A replay passes at most 2000 ms: the clock jumps over the rest.
+	if (ms > 2000 && replaying(*this)) {
+		scene_ms_ += ms - 2000;
+		reset_clock();
+		ms = 2000;
+	}
 	return ms;
 }
 
