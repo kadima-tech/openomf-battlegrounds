@@ -106,7 +106,8 @@ public:
 	Rgba fill, edges;
 	de::ObjectRef image;  // textures the face
 	Rgba image_tint;
-	bool hidden = false, disabled = false;
+	bool hidden = false;
+	bool disabled = false;  // ReadOnlyOn: covered and refusing input
 
 	void set_fill(Rgba c) { visual = has_fill = true, fill = c; }
 	void set_frame(float px, bool is_down) { visual = true, frame_x = frame_y = px, down = is_down; }

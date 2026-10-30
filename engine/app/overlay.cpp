@@ -140,6 +140,19 @@ void OverlayRenderer::quad(float x0, float y0, float x1, float y1, float u0, flo
 	glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+void OverlayRenderer::quadv(const std::array<float, 8> &xy, const std::array<float, 8> &uv, const float *rgba) {
+	float q[6][4];
+	const int order[6] = {0, 1, 2, 0, 2, 3};
+	for (int i = 0; i < 6; ++i) {
+		size_t k = size_t(order[i]) * 2;
+		q[i][0] = xy[k], q[i][1] = xy[k + 1], q[i][2] = uv[k], q[i][3] = uv[k + 1];
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+	glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STREAM_DRAW);
+	glUniform4fv(glGetUniformLocation(prog_, "color"), 1, rgba);
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
 std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::World::Primitive &t, float sx, float sy, float dx,
                                                   float dy) const {
 	std::vector<float> v;
@@ -187,7 +200,7 @@ void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
 	std::vector<const game::World::Primitive *> order;
 	for (auto &[obj, t] : world.texts) {
 		if (world.screen_space_meshes.count(t.mesh) || !t.mesh->parent || t.rgba[3] <= 0.01f) continue;
-		if (t.kind != game::World::Primitive::Quad && (t.kind != game::World::Primitive::Text || t.text.empty())) continue;
+		if (t.kind != game::World::Primitive::Quad) continue;
 		if (!rendered(t.mesh)) continue;
 		order.push_back(&t);
 	}
@@ -220,20 +233,6 @@ void OverlayRenderer::draw_world(const game::World &world, const float *vp) {
 		if (t->overlay) glDisable(GL_DEPTH_TEST);
 		else glEnable(GL_DEPTH_TEST);
 		auto mode = [&](int m) { glUniform1i(glGetUniformLocation(prog3_, "mode"), m); };
-		if (t->kind == game::World::Primitive::Text) {
-			const FontGL *f = font_for(*t);
-			if (!f) break;
-			glBindTexture(GL_TEXTURE_2D, f->tex);
-			mode(f->alpha ? 0 : 1);
-			float k = t->height / std::max(1e-6f, f->font.height), lift = -f->font.base * k;
-			if (t->shadow) {
-				float shadow[4] = {0, 0, 0, t->rgba[3] * 0.5f};
-				float off = 0.06f * k;
-				submit(*t, text_vertices(*f, *t, k, k, off, lift - off), shadow);
-			}
-			submit(*t, text_vertices(*f, *t, k, k, 0, lift), t->rgba);
-			continue;
-		}
 		GLuint tex = image(t->texture);
 		glBindTexture(GL_TEXTURE_2D, tex);
 		mode(tex ? 0 : 2);
@@ -260,7 +259,9 @@ void OverlayRenderer::draw(const game::World &world, int width, int height) {
 	glUniform1i(glGetUniformLocation(prog_, "tex"), 0);
 	std::vector<const game::World::Primitive *> order;
 	for (auto &[obj, t] : world.texts) {
-		if (!world.screen_space_meshes.count(t.mesh) || t.rgba[3] <= 0.01f) continue;
+		// A text primitive's DE_CFlatText3 is always screen space (NewText sets its screen position).
+		if (t.kind != game::World::Primitive::Text && !world.screen_space_meshes.count(t.mesh)) continue;
+		if (t.rgba[3] <= 0.01f) continue;
 		if (t.kind == game::World::Primitive::Text && t.text.empty()) continue;
 		if (!game::in_scene(*t.mesh)) continue;  // its actor left the scene (a deactivated overlay)
 		if (!rendered(t.mesh)) continue;
@@ -296,17 +297,22 @@ void OverlayRenderer::draw(const game::World &world, int width, int height) {
 			quad(b[0], b[1], b[2], b[3], t->uv[0], t->uv[1], t->uv[2], t->uv[3], t->rgba);
 			continue;
 		}
-		// CStatusBarPrimitive::UpdateBar: the filled body (texture's lower half) up to
-		// begin + (end - begin) x value, and a glowing cap (upper half) one bar thickness either
-		// side of that point.
+		// CStatusBarPrimitive::UpdateBar (0x7012d210): the body (the texture's lower half) up to one
+		// bar thickness short of the value's point and a cap (upper half) one thickness either side
+		// of it; a cap reaching past the start is cut there, its u moved on by half the cut.
+		const float x0 = std::min(b[0], b[2]), x1 = std::max(b[0], b[2]), y0 = std::min(b[1], b[3]), y1 = std::max(b[1], b[3]);
 		if (!t->bottom_to_top) {
-			float h = std::fabs(b[3] - b[1]), p = b[0] + (b[2] - b[0]) * t->value;
-			if (p - h > b[0]) quad(b[0], b[1], p - h, b[3], 0.1f, 0.5f, 0.9f, 1.0f, t->rgba);
-			if (t->value > 0) quad(std::max(b[0], p - h), b[1], p + h, b[3], 0.1f, 0.0f, 0.9f, 0.5f, t->rgba);
+			float h = y1 - y0, p = x0 + (x1 - x0) * t->value, lo = p - h, hi = p + h;
+			if (hi <= x0) continue;
+			if (lo > x0) quadv({x0, y0, lo, y0, lo, y1, x0, y1}, {0.1f, 1, 0.9f, 1, 0.9f, 0.5f, 0.1f, 0.5f}, t->rgba);
+			float s = std::max(lo, x0), u = lo > x0 ? 0.1f : 0.1f - (lo - x0) / h * 0.5f;
+			quadv({s, y0, hi, y0, hi, y1, s, y1}, {u, 0.5f, 0.9f, 0.5f, 0.9f, 0, u, 0}, t->rgba);
 		} else {
-			float w = std::fabs(b[2] - b[0]), p = b[1] + (b[3] - b[1]) * t->value;
-			if (p - w > b[1]) quad(b[0], b[1], b[2], p - w, 0.1f, 0.5f, 0.9f, 1.0f, t->rgba);
-			if (t->value > 0) quad(b[0], std::max(b[1], p - w), b[2], p + w, 0.1f, 0.0f, 0.9f, 0.5f, t->rgba);
+			float w = x1 - x0, p = y0 + (y1 - y0) * t->value, lo = p - w, hi = p + w;
+			if (hi <= y0) continue;
+			if (lo > y0) quadv({x0, y0, x1, y0, x1, lo, x0, lo}, {0.1f, 1, 0.1f, 0.5f, 0.9f, 0.5f, 0.9f, 1}, t->rgba);
+			float s = std::max(lo, y0), u = lo > y0 ? 0.1f : 0.1f - (lo - y0) / w * 0.5f;
+			quadv({x0, s, x1, s, x1, hi, x0, hi}, {u, 0.5f, u, 0, 0.9f, 0, 0.9f, 0.5f}, t->rgba);
 		}
 	}
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

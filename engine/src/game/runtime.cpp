@@ -1178,20 +1178,28 @@ bool World::verify(const InputSequence &seq) const {
 
 // DE_CScene::TemporalElementSetForRate: the set of a rate, made on first use with its last tick at
 // (now / rate) x rate, so every element of a rate ticks together on multiples of it.
-World::TemporalSet &World::temporal_set(uint32_t rate) {
+World::TemporalSet &World::temporal_set(uint32_t rate, int scene) {
 	for (auto &s : temporal_sets_) {
-		if (s.rate == rate) return s;
+		if (s.rate == rate && s.scene == scene) return s;
 	}
+	uint32_t now = scene ? gui_scene_ms[scene - 1] : scene_ms_;
 	TemporalSet s;
 	s.rate = rate;
-	s.next = scene_ms_ / rate * rate + rate;
+	s.scene = scene;
+	s.next = now / rate * rate + rate;
 	temporal_sets_.push_back(std::move(s));
 	return temporal_sets_.back();
 }
 
+// The scene an element's object is in (DE_CScene::AddTemporal on its own scene).
+int World::temporal_scene(const Temporal &t) {
+	const GameObject *o = t.kind == Temporal::Brain ? (t.brain ? t.brain->owner : nullptr) : t.kind == Temporal::Creature ? object(t.handle) : nullptr;
+	return o && in_gui(*o) ? std::clamp(gui_view(*o), 0, 1) + 1 : 0;
+}
+
 void World::add_temporal(uint32_t rate, Temporal t) {
 	if (rate == 0) return;
-	TemporalSet &s = temporal_set(rate);
+	TemporalSet &s = temporal_set(rate, temporal_scene(t));
 	for (auto &e : s.elements) {
 		if (e.kind == t.kind && e.handle == t.handle && e.brain == t.brain) return;
 	}
@@ -1391,7 +1399,9 @@ uint32_t World::scene_step(float real_ms) {
 	if (scene_carry_ < 0) {
 		uint32_t back = uint32_t(std::min<double>(-scene_carry_, scene_ms_));
 		scene_ms_ -= back;
-		for (auto &s : temporal_sets_) s.next -= back;
+		for (auto &s : temporal_sets_) {
+			if (!s.scene) s.next -= back;
+		}
 		// What measures time since it last ran must not have run in the future.
 		simple_physics->clock_back(scene_ms_);
 		for (auto &o : objects_) {
@@ -1408,7 +1418,31 @@ uint32_t World::scene_step(float real_ms) {
 }
 
 uint32_t World::scene_ms_of(const GameObject *o) const {
-	return o && in_gui(*o) && gui_view(*o) == 1 ? uint32_t(view_scene_ms) : scene_ms_;
+	return o && in_gui(*o) ? gui_scene_ms[std::clamp(gui_view(*o), 0, 1)] : scene_ms_;
+}
+
+void World::tick_gui(int view, uint32_t ms) {
+	uint32_t &now = gui_scene_ms[view];
+	uint32_t left = ms;
+	for (;;) {
+		register_temporals();
+		TemporalSet *first = nullptr;
+		for (auto &s : temporal_sets_) {
+			if (s.scene == view + 1 && (!first || s.next - now < first->next - now)) first = &s;
+		}
+		if (!first || first->next - now > left) break;
+		left -= first->next - now;
+		now = first->next;
+		first->next += first->rate;
+		// Scene().Add from a GUI script adds to that script's scene.
+		std::vector<GameObject *> roots = scene_roots;
+		advance(*first);
+		start_pending_brains();
+		for (GameObject *r : scene_roots) {
+			if (!r->gui && std::find(roots.begin(), roots.end(), r) == roots.end()) r->gui = true, r->view = view;
+		}
+	}
+	now += left;
 }
 
 void World::tick(uint32_t ms) {
@@ -1437,7 +1471,7 @@ void World::tick(uint32_t ms) {
 		register_temporals();
 		TemporalSet *first = nullptr;
 		for (auto &s : temporal_sets_) {
-			if (!first || s.next - scene_ms_ < first->next - scene_ms_) first = &s;
+			if (!s.scene && (!first || s.next - scene_ms_ < first->next - scene_ms_)) first = &s;
 		}
 		if (!first || first->next - scene_ms_ > left) break;
 		left -= first->next - scene_ms_;

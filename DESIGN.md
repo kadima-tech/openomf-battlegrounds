@@ -25,6 +25,8 @@ to present that data, and the few places where the look is our own.
   half alpha, window backs (0, 0, 0.1) at 0.7, white button text, a 30-pixel blue-to-navy title bar;
   lists with (0, 0, 0.5) selected rows and 24-pixel tiled scroll bars without arrows; combo boxes,
   sliders, check and radio buttons, edit fields with a yellow caret; Yes/No and text-input dialogs.
+  A read-only control (an Apply with nothing to apply, Play with no recording) is dimmed by a black
+  cover at half alpha.
   Sizes in screen pixels (the original's units), so controls stay the same pixel size at any
   resolution.
 - **Lists (description selectors, Replays).** Rows 20 screen pixels at 768 high, names 19 high, white;
@@ -64,6 +66,8 @@ to present that data, and the few places where the look is our own.
 - **HUD and messages.** Drawn from the scripts' screen-space primitives (text in `Font_Ariel` or the
   in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them. One font
   unit is the text size; HUD letters stretch with the screen's shape (x by its width, y by its height).
+  Every text primitive is on screen (crowd responses and pilot quotes too). Stat bars fill along
+  their length with a glowing cap at the value's end; the upright bars use the texture turned.
 - **Help.** A tree list: Plus / Minus icons 10 px wide at depth × 20 + 5, text at (depth + 1) × 20,
   branches collapsed at first, no tree lines.
 - **Shadows (off by default).** Each robot's silhouette darkens the floor under it to about half (Medium, High), from the static lights' direction (High adds one from the moving lights); Low casts one from straight above, darker.

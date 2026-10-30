@@ -134,7 +134,7 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 	if (debug) fprintf(stderr, "[particles %u] new instance of %s on %s\n", w_.frame(), def->object.info().name.c_str(), actor ? actor->name.c_str() : "-");
 	in->def = def;
 	in->actor = actor;
-	in->time = scene_time_ms(w_);
+	in->time = float(w_.scene_ms_of(actor));
 	if (auto sp = actor_spawning_.find(actor); sp != actor_spawning_.end()) in->spawning = sp->second;
 	const de::ObjectRef &g = def->generator.object;
 	if (auto gs = generator_spawning_.find({{g.file, g.index}, actor}); gs != generator_spawning_.end()) in->spawning = gs->second;
@@ -337,7 +337,7 @@ void ParticleSystem::step() {
 		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
 		for (auto *def : renderers_of(o)) {
 			if (!def->generator.object) continue;
-			step(instance(o, def), now);
+			step(instance(o, def), float(w_.scene_ms_of(o)));
 		}
 	}
 	for (GameObject *k : kills_) w_.destroy(k);

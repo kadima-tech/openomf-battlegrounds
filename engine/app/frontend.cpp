@@ -290,6 +290,8 @@ int main(int argc, char **argv) {
 					if (m.frame == fr && m.kind == 5) app.key(int(m.x)), app.text(std::string(1, char(m.x)));
 				}
 				app.update();
+				world.tick_gui(0, game::World::kFrameMs);
+				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
 				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
 				if (offline) {
 					offline->play_requests(world, view.player ? view.ear() : ear);
@@ -470,6 +472,8 @@ int main(int argc, char **argv) {
 			// Autopause: the scene passes no time while a page that autopauses is up (the
 			// sessions still update).
 			world.scene_paused = app.autopaused() && world.session;
+			world.tick_gui(0, frame_ms);
+			if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, frame_ms);
 			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
 			++fr;
 			mixer.play_requests(world, view.player ? view.ear() : listener);
@@ -479,7 +483,6 @@ int main(int argc, char **argv) {
 				float ms = shot ? float(game::World::kFrameMs) : float(double(t - last_render) * 1000.0 / double(SDL_GetPerformanceFrequency()));
 				last_render = t;
 				game::render_tick(world, std::fmin(ms, 100.0f));
-				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.view_scene_ms += std::fmin(ms, 100.0f);
 			}
 
 			int dw = W, dh = H;
@@ -716,6 +719,8 @@ int main(int argc, char **argv) {
 				}
 				for (auto &c : app.current->controls) {
 					overlay.label(c.text, (c.left + c.right) / 2, (c.top + c.bottom) / 2, 16.0f / 600.0f, white, vpt.w, vpt.h);
+					const float cover[4] = {0, 0, 0, 0.5f};
+					if (c.read_only) overlay.rect(c.left, c.top, c.right, c.bottom, cover, vpt.w, vpt.h);
 				}
 			}
 			// The doors close over the page's controls, which are 3D controls behind them in the original.

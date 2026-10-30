@@ -258,6 +258,12 @@ void Ctl::paint(Painter &p) {
 	paint_visual(p);
 	paint_self(p);
 	paint_children(p);
+	// ReadOnlyOn (0x700e5760): a child control over the client area, black at alpha 0.5.
+	if (disabled) {
+		float cx0, cy0, cx1, cy1;
+		client(cx0, cy0, cx1, cy1);
+		p.rect(cx0, cy0, cx1, cy1, {0, 0, 0, 0.5f});
+	}
 }
 
 Ctl *Ctl::hit(float x, float y) {
