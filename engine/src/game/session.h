@@ -73,6 +73,7 @@ struct SessionState {
 	GameObject *camera = nullptr;
 	int max_player_clients = 2;
 	bool begun = false;
+	bool scene_started = false;  // its scene's Genesis (OwnEnvironment): DE_CScene +0xf0 clear
 	std::vector<ScriptHook> slot_connect_hooks, slot_disconnect_hooks;
 	// UI managers (description selectors). The menus that would show them are not built yet:
 	// a launched UI whose description has a preset choice completes on the next update with it.

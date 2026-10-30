@@ -215,6 +215,7 @@ struct GameObject {
 	int32_t team = -1;                     // fighter +0x49c: its pilot's faction's TeamIndex when prepared
 	std::array<float, 4> analog_axis{0, 0, 0, 0};  // a creature controller's analog movement (+0x90)
 	uint8_t pad_orientation = 8;           // a non-fighter pad's default 2D orientation (SetDefault2DOrientation)
+	uint16_t pad_record = 0;               // a bound non-fighter pad's last input record's directions (0: none)
 	float camera_fov = 0;                  // DE_CCamera +0x2c set at run time (0: the data's)
 	uint32_t current_target = 0;           // fighter +0x30c (a handle): CurrentTarget's pick
 	uint32_t target_checked = 0;           // +0x4a4: scene ms the pick was last reconsidered
@@ -257,6 +258,10 @@ struct GameObject {
 	GameObject *component_owner = nullptr;                // CCreature::AddComponent (+0x218)
 	GameObject *data_owner = nullptr;                     // +0x118 from the data (references chunk 2)
 	bool data_owner_read = false;
+	bool encompasser = false;                             // +0x16c: AutoEncompase may choose it
+	bool auto_encompass = false;                          // +0x170: finds its encompasser when prepared
+	GameObject *data_encompasser = nullptr;               // +0x124 from the data (references chunk 2 v4)
+	bool data_encompasser_read = false;
 	std::array<GameObject *, 2> carry{nullptr, nullptr};  // fighter: left / right hand carryable
 	// DE_CCreature +0x1dc SceneTicksPerUpdate (creature contents; -1 not read yet) and +0x1d8
 	// creation time.
@@ -335,6 +340,7 @@ struct Brain {
 	size_t attached = 0;                               // behaviors[0..attached) are the class's own
 	std::vector<std::string> behavior_names;
 	bool started = false;  // its entry has been run up to its first wait (activation)
+	bool initial_tick = true;  // ClassExecutor +0x48: its entry runs as the scene adds it
 	// Its ClassExecutor's interval (+0x44, ms): a temporal of that rate (DE_CClassExecutorInstance::
 	// Setup), 0 none. A creature's behaviour executor is ticked by the creature instead.
 	uint32_t interval = 0;
@@ -493,6 +499,11 @@ public:
 	void tick_gui(int view, uint32_t ms);
 	// The clock of the scene `o` is in.
 	uint32_t scene_ms_of(const GameObject *o) const;
+	// What Scene() returns for `o` (its actor's +0x10, else the game's): one object per GUI scene,
+	// one for the game's (sessions' scenes are told apart by the caller).
+	GameObject *scene_object(const GameObject *o);
+	// The GUI scene view a Scene() object names, -1 for the game's.
+	static int gui_scene_view(const GameObject *scene);
 	// The input manager's ticks (DE_CJoystickInputManager, 16 ms): input records age in these.
 	uint32_t input_ticks() const { return input_ticks_; }
 
@@ -554,11 +565,10 @@ public:
 	// Run an attached brain's entry up to its first wait.
 	void start_brain(Brain *b);
 	// Put a branch in the scene, starting the executors of its actors (arena scripts, spawn
-	// points, ...) that are not running yet. With `defer_start` (CScene::Add from a script) the
-	// executors are attached at once but their entries run at the end of the tick, after the
-	// calling script has finished setting the actor up (Jaguar's laser takes its length and
-	// creator after Scene().Add, and its entry reads them).
-	void enter_scene(GameObject *root, bool defer_start = false);
+	// points, ...) that are not running yet: those whose ClassExecutor has the initial tick set
+	// (+0x48, contents v4+, the default) at once, the others (Jaguar's lasers, the arenas' own
+	// executors) at the end of the tick, after the calling script has set the actor up.
+	void enter_scene(GameObject *root);
 	void start_pending_brains();
 	// ObjNumBrainInstance / ObjBrainInstance, the brains Interface() searches, in order: an
 	// object's own executors; a session's, then each modifier's (DE_CStandardSession 0x4500f610);
@@ -604,7 +614,6 @@ public:
 	std::function<void(GameObject *rules)> show_rules;
 	// BVCRControls' UI manager (NewVCRControls): SetNextUIManager shows the app's VCR panel; it is
 	// active locally while the panel is up, and deleting it closes the panel.
-	bool scene_paused = false;  // DE_CScene::PassTime passes none: a page autopauses (the app sets it)
 	GameObject *vcr_ui = nullptr;
 	uint32_t vcr_handle = 0;
 	bool vcr_shown = false;
@@ -776,6 +785,13 @@ public:
 	std::vector<GameObject *> affectors();
 	// Number a branch's affectors that are not yet in the list, in that order.
 	void number_affectors(GameObject *root);
+	// The affector that encompasses `a` (+0x124): the data's, else AutoEncompase's (Core 0x7007c360).
+	GameObject *encompasser_of(GameObject *a);
+	// DE_CAffector::IsTouching's walk (Core 0x7007b900, InternalIsTouching 0x7007baa0): the scene's
+	// list holds only affectors nothing encompasses; one whose own groups miss but whose
+	// sub-affectors' match is tested without a result, and when touched its sub-affectors are
+	// walked, the last first. `test(target, record)` reports whether the source touches target.
+	void walk_affectors(uint32_t groups, const std::function<bool(GameObject *, bool)> &test);
 	// DE_CActor::ObjSetParent (Core 0x7008afb0): a branch parented into the scene from outside it
 	// is added there and then (Scene().Add), joining the affector list at its end.
 	void parented(GameObject *o, bool was_in_scene);
@@ -901,6 +917,14 @@ void rotate_rows(std::array<float, 9> &r, int axis, float a);
 // Turn a fighter's body rotation for `frame` (see GameObject::anim_rot).
 void anim_rotate(GameObject &o, int axis, float a);
 std::array<float, 9> slerp_rotation(const std::array<float, 9> &a, const std::array<float, 9> &b, float t);
+
+// CScene::Time / PreciseTime: the clock of the scene `this` names, else of the caller's.
+inline uint32_t scene_time(const NativeContext &c) {
+	const GameObject *s = c.self();
+	int v = World::gui_scene_view(s);
+	if (v >= 0) return c.world.gui_scene_ms[v];
+	return c.world.scene_ms_of(s && !s->file && s->name == "Scene" ? nullptr : c.owner());
+}
 
 // CVector blocks in VM memory (3 floats); null reads as zero, null writes are ignored.
 std::array<float, 3> read_vec(vm::Memory &m, uint32_t a);

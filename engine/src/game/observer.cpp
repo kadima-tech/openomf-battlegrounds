@@ -642,18 +642,12 @@ GameObject *creature_camera(World &w, GameObject *creature, int index) {
 	return find(creature);
 }
 
-int controller_orientation(World &w, const GameObject *ctrl) {
+int controller_orientation(World &, const GameObject *ctrl) {
 	if (!ctrl) return 8;
 	if (ctrl->input_device < 0) return ctrl->pad_orientation;
-	const Input &in = w.input;
-	if (in.up && in.right) return 1;
-	if (in.down && in.right) return 3;
-	if (in.down && in.left) return 5;
-	if (in.up && in.left) return 7;
-	if (in.up) return 0;
-	if (in.right) return 2;
-	if (in.down) return 4;
-	if (in.left) return 6;
+	for (int b : {0, 1, 7, 4, 3, 5, 2, 6}) {  // Get2DOrientation's test order
+		if (ctrl->pad_record & (1u << b)) return b;
+	}
 	return 8;
 }
 

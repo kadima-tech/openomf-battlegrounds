@@ -485,7 +485,7 @@ void register_transform_natives(World &w) {
 		if (!v) return;
 		write_vec(c.mem(), v, c.world.world_to_screen ? c.world.world_to_screen(read_vec(c.mem(), v)) : std::array<float, 3>{0, 0, 0});
 	});
-	reg("CScene::dword PreciseTime()", [](const NativeContext &c) { c.ret_u32(c.world.scene_ms_of(c.owner())); });
+	reg("CScene::dword PreciseTime()", [](const NativeContext &c) { c.ret_u32(scene_time(c)); });
 	reg("CActor::class CVector FocalPoint()", [](const NativeContext &c) {
 		GameObject *o = c.self();
 		if (!o) {

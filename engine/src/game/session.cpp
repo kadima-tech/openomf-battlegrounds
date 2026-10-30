@@ -76,6 +76,7 @@ struct ExecutorClass {
 	de::ObjectRef cls;
 	std::string entry;
 	uint32_t interval = 0;  // +0x44: v2 16, v3+ stored
+	bool initial_tick = true;  // +0x48 (v4+): ticked when the scene is done adding it
 };
 ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 	de::ObjectRef cls;
@@ -88,6 +89,7 @@ ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 	}
 	std::string entry = "Entry";
 	uint32_t interval = 0;
+	bool initial_tick = true;
 	try {
 		de::Contents c(exec.file->object_data(exec.info()).contents);
 		de::Chunk ch = de::begin_chunk(c);
@@ -103,9 +105,10 @@ ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 		}
 		if (ch.version == 2) interval = 16;
 		else if (ch.version >= 3) interval = uint32_t(c.i32());
+		if (ch.version >= 4) initial_tick = c.boolean();
 	} catch (const std::exception &) {
 	}
-	return {cls, entry, interval};
+	return {cls, entry, interval, initial_tick};
 }
 
 }  // namespace
@@ -115,11 +118,12 @@ std::vector<Brain *> World::activate_executors(GameObject *o, const std::vector<
 	if (!o || !activated_.insert(o).second) return out;
 	for (auto &p : properties) {
 		if (!p || p.info().class_path != "ClassExecutor") continue;
-		auto [cls, entry, interval] = executor_class(data_, p);
+		auto [cls, entry, interval, initial_tick] = executor_class(data_, p);
 		if (!cls) continue;
 		try {
 			Brain *b = attach_brain(o, cls, entry);
 			b->interval = interval;
+			b->initial_tick = initial_tick;
 			b->started = true;
 			if (run) start_brain(b);
 			out.push_back(b);
@@ -139,11 +143,12 @@ void World::add_executor_property(GameObject *o, const de::ObjectRef &executor) 
 	static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
 	if (debug) fprintf(stderr, "[executor %u] %s gets %s%s\n", frame_, o->name.c_str(), executor.info().name.c_str(), activated_.count(o) ? " (running)" : "");
 	if (!activated_.count(o)) return;  // enter_scene attaches it
-	auto [cls, entry, interval] = executor_class(data_, executor);
+	auto [cls, entry, interval, initial_tick] = executor_class(data_, executor);
 	if (!cls) return;
 	try {
 		Brain *b = attach_brain(o, cls, entry);
 		b->interval = interval;
+		b->initial_tick = initial_tick;
 		b->started = true;
 		start_brain(b);
 	} catch (const std::exception &e) {
@@ -213,7 +218,7 @@ void World::start_pending_brains() {
 	for (Brain *b : pending) start_brain(b);
 }
 
-void World::enter_scene(GameObject *root, bool defer_start) {
+void World::enter_scene(GameObject *root) {
 	if (!root) return;
 	if (std::find(scene_roots.begin(), scene_roots.end(), root) == scene_roots.end()) scene_roots.push_back(root);
 	root_session.try_emplace(root, session ? session->obj : nullptr);
@@ -254,11 +259,12 @@ void World::enter_scene(GameObject *root, bool defer_start) {
 			started.insert(started.end(), b.begin(), b.end());
 		}
 	}
-	if (defer_start) {
-		pending_starts_.insert(pending_starts_.end(), started.begin(), started.end());
-		return;
+	// DE_CScene::Add ends with DoneAddingExecutors (Core 0x70146450): the executors whose +0x48 is set
+	// tick there, running their entries before Add returns; the others wait for their first tick.
+	for (Brain *b : started) {
+		if (b->initial_tick) start_brain(b);
+		else pending_starts_.push_back(b);
 	}
-	for (Brain *b : started) start_brain(b);
 }
 
 GameObject *World::scene_session_of(const GameObject *o) const {
@@ -925,6 +931,10 @@ void register_session_natives(World &w) {
 		reg(std::string(cls) + "class CScene Scene()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
 		reg(std::string(cls) + "bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
 		reg(std::string(cls) + "bool IsSimulating()", [](const NativeContext &c) { c.ret_bool(true); });
+		// AddPropertyCaller (Session 0x45014ba0 / 0x45019e60): appended to the property list.
+		reg(std::string(cls) + "AddProperty(class CObject)", [node](const NativeContext &c) {
+			if (auto *n = node(c); n && c.arg_object(0)) n->properties.push_back(c.arg_object(0));
+		});
 		reg(std::string(cls) + "int NumProperty()", [node](const NativeContext &c) {
 			auto *n = node(c);
 			c.ret_u32(n ? uint32_t(n->properties.size()) : 0);
@@ -958,6 +968,7 @@ void register_session_natives(World &w) {
 			if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] %s owns environment %s\n", c.world.frame(), s->obj->name.c_str(), s->environment ? s->environment->name.c_str() : "-");
 			if (s->environment) c.world.root_session[s->environment] = s->obj;
 			c.world.enter_scene(s->environment);
+			if (s->environment) s->scene_started = true;
 		}
 	});
 	// SetEnvironmentGUIDCaller / EnvironmentGUIDCaller (Session 0x4500e680): the chosen
@@ -1480,18 +1491,28 @@ void register_session_natives(World &w) {
 		SessionState *s = S(c);
 		return s ? s->obj : nullptr;
 	};
-	reg("CScene::int NumActors()", [caller_scene](const NativeContext &c) {
+	// Is `o` an actor of the scene this call's Scene() names?
+	auto of_scene = [caller_scene](const NativeContext &c) {
+		int view = World::gui_scene_view(c.self());
+		GameObject *scene = view < 0 ? caller_scene(c) : nullptr;
+		return [&c, view, scene](const GameObject *o) {
+			if (!o->is_actor) return false;
+			if (view >= 0) return in_gui(*o) && gui_view(*o) == view;
+			return !in_gui(*o) && c.world.scene_session_of(o) == scene;
+		};
+	};
+	reg("CScene::int NumActors()", [of_scene](const NativeContext &c) {
 		uint32_t n = 0;
-		GameObject *scene = caller_scene(c);
-		for (auto *o : c.world.scene_objects()) n += o->is_actor && c.world.scene_session_of(o) == scene ? 1 : 0;
+		auto in = of_scene(c);
+		for (auto *o : c.world.scene_objects()) n += in(o) ? 1 : 0;
 		c.ret_u32(n);
 	});
-	reg("CScene::class CActor Actor(int)", [caller_scene](const NativeContext &c) {
+	reg("CScene::class CActor Actor(int)", [of_scene](const NativeContext &c) {
 		int i = c.arg<int32_t>(0), k = 0;
 		GameObject *found = nullptr;
-		GameObject *scene = caller_scene(c);
+		auto in = of_scene(c);
 		for (auto *o : c.world.scene_objects()) {
-			if (o->is_actor && c.world.scene_session_of(o) == scene && k++ == i) {
+			if (in(o) && k++ == i) {
 				found = o;
 				break;
 			}
@@ -1506,8 +1527,27 @@ void register_session_natives(World &w) {
 	reg("CScene::Add(class CActor)", [caller_scene](const NativeContext &c) {
 		GameObject *o = c.arg_object(0);
 		if (o) o->removed = false;
-		if (o && !o->parent) c.world.root_session.try_emplace(o, caller_scene(c));
-		c.world.enter_scene(o, true);
+		if (o && !o->parent) {
+			int view = World::gui_scene_view(c.self());
+			if (view >= 0) {
+				o->gui = true;
+				o->view = view;
+				c.world.root_session.try_emplace(o, nullptr);
+			} else {
+				c.world.root_session.try_emplace(o, caller_scene(c));
+			}
+		}
+		c.world.enter_scene(o);
+	});
+	// IsPausedCaller (Core 0x7006de90): the scene's +0xf0, set by ObjInitContents and Pause, cleared by
+	// Genesis and Continue. A session's scene starts when a modifier owns the environment.
+	reg("CScene::bool IsPaused()", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) >= 0) {
+			c.ret_bool(false);
+			return;
+		}
+		SessionState *s = session_of(c.world, caller_scene(c));
+		c.ret_bool(!s || !s->scene_started);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it
 	// lives as long as the scene; ours live until deleted anyway.
