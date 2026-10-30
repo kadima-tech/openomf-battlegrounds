@@ -54,8 +54,44 @@ void register_creature_natives(World &w) {
 	reg("CCreature::RegisterLastStateTimeCritical()", [](const NativeContext &) {});
 	reg("CCreature::AppendCreatureID(class CActor)", [](const NativeContext &) {});  // replication identity
 	reg("CCreature::AppendCreatureID(class CCreature)", [](const NativeContext &) {});
-	// Called when the creature's replicated state changes; a local server never receives one.
-	reg("CCreature::RegisterCreatureStateChangedHook(class CClassExecutorInstance,Method())", [](const NativeContext &) {});
+	// RegisterCreatureStateChangedPCHook (Creature 0x15019ce0): from the end, a slot whose instance is
+	// gone is reused, an identical hook ends the search; otherwise it is appended.
+	auto hook_brain = [](const NativeContext &c) {
+		uint32_t inst = c.arg<uint32_t>(0);
+		for (Brain *b : c.world.brains()) {
+			if (b->inst.handle == inst) return b;
+		}
+		return c.world.brain_of(c.ex);
+	};
+	reg("CCreature::RegisterCreatureStateChangedHook(class CClassExecutorInstance,Method())", [hook_brain](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o) return;
+		GameObject::StateHook h{hook_brain(c), c.arg<uint32_t>(1)};
+		for (size_t i = o->state_hooks.size(); i-- > 0;) {
+			auto &e = o->state_hooks[i];
+			if (!e.brain || e.brain->inst.shut_down) {
+				e = h;
+				return;
+			}
+			if (e.brain == h.brain && e.method == h.method) return;
+		}
+		o->state_hooks.push_back(h);
+	});
+	reg("CCreature::UnregisterCreatureStateChangedHook(class CClassExecutorInstance,Method())", [hook_brain](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o) return;
+		Brain *b = hook_brain(c);
+		uint32_t m = c.arg<uint32_t>(1);
+		for (size_t i = o->state_hooks.size(); i-- > 0;) {
+			if (o->state_hooks[i].brain == b && o->state_hooks[i].method == m) {
+				o->state_hooks.erase(o->state_hooks.begin() + long(i));
+				return;
+			}
+		}
+	});
+	reg("CCreature::ForceStateChange()", [](const NativeContext &c) {
+		if (GameObject *o = c.self()) o->state_seen = nullptr;
+	});
 	// CValueFLOAT::Set: the value object's own value, seen by GetFLOATValue on its parent.
 	reg("CValueFLOAT::Set(float)", [](const NativeContext &c) {
 		GameObject *v = c.self();

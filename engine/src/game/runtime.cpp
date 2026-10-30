@@ -1306,13 +1306,19 @@ void World::set_user_controlled(GameObject &creature, int32_t device) {
 	}
 }
 
-// DE_CScene::Add (Core 0x7006ed50) prepares an actor, then adds its children, the last first:
-// creatures join their sets in that order.
-void World::register_branch(GameObject *o) {
+// DE_CScene::Add (Core 0x7006ed50) prepares an actor, then adds its children, the last first. A
+// creature joins its set first (DE_CCreature::ObjPrepare), then its executors, in property order,
+// as DE_CActor::InternalPrepareActive (0x70090ca0) sets them up: `prepared` gets them in that order.
+void World::register_branch(GameObject *o, std::vector<Brain *> *prepared) {
 	if (!o) return;
 	register_creature(o);
+	for (auto &bp : brains_) {
+		if (bp->owner != o || !bp->started || bp->temporal_registered) continue;
+		register_brain(bp.get());
+		if (prepared) prepared->push_back(bp.get());
+	}
 	for (auto it = o->children.rbegin(); it != o->children.rend(); ++it) {
-		if (!parked(**it)) register_branch(*it);
+		if (!parked(**it)) register_branch(*it, prepared);
 	}
 }
 
@@ -1345,6 +1351,7 @@ void World::creature_tick(GameObject &o) {
 			break;
 		}
 	}
+	if (object(o.handle)) run_state_hooks(o);
 	++o.creature_ticks;
 	if (o.fighter) {
 		if (!skip && o.invulnerable_frames > 0) --o.invulnerable_frames;
@@ -1353,6 +1360,28 @@ void World::creature_tick(GameObject &o) {
 			particles->tick_trailers(o);
 		}
 		jitter_attack_range(o);
+	}
+}
+
+void World::run_state_hooks(GameObject &o) {
+	Brain *b = nullptr;
+	for (auto &bp : brains_) {
+		if (bp->owner == &o) {
+			b = bp.get();
+			break;
+		}
+	}
+	if (!b || !b->exec || b->exec->state() == o.state_seen) return;
+	static const bool debug = getenv("OPENBG_DEBUG_STATE_HOOKS") != nullptr;
+	if (debug)
+		fprintf(stderr, "[state-hook %u] %s %s -> %s (%zu hooks)\n", frame_, o.name.c_str(), o.state_seen ? o.state_seen->cm->signature.c_str() : "-",
+		        b->exec->state() ? b->exec->state()->cm->signature.c_str() : "-", o.state_hooks.size());
+	o.state_seen = b->exec->state();
+	for (size_t i = 0; i < o.state_hooks.size(); ++i) {
+		GameObject::StateHook h = o.state_hooks[i];
+		if (!h.brain || !h.method || h.brain->inst.shut_down) continue;
+		std::vector<uint8_t> args;
+		h.brain->call_handle(*this, h.method, args);
 	}
 }
 

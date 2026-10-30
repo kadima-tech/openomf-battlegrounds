@@ -48,6 +48,7 @@ void Executor::call(ScriptMethod &m, std::span<uint8_t> args) {
 
 void Executor::start(ScriptMethod &m) {
 	++generation_;
+	if (!m.is_instant() || m.is_state()) state_ = &m;
 	frames_.clear();
 	inst_.sleep = 0;  // a new state runs: exSleep() only holds the state that called it
 	base_ = 0;
@@ -111,6 +112,7 @@ void Executor::invoke(ScriptMethod &callee, uint32_t args_offset) {
 		state_switched_ = true;
 		return;
 	}
+	if (!callee.is_instant() && callee.is_state()) state_ = &callee;
 	internal_execute(callee, args_offset, callee.is_instant());
 }
 
@@ -610,6 +612,7 @@ int Executor::continue_execution() {
 		Frame &prev = frames_.back();
 		base_ = prev.base;
 		method_ = prev.method;
+		if (method_->is_state()) state_ = method_;
 		cls_ = method_->cls;
 		frame_size_ = method_->frame_size();
 		pc_ = prev.pc;
@@ -652,6 +655,9 @@ void Executor::restore(const std::vector<RestoreFrame> &frames,
 		frames_.push_back({base, m.code_addr + rf.ip, &m, false, {}});
 		fill(m, stack_ + base, frames_.back().local_refs);
 		base += m.frame_size();
+	}
+	for (const Frame &f : frames_) {
+		if (f.method->is_state()) state_ = f.method;
 	}
 	if (frames_.empty()) return;
 	Frame &cur = frames_.back();

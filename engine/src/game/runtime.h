@@ -200,6 +200,12 @@ struct GameObject {
 	GameObject *last_hit = nullptr, *last_hit_by = nullptr;  // physics +0x134 / +0x140
 	int invulnerable_frames = 0;
 	uint32_t creature_ticks = 0;    // DE_CCreature +0x1d4: updates run (Tick adds one at its end)
+	const vm::ScriptMethod *state_seen = nullptr;  // +0x19c: its behaviour executor's state as the hooks last saw it
+	struct StateHook {
+		Brain *brain;
+		uint32_t method;
+	};
+	std::vector<StateHook> state_hooks;  // +0x1b8: RegisterCreatureStateChangedHook
 	float ai_range_base = 1;        // fighter +0x5f4: AIAttackRange's base, jittered every 64 updates
 	bool temporal_registered = false;  // in its rate's temporal set
 	uint64_t affector_seq = 0;  // its place in the scene's affector list (0: not in it)
@@ -487,6 +493,9 @@ public:
 	double passed_ms = 0;
 	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
 	uint32_t scene_step(float real_ms);
+	// The end of DE_CCreature::Tick / DeltaTick: a behaviour executor state other than the one last
+	// seen runs the creature-state-changed hooks.
+	void run_state_hooks(GameObject &o);
 	// One creature tick with the scene clock at `at_ms` (DE_CCreature::SetTime's re-ticks).
 	void retick(GameObject &o, uint32_t at_ms);
 	// Runs `f` with the scene clock at `at_ms` (DE_CScene +0x1ac / +0x1b0).
@@ -868,7 +877,7 @@ private:
 	void add_temporal(uint32_t rate, Temporal t);
 	void register_temporals();
 	void register_creature(GameObject *o);
-	void register_branch(GameObject *o);
+	void register_branch(GameObject *o, std::vector<Brain *> *prepared = nullptr);
 public:
 	void register_brain(Brain *b);
 private:

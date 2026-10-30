@@ -815,6 +815,7 @@ void unpack_state(World &w, Packer &p, GameObject &o, uint32_t t) {
 		o.creature_ticks = t;
 		clock->unpacking = t;
 	}
+	if (creature) o.state_seen = nullptr;
 	std::vector<Brain *> run;
 	for (Brain *b : brains_of(w, o)) {
 		if (process_status(w, p, *b) && executes_states_instantly(w, *b)) run.push_back(b);
@@ -1567,6 +1568,7 @@ void creature_delta_tick(World &w, GameObject &o) {
 		if (sm->replay) update_for_replay(w, *sm, now);
 		if (auto st = newest_state(*sm, c.until + 1, now)) restore(w, *sm, *st);
 	}
+	w.run_state_hooks(o);
 	c.until = now;
 	o.creature_ticks = now;
 	c.ticked = true;

@@ -111,6 +111,8 @@ public:
 		}
 		return method_;
 	}
+	// DE_CClassExecutorInstance +0xf0: the state method last entered, returned to or restored.
+	ScriptMethod *state() const { return state_; }
 	uint32_t sp() const { return stack_ + base_; }  // address of the current frame
 
 	uint64_t instructions_executed() const { return executed_; }
@@ -169,6 +171,7 @@ private:
 	ScriptMethod *method_ = nullptr;  // +0x24
 	ScriptClass *cls_ = nullptr;      // +0x4c
 	ScriptMethod *default_state_ = nullptr;  // +0x28
+	ScriptMethod *state_ = nullptr;
 	std::vector<Frame> frames_;       // +0x40 DE_CExecuteInfo array
 	std::vector<int32_t> vp_frames_;
 	std::pair<size_t, size_t> vp_last_{0, 0};  // the most recently closed varparam frame  // +0x10 variable-parameter frame starts

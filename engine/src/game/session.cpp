@@ -250,17 +250,25 @@ void World::enter_scene(GameObject *root) {
 	}
 	// Every actor of the branch is prepared (its executors attached) before any entry runs, so
 	// that a script's Interface() calls find the behaviors of the actors around it.
-	register_branch(root);
-	number_affectors(root);
-	std::vector<Brain *> started;
+	std::vector<Brain *> attached;
 	for (GameObject *o : branch) {
 		if (o && o->is_actor && o->file && !o->brain) {
 			auto b = activate_executors(o, properties_of(*o), false);
-			started.insert(started.end(), b.begin(), b.end());
+			attached.insert(attached.end(), b.begin(), b.end());
 		}
 	}
+	std::vector<Brain *> prepared, started;
+	register_branch(root, &prepared);
+	number_affectors(root);
+	for (Brain *b : prepared) {
+		if (std::find(attached.begin(), attached.end(), b) != attached.end()) started.push_back(b);
+	}
+	for (Brain *b : attached) {
+		if (std::find(started.begin(), started.end(), b) == started.end()) started.push_back(b);
+	}
 	// DE_CScene::Add ends with DoneAddingExecutors (Core 0x70146450): the executors whose +0x48 is set
-	// tick there, running their entries before Add returns; the others wait for their first tick.
+	// tick there in the order they were set up, running their entries before Add returns; the others
+	// wait for their first tick.
 	for (Brain *b : started) {
 		if (b->initial_tick) start_brain(b);
 		else pending_starts_.push_back(b);
