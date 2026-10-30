@@ -28,12 +28,13 @@ layout(location = 6) in vec3 vcolour;
 uniform mat4 vp;
 uniform mat4 model;
 uniform vec4 uv_xf[4];  // each stage's texture matrix: (sx, sy, tx, ty)
+uniform vec3 pos_scale;  // a dynamic mesh ScaleModifier's; normals are left as they are
 out vec3 v_normal;
 out vec2 v_uv[4];
 out vec3 v_pos;
 out vec3 v_colour;
 void main() {
-	vec4 w = model * vec4(pos, 1.0);
+	vec4 w = model * vec4(pos * pos_scale, 1.0);
 	gl_Position = vp * w;
 	v_normal = mat3(model) * normal;
 	v_uv[0] = uv0 * uv_xf[0].xy + uv_xf[0].zw;
@@ -89,6 +90,7 @@ uniform mat3 splash_axes;  // rows: the cone's local X, Y, Z in world space
 uniform float splash_radius, splash_near, splash_far, splash_tan;
 uniform sampler2D shadow_atten;
 uniform vec3 splash_colour;
+uniform float splash_alpha;  // TFACTOR's alpha
 uniform sampler2D bumpmap;
 uniform int bump_stage;
 uniform int bump_on;
@@ -133,11 +135,12 @@ void main() {
 			if (l.z > 0.0) v = lightmap_at(-l.xy / (2.0 * l.z * splash_tan) + 0.5);
 			// Stage 1: the core ShadowAttenuation ramp at (-x, z - near) / (far - near), clamped:
 			// black behind the near plane, fading to nothing at the far end.
+			// Its alpha equals its luminance and multiplies the alpha too (CStage::SetStates).
 			vec2 at = vec2(-l.x, l.z - splash_near) / max(splash_far - splash_near, 1e-3);
-			v *= texture(shadow_atten, clamp(at, 0.0, 1.0)).r;
+			v *= texture(shadow_atten, clamp(at, 0.0, 1.0));
 		}
 		// No facing test: the pass draws the touched polygons the camera sees (D3DCULL_CW).
-		color = vec4(splash_colour * v.rgb, v.a);
+		color = vec4(splash_colour * v.rgb, v.a * splash_alpha);
 		return;
 	}
 	vec4 c = vec4(1.0);
@@ -231,6 +234,42 @@ const de::ObjectInfo *find_child(const de::ObjectsFile &f, size_t parent, const 
 
 Lighting g_lighting;
 de::LiveFloat g_live_values;
+const int *g_texture_detail = nullptr;
+
+namespace {
+struct DetailTexture {
+	GLuint t;
+	int w, h;
+};
+std::vector<DetailTexture> g_detail_textures;
+int g_applied_detail = 0;
+
+void set_detail_level(const DetailTexture &d, int detail) {
+	// SetMipMapLevel fails for a level with no pixels and the image stays at full size.
+	const int level = (d.w >> detail) > 0 && (d.h >> detail) > 0 ? detail : 0;
+	glBindTexture(GL_TEXTURE_2D, d.t);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, level);
+}
+}  // namespace
+
+void detail_texture(GLuint t, const de::Image &img) {
+	if (!t || !img.adjust_level) return;
+	forget_detail_texture(t);
+	g_detail_textures.push_back({t, img.width, img.height});
+	g_applied_detail = g_texture_detail ? *g_texture_detail : 0;
+	set_detail_level(g_detail_textures.back(), g_applied_detail);
+}
+
+void forget_detail_texture(GLuint t) {
+	std::erase_if(g_detail_textures, [t](const DetailTexture &d) { return d.t == t; });
+}
+
+void apply_texture_detail() {
+	const int detail = g_texture_detail ? *g_texture_detail : 0;
+	if (detail == g_applied_detail) return;
+	g_applied_detail = detail;
+	for (auto &d : g_detail_textures) set_detail_level(d, detail);
+}
 const bool *g_bump_enabled = nullptr;
 
 bool SceneLight::lights(const void *owner) const {
@@ -347,6 +386,7 @@ GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint>
 		if (!img.channels.empty()) {
 			auto px = img.rgba();
 			t = glu::texture_rgba(img.width, img.height, px.data());
+			detail_texture(t, img);
 			if (const char *dir = getenv("OPENBG_DUMP_TEXTURES")) glu::write_png((std::string(dir) + "/" + r.info().name + ".png").c_str(), img.width, img.height, px, false);
 		}
 	} catch (const std::exception &e) {
@@ -379,11 +419,12 @@ GLuint bump_texture(const de::ObjectRef &r) {
 			glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, img.width, img.height, 0, GL_RG, GL_UNSIGNED_BYTE, px.data());
 			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-			if (img.mipmap) glGenerateMipmap(GL_TEXTURE_2D);
+			if (img.mipmap || img.adjust_level) glGenerateMipmap(GL_TEXTURE_2D);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, img.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+			detail_texture(t, img);
 		}
 	} catch (const std::exception &) {
 	}
@@ -470,20 +511,43 @@ std::vector<std::array<std::array<float, 3>, 3>> corner_normals(const de::Mesh &
 	return out;
 }
 
+// A mesh's ScaleModifiers (de::mesh_modifiers): the static ones scale the positions once, when
+// the mesh is built (Process at priority 100000, once); a dynamic one restores the positions saved
+// at its first run and scales them again every frame (300000), so the last one registered wins.
+struct MeshScale {
+	std::array<float, 3> fixed{1, 1, 1};
+	std::shared_ptr<const de::ScaleModifier> dynamic;
+};
+MeshScale mesh_scale(const de::World &w, const de::ObjectRef &mesh) {
+	MeshScale out;
+	for (auto &m : de::mesh_modifiers(w, mesh)) {
+		if (m->dynamic) {
+			out.dynamic = m;
+			continue;
+		}
+		auto s = m->scale(g_live_values);
+		for (int k = 0; k < 3; ++k) out.fixed[size_t(k)] *= s[size_t(k)];
+	}
+	return out;
+}
+
 std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de::Material> &materials, const de::Transform &place,
                                      const std::function<GLuint(const de::ObjectRef &)> &texture, float *lo, float *hi,
-                                     bool keep = false) {
+                                     bool keep = false, const MeshScale &scale = {}, std::vector<bool> *drawn = nullptr) {
 	std::vector<MeshBatch> out;
 	const int lighting = mesh.vertex_lit() ? 1 : mesh.projector_lit() ? 2 : 0;
-	std::vector<std::array<float, 3>> wpos(mesh.vertices.size());
+	std::vector<std::array<float, 3>> wpos(mesh.vertices.size()), npos(mesh.vertices.size());
 	for (size_t i = 0; i < wpos.size(); ++i) {
-		wpos[i] = place.apply(mesh.vertices[i]);
+		const auto &v = mesh.vertices[i];
+		npos[i] = place.apply(v);
+		wpos[i] = place.apply({v[0] * scale.fixed[0], v[1] * scale.fixed[1], v[2] * scale.fixed[2]});
 		for (int j = 0; lo && j < 3; ++j) {
 			lo[j] = std::fmin(lo[j], wpos[i][j]);
 			hi[j] = std::fmax(hi[j], wpos[i][j]);
 		}
 	}
-	auto corner = corner_normals(mesh, wpos);
+	// The vertex normals are the mesh's own (CalculateNormals); the modifier never processes them.
+	auto corner = corner_normals(mesh, npos);
 	std::vector<bool> covered(mesh.faces.size(), false);
 	float material_glow = 0;
 	auto emit = [&](const std::vector<const de::Layer *> &pass, const std::vector<uint32_t> &faces, bool stand_in, bool overlay, bool late = false) {
@@ -554,6 +618,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 			auto xf = pass[k]->modifiers.back()->uv(g_live_values);
 			memcpy(bt.uv_xf[k], xf.data(), sizeof bt.uv_xf[k]);
 		}
+		bt.pos_mod = scale.dynamic;
 		bt.glow = material_glow;
 		bool reflects = false;
 		for (auto *l : pass) reflects = reflects || l->environment;
@@ -646,6 +711,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 	static const bool debug = getenv("OPENBG_DEBUG_MATERIALS") != nullptr;
 	if (debug && !rest.empty()) fprintf(stderr, "[material]   %zu of %zu faces in no material\n", rest.size(), mesh.faces.size());
 	if (g_stand_ins) emit({}, rest, true, false);
+	if (drawn) *drawn = covered;
 	return out;
 }
 
@@ -707,6 +773,8 @@ void set_cull(bool two_sided) {
 
 std::vector<DeferredDraw> *g_sink = nullptr;
 float g_vp[16], g_eye[3];
+// The values of the actor being drawn (ActorMeshRenderer::Item::live), for its dynamic modifiers.
+const de::LiveFloat *g_item_live = nullptr;
 
 void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches, int phase, const std::array<float, 3> *at, const void *owner);
 
@@ -729,14 +797,17 @@ void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase,
 			std::array<float, 3> origin = at ? *at
 			                                 : std::array<float, 3>{(b.bmin[0] + b.bmax[0]) / 2, (b.bmin[1] + b.bmax[1]) / 2, (b.bmin[2] + b.bmax[2]) / 2};
 			const MeshBatch *pb = &b;
-			g_sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb] {
+			de::LiveFloat live = g_item_live ? *g_item_live : de::LiveFloat{};
+			g_sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb, live] {
 				                   glUseProgram(prog);
 				                   glUniform1f(glGetUniformLocation(prog, "out_scale"), 1);
 				                   glUniform1f(glGetUniformLocation(prog, "fog_density"), 0);
 				                   glUniformMatrix4fv(glGetUniformLocation(prog, "vp"), 1, GL_FALSE, vp.data());
 				                   glUniform3fv(glGetUniformLocation(prog, "eye"), 1, eye.data());
 				                   glUniformMatrix4fv(glGetUniformLocation(prog, "model"), 1, GL_FALSE, m.data());
+				                   g_item_live = &live;
 				                   draw_batch_list(prog, {pb}, -1, where ? &*where : nullptr, owner);
+				                   g_item_live = nullptr;
 			                   }});
 			continue;
 		}
@@ -787,6 +858,9 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 			memcpy(uv_xf[s], xf.data(), sizeof uv_xf[s]);
 		}
 		glUniform4fv(glGetUniformLocation(prog, "uv_xf"), 4, &uv_xf[0][0]);
+		std::array<float, 3> pos_scale{1, 1, 1};
+		if (b.pos_mod) pos_scale = b.pos_mod->scale(g_item_live && *g_item_live ? *g_item_live : g_live_values);
+		glUniform3fv(glGetUniformLocation(prog, "pos_scale"), 1, pos_scale.data());
 		int has_tex[4], is_env[4], mode[4], has_alpha[4];
 		for (int i = 0; i < 4; ++i) {
 			glActiveTexture(GL_TEXTURE0 + GLenum(i));
@@ -831,29 +905,56 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 	glActiveTexture(GL_TEXTURE0);
 }
 
-// The light projector passes over projector-lit batches (DE_CStandardProjectorShader: no depth
-// writes, LESSEQUAL, always D3DCULL_CW, over the touched polygons): every light whose mask reaches
-// them (projector-lit elements take 4, 8 and 0x10: DE_CD3DRenderMeshElement::InitialSetup) and
-// that reaches the batch's owner. The shared projectors (the LightMap) add (ONE, ONE); a cone with
-// its own image blends by its light (SetStates: 0/3 ONE/ONE, 1/5 SRCALPHA/INVSRCALPHA, 2
-// ZERO/INVSRCCOLOR, 4 ONE/INVSRCCOLOR); a sphere with its own image has no projector.
-void draw_splashes(GLuint prog, const std::vector<MeshBatch> &batches) {
+// DE_CConeAffector::IsTouchingSphere (Core 0x70080560): within far end + r of the apex, the
+// depth along +Z overlapping near end .. far end, and the centre within |z| tan(penumbra) +
+// (1 + tan) r of the axis.
+bool cone_touches_sphere(const SceneLight &l, const std::array<float, 3> &c, float r) {
+	const std::array<float, 3> d{c[0] - l.pos[0], c[1] - l.pos[1], c[2] - l.pos[2]};
+	if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > (r + l.outer) * (r + l.outer)) return false;
+	const auto local = l.frame.inverse_rotate(d);
+	const float z = local[2];
+	if (z - r > l.outer || l.near_end > z + r) return false;
+	const float tn = std::tan(l.penumbra * 0.017453292f);
+	const float radial = std::sqrt(local[0] * local[0] + local[1] * local[1]);
+	return radial < z * tn || radial - (tn + 1) * r - std::fabs(z * tn) < 0;
+}
+
+// The light projector passes (DE_CStandardProjectorShader: no depth writes, LESSEQUAL, always
+// D3DCULL_CW): per light, the polygons of the projector-lit meshes it touches, each once
+// (FillProjectedVertexBuffer copies them into the light's own buffer). A sphere light takes the
+// octree cells its bounding box overlaps, a cell whole once it is smaller than the sphere; a cone
+// the leaf cells whose bounding spheres it touches (DE_COctree::GetPotentialCollisions). Every
+// light whose mask reaches them (projector-lit elements take 4, 8 and 0x10: DE_CD3DRenderMesh
+// Element::InitialSetup) and that reaches the mesh's owner. The shared projectors (the LightMap)
+// add (ONE, ONE); a cone with its own image blends by its light (SetStates: 0/3 ONE/ONE, 1/5
+// SRCALPHA/INVSRCALPHA, 2 ZERO/INVSRCCOLOR, 4 ONE/INVSRCCOLOR); a sphere with its own image has
+// no projector.
+void draw_splashes(GLuint prog, const std::vector<ProjectorTarget> &targets) {
 	static const bool off = getenv("OPENBG_NO_PROJECTORS") != nullptr;  // debugging: vertex lighting only
 	if (!g_lightmap || off) return;
 	glUniform1i(glGetUniformLocation(prog, "lightmap"), 5);
 	glUniform1i(glGetUniformLocation(prog, "shadow_atten"), 6);
+	const float one[3] = {1, 1, 1};
+	glUniform3fv(glGetUniformLocation(prog, "pos_scale"), 1, one);
 	glActiveTexture(GL_TEXTURE6);
 	glBindTexture(GL_TEXTURE_2D, g_shadow_atten ? g_shadow_atten : g_lightmap);
 	glEnable(GL_BLEND);
 	glDepthMask(GL_FALSE);
 	glDepthFunc(GL_LEQUAL);
 	set_cull(false);
+	std::vector<uint32_t> faces;
+	std::vector<GLint> first;
+	std::vector<GLsizei> count;
 	for (const SceneLight &l : g_lighting.lights) {
 		if (!(l.mask & 0x1c) || l.intensity <= 0 || l.outer <= 0) continue;
 		if (l.has_image && l.shape == SceneLight::kSphere) continue;
-		std::array<float, 3> c;
-		for (int k = 0; k < 3; ++k) c[size_t(k)] = std::clamp(l.colour[size_t(k)] * l.intensity, 0.0f, 1.0f);
 		const int blend = l.image ? l.blend : 0;
+		// DrawPatches' TFACTOR: the colour x intensity with alpha 1, except for the alpha-blended
+		// projectors (SetupConeProjector +0x68 clear), whose alpha is the intensity instead.
+		const bool alpha_blended = blend == 1 || blend == 5;
+		std::array<float, 3> c;
+		for (int k = 0; k < 3; ++k) c[size_t(k)] = std::clamp(l.colour[size_t(k)] * (alpha_blended ? 1.0f : l.intensity), 0.0f, 1.0f);
+		glUniform1f(glGetUniformLocation(prog, "splash_alpha"), alpha_blended ? std::clamp(l.intensity, 0.0f, 1.0f) : 1.0f);
 		switch (blend) {
 		case 1: case 5: glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); break;
 		case 2: glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR); break;
@@ -871,15 +972,27 @@ void draw_splashes(GLuint prog, const std::vector<MeshBatch> &batches) {
 		glUniform1f(glGetUniformLocation(prog, "splash_tan"), std::tan(std::clamp(l.penumbra, 1.0f, 89.0f) * 0.017453292f));
 		// Row-major rotation rows are the local axes; GL takes columns, so pass it transposed.
 		glUniformMatrix3fv(glGetUniformLocation(prog, "splash_axes"), 1, GL_TRUE, l.frame.r.data());
-		for (auto &b : batches) {
-			if (b.lighting != 2 || (l.reaches_all && l.position_static && b.position_static) || !l.lights(b.light_owner)) continue;
-			// A darkening projector multiplies each touched polygon once, not once per material pass.
-			if (blend == 2 && b.overlay) continue;
+		for (auto &t : targets) {
+			if ((l.reaches_all && l.position_static && t.position_static) || !l.lights(t.light_owner)) continue;
 			bool overlaps = true;
-			for (int k = 0; k < 3; ++k) overlaps = overlaps && l.pos[size_t(k)] + l.outer >= b.bmin[k] && l.pos[size_t(k)] - l.outer <= b.bmax[k];
+			for (int k = 0; k < 3; ++k) overlaps = overlaps && l.pos[size_t(k)] + l.outer >= t.bmin[k] && l.pos[size_t(k)] - l.outer <= t.bmax[k];
 			if (!overlaps) continue;
-			glBindVertexArray(b.vao);
-			glDrawArrays(GL_TRIANGLES, 0, b.count);
+			faces.clear();
+			if (l.shape == SceneLight::kSphere) {
+				t.octree.sphere_faces(t.place.inverse().apply(l.pos), l.outer, faces);
+			} else {
+				t.octree.affector_faces([&l](const std::array<float, 3> &p, float r) { return cone_touches_sphere(l, p, r); },
+				                        [&t](const std::array<float, 3> &p) { return t.place.apply(p); }, faces);
+			}
+			first.clear(), count.clear();
+			for (uint32_t f : faces) {
+				if (f >= t.drawn.size() || !t.drawn[f]) continue;
+				if (!first.empty() && first.back() + count.back() == GLint(f * 3)) count.back() += 3;
+				else first.push_back(GLint(f * 3)), count.push_back(3);
+			}
+			if (first.empty()) continue;
+			glBindVertexArray(t.vao);
+			glMultiDrawArrays(GL_TRIANGLES, first.data(), count.data(), GLsizei(first.size()));
 		}
 	}
 	glUniform1i(glGetUniformLocation(prog, "splash"), 0);
@@ -890,7 +1003,43 @@ void draw_splashes(GLuint prog, const std::vector<MeshBatch> &batches) {
 	glActiveTexture(GL_TEXTURE0);
 }
 
+// AssureProjectedTargetOctree: the mesh's stored "D3DProjectedTargetOctree", else one built with
+// cells of at most 100 (the element has a render affector).
+ProjectorTarget make_projector_target(const de::Mesh &mesh, const de::ObjectRef &object, const de::Transform &place,
+                                      const std::array<float, 3> &scale, const std::vector<bool> &drawn) {
+	ProjectorTarget t;
+	t.place = place;
+	t.drawn = drawn;
+	de::Mesh scaled = mesh;
+	for (auto &v : scaled.vertices) v = {v[0] * scale[0], v[1] * scale[1], v[2] * scale[2]};
+	t.octree = de::read_octree(*object.file, object.info());
+	if (!t.octree) t.octree = de::build_octree(scaled, 100);
+	std::vector<BatchVertex> vs(scaled.faces.size() * 3);
+	for (size_t f = 0; f < scaled.faces.size(); ++f) {
+		for (int k = 0; k < 3; ++k) {
+			BatchVertex &v = vs[f * 3 + size_t(k)];
+			v = BatchVertex{};
+			auto p = place.apply(scaled.vertices[scaled.faces[f].v[size_t(k)]]);
+			memcpy(v.pos, p.data(), sizeof v.pos);
+			v.normal[1] = 1;
+			for (int j = 0; j < 3; ++j) t.bmin[j] = std::fmin(t.bmin[j], p[size_t(j)]), t.bmax[j] = std::fmax(t.bmax[j], p[size_t(j)]);
+		}
+	}
+	glGenVertexArrays(1, &t.vao);
+	glBindVertexArray(t.vao);
+	glGenBuffers(1, &t.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, t.vbo);
+	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(vs.size() * sizeof(BatchVertex)), vs.data(), GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, pos));
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, normal));
+	for (GLuint s = 0; s < 4; ++s) glVertexAttribPointer(2 + s, 2, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)(offsetof(BatchVertex, uv) + s * 2 * sizeof(float)));
+	glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, colour));
+	for (GLuint i = 0; i < 7; ++i) glEnableVertexAttribArray(i);
+	return t;
+}
+
 void use_mesh_program(GLuint prog, const float *vp, const float *eye) {
+	apply_texture_detail();
 	std::copy(vp, vp + 16, g_vp);
 	std::copy(eye, eye + 3, g_eye);
 	glUseProgram(prog);
@@ -1007,11 +1156,24 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 			}
 			fprintf(stderr, "[mesh] %s: %.0f %.0f %.0f .. %.0f %.0f %.0f\n", item.actor.c_str(), l[0], l[1], l[2], h[0], h[1], h[2]);
 		}
-		for (auto &b : build_batches(item.mesh, item.materials, item.world, tex, lo, hi)) {
+		// Baked in world space: no arena mesh has a dynamic modifier, so one is taken as it starts.
+		MeshScale ms = mesh_scale(world, item.mesh_object);
+		if (ms.dynamic) {
+			auto d = ms.dynamic->scale(g_live_values);
+			for (int k = 0; k < 3; ++k) ms.fixed[size_t(k)] *= d[size_t(k)];
+			ms.dynamic = nullptr;
+		}
+		std::vector<bool> drawn;
+		for (auto &b : build_batches(item.mesh, item.materials, item.world, tex, lo, hi, false, ms, &drawn)) {
 			b.position_static = item.position_static;
 			triangles += size_t(b.count) / 3;
 			batches_.push_back(b);
 			chains_.push_back(chain);
+		}
+		if (item.mesh.projector_lit()) {
+			targets_.push_back(make_projector_target(item.mesh, item.mesh_object, item.world, ms.fixed, drawn));
+			targets_.back().position_static = item.position_static;
+			target_chains_.push_back(chain);
 		}
 	}
 }
@@ -1030,17 +1192,28 @@ void ArenaRenderer::set_moving(const std::set<uint32_t> &actors) {
 	}
 	batches_.resize(k);
 	chains_.resize(k);
+	k = 0;
+	for (size_t i = 0; i < targets_.size(); ++i) {
+		bool moved = false;
+		for (uint32_t a : target_chains_[i]) moved = moved || actors.count(a);
+		if (moved) continue;
+		if (k != i) targets_[k] = std::move(targets_[i]), target_chains_[k] = std::move(target_chains_[i]);
+		++k;
+	}
+	targets_.resize(k);
+	target_chains_.resize(k);
 }
 
 void ArenaRenderer::set_light_owners(const std::function<const void *(const std::vector<uint32_t> &chain)> &owner_of) {
 	for (size_t i = 0; i < batches_.size(); ++i) batches_[i].light_owner = owner_of(chains_[i]);
+	for (size_t i = 0; i < targets_.size(); ++i) targets_[i].light_owner = owner_of(target_chains_[i]);
 }
 
 void ArenaRenderer::draw(const float *vp, const float *eye) {
 	use_mesh_program(prog_, vp, eye);
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
 	draw_batches(prog_, batches_, 0);
-	draw_splashes(prog_, batches_);
+	draw_splashes(prog_, targets_);
 	draw_batches(prog_, batches_, 1);
 }
 
@@ -1075,6 +1248,7 @@ static void draw_glow_batches(GLuint prog_, const std::vector<MeshBatch> &batche
 		c.bump_factor = b.bump_factor, c.bump_rotate = b.bump_rotate;
 		memcpy(c.uv_xf, b.uv_xf, sizeof c.uv_xf);
 		for (int k = 0; k < 4; ++k) c.uv_mod[k] = b.uv_mod[k];
+		c.pos_mod = b.pos_mod;
 		c.overlay = true;
 		g_specular_pass = specular;
 		draw_batches(prog_, one, -1, at, owner);
@@ -1186,6 +1360,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 							if (!img.channels.empty()) {
 								auto px = paint_image(img, *p, r.info().name == "ReflectionMask").rgba();
 								t = glu::texture_rgba(img.width, img.height, px.data());
+								detail_texture(t, img);
 							}
 						} catch (const std::exception &) {
 						}
@@ -1205,7 +1380,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 							}
 						}
 					}
-					auto b = build_batches(mesh, materials, de::Transform{}, tex, nullptr, nullptr);
+					auto b = build_batches(mesh, materials, de::Transform{}, tex, nullptr, nullptr, false, mesh_scale(data, m));
 					all.insert(all.end(), b.begin(), b.end());
 				}
 			} catch (const std::exception &) {
@@ -1216,7 +1391,9 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		const de::Transform &t = a.world;
 		float m[16] = {t.r[0], t.r[1], t.r[2], 0, t.r[3], t.r[4], t.r[5], 0, t.r[6], t.r[7], t.r[8], 0, t.t[0], t.t[1], t.t[2], 1};
 		glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, m);
+		g_item_live = &a.live;
 		draw_batches(prog_, it->second, -1, &t.t, a.light_owner);
+		g_item_live = nullptr;
 	}
 }
 
@@ -1229,7 +1406,9 @@ void ActorMeshRenderer::draw_glow(const std::vector<Item> &actors, const float *
 		const de::Transform &t = a.world;
 		float m[16] = {t.r[0], t.r[1], t.r[2], 0, t.r[3], t.r[4], t.r[5], 0, t.r[6], t.r[7], t.r[8], 0, t.t[0], t.t[1], t.t[2], 1};
 		glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, m);
+		g_item_live = &a.live;
 		draw_glow_batches(prog_, it->second, &t.t, a.light_owner);
+		g_item_live = nullptr;
 	}
 }
 
@@ -1384,7 +1563,10 @@ void FighterRenderer::build() {
 		glDeleteBuffers(1, &b.vbo);
 		glDeleteVertexArrays(1, &b.vao);
 	}
-	for (auto &[k, t] : painted_textures_) glDeleteTextures(1, &t);
+	for (auto &[k, t] : painted_textures_) {
+		forget_detail_texture(t);
+		glDeleteTextures(1, &t);
+	}
 	painted_textures_.clear();
 	auto tex = [this](const de::ObjectRef &r) -> GLuint {
 		if (!r) return 0;
@@ -1398,6 +1580,7 @@ void FighterRenderer::build() {
 			if (!img.channels.empty()) {
 				auto px = paint_image(img, paint_, name == "ReflectionMask", scaled_).rgba();
 				t = glu::texture_rgba(img.width, img.height, px.data());
+				detail_texture(t, img);
 			}
 		} catch (const std::exception &) {
 		}

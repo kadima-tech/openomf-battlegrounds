@@ -98,6 +98,7 @@ GLuint ParticleRenderer::image(const de::ObjectRef &r) {
 		if (!img.channels.empty()) {
 			auto px = img.rgba();
 			t = glu::texture_rgba(img.width, img.height, px.data());
+			render::detail_texture(t, img);
 		}
 	} catch (const std::exception &) {
 	}

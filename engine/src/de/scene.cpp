@@ -342,6 +342,21 @@ std::array<float, 4> ScaleModifier::uv(const LiveFloat &live) const {
 	return {at(0), at(1), at(6), at(7)};
 }
 
+std::array<float, 3> ScaleModifier::scale(const LiveFloat &live) const {
+	auto at = [&](int i) { return v[i] ? v[i]->eval(0, live) : 1.0f; };
+	return {at(0), at(1), at(2)};
+}
+
+std::vector<std::shared_ptr<ScaleModifier>> mesh_modifiers(const World &w, const ObjectRef &mesh) {
+	std::vector<std::shared_ptr<ScaleModifier>> out;
+	for (auto &ref : actor_components(mesh.file->object_data(mesh.info()))) {
+		ObjectRef m = w.resolve(*mesh.file, ref);
+		if (!m || m.info().class_path != "ScaleModifier") continue;
+		if (auto sm = read_scale_modifier(w, m)) out.push_back(sm);
+	}
+	return out;
+}
+
 std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 	std::vector<Material> out;
 	auto layer_of = [&](const ObjectRef &tm) {

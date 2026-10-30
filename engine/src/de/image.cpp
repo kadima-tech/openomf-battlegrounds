@@ -46,6 +46,10 @@ Image read_image_header(const std::vector<uint8_t> &contents) {
 	img.width = c.i32();
 	img.height = c.i32();
 	if (c.pos() < ch.end) img.mipmap = c.boolean();
+	if (ch.version >= 4 && c.pos() + 5 <= ch.end) {
+		c.f32();
+		img.adjust_level = c.boolean();
+	}
 	c.seek(ch.end);
 	if (img.width < 0 || img.height < 0 || img.width > 8192 || img.height > 8192) {
 		throw FormatError("Image: implausible size");

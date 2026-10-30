@@ -116,7 +116,7 @@ void ShadowRenderer::update(int type, int texture_detail, const std::vector<Cast
 			}
 			cone.pos = cone.frame.t;
 			cone.penumbra = std::atan(r / L) * 57.2958f;
-			cone.near_begin = L - r;
+			cone.near_begin = cone.near_end = L - r;
 			cone.outer = 2 * L + 4 * r;
 			s.on = true;
 			// The map refreshes every frame near the camera, less often far away, never behind it.

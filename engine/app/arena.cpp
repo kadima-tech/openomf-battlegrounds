@@ -32,6 +32,10 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "--no-bump")) {
 			static const bool off = false;
 			render::g_bump_enabled = &off;
+		} else if (!strcmp(argv[i], "--texture-detail") && i + 1 < argc) {
+			static int detail = 0;
+			detail = atoi(argv[++i]);
+			render::g_texture_detail = &detail;
 		} else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
 			scene_ms = float(atof(argv[++i]));
 		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
@@ -79,7 +83,7 @@ int main(int argc, char **argv) {
 			l.pos = pl.world.t;
 			l.shape = pl.cone ? render::SceneLight::kCone : render::SceneLight::kSphere;
 			l.inner = pl.inner, l.outer = pl.outer, l.umbra = pl.umbra, l.penumbra = pl.penumbra;
-			l.near_begin = pl.near_begin;
+			l.near_begin = pl.near_begin, l.near_end = pl.near_end;
 			l.position_static = pl.position_static;
 			auto c = pl.info.colour.eval(0);
 			l.colour = {c[0], c[1], c[2]};
