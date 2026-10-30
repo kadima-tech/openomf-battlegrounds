@@ -129,3 +129,9 @@ registration in the DLLs either, but their methods are in Session.ModuleDLL and 
 |---|---|---|
 | Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. |
 | VMC2 trailing bytes | Ported | `DE_CClass::LoadVMCode` seeks to the chunk end after the final instances: the 1–3 bytes there are never read by the original either. |
+
+## Patch level
+
+| What | Kind | Notes |
+|---|---|---|
+| Game version | Deliberate deviation | The port follows the disc release, 2.090. The official patches up to 2.123 are decoded in `PATCHES.md` (FINDINGS 213), with rebuilt trees in `source/patched/`; none is applied. Most of their changes are data the port would pick up from a patched `Data/`; the engine-side list (new natives, the 2.112 attack-type renumbering, UI and camera tweaks) is in PATCHES.md, "Applying the patches to the port". |
