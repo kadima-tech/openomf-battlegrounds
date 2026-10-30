@@ -622,7 +622,7 @@ void register_script_natives(World &w) {
 		}
 		c.ret_object(top);
 	});
-	reg("CObject::dword SystemTime()", [](const NativeContext &c) { c.ret_u32(uint32_t(c.world.scene_ms())); });
+	reg("CObject::dword SystemTime()", [](const NativeContext &c) { c.ret_u32(c.world.system_ms()); });
 	// DeleteThis: detach from the tree; references to it read as inactive.
 	auto remove = [](const NativeContext &c) {
 		if (GameObject *o = c.self()) c.world.destroy(o);

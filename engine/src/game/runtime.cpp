@@ -18,6 +18,8 @@
 #include <functional>
 #include <cstdio>
 #include <cstring>
+#include <new>
+#include <sys/mman.h>
 
 #include "vm/compiler.h"
 #include "vm/disasm.h"
@@ -196,6 +198,31 @@ GameObject *NativeContext::arg_object(size_t i) const { return world.object(arg<
 std::string NativeContext::arg_string(size_t i) const { return world.read_string(arg<uint32_t>(i)); }
 void NativeContext::ret_u32(uint32_t v) const { mem().set<uint32_t>(args, v); }
 void NativeContext::ret_f32(float v) const { mem().set<float>(args, v); }
+
+ObjectArena::ObjectArena() {
+	const size_t size = size_t(16) << 30;
+	void *p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+	if (p == MAP_FAILED) throw std::bad_alloc();
+	base_ = next_ = committed_ = static_cast<char *>(p);
+	end_ = base_ + size;
+}
+
+ObjectArena::~ObjectArena() { munmap(base_, size_t(end_ - base_)); }
+
+void *ObjectArena::take(size_t bytes) {
+	bytes = (bytes + 63) & ~size_t(63);
+	if (bytes > size_t(end_ - next_)) throw std::bad_alloc();
+	char *p = next_;
+	next_ += bytes;
+	if (next_ > committed_) {
+		const size_t step = size_t(64) << 20;
+		size_t grow = (size_t(next_ - committed_) + step - 1) / step * step;
+		grow = std::min(grow, size_t(end_ - committed_));
+		if (mprotect(committed_, grow, PROT_READ | PROT_WRITE) != 0) throw std::bad_alloc();
+		committed_ += grow;
+	}
+	return p;
+}
 
 World::World(const std::filesystem::path &dir) : data_(dir) {
 	particles = std::make_shared<ParticleSystem>(*this);

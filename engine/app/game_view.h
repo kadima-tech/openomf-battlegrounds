@@ -90,6 +90,8 @@ private:
 	float cam_base = 0;  // camera heading, trailing the fighter's facing
 	bool cam_init = false;
 	bool owners_set = false;
+	// Each drawn actor's inherited lighting owner (AssureLightable).
+	std::map<const game::GameObject *, const game::GameObject *> inherited_owner_;
 	bool gl_ready_ = false;
 };
 

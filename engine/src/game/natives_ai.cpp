@@ -43,6 +43,8 @@ int crt_rand() {
 
 void crt_srand(uint32_t seed) { g_holdrand = seed; }
 
+uint32_t crt_rand_state() { return g_holdrand; }
+
 float random01(World &w) {
 	(void)w;
 	return float(crt_rand()) / 32768.0f;
