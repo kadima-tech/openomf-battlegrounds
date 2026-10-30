@@ -73,6 +73,7 @@ public:
 	bool auto_select = false;      // +0x94
 	bool backed_out = false;       // +0x60
 	bool persistent = false;       // the factory's persistent instance: never deleted
+	GameObject *script_object = nullptr;  // the script's CUIManager this page shows (NextUIManager)
 
 	std::vector<Control> controls;
 	// The page's 3D controls (built by setup_controls, gone when it deactivates).

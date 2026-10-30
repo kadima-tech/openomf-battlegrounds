@@ -238,6 +238,7 @@ private:
 class RulesDisplayPage : public UIManager {
 public:
 	explicit RulesDisplayPage(GameObject *rules) : UIManager("Rules", "SinglePlayerLoading"), rules_(rules) {
+		script_object = rules;
 		autopause = false;        // +0xb4
 		show_backdrop = false;    // +0xb0
 		show_main_frame = false;  // +0xac: SetupControls clears it for SinglePlayerLoading
@@ -1594,6 +1595,8 @@ Control UIManager::marker(AppManager &app, const std::string &m) {
 }
 
 AppManager::AppManager(World &w) : world(w) {
+	world.next_ui_manager = [this] { return next ? next->script_object : nullptr; };
+	world.current_ui_manager = [this] { return current ? current->script_object : nullptr; };
 	// DE_CInGameMenuUIManagerFactory::Init (OMF 0x350590e0) attaches the factory to its impulse.
 	world.impulses->set_default_hotkey("In Game Menu", 0x1b, false, false, false);
 	world.impulses->attach("In Game Menu", [this](bool up) {

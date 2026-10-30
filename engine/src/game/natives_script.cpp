@@ -87,9 +87,13 @@ std::optional<std::vector<uint8_t>> value_payload(const GameObject *v) {
 
 }  // namespace
 
-// Object values: Set*Value at run time, else the Value\\* data child of that name.
+// Object values: Set*Value at run time, else the Value\\* data child of that name. A session
+// looks in its info first (DE_CSession::ObjFindValueByName, Core 0x20202bd0, 2.112).
 World::ObjectValue *World::object_value(GameObject *o, const std::string &name) {
 	if (!o) return nullptr;
+	if (SessionState *s = session_of(*this, o); s && s->obj == o && s->description) {
+		if (ObjectValue *v = object_value(s->description, name)) return v;
+	}
 	auto &m = values[o];
 	auto it = m.find(name);
 	if (it != m.end()) return &it->second;
@@ -163,6 +167,11 @@ void register_script_natives(World &w) {
 	reg("CObject::float ScreenAspectRatio()", [](const NativeContext &c) { c.ret_f32(c.world.screen_aspect); });
 	reg("CDescription::Unlock(dword)", [](const NativeContext &c) {
 		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, c.arg<uint32_t>(0));
+	});
+	// UnlockSinglePlayerMatchCaller (Core 0x201f8ae0, 2.112): Unlock(0x10063 + n), the id the Choose
+	// Cast page's Starting Match list checks for match n.
+	reg("CDescription::UnlockSinglePlayerMatch(dword)", [](const NativeContext &c) {
+		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, 0x10063 + c.arg<uint32_t>(0));
 	});
 	// DE_CPilotDescription::UnlockStatDescriptions (OMF 0x35050cf0): shuffles the 22 stat ids with
 	// the CRT's rand() and unlocks the first `n` still locked, walking from the end.
@@ -476,24 +485,32 @@ void register_script_natives(World &w) {
 
 	// --- Object values (Set*Value at run time; Value\* children from the data) ------------------
 	auto value = [](const NativeContext &c, const std::string &name) { return c.world.object_value(c.self(), name); };
-	auto set_bits = [](const NativeContext &c, uint32_t bits) {
-		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].bits = bits;
+	// DE_CObject::SetValue (Core 0x200406d0): the value ObjFindValueByName finds is set, a new one
+	// is made on the object itself.
+	auto holder = [](const NativeContext &c) -> GameObject * {
+		GameObject *o = c.self();
+		SessionState *s = o ? session_of(c.world, o) : nullptr;
+		if (s && s->obj == o && s->description && c.world.object_value(s->description, c.arg_string(0))) return s->description;
+		return o;
+	};
+	auto set_bits = [holder](const NativeContext &c, uint32_t bits) {
+		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].bits = bits;
 	};
 	reg("CObject::SetBOOLValue(string,bool)", [set_bits](const NativeContext &c) { set_bits(c, c.arg<uint32_t>(1) ? 1 : 0); });
 	reg("CObject::SetINTValue(string,int)", [set_bits](const NativeContext &c) { set_bits(c, c.arg<uint32_t>(1)); });
 	reg("CObject::SetFLOATValue(string,float)", [set_bits](const NativeContext &c) { set_bits(c, c.arg<uint32_t>(1)); });
-	reg("CObject::SetValue(string,string)", [](const NativeContext &c) {
-		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].text = c.arg_string(1);
+	reg("CObject::SetValue(string,string)", [holder](const NativeContext &c) {
+		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].text = c.arg_string(1);
 	});
-	reg("CObject::SetValue(string,class CText)", [](const NativeContext &c) {
+	reg("CObject::SetValue(string,class CText)", [holder](const NativeContext &c) {
 		uint32_t t = c.arg<uint32_t>(1);
-		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].text = t ? c.world.read_string(c.mem().get<uint32_t>(t)) : std::string();
+		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].text = t ? c.world.read_string(c.mem().get<uint32_t>(t)) : std::string();
 	});
-	reg("CObject::SetObjectReferenceValue(string,class CObject)", [](const NativeContext &c) {
-		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].objects.push_back(c.arg<uint32_t>(1));
+	reg("CObject::SetObjectReferenceValue(string,class CObject)", [holder](const NativeContext &c) {
+		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].objects.push_back(c.arg<uint32_t>(1));
 	});
-	reg("CObject::ClearAllObjectReferenceValues(string)", [](const NativeContext &c) {
-		if (GameObject *o = c.self()) c.world.values[o][c.arg_string(0)].objects.clear();
+	reg("CObject::ClearAllObjectReferenceValues(string)", [holder](const NativeContext &c) {
+		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].objects.clear();
 	});
 	reg("CObject::bool GetBOOLValue(string)", [value](const NativeContext &c) {
 		auto *v = value(c, c.arg_string(0));

@@ -363,18 +363,41 @@ int32_t World::faction_team(uint32_t faction) {
 	return v ? int32_t(v->bits) : 0;
 }
 
+// DE_CCreature::ObjProcessContents (Creature 0x10214910): after the actor's chunk, v2-v4 [u32
+// SceneTicksPerUpdate +0x1dc][i32 +0x1e0][f32 global interest +0x1f4]. 2.123's data sets it to 0
+// on the fighters and projectiles that had 1, 0.5 or 0.2.
+float World::own_interest(GameObject &o) {
+	if (!o.interest_loaded) {
+		o.interest_loaded = true;
+		if (o.file && o.is("Actor\\Creature")) {
+			try {
+				de::Contents c(o.file->object_data(o.file->objects()[o.index]).contents);
+				c.seek(de::begin_chunk(c).end);
+				de::Chunk ch = de::begin_chunk(c);
+				if (ch.version >= 2 && ch.version <= 4) {
+					c.u32();
+					c.i32();
+					o.global_interest = c.f32();
+				}
+			} catch (const std::exception &) {
+			}
+		}
+	}
+	return o.global_interest;
+}
+
 // DE_COMF2Fighter::GlobalInterest (0x3502ae40): recomputed when more than 300 ms of scene time
 // have passed since the last time (+0x488): its own interest (+500) times (900 - d + 1) for every
 // enemy within 900 units; until then the cached value (+0x48c, 1 to begin with) stands. Other
 // creatures report their own interest.
 float World::global_interest_of(GameObject *o) {
 	if (!o) return 0;
-	if (!o->fighter) return o->global_interest;
+	if (!o->fighter) return own_interest(*o);
 	uint32_t now = uint32_t(scene_ms());
 	uint32_t since = now > o->interest_time ? now - o->interest_time : o->interest_time - now;
 	if (since > 300) {
 		o->interest_time = now;
-		float v = o->global_interest;
+		float v = own_interest(*o);
 		auto p = o->world().t;
 		auto list = enemies_of(*o);
 		for (auto it = list.rbegin(); it != list.rend(); ++it) {
@@ -943,6 +966,7 @@ void register_ai_natives(World &w) {
 		auto *o = c.self();
 		if (!o) return;
 		o->global_interest = c.arg<float>(0);
+		o->interest_loaded = true;
 		static const bool dbg = getenv("OPENBG_DEBUG_INTEREST") != nullptr;
 		if (dbg) {
 			Brain *b = c.world.brain_of(c.ex);
@@ -955,7 +979,7 @@ void register_ai_natives(World &w) {
 		auto *o = c.self();
 		bool alive = o && c.world.global_interest_of(o) != 0;
 		static const bool dbg = getenv("OPENBG_DEBUG_INTEREST") != nullptr;
-		if (dbg) fprintf(stderr, "[alive %u] %s#%x: %d own %.2f\n", c.world.frame(), o ? o->name.c_str() : "null", o ? o->handle : 0, alive, o ? o->global_interest : 0.f);
+		if (dbg) fprintf(stderr, "[alive %u] %s#%x: %d own %.2f\n", c.world.frame(), o ? o->name.c_str() : "null", o ? o->handle : 0, alive, o ? c.world.own_interest(*o) : 0.f);
 		c.ret_bool(alive);
 	});
 	// DE_COMF2Fighter::GlobalInterest (0x3502ae40): see World::global_interest_of.

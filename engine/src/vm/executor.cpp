@@ -46,10 +46,26 @@ void Executor::call(ScriptMethod &m, std::span<uint8_t> args) {
 	       m.return_size());
 }
 
+void Executor::close_frame(const Frame &f) {
+	if (!f.method || !f.method->cm) return;
+	uint32_t size = f.method->frame_size();
+	for (auto &ci : f.method->cm->instances) {
+		if (ci.flag || ci.value + 4 > size) continue;
+		if (uint32_t a = mem_.get<uint32_t>(stack_ + f.base + ci.value)) host_.close_instance(*this, a);
+	}
+}
+
+void Executor::close_frames(size_t keep) {
+	while (frames_.size() > keep) {
+		close_frame(frames_.back());
+		frames_.pop_back();
+	}
+}
+
 void Executor::start(ScriptMethod &m) {
 	++generation_;
 	if (!m.is_instant() || m.is_state()) state_ = &m;
-	frames_.clear();
+	close_frames(0);
 	inst_.sleep = 0;  // a new state runs: exSleep() only holds the state that called it
 	base_ = 0;
 	method_ = &m;
@@ -599,7 +615,7 @@ int Executor::continue_execution() {
 		// The current frame ran off its end.
 		if (frames_.size() < 2) {
 			if (!default_state_ || method_->is_instant()) {
-				frames_.clear();
+				close_frames(0);
 				base_ = 0;
 				pc_ = 0;
 				return 1;
@@ -608,7 +624,7 @@ int Executor::continue_execution() {
 			continue;
 		}
 		bool sync = frames_.back().sync;
-		frames_.pop_back();
+		close_frames(frames_.size() - 1);
 		Frame &prev = frames_.back();
 		base_ = prev.base;
 		method_ = prev.method;

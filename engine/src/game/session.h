@@ -61,6 +61,9 @@ struct SessionState {
 	GameObject *obj = nullptr;
 	SessionState *owner = nullptr;          // SubSessionOwner (+0xcc): the session that made this one
 	GameObject *master_description = nullptr;  // MasterDescription / OwnMasterDescription
+	// +0x38, the session's info: its values come before the session's own (ObjFindValueByName,
+	// 2.112), as DE_CSessionSettings leaves StartingMatch there.
+	GameObject *description = nullptr;
 	std::vector<de::Guid> attached_guids;   // AttachedSessionModifierDescriptionGUIDs
 	bool single_player = false;             // the session info's +0xdc
 	bool ended = false;                     // End has run (EndAndDie)

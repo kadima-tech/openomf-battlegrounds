@@ -34,7 +34,10 @@ constexpr uint32_t kBlockPenetration = 0x58, kDamage = 0x5c, kStunDamage = 0x60,
 constexpr uint32_t kRecoveryTime = 0x68, kDiminishDamage = 0x6c, kRetainDamage = 0x70, kMomentumAdjust = 0x74;
 constexpr uint32_t kGuideToLastHit = 0x78, kConnectPoint = 0x7c, kEffectDirection = 0x88;
 constexpr uint32_t kEffectDirection2 = 0x94, kTransferedMomentum = 0xa0, kReelDirection = 0xac;
-constexpr uint32_t kMaxNumberOfHits = 0xc0, kFlags = 0xc4;  // flags: 1 blocked, 4 super, 8 melee, 0x10 no evade, 0x20 force combo
+constexpr uint32_t kMaxNumberOfHits = 0xc0, kFlags = 0xc4;  // flags: 1 blocked, 4 super, 8 melee, 0x10 no evade, 0x20 force combo, 0x80 no counter
+// Attack-type bits at +0x4c as 2.112 numbered them (Light took 4, the later ones moved up).
+constexpr uint32_t kTypeStandard = 2, kTypeLight = 4, kTypeProjectile = 8, kTypeCold = 0x10, kTypeHeat = 0x20, kTypeElectrical = 0x40,
+                   kTypeGravitational = 0x80, kTypeTimeStop = 0x100, kTypeNoReplicate = 0x80000000u;
 
 struct AttackState {
 	GameObject *owner = nullptr;  // +0x14
@@ -96,14 +99,16 @@ GameObject *top_fighter(GameObject *o) {
 }
 
 
-// DE_CAttackInfo::TestForFighterBlock (OMF 0x35017560): the attack direction in the defender's
-// frame picks one of 16 sectors (22.5 degrees each, sector 0 = coming straight at its face); the
-// attack's required zones, rotated to that sector, must all be zones the defender can block
-// (its +0x44c mask). A defender that isn't a fighter always blocks.
-bool fighter_blocks(GameObject *defender, GameObject *owner, std::array<float, 3> dir, uint16_t zones) {
+// DE_CAttackInfo::TestForFighterBlock (OMF 0x107177d0, disc 0x35017560): the attack direction in
+// the defender's frame picks one of 16 sectors (22.5 degrees each, sector 0 = coming straight at
+// its face); the attack's required zones, rotated to that sector, must all be zones the defender
+// can block (its +0x44c mask). A defender that isn't a fighter always blocks; an attacker with
+// the BOOL value UnblockableAttacks never is blocked (2.112).
+bool fighter_blocks(World &w, GameObject *defender, GameObject *owner, std::array<float, 3> dir, uint16_t zones) {
 	if (!owner || !defender || !defender->fighter) {
 		return true;
 	}
+	if (auto *v = w.object_value(owner, "UnblockableAttacks"); v && v->bits) return false;
 	auto l = defender->world().inverse_rotate(dir);
 	float a = -float(std::atan2(l[0], l[2]));
 	a = (a + 3.14159f + 0.19634938f) / 3.14159f * 8.0f;
@@ -367,7 +372,7 @@ void World::reset_attack_info(uint32_t a) {
 	for (uint32_t off = kEffectDirection; off < kReelDirection + 12; off += 4) mem_.set<float>(a + off, 0);
 	mem_.set<uint32_t>(a + kReactionType, 2);
 	mem_.set<uint32_t>(a + kEffectType, 1);
-	mem_.set<uint32_t>(a + kAttackType, 2);
+	mem_.set<uint32_t>(a + kAttackType, kTypeStandard);
 	mem_.set<float>(a + kMomentumAdjust, -99999.0f);
 	mem_.set<float>(a + kGuideToLastHit, 1.0f);
 	mem_.set<float>(a + kDiminishDamage, 0.2f);
@@ -611,6 +616,13 @@ void register_combat_natives(World &w) {
 		uint32_t a = info_of(c);
 		c.mem().set<uint8_t>(a + kFlags, c.mem().get<uint8_t>(a + kFlags) | 0x10);
 	});
+	// SetNoCounterCaller / IsNoCounterCaller (OMF 0x10713210 / 0x10713160, new in 2.096): only the
+	// counters' scripts read it.
+	reg("CObject::CAttackInfo::SetNoCounter()", [=](const NativeContext &c) {
+		uint32_t a = info_of(c);
+		c.mem().set<uint8_t>(a + kFlags, c.mem().get<uint8_t>(a + kFlags) | 0x80);
+	});
+	reg("CObject::CAttackInfo::bool IsNoCounter()", [=](const NativeContext &c) { c.ret_bool(c.mem().get<uint8_t>(info_of(c) + kFlags) & 0x80); });
 	reg("CObject::CAttackInfo::bool IsBlocked()", [=](const NativeContext &c) { c.ret_bool(c.mem().get<uint8_t>(info_of(c) + kFlags) & 1); });
 	reg("CObject::CAttackInfo::SetBlocked(bool)", [=](const NativeContext &c) {
 		uint32_t f = info_of(c) + kFlags;
@@ -628,7 +640,7 @@ void register_combat_natives(World &w) {
 	auto block_test = [=](const NativeContext &c, std::array<float, 3> dir, uint16_t zones) {
 		uint32_t a = info_of(c);
 		auto it = g_attacks.find(a);
-		bool blocked = fighter_blocks(c.arg_object(0), it == g_attacks.end() ? nullptr : it->second.owner, dir, zones);
+		bool blocked = fighter_blocks(c.world, c.arg_object(0), it == g_attacks.end() ? nullptr : it->second.owner, dir, zones);
 		uint32_t f = a + kFlags;
 		c.mem().set<uint8_t>(f, uint8_t((c.mem().get<uint8_t>(f) & ~1u) | (blocked ? 1 : 0)));
 		return blocked;
@@ -664,15 +676,17 @@ void register_combat_natives(World &w) {
 		uint32_t r = c.mem().get<uint32_t>(a + kReactionType);
 		c.ret_bool(r == 0x65 || r == 100 || c.mem().get<float>(a + kReelDirection + 4) > 0.04f);
 	});
-	// AddAttackType*Caller / IsAttackType*Caller (OMF 0x350130a0..0x35013210): bits of +0x4c;
-	// ClearAttackTypeCaller zeroes it.
-	for (auto &[n, bit] : std::vector<std::pair<const char *, uint32_t>>{{"Standard", 2}, {"Projectile", 4}, {"Cold", 8}, {"Heat", 0x10},
-	                                                                     {"Electrical", 0x20}, {"Gravitational", 0x40}, {"TimeStop", 0x80},
-	                                                                     {"NoReplicate", 0x80000000u}}) {
+	// AddAttackType*Caller / IsAttackType*Caller (OMF 0x10713240..0x107133d0): bits of +0x4c;
+	// ClearAttackTypeCaller zeroes it. Light has only IsAttackTypeLight (0x107132f0).
+	for (auto &[n, bit] : std::vector<std::pair<const char *, uint32_t>>{{"Standard", kTypeStandard}, {"Light", kTypeLight}, {"Projectile", kTypeProjectile},
+	                                                                     {"Cold", kTypeCold}, {"Heat", kTypeHeat}, {"Electrical", kTypeElectrical},
+	                                                                     {"Gravitational", kTypeGravitational}, {"TimeStop", kTypeTimeStop},
+	                                                                     {"NoReplicate", kTypeNoReplicate}}) {
 		uint32_t b = bit;
 		reg(std::string("CObject::CAttackInfo::bool IsAttackType") + n + "()", [=](const NativeContext &c) {
 			c.ret_bool((c.mem().get<uint32_t>(info_of(c) + kAttackType) & b) != 0);
 		});
+		if (b == kTypeLight) continue;
 		reg(std::string("CObject::CAttackInfo::AddAttackType") + n + "()", [=](const NativeContext &c) {
 			uint32_t a = info_of(c);
 			c.mem().set<uint32_t>(a + kAttackType, c.mem().get<uint32_t>(a + kAttackType) | b);
@@ -682,13 +696,15 @@ void register_combat_natives(World &w) {
 	reg("CObject::CAttackInfo::SetReaction(dword)", [=](const NativeContext &c) { c.mem().set<uint32_t>(info_of(c) + kReactionType, c.arg<uint32_t>(0)); });
 	reg("CObject::CAttackInfo::SetEffectType(dword)", [=](const NativeContext &c) { c.mem().set<uint32_t>(info_of(c) + kEffectType, c.arg<uint32_t>(0)); });
 	reg("CObject::CAttackInfo::GainEnergy(float)", [=](const NativeContext &c) { c.mem().set<float>(info_of(c) + kEnergyDamage, -c.arg<float>(0)); });
-	// StartSimpleAttackCaller: reset the stats, then damage = stun = arg0, recovery = arg1.
+	// StartSimpleAttackCaller (OMF 0x107133f0): reset the stats, then damage = stun = arg0,
+	// recovery = arg1; damage under 15 makes it Light.
 	reg("CObject::CAttackInfo::StartSimpleAttack(float,float)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c);
 		c.world.reset_attack_info(a);
 		c.mem().set<float>(a + kDamage, c.arg<float>(0));
 		c.mem().set<float>(a + kStunDamage, c.arg<float>(0));
 		c.mem().set<float>(a + kRecoveryTime, c.arg<float>(1));
+		if (c.arg<float>(0) < 15.0f) c.mem().set<uint32_t>(a + kAttackType, c.mem().get<uint32_t>(a + kAttackType) | kTypeLight);
 	});
 	(void)vec_at;
 	(void)kUser;
@@ -1343,10 +1359,10 @@ void register_combat_natives(World &w) {
 		auto rows = rows_along(dir);
 		c.ret_object(spawn_sparks(c.world, f, read_vec(c.mem(), p), &rows, 0, length(dir)));
 	});
-	// PackForGetHitEffect / UnpackForGetHitEffect (OMF 0x35016e00, 0x35016f30): the fields the hit
+	// PackForGetHitEffect / UnpackForGetHitEffect (OMF 0x10716fe0, 0x10717110): the fields the hit
 	// effect needs, through a replicated CData. Pack writes the damage as the byte
-	// trunc(clamp(damage, 0, 50) x 255); Unpack reads that byte but discards it, setting the
-	// damage to clamp(its own damage, 0, 50) / 255 x 50 instead (as the original does).
+	// trunc(clamp(damage, 0, 50) x 255); Unpack takes it back as byte / 255 x 50 (2.123; before,
+	// it dropped the byte and used clamp(its own damage, 0, 50) / 255 x 50).
 	reg("CObject::CAttackInfo::PackForGetHitEffect(class CData)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c), d = c.arg<uint32_t>(0);
 		if (!a || !d) return;
@@ -1389,7 +1405,7 @@ void register_combat_natives(World &w) {
 		if (squeezed() != 1) return;
 		uint8_t dmg;
 		take(&dmg, 1);
-		c.mem().set<float>(a + kDamage, std::clamp(c.mem().get<float>(a + kDamage), 0.0f, 50.0f) / 255 * 50);
+		c.mem().set<float>(a + kDamage, float(dmg) / 255 * 50);
 		for (uint32_t off : {kEffectType, kReactionType, kAttackType}) c.mem().set<uint32_t>(a + off, squeezed());
 		for (uint32_t off : {kConnectPoint, kEffectDirection, kEffectDirection2}) take(c.mem().ptr(a + off, 12), 12);
 		take(c.mem().ptr(a + kFlags, 1), 1);

@@ -1,8 +1,8 @@
 # Official patches (2.090 → 2.123)
 
-The port follows the disc release, **2.090**. The game was patched eight times after it; this
-file says what each patch changed and what the port has to do to follow it. Nothing here is
-applied yet (PLACEHOLDERS, "Patch level").
+The disc release is **2.090**. The game was patched eight times after it; this file says what
+each patch changed and what the port has to do to follow it. The port now follows **2.123**
+(PLACEHOLDERS, "Patch level"; FINDINGS 214-224 for the engine side).
 
 Each change is tagged *observed* (seen in the patched data or code), *inferred* (read from it,
 not seen running) or *uncertain*. Script changes name the Behavior object and its state /

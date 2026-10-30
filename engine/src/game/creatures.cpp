@@ -33,9 +33,25 @@ void register_creature_natives(World &w) {
 		c.ret_u32(o ? o->creation_time : 0);
 	});
 	// SetOwner / Owner (OMF SetOwnerCaller 0x35012570, OwnerCaller 0x35012590): the creature that
-	// made this one -- a projectile's fighter, which its collision tests then skip.
-	reg("CCreature::SetOwner(class CActor)", [](const NativeContext &c) { if (auto *o = c.self()) o->creature_owner = c.arg_object(0); });
-	reg("CCreature::class CActor Owner()", [](const NativeContext &c) { auto *o = c.self(); c.ret_object(o ? o->creature_owner : nullptr); });
+	// made this one -- a projectile's fighter, which its collision tests then skip. The disc's
+	// DE_COMF2ProjectileFactory::Init registered the projectile's methods on CCreature's class
+	// node; 2.112's (OMF 0x1073e400) puts them on COMF2Projectile's, so later scripts name that.
+	for (const char *cls : {"CCreature::", "COMF2Projectile::"}) {
+		reg(std::string(cls) + "SetOwner(class CActor)", [](const NativeContext &c) { if (auto *o = c.self()) o->creature_owner = c.arg_object(0); });
+		reg(std::string(cls) + "class CActor Owner()", [](const NativeContext &c) { auto *o = c.self(); c.ret_object(o ? o->creature_owner : nullptr); });
+	}
+	// NewExecutorlessCopyCaller (OMF 0x3503dc20): a copy (keeping owner +0x308 and creator +0x314)
+	// whose ClassExecutor properties are removed and destroyed.
+	auto executorless_copy = [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o) return c.ret_object(nullptr);
+		GameObject *n = c.world.copy_tree(*o);
+		n->executorless = true;
+		std::erase_if(n->extra_properties, [](const de::ObjectRef &r) { return r && r.info().class_path == "ClassExecutor"; });
+		c.ret_object(n);
+	};
+	reg("CCreature::class CCreature NewExecutorlessCopy()", executorless_copy);
+	reg("COMF2Projectile::class COMF2Projectile NewExecutorlessCopy()", executorless_copy);
 	// SetAsNewProjectileOwner (0x350213b0): a projectile handed to this fighter becomes its own.
 	reg("COMF2Fighter::SetAsNewProjectileOwner(class CActor)", [](const NativeContext &c) {
 		GameObject *p = c.arg_object(0);
@@ -50,6 +66,7 @@ void register_creature_natives(World &w) {
 	// SetOrigionalCaller (0x3503dc00) stores the projectile it was copied from (+0x320); nothing
 	// in the engine or the scripts reads it back.
 	reg("CCreature::SetOrigional(class CCreature)", [](const NativeContext &) {});
+	reg("COMF2Projectile::SetOrigional(class COMF2Projectile)", [](const NativeContext &) {});
 	// Marks the creature's last state for replication (+0x204 state +0x28 |= 8).
 	reg("CCreature::RegisterLastStateTimeCritical()", [](const NativeContext &) {});
 	reg("CCreature::AppendCreatureID(class CActor)", [](const NativeContext &) {});  // replication identity

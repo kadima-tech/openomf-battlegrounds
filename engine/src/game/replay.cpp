@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <random>
 
 #include "de/contents.h"
 #include "game/runtime.h"
@@ -135,6 +136,18 @@ struct ReplayWorld {
 };
 
 std::map<const World *, ReplayWorld> g_worlds;
+
+constexpr int64_t kRepeatableEpoch = 1074902400;  // 2004-01-24, 2.123's build day
+de::Guid record_guid(bool repeatable) {
+	if (!repeatable) return de::new_guid();
+	static std::mt19937_64 rng{0x2123};
+	de::Guid g;
+	for (int i = 0; i < 16; i += 8) {
+		uint64_t v = rng();
+		memcpy(g.bytes + i, &v, 8);
+	}
+	return g;
+}
 ReplayWorld &rw(World &w) { return g_worlds[&w]; }
 // DE_CCreature +0x1ec: SetInstanceNumber's suffix, by handle.
 std::map<uint32_t, std::pair<const GameObject *, std::string>> g_instance_numbers;
@@ -1080,6 +1093,8 @@ Clock &clock_of(World &w, GameObject &o, uint32_t rate, int64_t tick_ms = -1) {
 // DE_CStandardStateManager::AddLaggedState (Core 0x701aec10) for a replayed state: it goes after
 // the newest state at or before its time, the newer ones discarded; the same state at the same
 // time is kept and not restored again. Past 40 adds the old ones are cleaned (not recorded).
+// AddLaggedStateDestIndex (2.123 0x201b4e10) asks the owner's CanStateInterrupt before a lagged
+// state replaces newer no-interrupt ones only when the manager is not replaying (+0x78 clear).
 bool add_lagged_state(StateManager &sm, uint32_t t, const std::vector<uint8_t> &bytes) {
 	auto &h = sm.lagged;
 	size_t at = h.size();
@@ -1107,6 +1122,27 @@ bool add_lagged_state(StateManager &sm, uint32_t t, const std::vector<uint8_t> &
 	}
 	return true;
 }
+
+}  // namespace
+
+// DE_COMF2Fighter::CanStateInterrupt (OMF 0x1072aad0, 2.096; DE_CActor's says no): a lagged
+// Fall(byte) may give way to HitEvade(byte), and Block(class CAttackInfo,bool) to FromBlock or
+// either block counter. Methods are compared by their own names.
+bool can_state_interrupt(const GameObject &actor, const std::string &current, const std::string &next) {
+	if (!actor.fighter) return false;
+	auto own = [](const std::string &m) {
+		std::string n = m.substr(m.rfind(':') == std::string::npos ? 0 : m.rfind(':') + 1);
+		size_t paren = n.find('('), dot = n.rfind('.', paren);
+		if (dot != std::string::npos) n = n.substr(dot + 1);
+		if (n.size() > 2 && n.ends_with("()")) n.resize(n.size() - 2);
+		return n;
+	};
+	std::string a = own(current), b = own(next);
+	if (a == "Fall(byte)" && b == "HitEvade(byte)") return true;
+	return a == "Block(class CAttackInfo,bool)" && (b == "FromBlock" || b == "RightBlockCounter" || b == "LeftBlockCounter");
+}
+
+namespace {
 
 void restore(World &w, StateManager &sm, const std::pair<uint32_t, std::vector<uint8_t>> &st) {
 	if (getenv("OPENBG_DEBUG_REPLAY") || (!sm.replay && getenv("OPENBG_DEBUG_STATES"))) fprintf(stderr, "[replay %u] %s takes its %u state\n", w.frame(), sm.owner->name.c_str(), st.first);
@@ -1359,17 +1395,20 @@ void replay_session_ended(World &w, SessionState &s) {
 		if (s.obj && s.obj->file) r.factory = s.obj->file->objects()[s.obj->index].guid;
 		r.end_ms = uint32_t(w.scene_ms());
 		r.length = float(r.end_ms) / 1000.0f;
-		r.date = int64_t(time(nullptr));
+		// time(NULL) and new GUIDs, as the original stamps a record; runs without a wall clock
+		// (screenshot, headless) stamp it from their own clock so they repeat.
+		const bool repeatable = !w.system_clock;
+		r.date = repeatable ? kRepeatableEpoch + int64_t(w.system_ms() / 1000) : int64_t(time(nullptr));
 		r.server = w.registry_string("Network\\Server Name");
 		if (r.server.empty()) r.server = "Server";
 		r.name = r.server;
 		r.player = w.registry_string("Network\\Player Name");
 		char stamp[96];
 		time_t now = time_t(r.date);
-		strftime(stamp, sizeof stamp, "Session Recording, %a %B %d %Y, %I-%M-%S%p", localtime(&now));
+		strftime(stamp, sizeof stamp, "Session Recording, %a %B %d %Y, %I-%M-%S%p", repeatable ? gmtime(&now) : localtime(&now));
 		r.agent = stamp;
-		r.agent_guid = de::new_guid();
-		r.guid = de::new_guid();
+		r.agent_guid = record_guid(repeatable);
+		r.guid = record_guid(repeatable);
 		std::error_code ec;
 		std::filesystem::create_directories(recordings_dir(), ec);
 		r.path = recordings_dir() + "/" + stamp + ".DEObjects";
@@ -1523,11 +1562,11 @@ void replay_destroying(World &w, GameObject &o) {
 	}
 }
 
-// DE_CCreature::Tick (Creature 0x15016870), its state side: a held creature skips physics and
-// brain; one whose history holds a state for this very tick (not the one being restored) takes it
-// and skips them too, live or replayed: a live creature's own state registered since its last
-// tick comes back. At the end of the tick a hold ends once the clock is back where it was
-// (AssureSequenced).
+// DE_CCreature::Tick (Creature 0x15016870, 2.123 0x10216990), its state side: a held creature
+// skips physics and brain; one whose history holds a state for this very tick (not the one being
+// restored) takes it and skips them too, live or replayed: a live creature's own state registered
+// since its last tick comes back. After the state-changed hooks a hold ends once the clock is back
+// where it was (AssureSequenced).
 bool creature_state_tick(World &w, GameObject &o) {
 	uint32_t rate = w.creature_rate(&o);
 	if (!rate) return false;
@@ -1543,6 +1582,13 @@ bool creature_state_tick(World &w, GameObject &o) {
 			}
 		}
 	}
+	return skip;
+}
+
+void creature_state_tick_end(World &w, GameObject &o) {
+	auto it = rw(w).clocks.find(o.handle);
+	if (it == rw(w).clocks.end()) return;
+	Clock &c = it->second;
 	if (c.mode != 0) {
 		if (o.creature_ticks >= c.until) {
 			assure_sequenced(w, o, c);
@@ -1553,7 +1599,6 @@ bool creature_state_tick(World &w, GameObject &o) {
 		c.until = o.creature_ticks;
 	}
 	c.ticked = true;
-	return skip;
 }
 
 bool creature_delta_ticked(const GameObject &o) { return creature_flags(o).defer != 0; }

@@ -62,6 +62,8 @@ public:
 	virtual uint32_t new_instance(Executor &ex, uint32_t index, uint32_t count);
 	// op 42: copy-construct a local instance of class `index` from `source` (may be 0).
 	virtual uint32_t new_local_instance(Executor &, uint32_t index, uint32_t source);
+	// CloseStack: an instance SetupStack made for a frame that has closed.
+	virtual void close_instance(Executor &, uint32_t /*instance*/) {}
 	// Behavior interfaces (ops 23-25, 27, 29, 37, 88): handles to another brain's behavior.
 	virtual bool interface_valid(Executor &, uint32_t /*iface*/) { return false; }
 	virtual uint32_t interface_global_id(Executor &, uint32_t /*iface*/) { return 0; }
@@ -150,6 +152,9 @@ private:
 	};
 
 	void internal_execute(ScriptMethod &m, uint32_t args_offset, bool sync);
+	// DE_CClassCompiledMethod::CloseStack (Core 0x201423c0): the frame's instances go to the host.
+	void close_frame(const Frame &f);
+	void close_frames(size_t keep);
 	int continue_execution();  // ContinueExecutionInternal: 0 = suspended, 1 = finished
 	void invoke(ScriptMethod &callee, uint32_t args_offset);
 	std::string format_varparams();

@@ -17,6 +17,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 
@@ -720,6 +721,26 @@ int main(int argc, char **argv) {
 					printf("%-28s %-36s v%d interval %d entry %s\n", e.path().stem().string().c_str(), o.name.c_str(), b.version, interval, entry.c_str());
 				}
 			}
+			return 0;
+		}
+		if (!strcmp(argv[1], "intrinsics") && argc > 2) {  // intrinsics <Data>: every native the compiled classes name
+			std::set<std::string> keys;
+			for (auto &e : std::filesystem::directory_iterator(argv[2])) {
+				if (e.path().extension() != ".DEObjects") continue;
+				de::ObjectsFile f(read_file(e.path().string().c_str()));
+				for (const auto &o : f.objects()) {
+					if (o.class_path != "Class") continue;
+					auto d = f.object_data(o);
+					auto code = f.ex_payload(d, "VMC2");
+					if (!code) continue;
+					try {
+						auto v = vm::VMClass::parse(code->data, vm::class_behavior_refs(d.references).size());
+						for (auto &in : v.intrinsics) keys.insert(v.classes[in.class_index].name + "::" + in.signature);
+					} catch (const std::exception &) {
+					}
+				}
+			}
+			for (auto &k : keys) printf("%s\n", k.c_str());
 			return 0;
 		}
 		if (!strcmp(argv[1], "meshflags") && argc > 2) {  // meshflags <file>: DE_CMesh +0x40 per mesh

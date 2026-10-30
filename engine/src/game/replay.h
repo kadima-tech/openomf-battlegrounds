@@ -80,6 +80,12 @@ bool replay_driven(World &w, const GameObject *o);
 // DE_CCreature::Tick at its start: true when the creature skips its physics and brain this tick
 // (held since a replay's clock went back, or re-taking a state of this tick).
 bool creature_state_tick(World &w, GameObject &o);
+// DE_CCreature::Tick after the state-changed hooks, before the tick count goes up: a hold ends
+// once the clock is back where it was (AssureSequenced).
+void creature_state_tick_end(World &w, GameObject &o);
+// DE_CActor::CanStateInterrupt (vtable +0x138 in 2.123): may a lagged state in `next` replace a
+// newer no-interrupt one in `current` (network play only; replays never ask).
+bool can_state_interrupt(const GameObject &actor, const std::string &current, const std::string &next);
 // DE_CCreature::ObjPrepare: a creature with no tick rate joins the scene's delta-tick list when
 // its +0x1e0 is set (none in the shipped data).
 bool creature_delta_ticked(const GameObject &o);

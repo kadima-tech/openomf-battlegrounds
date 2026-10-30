@@ -27,6 +27,8 @@ unshield -d source/extracted x source/iso/Setup/data1.cab
 
 You should now have `source/extracted/App_Executables/Data` (the `.DEObjects` game files) and `.../Engine` (the engine modules, read for their embedded core data). `source/` is ignored by git.
 
+The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` rebuilds `source/patched/v2123` (and the earlier versions) from the disc install and the official patch files (PATCHES.md); the build and tests use that tree when it is there, and the examples below name it. The disc's `source/extracted/App_Executables/Data` still loads.
+
 **2. Build.**
 
 ```sh
@@ -38,7 +40,7 @@ ctest --test-dir engine/build        # parses every data file; -LE full skips th
 **3. Play.**
 
 ```sh
-engine/build/openbg-fight source/extracted/App_Executables/Data Jaguar --opponent Katana --arena Desert
+engine/build/openbg-fight source/patched/v2123/Data Jaguar --opponent Katana --arena Desert
 ```
 
 Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space jump, Left Shift or C duck/evade, drag to orbit. Robots: Jaguar, Katana, Gargoyle, Chronos, Mantis, Pyros, Warlord, Force. Arenas: Desert, BladePit, Canyon, City, FirePit, Iceberg, PowerPlant, SpaceStation, Volcano. `--watch` lets the computer fight itself; the options are described below.
@@ -57,17 +59,17 @@ Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space
 - `src/vm`: the script VM. It reads the compiled VMC2 bytecode (249 classes, 10,582 methods) and runs it natively; shipped fighter-stat methods execute correctly.
 - `src/de/scene.cpp`: actor hierarchy, transforms and materials, with cross-file references resolved through a `World` of all files.
 - `app/viewer.cpp` (`openbg-viewer`): native SDL2/OpenGL fighter viewer with pilot recolouring and skeletal animation:
-  `engine/build/openbg-viewer --data source/extracted/App_Executables/Data --fighter Jaguar --anim LeftMediumPunch`
+  `engine/build/openbg-viewer --data source/patched/v2123/Data --fighter Jaguar --anim LeftMediumPunch`
   (Left/Right cycles through the fighter's moves; `--list` prints them; Space pauses.)
 - `tools/pcc.cpp` (`pcc`): compiles a Class from its behaviors' sources (`vm/compiler.cpp`, for the classes the game ships without bytecode) and prints the code next to the shipped VMC2 where there is one:
-  `engine/build/pcc source/extracted/App_Executables/Data SinglePlayer PSubSession 1`.
+  `engine/build/pcc source/patched/v2123/Data SinglePlayer PSubSession 1`.
 - `app/arena.cpp` (`openbg-arena`): native arena fly-through:
-  `engine/build/openbg-arena source/extracted/App_Executables/Data Desert` (WASD/QE, drag to look), drawn with
+  `engine/build/openbg-arena source/patched/v2123/Data Desert` (WASD/QE, drag to look), drawn with
   the fight's renderer (materials, the arena's lights, reflections, glow).
 - `app/frontend.cpp` (`openbg`): the front end, the game's own 3D menus from OMFBGGUI with their scripts
   (buttons light up and click, the doors close and open between pages), driven by a port of the UI
   managers' page flow (`src/game/ui.cpp`; FINDINGS 125-127):
-  `engine/build/openbg source/extracted/App_Executables/Data`. The main menu, the Quit page and Single
+  `engine/build/openbg source/patched/v2123/Data`. The main menu, the Quit page and Single
   Player's Choose Match work, and a chosen match's session runs its Choose Pilot / Choose Creature
   screens; the matches themselves (sub-sessions) are next. Other screens say they are not ported yet.
   `--launch Training` starts a match at once, `--choose Elizabeth,Jaguar` has its screens pick those, and
@@ -82,7 +84,7 @@ Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space
 - `app/fight.cpp` (`openbg-fight`): a match against a computer-controlled robot, run by the game's own
   Last Man Standing session scripts (countdown, READY/FIGHT, knockouts, rounds, winner), both robots
   driven by their own compiled script brains, in an arena:
-  `engine/build/openbg-fight source/extracted/App_Executables/Data Jaguar --opponent Katana --arena Desert`
+  `engine/build/openbg-fight source/patched/v2123/Data Jaguar --opponent Katana --arena Desert`
   (`--opponent none` for solo; `--pilot` / `--opponent-pilot` pick pilots from Pilots.DEObjects,
   `--difficulty rookie|amateur|veteran|champion|world-champion` sets the AI quality, `--wins 1|2|5|10|20|50`
   the score limit (default 2); `--direct` skips the session and spawns both robots straight away (in the real arena, at the session's spawn points, each with its pilot driving it as in a session; the same robot can be both fighters); `--watch` lets the computer drive your robot too, for watching AI against AI.)

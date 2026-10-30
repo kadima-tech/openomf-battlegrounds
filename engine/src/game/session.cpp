@@ -208,6 +208,7 @@ std::vector<de::ObjectRef> World::actor_properties(const de::ObjectRef &r) const
 std::vector<de::ObjectRef> World::properties_of(const GameObject &o) const {
 	std::vector<de::ObjectRef> out;
 	if (o.file) out = actor_properties({o.file, o.index});
+	if (o.executorless) std::erase_if(out, [](const de::ObjectRef &r) { return r && r.info().class_path == "ClassExecutor"; });
 	out.insert(out.end(), o.extra_properties.begin(), o.extra_properties.end());
 	return out;
 }
@@ -587,7 +588,13 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 			}
 		};
 		if (refs.size() > 2) add(refs[2]);
+		// DE_CFighterDescription::NewResource(GUID) (OMF 0x10733930): a FighterModelDescription's
+		// GUID stands for its model.
 		de::ObjectRef m = model ? w.data().by_guid(*model) : de::ObjectRef{};
+		if (m && m.info().class_path == "Description\\FighterModelDescription") {
+			auto res = passive_references(w.data(), m);
+			m = res.empty() ? de::ObjectRef{} : res[0];
+		}
 		if (!m && refs.size() > 1) m = refs[1];
 		if (m) add(m);
 	}
@@ -662,6 +669,7 @@ void end_session(World &w, SessionState &s) {
 	end_scene_of(w, s);
 	for (GameObject *m : s.modifiers) w.clean_later(m);
 	w.clean_later(s.obj);
+	w.clean_later(s.description);
 }
 
 // DE_CSession::ObjDestroyContents (0x701f7f20) calls End (vtable +0x174): a deleted session
@@ -689,6 +697,7 @@ namespace {
 std::shared_ptr<SessionState> new_session(World &w, const char *name) {
 	auto s = std::make_shared<SessionState>();
 	s->obj = w.create_child(nullptr, name, "Session\\Standard");
+	s->description = w.create_child(nullptr, std::string(name) + "Info", "SessionInfo");
 	w.sessions.push_back(s);
 	return s;
 }
@@ -1352,6 +1361,13 @@ void register_session_natives(World &w) {
 		if (auto *cl = client(c)) cl->user = cl->local = true;
 	});
 	reg("CClient::Activate()", [client](const NativeContext &c) { if (auto *cl = client(c)) cl->active = true; });
+	// IsAdministratorCaller (Core 0x201fb310, 2.101): a local client of a server session that a
+	// user controls (+0x68, its device, set) is; otherwise its AdministratorLevel (+0x74, 0). Our
+	// sessions are all local servers.
+	reg("CClient::bool IsAdministrator()", [client](const NativeContext &c) {
+		auto *cl = client(c);
+		c.ret_bool(cl && cl->local && cl->user);
+	});
 	// DestroyClient: the client leaves its slot and the session.
 	reg("CClient::DestroyClient()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
@@ -1406,6 +1422,13 @@ void register_session_natives(World &w) {
 	stub("CUIManager::DisableAutodestroy()");
 	// The panel finds the observer itself (StandardSessionAssureObserver), as this hands it over.
 	stub("CVCRControls::SetObserverCamera(class CCreature)");
+	// NextUIManagerCaller / CurrentUIManagerCaller (Core 0x2004a510 / 0x2004a530, 2.101).
+	reg("CObject::class CUIManager NextUIManager()", [](const NativeContext &c) {
+		c.ret_object(c.world.next_ui_manager ? c.world.next_ui_manager() : nullptr);
+	});
+	reg("CObject::class CUIManager CurrentUIManager()", [](const NativeContext &c) {
+		c.ret_object(c.world.current_ui_manager ? c.world.current_ui_manager() : nullptr);
+	});
 	reg("CObject::SetNextUIManager(class CUIManager)", [](const NativeContext &c) {
 		GameObject *ui = c.arg_object(0);
 		if (ui && ui == c.world.vcr_ui && c.world.show_vcr) {
@@ -1503,6 +1526,15 @@ void register_session_natives(World &w) {
 			for (uint8_t b : guid.bytes) set |= b != 0;
 		}
 		c.ret_object(new_resource(c.world, c.self(), set ? &guid : nullptr));
+	});
+	// GetRandomFighterModelDescription (OMF 0x10733be0, 2.096): MATH::Rand over GatherFighterModels
+	// (0x10733a70), every FighterModelDescription master object of this fighter; null without one.
+	reg("CFighterDescription::class CDescription GetRandomFighterModelDescription()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		auto models = o && o->file ? fighter_models(c.world.data(), {o->file, o->index}) : std::vector<de::ObjectRef>{};
+		if (models.empty()) return c.ret_object(nullptr);
+		int n = int(models.size());
+		c.ret_object(c.world.global_object(models[size_t((crt_rand() * n) >> 15)]));
 	});
 	// --- The scene's actor list (DE_CScene::NumActors/Actor/Add) ----------------------------------
 	// The scene a script's Scene() names: its actor's (+0x10), else its session's.

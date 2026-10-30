@@ -1379,6 +1379,7 @@ void World::creature_tick(GameObject &o) {
 		}
 	}
 	if (object(o.handle)) run_state_hooks(o);
+	creature_state_tick_end(*this, o);
 	++o.creature_ticks;
 	if (o.fighter) {
 		if (!skip && o.invulnerable_frames > 0) --o.invulnerable_frames;
@@ -1570,9 +1571,18 @@ void World::tick_gui(int view, uint32_t ms) {
 	now += left;
 }
 
+void World::close_instance(vm::Executor &, uint32_t instance) { instances_closed_.push_back(instance); }
+
+// The arena never hands an instance's bytes out again, so destroying one only forgets its class.
+void World::destroy_closed_instances() {
+	for (uint32_t a : instances_closed_) instance_classes_.erase(a);
+	instances_closed_.clear();
+}
+
 void World::tick(uint32_t ms) {
 	++frame_;
 	frame_ms_ = ms;
+	destroy_closed_instances();
 	housekeeping();
 	impulses->flush();
 	// OPENBG_CALLS="Katana@400-402" (or "*@..."): log the methods brains of that owner enter.

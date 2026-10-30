@@ -198,6 +198,7 @@ static void test_vm_fighter_stats(const std::filesystem::path &dir) {
 // Every object in every shipped file: header parses and contents decode (MD5-checked).
 static void test_all_files(const std::filesystem::path &dir) {
 	size_t files = 0, objects = 0;
+	bool v2123 = false;  // 2.123's Effects carry the get-hit debris (PATCHES.md)
 	for (auto &e : std::filesystem::directory_iterator(dir)) {
 		if (e.path().extension() != ".DEObjects") {
 			continue;
@@ -207,6 +208,7 @@ static void test_all_files(const std::filesystem::path &dir) {
 			for (auto &o : f.objects()) {
 				f.object_data(o);
 				++objects;
+				v2123 |= o.name == "GetHitBitsParent";
 			}
 			++files;
 		} catch (const std::exception &ex) {
@@ -321,10 +323,10 @@ static void test_all_files(const std::filesystem::path &dir) {
 	}
 	printf("meshes: %zu (%zu vertices, %zu triangles, %zu without geometry)\n", meshes, verts, tris, no_geometry);
 	CHECK(meshes == 966);
-	CHECK(obsolete == 38);  // on 20 images; their index-0 pixels still decode
-	CHECK(classes == 249);
+	CHECK(obsolete == (v2123 ? 36u : 38u));  // on 20 images in 2.090; their index-0 pixels still decode
+	CHECK(classes == (v2123 ? 255u : 249u));
 	CHECK(files == 65);
-	CHECK(objects == 28115);
+	CHECK(objects == (v2123 ? 28337u : 28115u));
 }
 
 // Every Image\\AVI in the data: DIB, Cinepak and Indeo 4/5 videos decode to one frame per stream

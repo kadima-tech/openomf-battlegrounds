@@ -1,5 +1,5 @@
 // Navigation links (Creature DE_CNavigationLink::CPath: SetupCreature 0x1500f290, GetPathAffector
-// 0x1500eeb0, CalculatePath 0x1500ef90, GetMoveToPosition 0x1500f8b0; DE_CNavigationLink::StepTo
+// 0x1500eeb0 (2.123: 0x1020ef70), CalculatePath 0x1500ef90, GetMoveToPosition 0x1500f8b0; DE_CNavigationLink::StepTo
 // 0x1500f5a0, PreStepCalculate 0x1500f790; DE_CMoveToCommand::Update 0x15021640).
 //
 // An arena's navigation areas are affectors (Desert's spheres under NavParent). Each carries
@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "game/navigation.h"
+#include "game/forces.h"
 #include "game/session.h"
 
 namespace game {
@@ -65,20 +66,30 @@ void Navigation::build() {
 	}
 }
 
-// GetPathAffector: a sphere test at the point, growing until it meets a navigation area (or
-// passes 500).
+// GetPathAffector (Creature 0x1020ef70, 2.123): the scene's test sphere at the point against group
+// 0x2000 (SetupCreature's filter), radius 0, then 5, then squared, until it touches something
+// (null past 500); the first touched affector that is one of the links' areas. Touching only
+// others, the sphere grows by 100 while under 500 (2.112 tested the same sphere again, forever).
 GameObject *Navigation::area_at(const Vec &p) {
-	for (float r = 1; r <= 500; r *= 2) {
-		GameObject *best = nullptr;
-		float best_d = 1e30f;
-		for (GameObject *a : areas_) {
-			if (!in_scene(*a)) continue;
-			float d = dist(a->world().t, p) - radius(*a);
-			if (d <= r && d < best_d) best = a, best_d = d;
+	GameObject *probe = w_.create("NavigationTestSphere", "Actor\\Affector\\Sphere");
+	probe->shape = GameObject::Shape::Sphere;
+	probe->local = {};
+	probe->local.t = p;
+	probe->hotspot = 0;
+	for (float r = 0;;) {
+		probe->falloff = r;
+		auto hits = touches(w_, *probe, 0x2000);
+		if (hits.empty()) {
+			r = r == 0 ? r + 5 : r * r;
+			if (r > 500) return nullptr;
+			continue;
 		}
-		if (best) return best;
+		for (const Contact &h : hits) {
+			if (std::find(areas_.begin(), areas_.end(), h.touched) != areas_.end()) return h.touched;
+		}
+		r += 100;
+		if (!(r < 500)) return nullptr;
 	}
-	return nullptr;
 }
 
 void Navigation::calculate(Path &path, GameObject &creature, const Vec &dest) {

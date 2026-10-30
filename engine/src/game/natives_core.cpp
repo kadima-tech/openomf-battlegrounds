@@ -213,6 +213,48 @@ void register_core_natives(World &w) {
 		c.world.root_session[o] = scene;
 		if (std::find(c.world.scene_roots.begin(), c.world.scene_roots.end(), o) == c.world.scene_roots.end()) c.world.scene_roots.push_back(o);
 	});
+	// DE_CObject::ReplaceWithThenDie (Core 0x20043800): its children move to the replacement, what
+	// referred to it refers to the replacement (here: texture managers drawing it as an image),
+	// and it is cleaned up.
+	reg("CObject::ReplaceWithThenDie(class CObject)", [](const NativeContext &c) {
+		GameObject *o = c.self(), *r = c.arg_object(0);
+		if (!o) return;
+		if (r && r != o) {
+			while (!o->children.empty()) {
+				GameObject *ch = o->children.front();
+				bool was = in_scene(*ch);
+				o->children.erase(o->children.begin());
+				ch->parent = r;
+				r->children.push_back(ch);
+				c.world.parented(ch, was);
+			}
+			if (o->file && r->file && o->is("Image")) {
+				for (uint32_t i = 0; i < o->file->objects().size(); ++i) {
+					if (o->file->objects()[i].class_path.rfind("TextureManager", 0) != 0) continue;
+					for (auto &l : reference_lists(c.world.data(), {o->file, i})) {
+						for (auto &refs : l) {
+							for (auto &ref : refs) {
+								if (ref.file == o->file && ref.index == o->index) c.world.texture_overrides[{o->file, i}] = de::ObjectRef{r->file, r->index};
+							}
+						}
+					}
+				}
+				++c.world.texture_override_version;
+			}
+		}
+		c.world.clean_later(o);
+	});
+	// DE_CActor::RenderQuality (Core 0x20095260, 2.123): 0 without a renderer camera, else
+	// min(120 / max(distance to the camera - 100, 1), 1) x the renderer's maximum quality (+0x78,
+	// 1: nothing calls SetMaximumQuality).
+	reg("CActor::float RenderQuality()", [](const NativeContext &c) {
+		GameObject *o = c.self(), *cam = c.world.renderer_camera_actor();
+		if (!o || !cam || !in_scene(*o)) return c.ret_f32(0);
+		auto a = o->world().t, b = cam->world().t;
+		float d = std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])) - 100;
+		if (d < 1) d = 1;
+		c.ret_f32(std::min(120 / d, 1.0f));
+	});
 	reg("CObject::class CObject NewCopy()", [](const NativeContext &c) {
 		auto *o = c.self();
 		c.ret_object(o ? c.world.copy_tree(*o) : nullptr);

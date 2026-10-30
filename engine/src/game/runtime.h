@@ -215,7 +215,8 @@ struct GameObject {
 	bool reference_created = false;  // a PassiveObjectReference that has made its object
 	int32_t input_device = -1;       // a creature controller's bound device (+0x2c), -1 none
 	float move_multiplier = 1, turn_multiplier = 1;  // fighter +0x4bc / +0x4c0
-	float global_interest = 0;             // CActor::SetGlobalInterest (fighter +500)
+	float global_interest = 0;             // DE_CCreature +0x1f4: creature contents v2-v4, or SetGlobalInterest
+	bool interest_loaded = false;          // global_interest read from the contents (or set) yet
 	uint32_t interest_time = 0;            // fighter +0x488: scene ms GlobalInterest was last worked out
 	float interest_cached = 1;             // fighter +0x48c
 	uint32_t faction = 0;                  // pilot +0x32c (a handle): CPilot::SetFaction (team games)
@@ -278,6 +279,7 @@ struct GameObject {
 	bool copied = false;          // made at run time (NewCopy, passive references): drawn live
 	// DE_CPassiveActorReference::Create appends the reference's own properties to the actor's.
 	std::vector<de::ObjectRef> extra_properties;
+	bool executorless = false;  // COMF2Projectile::NewExecutorlessCopy: its data's executors are dropped
 	uint32_t creation_time = 0;
 	uint32_t anchor_prepared_frame = 0;
 	float danger_level = 0, danger_delay = 0;             // a CDanger property on this affector
@@ -488,6 +490,8 @@ public:
 	// DE_CFaction::TeamIndex (OMF 0x35052130): its INT value "TeamIndex".
 	int32_t faction_team(uint32_t faction);
 	float global_interest_of(GameObject *o);
+	// A creature's own interest (+0x1f4): its contents' until a script sets it.
+	float own_interest(GameObject &o);
 	// DE_COMF2Fighter::CurrentTarget (OMF 0x3502a8b0): the fighter it is facing up to.
 	GameObject *current_target_of(GameObject &f);
 	// CObject::NewCopy: a deep copy of `o` and its children (no brains), unparented.
@@ -668,6 +672,9 @@ public:
 	bool vcr_shown = false;
 	std::function<void(GameObject *ui)> show_vcr;
 	std::function<void()> close_ui_stack;
+	// DE_CAppManager::NextUIManager / GetUIManager: the script objects of the pages the app has
+	// queued and up (null when the page is not a script's).
+	std::function<GameObject *()> next_ui_manager, current_ui_manager;
 	int ai_difficulty = 0;  // DE_COMF2Manager::AIDifficulty (registry default 0, Rookie) for pilots the session creates
 	struct ObjectValue {
 		uint32_t bits = 0;  // BOOL / INT / FLOAT
@@ -812,6 +819,11 @@ public:
 	// which runs before and after the frame's updates (DE_GLOBAL::UpdateSystem).
 	void clean_later(GameObject *o);
 	void housekeeping();
+	// DE_CClassCompiledMethod::CloseStack (2.101, Core 0x201423c0) queues a closed frame's class
+	// instances in g_ClassInstancesNeedingDestruction; DE_CClassFactory::ObjUpdate (0x201388b0)
+	// destroys them on the next update.
+	void close_instance(vm::Executor &ex, uint32_t instance) override;
+	void destroy_closed_instances();
 
 	// vm::Host
 	void intrinsic(vm::Executor &ex, uint32_t index, uint32_t args) override;
@@ -881,6 +893,7 @@ private:
 	std::map<std::pair<const vm::ScriptClass *, uint32_t>, Bound> bound_;
 	std::map<std::string, uint64_t> missing_;
 	std::unordered_map<uint32_t, std::string> instance_classes_;
+	std::vector<uint32_t> instances_closed_;
 	std::set<const GameObject *> activated_;  // objects whose executors were started
 	std::vector<Brain *> pending_starts_;      // attached by a deferred enter_scene, not yet started
 	std::deque<std::unique_ptr<Brain>> brains_;
