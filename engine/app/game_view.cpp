@@ -193,9 +193,34 @@ Fighter *GameView::viewed_fighter() const {
 	return player;
 }
 
+// The renderer draws the one scene its viewer has attached: DE_CStandardSession::Begin attaches
+// the newest session's (AttachScene detaches the one before), so a finished match's scene, alive
+// until housekeeping deletes it, is not drawn.
+bool GameView::shown(const game::GameObject *o) const {
+	if (game::in_gui(*o)) return false;
+	const game::GameObject *s = world.scene_session_of(o);
+	return !s || !world.session || s == world.session->obj;
+}
+
 void GameView::init_gl() {
 	overlay.load(world.data());
 	particles_r.load();
+	particles_r.only = [this](const game::GameObject *o) { return shown(o); };
+	render::g_bump_enabled = &world.bump_enabled;
+	// A FLOAT value object as the scripts set it (BSetSceneTime's SceneTime every render tick).
+	render::g_live_values = [this](const de::ObjectRef &r) -> std::optional<float> {
+		for (auto &[parent, named] : world.values) {
+			for (const game::GameObject *ch : parent->children) {
+				if (ch->file != r.file || ch->index != r.index) continue;
+				auto it = named.find(ch->name);
+				if (it == named.end()) break;
+				float f;
+				memcpy(&f, &it->second.bits, 4);
+				return f;
+			}
+		}
+		return std::nullopt;
+	};
 	actors_r.image_of = [this](const de::ObjectRef &tm) -> std::optional<de::ObjectRef> {
 		auto it = world.texture_overrides.find({tm.file, tm.index});
 		if (it == world.texture_overrides.end()) return std::nullopt;
@@ -241,7 +266,7 @@ void GameView::load_arena(const std::string &stem) {
 // The session's environment in the scene: its file is the arena.
 std::string GameView::find_arena() const {
 	for (game::GameObject *o : world.scene_objects()) {
-		if (o->file && o->class_path == "Actor\\Creature\\Environment" && !game::in_gui(*o)) return o->file->master().name;
+		if (o->file && o->class_path == "Actor\\Creature\\Environment" && shown(o)) return o->file->master().name;
 	}
 	return {};
 }
@@ -373,7 +398,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		};
 	}
 	// The frame's lights and their lighting owners (scene_lights.h).
-	render::FrameLights frame_lights = render::collect_lights(world, fr, [](const game::GameObject *o) { return !game::in_gui(*o); });
+	render::FrameLights frame_lights = render::collect_lights(world, fr, [this](const game::GameObject *o) { return shown(o); });
 	if (!world.lighting_enabled) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
 	// The applied Shadow Type (default 0), only with the lights on.
 	const int shadow_type = world.lighting_enabled ? world.shadow_type : 0;
@@ -391,7 +416,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
-			if (!o->path_moved || o->file != arena_file) continue;
+			if (!o->path_moved || o->file != arena_file || !shown(o)) continue;
 			moving.insert(o->index);
 			add(o);
 		}
@@ -401,7 +426,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			owners_set = true;
 			std::map<uint32_t, const game::GameObject *> by_index;
 			for (game::GameObject *o : world.scene_objects()) {
-				if (o->file == arena_file) by_index.emplace(o->index, o);
+				if (o->file == arena_file && shown(o)) by_index.emplace(o->index, o);
 			}
 			arena_r.set_light_owners([&](const std::vector<uint32_t> &chain) -> const void * {
 				for (uint32_t i : chain) {
@@ -427,7 +452,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	std::vector<render::ActorMeshRenderer::Item> items = moving_items;
 	{
 		for (game::GameObject *o : world.scene_objects()) {
-			if (!o->copied || !o->is_actor || o->fighter || !o->file || o->meshes_disabled || game::in_gui(*o)) continue;
+			if (!o->copied || !o->is_actor || o->fighter || !o->file || o->meshes_disabled || !shown(o)) continue;
 			// The arena's own actors are the static scene ArenaRenderer draws.
 			if (o->file == arena_file) continue;
 			bool live = game::in_scene(*o);
@@ -446,7 +471,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	{
 		for (auto *fi : fighters) {
 			auto *a = fi->actor;
-			if (!a->spawned || !a->visible) continue;
+			if (!a->spawned || !a->visible || !shown(a)) continue;
 			render::FighterRenderer::AnimState st{a->sequence, a->anim_time, a->prelude, a->prelude_time, a->activations,
 			                                      a->captured_blend, a->capture_initial.sequence, a->capture_final.sequence,
 			                                      a->capture_initial.time, a->capture_final.time};
@@ -493,7 +518,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		std::vector<render::ShadowRenderer::Caster> casters;
 		if (shadow_type > 0) {
 			for (auto *fi : fighters) {
-				if (!fi->actor->spawned) continue;
+				if (!fi->actor->spawned || !shown(fi->actor)) continue;
 				const void *owner = light_owner_of(fi->actor);
 				for (auto &[aff, own] : frame_lights.render_affectors) {
 					if (own != fi->actor || aff->shape != game::GameObject::Shape::Sphere) continue;
@@ -507,9 +532,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 				}
 			}
 		}
-		// Texture Detail (registry Texture Mip Map, default 1 Medium), as the options panel saved it.
-		const std::string detail = world.registry_string("Preferences\\Renderer\\Texture Mip Map");
-		shadows_r.update(shadow_type, detail.empty() ? 1 : atoi(detail.c_str()), casters, render::g_lighting, view, 70.5f);
+		// The applied Texture Detail (renderer +0x1a0).
+		shadows_r.update(shadow_type, world.texture_detail, casters, render::g_lighting, view, 70.5f);
 	}
 	if (!capture_camera) world.particles->process_trailers();
 	render::set_transparent_sink(nullptr);
@@ -525,7 +549,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
 		{
 			for (auto *fi : fighters) {
-				if (fi->actor->spawned && fi->renderer_loaded) fi->renderer.draw_glow(vp, eye);
+				if (fi->actor->spawned && fi->renderer_loaded && shown(fi->actor)) fi->renderer.draw_glow(vp, eye);
 			}
 		}
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);

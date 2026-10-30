@@ -13,6 +13,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,11 +36,17 @@ struct Interpolation {
 };
 
 struct FloatValue {
+	ObjectRef object;
 	bool inter = false;
 	float value = 0;  // DE_CValueFLOAT
 	float min = 0, max = 1, frequency = 1;
 	Interpolation shape;
-	float eval(float t) const;
+	// Value\FLOAT\MathFunction (DE_CValueFLOATMathFunction::GetValue, Core 0x70110770): op +0x54
+	// (0 add, 1 a - b, 2 a / b, 3 multiply, 4 in[0] at b, 5 product), a = in[0](t), b = in[1](t),
+	// each the function's own value when unset.
+	int op = -1;
+	std::shared_ptr<FloatValue> in[3];
+	float eval(float t, const LiveFloat &live = {}) const;
 };
 
 struct ColorValue {
@@ -51,7 +58,7 @@ struct ColorValue {
 };
 
 // A Value object (by class path).
-FloatValue read_float_value(const World &w, const ObjectRef &r);
+FloatValue read_float_value(const World &w, const ObjectRef &r, int depth = 0);
 ColorValue read_color_value(const World &w, const ObjectRef &r);
 
 // DE_CObject::GetFLOATValue(name) for a value kept as a named child (GlowFactor on meshes and

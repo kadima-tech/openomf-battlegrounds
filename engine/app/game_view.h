@@ -83,6 +83,7 @@ private:
 	Fighter *viewed_fighter() const;
 	void load_renderers();
 	std::string find_arena() const;
+	bool shown(const game::GameObject *o) const;
 
 	std::string arena;
 	std::array<float, 16> screen_vp{};

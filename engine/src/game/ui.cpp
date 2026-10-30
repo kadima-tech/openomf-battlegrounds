@@ -1703,6 +1703,8 @@ void AppManager::apply_render(const RenderOptions &o) {
 	world.lighting_enabled = g.lights != 0;
 	de::g_high_detail = g.high_detail != 0;
 	world.shadow_type = g.shadows;
+	world.bump_enabled = g.bump != 0;
+	world.texture_detail = g.texture;
 }
 
 void AppManager::apply_settings() {

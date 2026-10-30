@@ -659,7 +659,9 @@ int main(int argc, char **argv) {
 				de::ObjectRef m = picker->model();
 				auto res = m ? game::passive_references(world.data(), m) : std::vector<de::ObjectRef>{};
 				if (!res.empty() && picker->pedestal) {
-					if (m.file != picker_model_shown.file || m.index != picker_model_shown.index) {
+					// UpdateModel makes a new model, painted by its first decode, whenever either changes.
+					const bool new_pilot = picker->pilot.file != picker_pilot_shown.file || picker->pilot.index != picker_pilot_shown.index;
+					if (m.file != picker_model_shown.file || m.index != picker_model_shown.index || new_pilot) {
 						std::string stem = res[0].file->master().name;
 						std::string robot = stem.size() > 6 && stem.compare(stem.size() - 6, 6, "Model1") == 0 ? stem.substr(0, stem.size() - 6) : stem;
 						picker_model = render::FighterRenderer();

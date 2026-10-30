@@ -1,15 +1,17 @@
 // openbg-arena: fly through an arena built from the original data (SDL2 + OpenGL 4.1).
 //
-//   openbg-arena <Data dir> <arena file stem, e.g. Desert> [--eye x,y,z,yaw,pitch] [--screenshot out.png]
+//   openbg-arena <Data dir> <arena file stem, e.g. Desert> [--eye x,y,z,yaw,pitch] [--time ms] [--no-bump] [--screenshot out.png]
 //
 // WASD/QE to move (Shift = fast), drag to look, Esc to quit.
 // Drawn with the fight's renderer: the materials' stage passes, the arena's lights, reflections and
-// the glow layer.
+// the glow layer. The arena's SceneTime runs from --time (0) as BSetSceneTime would set it.
 #include <SDL.h>
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <optional>
 
 #include "de/lighting.h"
 #include "de/scene.h"
@@ -25,8 +27,14 @@ int main(int argc, char **argv) {
 	const char *shot = nullptr;
 	float eye_arg[5];
 	bool have_eye = false;
+	float scene_ms = 0;
 	for (int i = 3; i < argc; ++i) {
-		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
+		if (!strcmp(argv[i], "--no-bump")) {
+			static const bool off = false;
+			render::g_bump_enabled = &off;
+		} else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
+			scene_ms = float(atof(argv[++i]));
+		} else if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) {
 			shot = argv[++i];
 		} else if (!strcmp(argv[i], "--eye") && i + 1 < argc) {
 			// --eye x,y,z,yaw,pitch (radians)
@@ -57,6 +65,10 @@ int main(int argc, char **argv) {
 		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
 		SDL_GL_SetSwapInterval(1);
+		render::g_live_values = [&](const de::ObjectRef &r) -> std::optional<float> {
+			if (r.file == file && r.info().name == "SceneTime") return scene_ms;
+			return std::nullopt;
+		};
 		render::ArenaRenderer arena;
 		arena.load(world, argv[2]);
 		render::GlowRenderer glow;
@@ -106,6 +118,7 @@ int main(int argc, char **argv) {
 			Uint64 now = SDL_GetPerformanceCounter();
 			float dt = float(now - last) / float(SDL_GetPerformanceFrequency());
 			last = now;
+			if (!shot) scene_ms += dt * 1000;
 			const Uint8 *k = SDL_GetKeyboardState(nullptr);
 			float speed = (k[SDL_SCANCODE_LSHIFT] ? 1500.0f : 300.0f) * dt;
 			float fx = std::sin(yaw), fz = -std::cos(yaw);

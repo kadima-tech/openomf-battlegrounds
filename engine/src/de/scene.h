@@ -11,6 +11,8 @@
 
 #include <array>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <map>
 #include <memory>
 #include <string>
@@ -127,6 +129,11 @@ struct MultiStageInfo {
 };
 MultiStageInfo read_multistage(const ObjectsFile::ObjectData &d);
 
+struct FloatValue;
+struct ScaleModifier;
+// A value set at run time (CValueFLOAT::Set writes +0x2c), by its Value object; none: the data's.
+using LiveFloat = std::function<std::optional<float>(const ObjectRef &value)>;
+
 // One TextureManager stage of a TextureProcess\MultiStage material.
 struct Layer {
 	std::string name;
@@ -153,8 +160,24 @@ struct Layer {
 	ObjectRef cube;
 	// The stage image's "Bump" child image, its "BumpFactor" and "RotateValue" (DE_CShader::CStage::
 	// SetStates, Direct3D 0x20031b60): the stage image's du/dv channels (6, 7) bend the reflection.
+	// SetStates reads both every draw; RotateValue is a MathFunction over the arena's SceneTime.
 	ObjectRef bump;
-	float bump_factor = 0, bump_rotate = 0;
+	std::shared_ptr<FloatValue> bump_factor, bump_rotate;
+	// The manager's ScaleModifiers (its reference list +0x34), each processing the stage's UV
+	// element in turn (DE_CTextureManager::Process, Core 0x701327c0).
+	std::vector<std::shared_ptr<ScaleModifier>> modifiers;
+};
+
+// DE_CScaleModifier (Core 0x7011dc40..): contents v2 [name][BOOL dynamic +0xe0] then nine
+// FLOAT advanced references: scale x y z (+0x2c, +0x40, +0x54; default 1), three unused by the
+// UV path (+0x68..; 0), translation x y z (+0xa4, +0xb8, +0xcc; 0). On a UV element Process
+// (0x7011e2b0) replaces its texture matrix: u' = u sx + tx, v' = v sy + ty (D3DTTFF_COUNT2).
+// A dynamic one re-processes every frame; a static one once, when the material is built.
+struct ScaleModifier {
+	bool dynamic = false;
+	std::shared_ptr<FloatValue> v[9];
+	// (sx, sy, tx, ty).
+	std::array<float, 4> uv(const LiveFloat &live) const;
 };
 
 struct Material {

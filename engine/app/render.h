@@ -70,6 +70,10 @@ struct MeshBatch {
 	GLuint bump = 0;
 	int bump_stage = 0;
 	float bump_matrix[4] = {0, 0, 0, 0};
+	std::shared_ptr<const de::FloatValue> bump_factor, bump_rotate;
+	// Each stage's texture matrix (sx, sy, tx, ty); a dynamic ScaleModifier rewrites it every draw.
+	float uv_xf[4][4] = {{1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}};
+	std::shared_ptr<const de::ScaleModifier> uv_mod[4];
 	float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
 	// Kept for meshes re-posed every frame (fighters): the vertices and their mesh vertex.
 	std::vector<BatchVertex> vertices;
@@ -114,6 +118,11 @@ struct Lighting {
 };
 // The frame's lights; the app fills it before drawing.
 extern Lighting g_lighting;
+// Values the scripts set (the arenas' SceneTime), read by modifiers and bump stages as they draw.
+extern de::LiveFloat g_live_values;
+// The applied Bump Mapping Enabled (options +8): off, DE_CGenericShader::AddStage inserts no
+// D3DTOP_BUMPENVMAP stage, so reflections are not bent.
+extern const bool *g_bump_enabled;
 
 GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> &cache, const de::ObjectRef &r);
 // Image\AVI textures show the frame for their image's phase (CImage::SetPhase); call once a frame.
@@ -188,7 +197,7 @@ public:
 	using Paint = std::array<std::array<float, 3>, 3>;
 	// The FighterModel at `model` in `model_file` (a paint), else the file's first.
 	void load(const de::World &world, const de::ObjectsFile &model_file, const de::ObjectsFile *fighter_file, size_t model = SIZE_MAX);
-	// The pilot's colours (DE_CPilot::UserDefinedColor 0..2); repaints when they change.
+	// The pilot's colours (DE_CPilot::UserDefinedColor 0..2), taken once, as the images decode once.
 	void set_paint(const Paint &p);
 	// Pose `sequence` (index into bank, -1 = bind pose) at normalised time t, placed by `world`.
 	void draw(const float *vp, const float *eye, const de::Transform &world, int sequence, float t);

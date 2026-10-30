@@ -189,7 +189,7 @@ void ParticleRenderer::stream(const game::World &world, const game::ParticleInst
 	b.tex = image(d.image);
 	b.additive = additive;
 	const Screen screen{view};
-	const float now = world.scene_ms();
+	const float now = float(world.scene_ms_of(in.actor));
 	std::array<float, 4> base = d.color.rgba;
 	const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
 	if (set_rgb) base = {(*set_rgb)[0], (*set_rgb)[1], (*set_rgb)[2], (*set_rgb)[3] >= 0 ? (*set_rgb)[3] : base[3]};
@@ -367,7 +367,7 @@ void ParticleRenderer::trail(const game::World &world, const game::Trail &t, con
 	b.tex = image(d.image);
 	b.additive = additive;
 	const Screen screen{view};
-	const float now = world.scene_ms();
+	const float now = float(world.scene_ms_of(t.actor));
 	const float base_v = d.texture_length != 0 ? std::floor(now / d.texture_length) : 0;
 	struct P {
 		Vec pos;

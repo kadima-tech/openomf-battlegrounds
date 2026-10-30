@@ -294,6 +294,54 @@ ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o) {
 	return a;
 }
 
+namespace {
+
+std::shared_ptr<FloatValue> child_value(const World &w, const ObjectRef &parent, const std::string &name) {
+	for (uint32_t c : ObjectsFile::children(parent.file->object_data(parent.info()))) {
+		const ObjectInfo &o = parent.file->objects()[c];
+		if (o.name == name && o.class_path.rfind("Value\\FLOAT", 0) == 0) return std::make_shared<FloatValue>(read_float_value(w, {parent.file, c}));
+	}
+	return nullptr;
+}
+
+std::shared_ptr<ScaleModifier> read_scale_modifier(const World &w, const ObjectRef &r) {
+	auto m = std::make_shared<ScaleModifier>();
+	const float defaults[9] = {1, 1, 1, 0, 0, 0, 0, 0, 0};
+	try {
+		auto d = r.file->object_data(r.info());
+		Contents c(d.contents);
+		Chunk ch = begin_chunk(c);
+		if (ch.version != 1 && ch.version != 2) return nullptr;
+		c.bytes(c.u32());
+		const int n = ch.version == 2 ? 9 : 3;
+		if (ch.version == 2) m->dynamic = c.boolean();
+		for (int i = 0; i < n; ++i) m->v[i] = std::make_shared<FloatValue>(read_embedded_float(c));
+		if (ch.version == 1) m->dynamic = c.boolean();
+		for (int i = n; i < 9; ++i) m->v[i] = std::make_shared<FloatValue>(), m->v[i]->value = defaults[i];
+		Contents rc(d.references);
+		Chunk obj = begin_chunk(rc);
+		rc.seek(obj.end);
+		if (rc.remaining() > 1) {
+			Chunk rs = begin_chunk(rc);
+			if (rs.version == ch.version) {
+				for (int i = 0; i < n && rc.pos() < rs.end; ++i) {
+					if (ObjectRef v = read_advanced_reference(w, *r.file, rc)) m->v[i] = std::make_shared<FloatValue>(read_float_value(w, v));
+				}
+			}
+		}
+	} catch (const std::exception &) {
+		return nullptr;
+	}
+	return m;
+}
+
+}  // namespace
+
+std::array<float, 4> ScaleModifier::uv(const LiveFloat &live) const {
+	auto at = [&](int i) { return v[i] ? v[i]->eval(0, live) : 0.0f; };
+	return {at(0), at(1), at(6), at(7)};
+}
+
 std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 	std::vector<Material> out;
 	auto layer_of = [&](const ObjectRef &tm) {
@@ -309,6 +357,10 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 		layer.specular = child_float(w, tm, "SpecularFactor").value_or(1);
 		for (auto &ref : texture_images(tm.file->object_data(tm.info()))) {
 			ObjectRef img = w.resolve(*tm.file, ref);
+			if (img && img.info().class_path == "ScaleModifier") {
+				if (auto m = read_scale_modifier(w, img)) layer.modifiers.push_back(m);
+				continue;
+			}
 			if (img && img.info().class_path == "Image\\CubeEnvironment" && !layer.cube) layer.cube = img;
 			bool flat = img && (img.info().class_path == "Image\\Standard" || img.info().class_path == "Image\\AVI");
 			if (flat && !layer.image) layer.image = img;
@@ -318,9 +370,9 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 				const ObjectInfo &o = layer.image.file->objects()[c];
 				if (o.name == "Bump" && o.class_path == "Image\\Standard") {
 					layer.bump = {layer.image.file, c};
-					layer.bump_factor = child_float(w, layer.bump, "BumpFactor").value_or(0);
-					layer.bump_rotate = child_float(w, layer.bump, "RotateValue").value_or(0);
-					if (layer.bump_factor == 0 && layer.bump_rotate == 0) layer.bump = {};
+					layer.bump_factor = child_value(w, layer.bump, "BumpFactor");
+					layer.bump_rotate = child_value(w, layer.bump, "RotateValue");
+					if (!layer.bump_factor && !layer.bump_rotate) layer.bump = {};
 					break;
 				}
 			}

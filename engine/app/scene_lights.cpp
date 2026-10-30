@@ -63,7 +63,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 				l.inner = aff->far_begin, l.outer = aff->far_end, l.umbra = aff->umbra, l.penumbra = aff->penumbra;
 				l.near_begin = aff->near_begin;
 			}
-			auto col = info.colour.eval(world.scene_ms() / 1000.0f);
+			auto col = info.colour.eval(float(world.scene_ms_of(aff)) / 1000.0f);
 			l.colour = {col[0], col[1], col[2]};
 			l.intensity = info.intensity;
 			l.mask = info.mask();

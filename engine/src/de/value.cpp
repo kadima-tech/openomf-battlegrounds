@@ -102,8 +102,29 @@ float Interpolation::value(float a, float b, float t) const {
 	return (b - a) * t + a;
 }
 
-float FloatValue::eval(float t) const {
-	if (!inter) return value;
+float FloatValue::eval(float t, const LiveFloat &live) const {
+	float own = value;
+	if (live && object) {
+		if (auto v = live(object)) own = *v;
+	}
+	if (op >= 0) {
+		auto at = [&](int i, float x) { return in[i] ? in[i]->eval(x, live) : own; };
+		float a = at(0, t), b = at(1, t);
+		switch (op) {
+		case 0: return b + a;
+		case 1: return a - b;
+		case 2: return b == 0 ? 1 : a / b;
+		case 3: return b * a;
+		case 4: return in[0] ? in[0]->eval(b, live) : 0;
+		case 5: {
+			float r = 1;
+			for (auto &f : in) r *= f ? f->eval(t, live) : 1;
+			return r;
+		}
+		default: return 0;
+		}
+	}
+	if (!inter) return own;
 	if (frequency != 1) t = t * frequency - float(int(t * frequency));
 	return shape.value(min, max, t);
 }
@@ -145,15 +166,43 @@ ObjectRef read_advanced_reference(const World &w, const ObjectsFile &from, Conte
 	return out;
 }
 
-FloatValue read_float_value(const World &w, const ObjectRef &r) {
+namespace {
+
+// Contents [v1: u32 op]; references, the last chunk [v1: three { BOOL, reference } inputs].
+void read_math_function(const World &w, const ObjectRef &r, Contents &c, FloatValue &v, int depth) {
+	Chunk ch = begin_chunk(c);
+	if (ch.version == 1 && ch.end - c.pos() >= 4) v.op = int(c.u32());
+	c.seek(ch.end);
+	Contents rc(r.file->object_data(r.info()).references);
+	size_t last = 0;
+	while (rc.remaining() > 1) {
+		last = rc.pos();
+		Chunk skip = begin_chunk(rc);
+		rc.seek(skip.end);
+	}
+	rc.seek(last);
+	Chunk m = begin_chunk(rc);
+	if (m.version != 1) return;
+	for (auto &in : v.in) {
+		if (rc.pos() >= m.end || !rc.boolean()) continue;
+		ObjectRef ir = w.resolve(*r.file, Reference::read(rc));
+		if (ir && depth < 16) in = std::make_shared<FloatValue>(read_float_value(w, ir, depth + 1));
+	}
+}
+
+}  // namespace
+
+FloatValue read_float_value(const World &w, const ObjectRef &r, int depth) {
 	FloatValue v;
 	if (!r) return v;
 	const std::string &cls = r.info().class_path;
 	if (cls.rfind("Value\\FLOAT", 0) != 0) return v;
+	v.object = r;
 	try {
 		Contents c(r.file->object_data(r.info()).contents);
 		skip_object_chunk(c);
 		v.value = read_float_chunk(c);
+		if (cls == "Value\\FLOAT\\MathFunction") read_math_function(w, r, c, v, depth);
 		if (cls == "Value\\FLOAT\\Inter" && c.remaining() > 1) {
 			Chunk ch = begin_chunk(c);
 			if (ch.version >= 2) {
@@ -169,7 +218,6 @@ FloatValue read_float_value(const World &w, const ObjectRef &r) {
 		}
 	} catch (const std::exception &) {
 	}
-	(void)w;
 	return v;
 }
 

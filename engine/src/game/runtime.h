@@ -514,6 +514,10 @@ public:
 	// Preferences\Renderer\Glow Enabled / Lighting Enabled (the options' Video panel).
 	bool glow_enabled = true, lighting_enabled = true;
 	int shadow_type = 0;  // the applied Preferences\Renderer\Shadow Type
+	// The applied Bump Mapping Enabled (options +8) and Texture Mip Map, the panel's Texture Detail
+	// (options +0x1c: 0 High, 1 Medium, 2 Low), as the renderer holds them (DE_CRenderer::ApplyOptions).
+	bool bump_enabled = true;
+	int texture_detail = 1;
 	// The mouse over the GUI (CObject::MouseScreenPositionX/Y: fractions of its width and height,
 	// y up) and the screen's aspect ratio (ScreenAspectRatio, width / height); the app sets them.
 	float mouse_x = 0.5f, mouse_y = 0.5f, screen_aspect = 4.0f / 3.0f;

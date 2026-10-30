@@ -11,6 +11,7 @@
 #include "de/image.h"
 #include "de/lighting.h"
 #include "de/texture.h"
+#include "de/value.h"
 
 namespace render {
 
@@ -26,6 +27,7 @@ layout(location = 5) in vec2 uv3;
 layout(location = 6) in vec3 vcolour;
 uniform mat4 vp;
 uniform mat4 model;
+uniform vec4 uv_xf[4];  // each stage's texture matrix: (sx, sy, tx, ty)
 out vec3 v_normal;
 out vec2 v_uv[4];
 out vec3 v_pos;
@@ -34,10 +36,10 @@ void main() {
 	vec4 w = model * vec4(pos, 1.0);
 	gl_Position = vp * w;
 	v_normal = mat3(model) * normal;
-	v_uv[0] = uv0;
-	v_uv[1] = uv1;
-	v_uv[2] = uv2;
-	v_uv[3] = uv3;
+	v_uv[0] = uv0 * uv_xf[0].xy + uv_xf[0].zw;
+	v_uv[1] = uv1 * uv_xf[1].xy + uv_xf[1].zw;
+	v_uv[2] = uv2 * uv_xf[2].xy + uv_xf[2].zw;
+	v_uv[3] = uv3 * uv_xf[3].xy + uv_xf[3].zw;
 	v_pos = w.xyz;
 	v_colour = vcolour;
 }
@@ -228,6 +230,8 @@ const de::ObjectInfo *find_child(const de::ObjectsFile &f, size_t parent, const 
 }  // namespace
 
 Lighting g_lighting;
+de::LiveFloat g_live_values;
+const bool *g_bump_enabled = nullptr;
 
 bool SceneLight::lights(const void *owner) const {
 	return reaches_all || (owner && std::find(reaches.begin(), reaches.end(), owner) != reaches.end());
@@ -537,16 +541,18 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 			if (pass[k]->bump) {
 				bt.bump = bump_texture(pass[k]->image);
 				bt.bump_stage = int(k);
-				// CStage::SetStates (0x20031b60): a RotateValue turns the du/dv (radians = value x 0.000723)
-				// and ignores the factor; without one the matrix is BumpFactor x identity.
-				if (float a = pass[k]->bump_rotate * 0.000723f; pass[k]->bump_rotate != 0) {
-					bt.bump_matrix[0] = std::cos(a), bt.bump_matrix[1] = -std::sin(a);
-					bt.bump_matrix[2] = std::sin(a), bt.bump_matrix[3] = std::cos(a);
-				} else {
-					bt.bump_matrix[0] = bt.bump_matrix[3] = pass[k]->bump_factor;
-				}
+				bt.bump_factor = pass[k]->bump_factor;
+				bt.bump_rotate = pass[k]->bump_rotate;
 				break;
 			}
+		}
+		for (size_t k = 0; k < pass.size() && k < 4; ++k) {
+			if (pass[k]->environment || pass[k]->modifiers.empty()) continue;
+			for (auto &m : pass[k]->modifiers) {
+				if (m->dynamic) bt.uv_mod[k] = m;
+			}
+			auto xf = pass[k]->modifiers.back()->uv(g_live_values);
+			memcpy(bt.uv_xf[k], xf.data(), sizeof bt.uv_xf[k]);
 		}
 		bt.glow = material_glow;
 		bool reflects = false;
@@ -756,8 +762,31 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		glActiveTexture(GL_TEXTURE6);
 		glBindTexture(GL_TEXTURE_2D, b.bump);
 		glUniform1i(glGetUniformLocation(prog, "bump_stage"), b.bump_stage);
-		glUniform1i(glGetUniformLocation(prog, "bump_on"), b.bump != 0);
-		glUniform4fv(glGetUniformLocation(prog, "bump_matrix"), 1, b.bump_matrix);
+		glUniform1i(glGetUniformLocation(prog, "bump_on"), b.bump != 0 && (!g_bump_enabled || *g_bump_enabled));
+		float bump_matrix[4];
+		memcpy(bump_matrix, b.bump_matrix, sizeof bump_matrix);
+		// CStage::SetStates (0x20031b60), every draw: a RotateValue turns the du/dv (radians = value x
+		// 0.000723) and the factor is ignored; while it is 0 the matrix is BumpFactor x identity.
+		if (b.bump_factor || b.bump_rotate) {
+			const float rot = b.bump_rotate ? b.bump_rotate->eval(0, g_live_values) : 0;
+			if (rot != 0) {
+				const float a = rot * 0.000723f;
+				bump_matrix[0] = std::cos(a), bump_matrix[1] = -std::sin(a);
+				bump_matrix[2] = std::sin(a), bump_matrix[3] = std::cos(a);
+			} else {
+				bump_matrix[0] = bump_matrix[3] = b.bump_factor ? b.bump_factor->eval(0, g_live_values) : 0;
+				bump_matrix[1] = bump_matrix[2] = 0;
+			}
+		}
+		glUniform4fv(glGetUniformLocation(prog, "bump_matrix"), 1, bump_matrix);
+		float uv_xf[4][4];
+		memcpy(uv_xf, b.uv_xf, sizeof uv_xf);
+		for (int s = 0; s < 4; ++s) {
+			if (!b.uv_mod[s]) continue;
+			auto xf = b.uv_mod[s]->uv(g_live_values);
+			memcpy(uv_xf[s], xf.data(), sizeof uv_xf[s]);
+		}
+		glUniform4fv(glGetUniformLocation(prog, "uv_xf"), 4, &uv_xf[0][0]);
 		int has_tex[4], is_env[4], mode[4], has_alpha[4];
 		for (int i = 0; i < 4; ++i) {
 			glActiveTexture(GL_TEXTURE0 + GLenum(i));
@@ -1043,6 +1072,9 @@ static void draw_glow_batches(GLuint prog_, const std::vector<MeshBatch> &batche
 		c.two_sided = b.two_sided, c.light_owner = b.light_owner, c.position_static = b.position_static;
 		c.bump = b.bump, c.bump_stage = b.bump_stage;
 		memcpy(c.bump_matrix, b.bump_matrix, sizeof c.bump_matrix);
+		c.bump_factor = b.bump_factor, c.bump_rotate = b.bump_rotate;
+		memcpy(c.uv_xf, b.uv_xf, sizeof c.uv_xf);
+		for (int k = 0; k < 4; ++k) c.uv_mod[k] = b.uv_mod[k];
 		c.overlay = true;
 		g_specular_pass = specular;
 		draw_batches(prog_, one, -1, at, owner);
@@ -1339,8 +1371,9 @@ void FighterRenderer::draw_glow(const float *vp, const float *eye) {
 	draw_glow_batches(prog_, batches_, &last_at_, light_owner_);
 }
 
+// Painted once: an image is filtered only on its first decode (AssureUpdatedImage while +0x9c is 1).
 void FighterRenderer::set_paint(const Paint &p) {
-	if (painted_ && p == paint_) return;
+	if (painted_) return;
 	paint_ = p;
 	painted_ = true;
 	build();
