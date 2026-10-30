@@ -57,7 +57,7 @@ struct PlacedLight {
 	Transform world;
 	bool cone = false;
 	float inner = 0, outer = 0, umbra = 0, penumbra = 0;
-	float near_begin = 0;  // cone only
+	float near_begin = 0, near_end = 0;  // cone only
 	bool position_static = false;  // its affector (DE_CActor::IsPositionStatic)
 };
 std::vector<PlacedLight> read_scene_lights(const World &w, const ObjectsFile &file);

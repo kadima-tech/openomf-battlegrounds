@@ -38,6 +38,19 @@ struct DeferredDraw {
 };
 void set_transparent_sink(std::vector<DeferredDraw> *sink);
 
+// A projector-lit mesh as the light projector passes see it (DE_CD3DRenderMeshElement::
+// AssureProjectedTargetOctree, Direct3D 0x2002e1f0): every face once, in mesh order, and the
+// octree that picks the faces a light touches (DE_CD3DLight::UpdateTouchedPolygons 0x2002cd00).
+struct ProjectorTarget {
+	GLuint vao = 0, vbo = 0;
+	de::Octree octree;     // in mesh space
+	de::Transform place;   // mesh space to world
+	std::vector<bool> drawn;  // the face is in a drawn material
+	bool position_static = false;
+	const void *light_owner = nullptr;
+	float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
+};
+
 struct MeshBatch {
 	GLuint vao = 0, vbo = 0;
 	GLsizei count = 0;
@@ -74,6 +87,8 @@ struct MeshBatch {
 	// Each stage's texture matrix (sx, sy, tx, ty); a dynamic ScaleModifier rewrites it every draw.
 	float uv_xf[4][4] = {{1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}, {1, 1, 0, 0}};
 	std::shared_ptr<const de::ScaleModifier> uv_mod[4];
+	// The mesh's dynamic ScaleModifier: its scale is taken every draw (vertex positions only).
+	std::shared_ptr<const de::ScaleModifier> pos_mod;
 	float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
 	// Kept for meshes re-posed every frame (fighters): the vertices and their mesh vertex.
 	std::vector<BatchVertex> vertices;
@@ -91,6 +106,7 @@ struct SceneLight {
 	de::Transform frame;  // the affector's world placement (the cone's axes)
 	float inner = 0, outer = 0, umbra = 0, penumbra = 0;
 	float near_begin = 0;  // a cone's near-attenuation begin (+0x184): where its projected fade starts
+	float near_end = 0;    // and end (+0x188), which bounds the polygons it touches
 	std::array<float, 3> colour{1, 1, 1};
 	float intensity = 1;
 	uint32_t mask = 6;  // the actors it reaches (de::LightInfo::mask)
@@ -123,6 +139,15 @@ extern de::LiveFloat g_live_values;
 // The applied Bump Mapping Enabled (options +8): off, DE_CGenericShader::AddStage inserts no
 // D3DTOP_BUMPENVMAP stage, so reflections are not bent.
 extern const bool *g_bump_enabled;
+// The applied Texture Detail (options +0x1c: 0 High, 1 Medium, 2 Low); none: High.
+extern const int *g_texture_detail;
+// DE_CD3DTexture::CreateTextureFromImage (Direct3D 0x2001bce0): an image whose AdjustMipMapLevel
+// flag is set (+0x5c) is made from its mip level `Texture Detail` down, when that level exists.
+// Registers such a texture (its full chain uploaded) to start at the applied level.
+void detail_texture(GLuint t, const de::Image &img);
+void forget_detail_texture(GLuint t);
+// Apply a changed Texture Detail to the registered textures (ApplyOptions rebuilds them).
+void apply_texture_detail();
 
 GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> &cache, const de::ObjectRef &r);
 // Image\AVI textures show the frame for their image's phase (CImage::SetPhase); call once a frame.
@@ -157,6 +182,8 @@ private:
 	GLuint prog_ = 0;
 	std::vector<MeshBatch> batches_;
 	std::vector<std::vector<uint32_t>> chains_;  // per batch: its actor and that actor's ancestors
+	std::vector<ProjectorTarget> targets_;
+	std::vector<std::vector<uint32_t>> target_chains_;
 	std::set<uint32_t> moving_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures_;
 	std::vector<std::array<std::array<float, 3>, 3>> floor_tris_;
@@ -169,6 +196,8 @@ public:
 		de::ObjectRef actor;
 		de::Transform world;
 		const void *light_owner = nullptr;  // see SceneLight::reaches
+		// This actor's values as its scripts set them (each instance has its own); else g_live_values.
+		de::LiveFloat live;
 	};
 	void draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye);
 	// Their glow and specular-glow passes, for the meshes `draw` built.

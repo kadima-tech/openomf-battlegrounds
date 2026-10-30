@@ -207,6 +207,7 @@ void GameView::init_gl() {
 	particles_r.load();
 	particles_r.only = [this](const game::GameObject *o) { return shown(o); };
 	render::g_bump_enabled = &world.bump_enabled;
+	render::g_texture_detail = &world.texture_detail;
 	// A FLOAT value object as the scripts set it (BSetSceneTime's SceneTime every render tick).
 	render::g_live_values = [this](const de::ObjectRef &r) -> std::optional<float> {
 		for (auto &[parent, named] : world.values) {
@@ -405,6 +406,24 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	shadows_r.append(render::g_lighting);
 	const auto &light_owners = frame_lights.owners;
 	auto light_owner_of = [&](const game::GameObject *o) { return frame_lights.owner_of(o); };
+	// The value objects an actor's modifiers read, as set on that actor or one above it.
+	auto live_of = [this](const game::GameObject *o) -> de::LiveFloat {
+		return [this, o](const de::ObjectRef &r) -> std::optional<float> {
+			for (const game::GameObject *p = o; p; p = p->parent) {
+				auto it = world.values.find(p);
+				if (it == world.values.end()) continue;
+				for (const game::GameObject *ch : p->children) {
+					if (ch->file != r.file || ch->index != r.index) continue;
+					auto v = it->second.find(ch->name);
+					if (v == it->second.end()) break;
+					float f;
+					memcpy(&f, &v->second.bits, 4);
+					return f;
+				}
+			}
+			return std::nullopt;
+		};
+	};
 	const de::ObjectsFile *arena_file = world.data().file(arena);
 	// The arena's actors that paths move (trains, cars, ...): drawn live, not baked.
 	std::vector<render::ActorMeshRenderer::Item> moving_items;
@@ -412,7 +431,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		std::set<uint32_t> moving;
 		std::function<void(game::GameObject *)> add = [&](game::GameObject *o) {
 			if (!o->file || o->file != arena_file) return;
-			if (o->is_actor) moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o)});
+			if (o->is_actor) moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o)});
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
@@ -460,7 +479,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 			}
-			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o)});
+			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o)});
 			static const bool dbg = getenv("OPENBG_DEBUG_ACTOR_MESHES") != nullptr;
 			if (dbg && live && fr == 900) fprintf(stderr, "[actor mesh] %s (%s) under %s\n", o->name.c_str(), o->class_path.c_str(), o->parent ? o->parent->name.c_str() : "-");
 		}

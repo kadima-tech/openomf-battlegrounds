@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -35,5 +36,33 @@ struct Mesh {
 };
 
 Mesh read_mesh(const ObjectsFile &f, const ObjectInfo &o);
+
+// DE_COctree (Core 0x70204df0..) over a mesh's faces, in mesh space. Each node keeps the faces
+// of every leaf under it (CIndexNode::CopyIDsUpTree), sorted; a leaf those whose bounds touch its box.
+struct Octree {
+	struct Node {
+		std::array<float, 3> lo, hi;
+		float radius = 0;  // half the box's diagonal (+0x28)
+		bool leaf = false;
+		std::array<int32_t, 8> child{-1, -1, -1, -1, -1, -1, -1, -1};
+		std::vector<uint32_t> faces;
+	};
+	std::vector<Node> nodes;  // the root first
+	explicit operator bool() const { return !nodes.empty(); }
+	// GetPotentialSphereCollisions (0x702064e0): the nodes whose boxes the sphere's bounding box
+	// touches, taken whole at a leaf or once smaller than the sphere.
+	void sphere_faces(const std::array<float, 3> &c, float r, std::vector<uint32_t> &out) const;
+	// CIndexNode::GetPotentialCollisions (0x70205e60): each node as a sphere (its centre through
+	// `to_world`, its radius) asked of `touches`; a leaf that touches gives its faces.
+	void affector_faces(const std::function<bool(const std::array<float, 3> &centre, float radius)> &touches,
+	                    const std::function<std::array<float, 3>(const std::array<float, 3> &)> &to_world, std::vector<uint32_t> &out) const;
+};
+// The mesh object's stored "D3DProjectedTargetOctree" (DE_COctree::ObjProcessContents 0x702051c0,
+// v2/v3); empty when it has none.
+Octree read_octree(const ObjectsFile &f, const ObjectInfo &o);
+// DE_COctree::Create (0x70207010) and CNode::AssureMaximumSize (0x70205450): the faces' bounding
+// box, split at its centre along each axis longer than `max_size` and at least half the longest,
+// no deeper than six levels below the root.
+Octree build_octree(const Mesh &m, float max_size);
 
 }  // namespace de

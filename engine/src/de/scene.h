@@ -178,7 +178,12 @@ struct ScaleModifier {
 	std::shared_ptr<FloatValue> v[9];
 	// (sx, sy, tx, ty).
 	std::array<float, 4> uv(const LiveFloat &live) const;
+	// On a mesh's positions (types 0x19..0x1b): p * (sx, sy, sz); the translation is not read.
+	std::array<float, 3> scale(const LiveFloat &live) const;
 };
+// The ScaleModifiers among a mesh's references (DE_CMesh +0x34), in order: DE_CMesh::
+// ProcessProperties hands them its render element, and each registers on the original positions.
+std::vector<std::shared_ptr<ScaleModifier>> mesh_modifiers(const World &w, const ObjectRef &mesh);
 
 struct Material {
 	std::string name;

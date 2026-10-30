@@ -120,7 +120,7 @@ std::vector<PlacedLight> read_scene_lights(const World &w, const ObjectsFile &fi
 			if (l.cone) {
 				l.inner = c.f32(), l.outer = c.f32();
 				l.near_begin = c.f32();
-				c.f32();
+				l.near_end = c.f32();
 				l.umbra = c.f32(), l.penumbra = c.f32();
 			} else {
 				l.inner = c.f32(), l.outer = c.f32();
