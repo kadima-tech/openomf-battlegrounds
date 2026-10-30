@@ -804,7 +804,7 @@ public:
 		Gui &g = *gui;
 		app_ = &app;
 		play_ = button(app, "Play", "NEXT");
-		play_->enabled = false;  // ReadOnlyOn until a record is selected
+		play_->enabled = false, play_->read_only = true;  // ReadOnlyOn until a record is selected
 		back_ = button(app, "Back", "BACK");
 		Ctl *frame = g.place(marker(app, "ListWindow"));
 		frame->set_frame(2, true);
@@ -852,7 +852,7 @@ private:
 	// SetCurrentRecord (0x35062610): a new info control for the record; Play follows the selection.
 	void select(int i) {
 		selected_ = i >= 0 && size_t(i) < records_.size() ? i : -1;
-		if (play_) play_->enabled = current() != nullptr;
+		if (play_) play_->enabled = current() != nullptr, play_->read_only = !play_->enabled;
 		if (info_) info_->destroy();
 		info_ = nullptr;
 		SessionRecord *r = current();

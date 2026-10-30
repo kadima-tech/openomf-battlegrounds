@@ -3,6 +3,7 @@
 // bars (the HUD).
 #pragma once
 
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -16,12 +17,12 @@ namespace render {
 class OverlayRenderer {
 public:
 	void load(const de::World &world);
-	// Draws the primitives of every screen-space mesh (positions are fractions of the screen,
-	// y up; text heights are fractions of the screen height), those whose actor is renderable.
+	// Draws the primitives of every screen-space mesh and every text primitive (positions are
+	// fractions of the screen, y up; text heights are fractions of the screen height), those
+	// whose actor is renderable.
 	void draw(const game::World &world, int width, int height);
-	// Draws the primitives of every other mesh in the scene (`vp` the view-projection): the same
-	// vertices in the local frame of the mesh's actor (x along the text, y up, text heights in
-	// its units), depth-tested unless the primitive is an overlay.
+	// Draws the quads of every other mesh in the scene (`vp` the view-projection) in the local
+	// frame of the mesh's actor, depth-tested unless the primitive is an overlay.
 	void draw_world(const game::World &world, const float *vp);
 	// The front end's controls (game/ui.h), in screen fractions with y down: a filled rectangle,
 	// and a flat-text label (Font_Ariel) of text size `size` screen heights (one font unit, as
@@ -57,6 +58,8 @@ private:
 	void begin_screen(int width, int height);
 	void end_screen();
 	void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const float *rgba);
+	// A quad from its four corners (x, y) and their (u, v), in screen fractions with y up.
+	void quadv(const std::array<float, 8> &xy, const std::array<float, 8> &uv, const float *rgba);
 	GLuint image(const game::GameObject *img);
 	GLuint image(const de::ObjectsFile *file, uint32_t index);
 	std::map<std::string, FontGL> fonts_;

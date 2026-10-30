@@ -481,9 +481,12 @@ public:
 	double passed_ms = 0;
 	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
 	uint32_t scene_step(float real_ms);
-	// A GUI scene viewer's own scene (GameObject::view 1, the model picker's): its clock, passed
-	// by the app while its page is up (the robot's idle event, DE_CScene vtable +0x148).
-	double view_scene_ms = 0;
+	// The GUI's own scenes: the top control's (GameObject::view 0) and a GUI scene viewer's (view 1,
+	// the model picker's). Neither autopauses (DE_CScene +0x1c0 / +0x1bc), so the app passes them
+	// real time: the first every frame, the second while its page is up (the robot's idle event).
+	uint32_t gui_scene_ms[2] = {0, 0};
+	// Passes `ms` on GUI scene `view`'s clock, ticking its temporal sets on the way.
+	void tick_gui(int view, uint32_t ms);
 	// The clock of the scene `o` is in.
 	uint32_t scene_ms_of(const GameObject *o) const;
 	// The input manager's ticks (DE_CJoystickInputManager, 16 ms): input records age in these.
@@ -826,10 +829,12 @@ private:
 	};
 	struct TemporalSet {
 		uint32_t rate = 0, next = 0;  // next tick: last tick (+0x38) + rate
+		int scene = 0;                // 0 the game's, else GUI scene view + 1
 		std::vector<Temporal> elements;
 	};
 	std::vector<TemporalSet> temporal_sets_;
-	TemporalSet &temporal_set(uint32_t rate);
+	TemporalSet &temporal_set(uint32_t rate, int scene);
+	int temporal_scene(const Temporal &t);
 	void add_temporal(uint32_t rate, Temporal t);
 	void register_temporals();
 	void register_creature(GameObject *o);

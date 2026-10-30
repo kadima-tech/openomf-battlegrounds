@@ -31,6 +31,7 @@ struct Control {
 	GameObject *ve = nullptr;                         // the VE actor its events go to
 	bool hovered = false;
 	bool enabled = true;          // robot +0x74
+	bool read_only = false;       // ReadOnlyOn: a black cover at alpha 0.5
 	std::vector<int> keys;        // DE_CButtonClickOnKey: SDL keycodes that click it
 	bool contains(float x, float y) const { return x >= left && x < right && y >= top && y < bottom; }
 };
