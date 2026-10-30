@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -238,7 +237,7 @@ private:
 class RulesDisplayPage : public UIManager {
 public:
 	explicit RulesDisplayPage(GameObject *rules) : UIManager("Rules", "SinglePlayerLoading"), rules_(rules) {
-		script_object = rules;
+		script = rules;
 		autopause = false;        // +0xb4
 		show_backdrop = false;    // +0xb0
 		show_main_frame = false;  // +0xac: SetupControls clears it for SinglePlayerLoading
@@ -280,8 +279,8 @@ public:
 	}
 	void draw(AppManager &app, std::vector<DrawItem> &out) override {
 		auto &r = app.world.rules_displays[rules_];
-		// The robot's text controls (DE_CRulesDisplayRobot, OMF 0x35063520): heights in virtual
-		// pixels and colours as it sets them.
+		// The robot's text controls (DE_CRulesDisplayRobot, 2.123 OMF 0x10764380): heights in
+		// virtual pixels; all three pale blue.
 		auto text = [&](Control *c, const std::string &t, int height, std::array<float, 4> rgba) {
 			if (!c || t.empty()) return;
 			ControlLayout l;
@@ -327,9 +326,9 @@ public:
 				}
 			}
 		}
-		text(name_box_, title_, 19, {1, 1, 0.65f, 1});
-		text(commentary_box_, commentary_, 14, {1, 0.75f, 0.8f, 1});
-		text(next_box_, next_, 16, {0.8f, 0.8f, 0.8f, 1});
+		text(name_box_, title_, 19, {0.8f, 0.9f, 1, 1});
+		text(commentary_box_, commentary_, 14, {0.8f, 0.9f, 1, 1});
+		text(next_box_, next_, 16, {0.8f, 0.9f, 1, 1});
 		if (progress_box_) {
 			DrawItem d;
 			d.kind = DrawItem::Text;
@@ -760,8 +759,10 @@ private:
 			Dialog *d = g.open_dialog("", 450, 150);
 			d->set_fill({0.2f, 0.2f, 0.2f, 0.9f});
 			d->body->add<TextDisplay>("Press key to assign it to this action", g.vy(16));
+			// 2.097's guards (OMF CaptureControl 0x107608c0, ProcessButtonClickEvent 0x10760570): no
+			// selected action or no captured control assigns nothing.
 			d->on_key = [&app, d, st, refresh](int) {
-				if (app.last_scancode) app.set_binding(size_t(st->action), app.last_scancode);
+				if (app.last_scancode && st->action >= 0) app.set_binding(size_t(st->action), app.last_scancode);
 				d->close();
 				refresh();
 				return true;
@@ -1000,13 +1001,14 @@ public:
 		auto *snap = fill_->add<Button>("Snapshot");
 		snap->scale(0.9f, 0.7f, 1, 1);
 		snap->bound = &snapshot_;
-		last_ = std::chrono::steady_clock::now();
+		last_ = app.world.system_ms();
 	}
 	// ObjUpdate.
 	void update(AppManager &app) override {
 		World &w = app.world;
-		auto now = std::chrono::steady_clock::now();
-		float dt = std::chrono::duration<float, std::milli>(now - last_).count();
+		// SystemTime (gTime, 2.123 OMF DE_CVCRControls::ObjUpdate 0x10765e70).
+		uint32_t now = w.system_ms();
+		float dt = float(now - last_);
 		last_ = now;
 		// The observer (+0x128, the session's StandardSessionAssureObserver): Manual flies it from
 		// the keys and the relative mouse, Auto gives it back to its observe command.
@@ -1068,7 +1070,7 @@ private:
 	int step_ = 0, ff_ = 0, rewind_ = 0, snapshot_ = 0;
 	float slider_ = 0, last_slider_ = 0, hide_ = 0, prev_dt_ = 0;
 	int mode_ = 0, slow_index_ = 0, fast_index_ = 0, observer_mode_ = 0;
-	std::chrono::steady_clock::time_point last_;
+	uint32_t last_ = 0;
 };
 
 // DE_CQuitMenuUIManager (OMF 0x350611d0, 0x35061210, 0x35061610).
@@ -1125,8 +1127,8 @@ bool DescriptionSelector::begin(AppManager &app) {
 
 // DE_CGenericDescriptionSelector::SetupControls (Core 0x701e4a60), and DE_CChooseFighterUIManager's
 // (OMF 0x35056720): the list in ListWindow, the representation in Window; Choose Creature adds a
-// strip from 0.93 down the Window with the Model combo (to 0.7 across) and View (0.73 to 0.97),
-// and its Back has no Esc.
+// strip from 0.93 down the Window with the Model combo (to 0.7 across) and View (0.73 to 0.97);
+// its Back takes Esc from 2.096 (2.123 OMF 0x10757490).
 void DescriptionSelector::setup_controls(AppManager &app) {
 	Gui &g = *gui;
 	list_rect_ = marker(app, "ListWindow");
@@ -1137,7 +1139,7 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 		next_->keys = {kKeyReturn};
 	}
 	back_ = button(app, "Back", "BACK");
-	if (!choose_fighter) back_->keys = {kKeyEscape};
+	back_->keys = {kKeyEscape};
 	list_ = g.place(list_rect_)->add<List>();
 	list_->tree = hierarchy;
 	std::vector<List::Row> rows;
@@ -1450,6 +1452,7 @@ void ModelPicker::setup_controls(AppManager &app) {
 // or animation manager, so the model stands undeformed (its bind pose), and no executors.
 void ModelPicker::update_model(AppManager &app) {
 	World &w = app.world;
+	scene_paused = true;
 	if (robot) w.clean_later(robot);
 	robot = nullptr;
 	de::ObjectRef m = model();
@@ -1595,8 +1598,8 @@ Control UIManager::marker(AppManager &app, const std::string &m) {
 }
 
 AppManager::AppManager(World &w) : world(w) {
-	world.next_ui_manager = [this] { return next ? next->script_object : nullptr; };
-	world.current_ui_manager = [this] { return current ? current->script_object : nullptr; };
+	world.next_ui_manager = [this] { return next_ui_object(); };
+	world.current_ui_manager = [this] { return current_ui_object(); };
 	// DE_CInGameMenuUIManagerFactory::Init (OMF 0x350590e0) attaches the factory to its impulse.
 	world.impulses->set_default_hotkey("In Game Menu", 0x1b, false, false, false);
 	world.impulses->attach("In Game Menu", [this](bool up) {
@@ -1866,10 +1869,15 @@ void AppManager::delete_stack(bool close_current) {
 	if (close_current) set_next(nullptr, false);
 }
 
-// CloseUIManagerStack (Core 0x7019bd00): each stacked page is made next and leaves the stack, then
-// nothing is next and the current page finishes.
+// CloseUIManagerStack (Core 0x201a2140): each stacked page is made next and leaves the stack, then
+// nothing is next and the current page finishes. From 2.101 a queued page it displaces that has
+// not activated is deleted, unless it is persistent or not auto-destroy.
 void AppManager::close_stack() {
 	auto pop = [this] {
+		if (next && !next->activated && !next->persistent && next->autodestroy) {
+			next->deleted = true;
+			next->begun = false;
+		}
 		UIPtr top = stack.back();
 		set_next(top, false);
 		stack.erase(std::find(stack.begin(), stack.end(), top));
@@ -1882,11 +1890,8 @@ void AppManager::close_stack() {
 	set_next(nullptr, false);
 }
 
-// BeginUI (Core 0x7019b9f0): the transition actor plays its end, the opening reveal.
-void AppManager::begin_ui() {
-	set_active(transition, true);
-	signal_transition("GUIPageChangeTransitionCompleted");
-}
+// BeginUI (Core 0x201a1dc0) is empty in 2.123: the first page change sends the doors their end.
+void AppManager::begin_ui() {}
 
 void AppManager::signal_transition(const char *handle) {
 	set_active(transition, true);
@@ -1901,9 +1906,10 @@ bool AppManager::transition_busy() {
 	return world.memory().get<int32_t>(e + 4) != 0;
 }
 
-// TransitionUIManager (Core 0x7019ab30).
+// TransitionUIManager (Core 0x201a0910). Until the first page change has finished
+// (m_FirstTransition) the doors are not closed and their opening is not waited for.
 void AppManager::transition_ui() {
-	bool wanted = (current && current->uses_transition && page_finished) || (next && next->uses_transition);
+	bool wanted = !first_transition && ((current && current->uses_transition && page_finished) || (next && next->uses_transition));
 	if (transition_state == 0) {
 		transition_state = 1;
 		if (wanted) signal_transition("GUIStartPageChangeTransition");
@@ -1938,24 +1944,30 @@ void AppManager::transition_ui() {
 		signal_transition("GUIPageChangeTransitionCompleted");
 		return;
 	}
+	if (first_transition) {
+		first_transition = false;
+		transition_state = 0;
+		return;
+	}
 	if (transition_busy()) return;
 	transition_state = 0;
 	if (!current) page_finished = false;
 	set_active(transition, false);
 }
 
-// UpdateUI (Core 0x7019b360), then DE_COMF2Manager::ObjUpdate's way back to the main menu.
+// UpdateUI (Core 0x201a1720), then DE_COMF2Manager::ObjUpdate's way back to the main menu.
 void AppManager::update() {
+	bool needed = !first_transition && ((current && current->uses_transition && page_finished) || (next && next->uses_transition));
 	if (!current && !next && transition_state == 0) {
 		set_active(transition, false);
-	} else if ((current && current->uses_transition && page_finished) || (next && next->uses_transition)) {
+	} else if (needed) {
 		set_active(transition, true);
 	}
 	// The standard session overlay (+0x9c) tints a rendering session's scene under a page that
 	// wants it (+0xc8).
 	bool under_session = session_scene_rendering && session_scene_rendering();
 	set_active(session_overlay, current && under_session && current->show_overlay);
-	if (transition_state != 0 || (current && page_finished) || next || page_finished) transition_ui();
+	if (transition_state != 0 || (!first_transition && ((current && page_finished) || next)) || page_finished) transition_ui();
 	if (current && current->activated) current->update(*this);
 	if (!next || next->begun) {
 		if (current) {

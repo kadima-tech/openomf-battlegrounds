@@ -4,6 +4,8 @@ This project reimplements a 2003 game, so its look is the original's: the menus,
 colours all come from the game's own data files. This file records the conventions our engine uses
 to present that data, and the few places where the look is our own.
 
+The data is the final official patch's (2.123, PATCHES.md); the notes below describe its look.
+
 ## Front end (menus)
 
 - **Scene.** The 3D GUI scene in OMFBGGUI.DEObjects: persistent `V.*` actors (the frame, the
@@ -12,14 +14,16 @@ to present that data, and the few places where the look is our own.
 - **Frame.** The GUI is laid out in a 4:3 field (x 0..1, y 0..0.75), drawn through a 60° horizontal
   field of view looking down −Z and stretched to fill the window (FINDINGS 126, 161).
 - **Buttons.** A hit rectangle over each button's `DisplayArea` mesh. Hover, leave and click go to
-  the button's script (`GUIEnter`, `GUILeave`, `GUISelect`), which spins its rotors, lights its
-  lightning and sparks and plays `MouseEnter` / `ButtonClick`.
+  the button's script (`GUIEnter`, `GUILeave`, `GUISelect`), which lights the button's glass panel
+  (`LightingGlass`, `LightedGlass_Back` / `_Next`) while the mouse is over it and plays `MouseEnter` /
+  `ButtonClick`; the electric arcs and sparks of the disc release are gone.
 - **Labels.** Flat text in the engine's `Font_Ariel` (from Core.ModuleDLL), 16 of 600 virtual pixels
   high, white, centred in the button.
-- **Page changes.** The doors (`V.MainDoors`) slide shut (350 ms), the page is swapped behind them,
-  and they slide open (500 ms). The main frame shows on every page except the main menu and in-game
-  menus. The doors cover everything on the page, its text, images and bars included; only
-  notifications draw over them.
+- **Page changes.** The doors (`V.MainDoors`) are an iris: 16 leaves turned 22.5° apart, swung in
+  along `IrisLeafPath` (410 ms), the page swapped behind them, then swung open. The launch shows the
+  main menu with the iris opening once and nothing closing first. The main frame shows on every page
+  except the main menu and in-game menus. The iris covers everything on the page, its text, images
+  and bars included; only notifications draw over it.
 - **Controls** (the engine's 3D GUI controls, `game/controls.*`). Bevelled frames (5 quads, per-corner
   highlight / shadow colours with a slight face gradient, swapped when pressed); faces grey 0.5 at
   half alpha, window backs (0, 0, 0.1) at 0.7, white button text, a 30-pixel blue-to-navy title bar;
@@ -50,8 +54,8 @@ to present that data, and the few places where the look is our own.
 - **VCR panel (replays, V).** `F.VCR` along the bottom; in its middle 60%: the Play/Pause, frame
   advance, rewind and fast-forward images (a cyan underline marks the running fast mode), the speed
   labels, a seek slider (pale blue track, cyan knob) and Observer / Snapshot labels.
-- **Single-player loading screen** (the rules display). No main frame; the match name (19 px,
-  pale yellow), commentary (14 px, pink), next match (16 px, grey) and progress text in the
+- **Single-player loading screen** (the rules display). No main frame; the match name (19 px),
+  commentary (14 px) and next match (16 px), all pale blue (0.8, 0.9, 1), and progress text in the
   page's markers; the match snapshot (a 256 × 256 capture from the observer's camera) fills the
   MatchScreenShot box once the player has been knocked out or landed a kill.
 - **Notifications** (`DE_CDialog3d::UserInformation`, built from the same controls as every
@@ -59,8 +63,8 @@ to present that data, and the few places where the look is our own.
   box), sized to its text: a VPU 3 down panel in the window back colour at alpha 0.7; the
   `Not_UserInformation` icon (64 × 64 VPU, tinted white at 0.8) centred in a VPU 75 column on the
   left; the text lines (VPU 14, rows 1.5 high) centred beside it, wrapped at VPU 400 / 600 / 700
-  less the column; OK as a plain 15-VPU label in a VPU 120 × 38 box (black at 0.2) at the bottom
-  right, which under the mouse clears and glows blue from its top-left and bottom-right corners.
+  less the column; OK as a plain 15-VPU label in a VPU 120 × 38 box (black at 0.2) centred in a
+  bottom strip VPU(VPU 60) high, at the right, which under the mouse clears and glows blue from its top-left and bottom-right corners.
   OK, the close box, Enter or Esc closes it; it drags by its title bar.
 
 ## In game

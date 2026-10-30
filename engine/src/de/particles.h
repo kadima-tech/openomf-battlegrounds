@@ -119,6 +119,7 @@ struct ParticleRendererDef {
 	ObjectRef object;
 	std::string kind;  // class path after "Mesh\ParticleRenderer\"
 	int32_t blend = 0;  // +0x54: 0 and 1 add (colour premultiplied by alpha), 2 alpha-blends
+	int32_t placement_times = 0;  // the mesh's +0x44 (see de::Mesh)
 	ObjectRef image;
 	ParticleGeneratorDef generator;
 	// BillboardedQuad v2-v7.

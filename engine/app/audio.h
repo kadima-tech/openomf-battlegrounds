@@ -43,6 +43,7 @@ private:
 		// The speaker: its sphere (centre, hotspot, falloff), volume (+0x50) and update rate
 		// (+0xb0, +0xac).
 		std::array<float, 3> at{0, 0, 0};
+		bool on_camera = false;  // parented to the camera at (0, 0, -10000)
 		float hotspot = 0, falloff = 0, volume = 1;
 		float rate = 1, due = 99999.0f;
 	};

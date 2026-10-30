@@ -31,6 +31,9 @@ struct Mesh {
 	// 0x08 lit (with 0x10: D3D vertex lighting, else lit by light projector passes) and 0x20
 	// projected-texture target.
 	uint32_t flags = 0;
+	// +0x44, the placement times (base chunk v4; DE_CRenderMaterialElement::SetPlacementTimes keeps
+	// -127..128): positive puts the mesh's blended first passes in clip-volume layer 6.
+	int placement_times = 0;
 	bool vertex_lit() const { return (flags & 0x18) == 0x18; }
 	bool projector_lit() const { return (flags & 0x18) == 0x08; }
 };

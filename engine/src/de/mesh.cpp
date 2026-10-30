@@ -19,6 +19,9 @@ Mesh read_mesh(const ObjectsFile &f, const ObjectInfo &o) {
 		if (base.version >= 3) {
 			m.flags = c.u32() & ~0x1000u;
 		}
+		if (base.version >= 4) {
+			m.placement_times = std::clamp(int32_t(c.u32()), -127, 128);
+		}
 		c.seek(base.end);
 		Chunk std = begin_chunk(c);
 		if (std.version < 6) {

@@ -440,7 +440,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	const Vec cam{eye[0], eye[1], eye[2]};
 	using Batches = std::map<std::pair<GLuint, bool>, Batch>;
 	std::map<const void *, Batches> per_element;
-	auto element = [&](const void *id, const game::GameObject *actor, bool particle_renderer) -> Batches & {
+	auto element = [&](const void *id, const game::GameObject *actor, bool particle_renderer, int placement = 0) -> Batches & {
 		auto [it, made] = elements_.try_emplace(id);
 		Element &e = it->second;
 		if (made) {
@@ -449,7 +449,8 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 				auto [mi, fresh] = master_index_.try_emplace(actor, int(master_index_.size()));
 				g = float(mi->second) * 1000 + float(++root_counter_[actor]);
 			}
-			e.key = g + 1;
+			e.key = g + 1 + 1000.0f * float(placement);
+			e.layer = placement > 0 ? 6 : 8;
 			order_.push_back(id);
 			order_dirty_ = true;
 		}
@@ -460,7 +461,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	if (meshes) {
 		// Mesh shaders' static key is their shader index (no group: only particle renderers have one).
 		for (const DeferredDraw &m : *meshes) {
-			element(m.id, nullptr, false);
+			element(m.id, nullptr, false, m.placement * m.stages);
 			Element &e = elements_[m.id];
 			e.origin = m.origin;
 			e.mesh = m.draw;
@@ -474,7 +475,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	for (auto &inp : world.particles->instances()) {
 		const game::ParticleInstance &in = *inp;
 		if (in.particles.empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled || (only && !only(in.actor))) continue;
-		Batches &batches = element(&in, in.actor, true);
+		Batches &batches = element(&in, in.actor, true, in.def->placement_times);
 		const de::ParticleRendererDef &d = *in.def;
 		// The glow layer: only renderers with a GlowFactor, scaled by a quarter of it (clamped to 1),
 		// in black exponential fog (density 0.0007; DE_CGenericShader::ActivateAndDrawPatches flag
@@ -775,6 +776,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	if (order_dirty_ && !glow_layer) {
 		std::stable_sort(order_.begin(), order_.end(), [&](const void *a, const void *b) {
 			const Element &ea = elements_[a], &eb = elements_[b];
+			if (ea.layer != eb.layer) return ea.layer < eb.layer;
 			return ea.key + ea.z > eb.key + eb.z;
 		});
 		order_dirty_ = false;
