@@ -350,25 +350,30 @@ static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, 
 			take(tt, mul(fn, -1), int(i), z0 >= 0 ? -z1 : -z0);
 		}
 	} else if (target->shape == GameObject::Shape::Box) {
-		float t0 = 0, t1 = 1;
-		int axis = -1;
-		float sign = 1;
-		for (int k = 0; k < 3; ++k) {
-			if (std::fabs(ld[k]) < 1e-9f) {
-				if (la[k] < target->box_min[k] || la[k] > target->box_max[k]) return best;
-				continue;
-			}
-			float ta = (target->box_min[k] - la[k]) / ld[k], tb = (target->box_max[k] - la[k]) / ld[k];
-			float sgn = -1;
-			if (ta > tb) std::swap(ta, tb), sgn = 1;
-			if (ta > t0) t0 = ta, axis = k, sign = sgn;
-			t1 = std::min(t1, tb);
-			if (t0 > t1) return best;
+		// DE_CBoxAffector::IsTouchingConeAsLineSegment (Core 0x7007e7a0): only a flat box has a plane
+		// (InternalWorldUpdate), met by the whole line, past either end; no box in the data is flat.
+		if (target->box_min[2] != target->box_max[2]) return best;
+		float L = len(d);
+		if (L <= 0) return best;
+		Vec lu = mul(ld, 1 / L);
+		if (lu[2] == 0) return best;
+		float tl = (target->box_min[2] - la[2]) / lu[2];
+		float px = la[0] + lu[0] * tl, py = la[1] + lu[1] * tl;
+		const float xs[4] = {target->box_min[0], target->box_min[0], target->box_max[0], target->box_max[0]};
+		const float ys[4] = {target->box_min[1], target->box_max[1], target->box_max[1], target->box_min[1]};
+		bool inside = false;
+		for (int i = 0, j = 3; i < 4; j = i++) {
+			if (((ys[i] <= py && py < ys[j]) || (ys[j] <= py && py < ys[i])) &&
+			    px < (py - ys[i]) * (xs[j] - xs[i]) / (ys[j] - ys[i]) + xs[i])
+				inside = !inside;
 		}
-		if (axis < 0) return best;
-		Vec n{0, 0, 0};
-		n[axis] = sign;
-		take(t0, n, -1);
+		if (!inside) return best;
+		Contact c;
+		c.touched = target;
+		c.point = add(a, mul(d, tl / L));
+		c.normal = c.face_normal = {0, 0, 0};
+		c.distance = tl;
+		if (!best || tl / L < best->first) best = std::make_pair(tl / L, c);
 	} else if (target->shape == GameObject::Shape::Sphere) {
 		// The cone with penumbra 0 against a sphere (DE_CConeAffector::IsTouchingSphere 0x70080560):
 		// the centre within r of the axis, its depth along it within -r .. length + r; the touch
