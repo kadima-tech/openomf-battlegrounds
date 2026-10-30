@@ -837,6 +837,12 @@ void update_session(World &w) {
 			b->call_handle(w, m, args);
 		}
 	}
+	// DE_CScene::PassTime (Core 0x70070040): the delta-tick list after the hooks.
+	auto &dc = w.delta_creatures;
+	dc.erase(std::remove_if(dc.begin(), dc.end(), [&](uint32_t h) { return !w.object(h); }), dc.end());
+	for (uint32_t h : std::vector<uint32_t>(dc)) {
+		if (GameObject *o = w.object(h); o && in_scene(*o)) creature_delta_tick(w, *o);
+	}
 	if (w.render_ticks_per_frame) render_tick(w, float(w.frame_ms()));
 	// Sessions whose object has been deleted (EndAndDie) are gone; the current one falls back to
 	// the session that made it.

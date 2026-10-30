@@ -1260,8 +1260,11 @@ void World::register_creature(GameObject *o) {
 	{
 		if (o->temporal_registered || !o->is("Actor\\Creature")) return;
 		uint32_t rate = creature_rate(o);
-		if (rate == 0) return;
 		o->temporal_registered = true;
+		if (rate == 0) {
+			if (creature_delta_ticked(*o)) delta_creatures.push_back(o->handle);
+			return;
+		}
 		add_temporal(rate, {Temporal::Creature, o->handle, nullptr});
 		// DE_CCreature::ObjPrepare (Creature 0x15016050): one made earlier starts at the tick its
 		// creation time gives.
@@ -1331,10 +1334,10 @@ static void pulse(World &w, Brain *b) {
 void World::creature_tick(GameObject &o) {
 	if (o.fighter) {
 		validate_animation(o);  // as InternalWorldUpdate does when something needs positions
-		run_commands(o);
+		if (!temporal_updating) run_commands(o);
 	}
 	// A replay's held creature, or one re-taking its state for this tick, skips physics and brain.
-	bool skip = replay_tick(*this, o);
+	bool skip = creature_state_tick(*this, o);
 	if (o.fighter && !skip) physics_step(o);
 	for (auto &bp : brains_) {
 		if (bp->owner == &o) {
@@ -1530,6 +1533,7 @@ void World::tick(uint32_t ms) {
 		}
 		if (window) fprintf(stderr, "[call] --- frame %u\n", frame_);
 	}
+	replay_temporal_update(*this);
 	// PassTime: the set whose next tick comes first (the first made, on a tie) advances, the
 	// clock standing at that tick, until the next tick lies beyond the frame.
 	uint32_t left = ms;

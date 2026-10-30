@@ -491,6 +491,11 @@ public:
 	void retick(GameObject &o, uint32_t at_ms);
 	// Runs `f` with the scene clock at `at_ms` (DE_CScene +0x1ac / +0x1b0).
 	void at_scene_ms(uint32_t at_ms, const std::function<void()> &f);
+	// DE_CScene +0x158: re-simulating (TemporalUpdate's deferred SetTimes), so creature ticks leave
+	// their command managers alone.
+	bool temporal_updating = false;
+	// The scene's delta-tick list (+0x70): creatures with no tick rate whose +0x1e0 is set.
+	std::vector<uint32_t> delta_creatures;
 	// The GUI's own scenes: the top control's (GameObject::view 0) and a GUI scene viewer's (view 1,
 	// the model picker's). Neither autopauses (DE_CScene +0x1c0 / +0x1bc), so the app passes them
 	// real time: the first every frame, the second while its page is up (the robot's idle event).

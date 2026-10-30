@@ -77,14 +77,19 @@ void replay_destroying(World &w, GameObject &o);
 void set_instance_number(GameObject &o, int32_t n);
 // DE_CStateManager +0x78: driven by a record (IsSimulating / IsStateAlterable false).
 bool replay_driven(World &w, const GameObject *o);
-// DE_CCreature::Tick in a replay, at its start: true when the creature skips its physics and
-// brain this tick (held since the clock went back, or re-taking this tick's state).
-bool replay_tick(World &w, GameObject &o);
+// DE_CCreature::Tick at its start: true when the creature skips its physics and brain this tick
+// (held since a replay's clock went back, or re-taking a state of this tick).
+bool creature_state_tick(World &w, GameObject &o);
+// DE_CCreature::ObjPrepare: a creature with no tick rate joins the scene's delta-tick list when
+// its +0x1e0 is set (none in the shipped data).
+bool creature_delta_ticked(const GameObject &o);
+// DE_CCreature::DeltaTick (Creature 0x15016700), at the end of each scene pass.
+void creature_delta_tick(World &w, GameObject &o);
 // Held (+0x2fc == 2): a fighter's guide and trailers wait too.
 bool replay_held(World &w, const GameObject &o);
 // DE_CCreature::SetTime after the replay's clock jumped: re-ticks up to it or rewinds.
 void replay_set_time(World &w, GameObject &o, uint32_t ms);
-// DE_CScene::TemporalUpdate: restored creatures whose SetTime was deferred.
+// DE_CScene::TemporalUpdate (Core 0x70070710): restored creatures whose SetTime was deferred.
 void replay_temporal_update(World &w);
 bool replaying(World &w);
 // The replay's recorded end (scene ms), 0 when not replaying.

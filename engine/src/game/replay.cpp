@@ -8,6 +8,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <optional>
 
 #include "de/contents.h"
 #include "game/runtime.h"
@@ -103,7 +104,8 @@ struct StateManager {
 	uint32_t adds = 0;         // +0x64
 	bool keep_clock = false;   // +0xd0
 	bool connected = true;     // in the session's connector (ObjPrepare)
-	std::vector<LocalState> history;                               // +0x3c, while recording
+	bool local = false;        // kept for its own states only, outside any session
+	std::vector<LocalState> history;                               // +0x3c, the owner's own states
 	std::vector<std::pair<uint32_t, std::vector<uint8_t>>> lagged;  // +0x3c, while replaying
 };
 
@@ -287,23 +289,33 @@ StateManager *manager_of(World &w, const GameObject *o) {
 	return it == m.end() || it->second.owner != o ? nullptr : &it->second;
 }
 
-// DE_CSession::Add + DE_CSessionRecord::Add (Core 0x701f9520 / 0x70203610).
+// DE_CCreature::ObjPrepare (Creature 0x15016050): a tick-based creature's manager keeps a second
+// of ticks.
+void set_window(World &w, StateManager &sm) {
+	if (uint32_t rate = sm.owner->is("Actor\\Creature") ? w.creature_rate(sm.owner) : 0) sm.window = uint32_t(1000.0f / float(rate));
+}
+
+// DE_CSession::Add + DE_CSessionRecord::Add (Core 0x701f9520 / 0x70203610); a manager that kept
+// states outside the session keeps them.
 StateManager &join(World &w, GameObject &o) {
 	auto &R = rw(w);
 	StateManager &sm = R.managers[o.handle];
-	if (sm.owner == &o) return sm;
+	if (sm.owner == &o && !sm.local) return sm;
+	std::vector<LocalState> history;
+	uint32_t adds = 0;
+	if (sm.owner == &o) history = std::move(sm.history), adds = sm.adds;
 	sm = StateManager{};
 	sm.owner = &o;
+	sm.history = std::move(history);
+	sm.adds = adds;
 	ManagerFlags flags = manager_flags(o);
 	sm.connected = flags.joins;
+	sm.keep_clock = flags.keep_clock;
+	set_window(w, sm);
 	if (!sm.connected) return sm;
 	sm.id = build_id(w, o);
 	sm.joined = ++R.joins;
-	// DE_CCreature::ObjPrepare (Creature 0x15016050): a tick-based creature's manager keeps a
-	// second of ticks.
-	if (uint32_t rate = o.is("Actor\\Creature") ? w.creature_rate(&o) : 0) sm.window = uint32_t(1000.0f / float(rate));
 	// An empty ID matches the first empty-ID record, so all such managers share one.
-	sm.keep_clock = flags.keep_clock;
 	if (auto &rec = R.record; rec && flags.record) {
 		sm.record = rec->find(sm.id);
 		if (!sm.record && rec->recording) {
@@ -319,6 +331,20 @@ StateManager &join(World &w, GameObject &o) {
 		fprintf(stderr, "[replay %u] join %s (%s): %s, window %u, defer %u\n", w.frame(), o.name.c_str(), shown.c_str(),
 		        sm.record ? (sm.replay ? "replayed" : "recorded") : "-", sm.window, creature_flags(o).defer);
 	}
+	return sm;
+}
+
+// The manager of an object outside the recorded or replayed session: CreateCurrentState keeps its
+// states all the same.
+StateManager &own_manager(World &w, GameObject &o) {
+	StateManager &sm = rw(w).managers[o.handle];
+	if (sm.owner == &o) return sm;
+	sm = StateManager{};
+	sm.owner = &o;
+	sm.local = true;
+	sm.connected = false;
+	sm.keep_clock = manager_flags(o).keep_clock;
+	set_window(w, sm);
 	return sm;
 }
 
@@ -1038,11 +1064,6 @@ std::vector<std::shared_ptr<SessionRecord>> read_records(const std::string &path
 	}
 }
 
-StateManager *replayed(World &w, const GameObject &o) {
-	StateManager *sm = manager_of(w, &o);
-	return sm && sm->replay ? sm : nullptr;
-}
-
 // A tick-based creature's clock; met first in a tick (`tick_ms`), its base is where that tick
 // puts it, else the last step of the creature's rate.
 Clock &clock_of(World &w, GameObject &o, uint32_t rate, int64_t tick_ms = -1) {
@@ -1087,11 +1108,28 @@ bool add_lagged_state(StateManager &sm, uint32_t t, const std::vector<uint8_t> &
 }
 
 void restore(World &w, StateManager &sm, const std::pair<uint32_t, std::vector<uint8_t>> &st) {
-	if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s takes its %u state\n", w.frame(), sm.owner->name.c_str(), st.first);
+	if (getenv("OPENBG_DEBUG_REPLAY") || (!sm.replay && getenv("OPENBG_DEBUG_STATES"))) fprintf(stderr, "[replay %u] %s takes its %u state\n", w.frame(), sm.owner->name.c_str(), st.first);
 	Packer p;
 	p.data = st.second;
 	unpack_state(w, p, *sm.owner, st.first);
 }
+
+// DE_CStateManager::GetState / GetNewestStateInRange (Core 0x701b1f40, Creature 0x1501a630): the
+// newest state in its list (+0x3c: the recorded ones a replay took, else the owner's own) at or
+// before `to`, if not before `from`; copied, as restoring it may change the list.
+std::optional<std::pair<uint32_t, std::vector<uint8_t>>> newest_state(StateManager &sm, uint32_t from, uint32_t to) {
+	if (sm.replay) {
+		for (auto it = sm.lagged.rbegin(); it != sm.lagged.rend(); ++it) {
+			if (it->first <= to) return it->first >= from ? std::optional(*it) : std::nullopt;
+		}
+	} else {
+		for (auto it = sm.history.rbegin(); it != sm.history.rend(); ++it) {
+			if (it->time <= to) return it->time >= from ? std::optional(std::pair(it->time, it->bytes)) : std::nullopt;
+		}
+	}
+	return std::nullopt;
+}
+std::optional<std::pair<uint32_t, std::vector<uint8_t>>> state_at(StateManager &sm, uint32_t t) { return newest_state(sm, t, t); }
 
 // UpdateForReplay (Core 0x701af350): the newest recorded state at or before `t` (the owner's
 // local time), when not the last one taken, joins the history; the session's fixup then restores
@@ -1445,15 +1483,15 @@ void replay_update(World &w) {
 
 void register_state(World &w, GameObject *owner, bool got_hit) {
 	auto &R = rw(w);
-	if (!owner || !R.record || !R.record->recording) return;
+	if (!owner) return;
 	// The state manager of the object (or of the creature it is a component of).
 	GameObject *o = owner;
 	while (o && !has_state_manager(*o)) o = o->component_owner && o->component_owner != o ? o->component_owner : o->parent;
-	if (!o || in_gui(*o) || !in_session(w, o)) return;
-	StateManager &sm = join(w, *o);
-	if (!sm.connected) return;
+	if (!o || in_gui(*o)) return;
+	StateManager &sm = R.record && R.record->recording && in_session(w, o) ? join(w, *o) : own_manager(w, *o);
+	if (sm.replay) return;
 	// CreateCurrentState (Core 0x701aeea0) at the owner's local time (RegisterExecutorState,
-	// Creature 0x15015650); the state is recorded when it ages out of the history.
+	// Creature 0x15015650), recording or not; the state is recorded when it ages out of the history.
 	Packer p;
 	p.local = true;
 	LocalState ls;
@@ -1484,12 +1522,12 @@ void replay_destroying(World &w, GameObject &o) {
 	}
 }
 
-// DE_CCreature::Tick (Creature 0x15016870), its replay side: a held creature skips physics and
-// brain; a replayed one whose history holds a state for this very tick (not the one being
-// restored) takes it and skips them too. At the end of the tick a hold ends once the clock is
-// back where it was (AssureSequenced).
-bool replay_tick(World &w, GameObject &o) {
-	if (!replaying(w)) return false;
+// DE_CCreature::Tick (Creature 0x15016870), its state side: a held creature skips physics and
+// brain; one whose history holds a state for this very tick (not the one being restored) takes it
+// and skips them too, live or replayed: a live creature's own state registered since its last
+// tick comes back. At the end of the tick a hold ends once the clock is back where it was
+// (AssureSequenced).
+bool creature_state_tick(World &w, GameObject &o) {
 	uint32_t rate = w.creature_rate(&o);
 	if (!rate) return false;
 	Clock &c = clock_of(w, o, rate, int64_t(w.scene_ms()));
@@ -1497,13 +1535,10 @@ bool replay_tick(World &w, GameObject &o) {
 	else if (!rw(w).reticking) c.base = uint32_t(w.scene_ms()) - (o.creature_ticks + 1) * rate;
 	bool skip = c.mode == 2;
 	if (!skip && c.mode == 0 && c.ticked && c.unpacking != o.creature_ticks) {
-		if (StateManager *sm = replayed(w, o)) {
-			for (auto &st : sm->lagged) {
-				if (st.first != o.creature_ticks) continue;
-				auto copy = st;
-				restore(w, *sm, copy);
+		if (StateManager *sm = manager_of(w, &o)) {
+			if (auto st = state_at(*sm, o.creature_ticks)) {
+				restore(w, *sm, *st);
 				skip = true;
-				break;
 			}
 		}
 	}
@@ -1518,6 +1553,23 @@ bool replay_tick(World &w, GameObject &o) {
 	}
 	c.ticked = true;
 	return skip;
+}
+
+bool creature_delta_ticked(const GameObject &o) { return creature_flags(o).defer != 0; }
+
+// Once it has ticked, the newest state its manager holds since its last delta tick comes back;
+// +0x1e4 and +0x1d4 then follow the scene.
+void creature_delta_tick(World &w, GameObject &o) {
+	Clock &c = rw(w).clocks[o.handle];
+	uint32_t now = uint32_t(w.scene_ms());
+	if (now == c.until && !c.ticked) return;
+	if (StateManager *sm = manager_of(w, &o); sm && c.ticked) {
+		if (sm->replay) update_for_replay(w, *sm, now);
+		if (auto st = newest_state(*sm, c.until + 1, now)) restore(w, *sm, *st);
+	}
+	c.until = now;
+	o.creature_ticks = now;
+	c.ticked = true;
 }
 
 bool replay_held(World &w, const GameObject &o) {
@@ -1535,9 +1587,11 @@ void replay_temporal_update(World &w) {
 	auto &R = rw(w);
 	auto list = std::move(R.deferred);
 	R.deferred.clear();
+	w.temporal_updating = true;
 	for (uint32_t h : list) {
 		if (GameObject *o = w.object(h)) set_time(w, *o, uint32_t(w.scene_ms()));
 	}
+	w.temporal_updating = false;
 }
 
 // SetInstanceNumberCaller (Creature 0x15014100): the number's digits join the ID suffix, which
