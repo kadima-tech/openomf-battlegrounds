@@ -48,6 +48,8 @@ public:
 	// colours the four edges, the face then transparent unless `face`.
 	void bevel(float x0, float y0, float x1, float y1, float bx, float by, bool down, const Rgba *face = nullptr,
 	           const Rgba *edges = nullptr);
+	// SetColors (0x700c3410): every corner of the five sections given (top, bottom, left, right, face).
+	void bevel_colors(float x0, float y0, float x1, float y1, float bx, float by, const Rgba (&cols)[5][4]);
 	void bevel_filled(float x0, float y0, float x1, float y1, float bx, float by, bool down, Rgba fill, const Rgba *edges = nullptr) {
 		const Rgba f[4] = {fill, fill, fill, fill};
 		bevel(x0, y0, x1, y1, bx, by, down, f, edges);
@@ -447,6 +449,8 @@ public:
 	// (0x700e6b80).
 	void confirm(const std::string &title, const std::string &text, std::function<void(bool)> done);
 	void get_string(const std::string &title, const std::string &initial, std::function<void(bool, const std::string &)> done);
+	// DE_CDialog3d::UserInformation (0x700f32b0): the notification, `icon` in a column on the left.
+	void user_information(const std::string &title, const std::string &text, const de::ObjectRef &icon, std::function<void()> done);
 	Dialog *open_dialog(const std::string &title, float w, float h);
 	void close(Ctl *dialog_or_popup);
 	void open_popup(std::unique_ptr<Ctl> popup);
@@ -456,6 +460,7 @@ public:
 	void trash(std::unique_ptr<Ctl> c);
 	void set_focus(Ctl *c);
 	Ctl *focused() const { return focus_; }
+	Ctl *hovered() const { return hover_; }
 
 	void layout();
 	void paint(std::vector<DrawItem> &out);

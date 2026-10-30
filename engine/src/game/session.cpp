@@ -1413,7 +1413,11 @@ void register_session_natives(World &w) {
 			c.world.show_vcr(ui);
 		}
 	});
-	reg("CUIManager::bool IsDisplayed()", [shown](const NativeContext &c) { c.ret_bool(shown(c, c.self())); });
+	// IsDisplayedCaller (Core): with controls, the page has activated and no page transition is busy.
+	reg("CUIManager::bool IsDisplayed()", [shown](const NativeContext &c) {
+		auto it = c.world.rules_displays.find(c.self());
+		c.ret_bool(c.self() && it != c.world.rules_displays.end() ? it->second.displayed : shown(c, c.self()));
+	});
 	reg("CObject::class CGenericDescriptionSelector NewGenericDescriptionSelector()", [](const NativeContext &c) {
 		c.ret_object(c.world.create_child(nullptr, "GenericDescriptionSelector", "UIManager\\GenericDescriptionSelector"));
 	});
@@ -1567,15 +1571,14 @@ void register_session_natives(World &w) {
 		if (SessionState *s = session_of(c.world, caller_scene(c))) s->watchers_active = true;
 	});
 	// IsPausedCaller (Core 0x7006de90): the scene's +0xf0, set by ObjInitContents and Pause, cleared by
-	// Genesis and Continue. A session's scene starts when a modifier owns the environment; counting a
-	// page's autopause is a stand-in that lets Practice's rules display close (FINDINGS 200).
+	// Genesis and Continue. A session's scene starts when a modifier owns the environment.
 	reg("CScene::bool IsPaused()", [caller_scene](const NativeContext &c) {
 		if (World::gui_scene_view(c.self()) >= 0) {
 			c.ret_bool(false);
 			return;
 		}
 		SessionState *s = session_of(c.world, caller_scene(c));
-		c.ret_bool(c.world.scene_paused || !s || !s->scene_started);
+		c.ret_bool(!s || !s->scene_started);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it
 	// lives as long as the scene; ours live until deleted anyway.

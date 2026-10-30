@@ -130,10 +130,17 @@ public:
 	// What the scene viewer control shows.
 	GameObject *environment = nullptr, *pedestal = nullptr, *camera = nullptr;
 	de::ObjectRef model() const;  // the chooser's current FighterModelDescription
-	de::ObjectRef pilot;          // DE_CPilotDescription::LastSelectedPilot when the page opened
+	// The robot (+0x94): a copy of LoadScene\FighterTemplate under RobotPedistal holding the last
+	// selected pilot and a CreatureModel with the model description's FighterModel.
+	GameObject *robot = nullptr;
+	static const GameObject *robot_model(const GameObject *robot);
+	static const GameObject *robot_pilot(const GameObject *robot);
 
 private:
+	void update_model(AppManager &app);
+
 	DescriptionSelector *chooser_;
+	GameObject *template_ = nullptr;  // +0x98
 	Control *name_ = nullptr, *prev_ = nullptr, *next_ = nullptr, *back_ = nullptr, *done_ = nullptr;
 	de::ObjectRef prev_image_, next_image_;
 };
@@ -203,8 +210,8 @@ public:
 	std::function<bool()> session_fully_sequenced;
 	std::function<bool()> session_scene_rendering;
 
-	// DE_CAppManager::IsUIManagerAutopaused (Core 0x7019b260): a page that autopauses is up or
-	// stacked; the scene then passes no time (DE_CScene::PassTime).
+	// DE_CAppManager::IsUIManagerAutopaused (Core 0x7019b260): a modal dialog is up, or a page that
+	// autopauses is current or stacked; a session's scene then passes no time (TemporalUpdate).
 	bool autopaused() const;
 	// DE_CRulesDisplay: the screen for a session script's rules display.
 	UIPtr rules_display(GameObject *rules);
@@ -244,19 +251,11 @@ public:
 	void notify(const std::string &title, const std::string &text);
 	struct Notification {
 		std::string title, text;
-		float moved_x = 0, moved_y = 0;  // dragged by the title bar, screen fractions
 	};
 	std::vector<Notification> notifications;
-	// DE_CDialog3d::UserInformation's dialog for the front notification, in screen fractions (y
-	// down), measured from the original at 4:3: the box, its title bar and close box, the icon,
-	// the text's lines and the OK button.
-	struct NotificationLayout {
-		float x0, y0, x1, y1, title_bottom, frame;
-		float close[4], icon[4], ok[4];
-		float text_left, text_right, text_top, text_size, line;
-		std::vector<std::string> lines;
-	};
-	NotificationLayout notification_layout() const;
+	// The front notification's DE_CDialog3d::UserInformation dialog, on its own top control over
+	// everything; null when there is none.
+	Gui *notification_gui();
 	// A screen this port does not have yet: says so instead of guessing.
 	void not_ported(const std::string &what);
 
@@ -317,9 +316,11 @@ public:
 	RenderOptions render_global, render_started;
 	void apply_render(const RenderOptions &o);
 
+	// PageTransitionBusy (Core 0x7019b8f0): the transition actor answers in INT1.
+	bool transition_busy();
+
 private:
 	void transition_ui();
-	bool transition_busy();
 	void signal_transition(const char *handle);
 	bool on_stack(const UIManager *m) const;
 	void drop(const UIPtr &m);
@@ -332,7 +333,8 @@ public:
 	float mouse_y() const { return mouse_y_; }
 
 private:
-	bool notification_press_ = false, notification_drag_ = false;
+	std::unique_ptr<Gui> notification_gui_;
+	bool notification_shown_ = false;
 	bool first_ui_ = true;
 	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_;
 };

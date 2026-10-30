@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
 		// No front end: a match's rules display (which drives its loading) is up and authorised at once.
 		world.show_rules = [&world](game::GameObject *rules) {
 			auto &r = world.rules_displays[rules];
-			r.shown = r.authorized = true;
+			r.shown = r.displayed = r.authorized = true;
 		};
 		world.all_ai = watch;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.

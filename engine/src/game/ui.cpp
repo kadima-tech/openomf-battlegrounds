@@ -1403,7 +1403,6 @@ GameObject *descendant_named(GameObject *o, const std::string &name) {
 // the scene.
 void ModelPicker::setup_controls(AppManager &app) {
 	result = false;
-	pilot = app.last_pilot;
 	Control frame = *button(app, "", "LoadFrame");
 	controls.pop_back();
 	auto sub = [&](const std::string &text, float l, float t, float r, float b) {
@@ -1413,7 +1412,7 @@ void ModelPicker::setup_controls(AppManager &app) {
 		c.left = frame.left + l * w, c.right = frame.left + r * w, c.top = frame.top + t * h, c.bottom = frame.top + b * h;
 		return &c;
 	};
-	name_ = sub(model() ? model().info().name : "", 0.05f, 0, 0.95f, 0.3f);
+	name_ = sub("", 0.05f, 0, 0.95f, 0.3f);
 	name_->enabled = false;
 	prev_ = sub("", 0.25f, 0.35f, 0.45f, 0.65f);
 	next_ = sub("", 0.55f, 0.35f, 0.75f, 0.65f);
@@ -1438,6 +1437,50 @@ void ModelPicker::setup_controls(AppManager &app) {
 		pedestal = descendant_named(environment, "RobotPedistal");
 		camera = descendant_named(environment, "EnvironmentCamera");
 	}
+	template_ = app.construct("LoadScene\\FighterTemplate");
+	robot = nullptr;
+	update_model(app);
+}
+
+// UpdateModel (0x35055a10): the old robot is deleted and a new copy of the template takes the last
+// selected pilot's resource and NewStrippedFighterModel (0x35038940): a CreatureModel holding an
+// instance of the model description's FighterModel, which Setup (0x35037470) hooks up to the
+// template's FighterImageFilter, so the pilot paints it. The template has no skeleton, deform info
+// or animation manager, so the model stands undeformed (its bind pose), and no executors.
+void ModelPicker::update_model(AppManager &app) {
+	World &w = app.world;
+	if (robot) w.clean_later(robot);
+	robot = nullptr;
+	de::ObjectRef m = model();
+	if (name_) name_->text = m ? m.info().name : "";
+	if (!template_ || !pedestal) return;
+	auto adopt = [](GameObject *child, GameObject *parent) {
+		child->parent = parent;
+		parent->children.push_back(child);
+	};
+	robot = w.copy_tree(*template_);
+	if (GameObject *pd = app.last_pilot ? w.global_object(app.last_pilot) : nullptr) {
+		if (GameObject *p = new_resource(w, pd, nullptr)) adopt(p, robot);
+	}
+	GameObject *creature_model = w.create_child(robot, "CreatureModel", "CreatureModel");
+	auto res = m ? passive_references(w.data(), m) : std::vector<de::ObjectRef>{};
+	if (GameObject *fm = res.empty() ? nullptr : w.global_object(res[0])) adopt(w.copy_tree(*fm), creature_model);
+	adopt(robot, pedestal);
+	w.enter_scene(robot);
+}
+
+const GameObject *ModelPicker::robot_model(const GameObject *robot) {
+	for (const GameObject *c : robot ? robot->children : std::vector<GameObject *>{}) {
+		if (c->class_path == "CreatureModel" && !c->children.empty()) return c->children.front();
+	}
+	return nullptr;
+}
+
+const GameObject *ModelPicker::robot_pilot(const GameObject *robot) {
+	for (const GameObject *c : robot ? robot->children : std::vector<GameObject *>{}) {
+		if (c->pilot) return c;
+	}
+	return nullptr;
 }
 
 // ProcessButtonClickEvent (0x35055890): the arrows step the chooser's model, wrapping.
@@ -1451,7 +1494,7 @@ void ModelPicker::click(AppManager &app, Control &c) {
 	} else if ((&c == next_ || &c == prev_) && chooser_ && !chooser_->models_.empty()) {
 		int n = int(chooser_->models_.size());
 		chooser_->model_ = (chooser_->model_ + (&c == next_ ? 1 : n - 1)) % n;
-		name_->text = model().info().name;
+		update_model(app);
 	}
 }
 
@@ -1467,7 +1510,8 @@ void ModelPicker::draw(AppManager &, std::vector<DrawItem> &out) {
 
 void ModelPicker::deactivated(AppManager &app) {
 	if (environment) app.world.clean_later(environment);
-	environment = pedestal = camera = nullptr;
+	if (template_) app.world.clean_later(template_);
+	environment = pedestal = camera = robot = template_ = nullptr;
 }
 
 bool AppManager::is_locked(const de::ObjectRef &d) const {
@@ -1600,10 +1644,12 @@ UIPtr AppManager::main_menu() {
 	return main_menu_;
 }
 
+// Its newest-session test (a remote client's session never autopauses) passes for all of ours.
 bool AppManager::autopaused() const {
+	if (!notifications.empty() || (current && current->gui && current->gui->modal())) return true;
 	if (stack.empty() && !current) return false;
-	if (current && current->autopause) return true;
-	return std::any_of(stack.begin(), stack.end(), [](const UIPtr &m) { return m->autopause; });
+	if (std::any_of(stack.begin(), stack.end(), [](const UIPtr &m) { return m->autopause; })) return true;
+	return current && current->autopause;
 }
 
 UIPtr AppManager::rules_display(GameObject *rules) { return std::make_shared<RulesDisplayPage>(rules); }
@@ -1817,13 +1863,18 @@ void AppManager::delete_stack(bool close_current) {
 	if (close_current) set_next(nullptr, false);
 }
 
-// CloseUIManagerStack (Core 0x7019bd00).
+// CloseUIManagerStack (Core 0x7019bd00): each stacked page is made next and leaves the stack, then
+// nothing is next and the current page finishes.
 void AppManager::close_stack() {
-	if (current) {
-		while (!stack.empty()) {
-			next = stack.back();
-			stack.pop_back();
-		}
+	auto pop = [this] {
+		UIPtr top = stack.back();
+		set_next(top, false);
+		stack.erase(std::find(stack.begin(), stack.end(), top));
+	};
+	if (current && !stack.empty()) pop();
+	while (!stack.empty()) {
+		pop();
+		if (!next) break;
 	}
 	set_next(nullptr, false);
 }
@@ -1839,7 +1890,6 @@ void AppManager::signal_transition(const char *handle) {
 	send(world, transition, handle);
 }
 
-// PageTransitionBusy (Core 0x7019b8f0): the transition actor answers in INT1.
 bool AppManager::transition_busy() {
 	if (!transition) return false;
 	uint32_t e = new_event(world, "GUIPageChangeTransitionBusy");
@@ -1961,10 +2011,8 @@ void AppManager::not_ported(const std::string &what) { notify(what, "This screen
 // DE_CTopControl3d's control under the mouse (control events 0x25 / 0x26) and
 // DE_CUIManagerActorButtonRobot::ProcessMouseEnter / Leave (Core 0x701ed540 / 0x701ed480).
 void AppManager::mouse_move(float x, float y) {
-	if (notification_drag_ && !notifications.empty()) {
-		notifications.front().moved_x += x - mouse_x_, notifications.front().moved_y += y - mouse_y_;
-	}
 	mouse_x_ = x, mouse_y_ = y;
+	if (Gui *g = notification_gui()) g->mouse_move(x, y);
 	if (!current || !current->activated) return;
 	UIPtr page = current;
 	bool taken = notifications.empty() && page->gui && page->gui->mouse_move(x, y);
@@ -1983,69 +2031,24 @@ void AppManager::mouse_move(float x, float y) {
 
 // DE_CButtonRobot: a button clicks when released over itself; the actor robot sends GUISelect
 // (ProcessButtonClick 0x701ed640) and the page's robot acts on it.
-AppManager::NotificationLayout AppManager::notification_layout() const {
-	NotificationLayout l{};
-	if (notifications.empty()) return l;
-	// In screen heights (the reference: a 1049 x 364 box at 1424 high), x scaled by 3/4.
-	const float hx = 0.75f;
-	float w = 0.737f * hx, frame = 0.0056f, title = 0.049f, icon = 0.115f;
-	l.frame = frame;
-	l.text_size = 0.0213f;
-	l.line = 0.0405f;
-	l.text_left = 0.5f - w / 2 + frame + icon * hx + 0.012f;
-	l.text_right = 0.5f + w / 2 - frame - 0.01f;
-	// SplitNewLine, then lines broken at the text's width.
-	std::string text = notifications.front().text;
-	for (size_t p = 0; p <= text.size();) {
-		size_t nl = text.find('\n', p);
-		std::string para = text.substr(p, nl == std::string::npos ? std::string::npos : nl - p), line;
-		for (size_t q = 0; q <= para.size();) {
-			size_t sp = para.find(' ', q);
-			std::string word = para.substr(q, sp == std::string::npos ? std::string::npos : sp - q);
-			std::string test = line.empty() ? word : line + " " + word;
-			if (!line.empty() && text_width && text_width(test, l.text_size) > l.text_right - l.text_left) {
-				l.lines.push_back(line);
-				line = word;
-			} else {
-				line = test;
-			}
-			if (sp == std::string::npos) break;
-			q = sp + 1;
-		}
-		l.lines.push_back(line);
-		if (nl == std::string::npos) break;
-		p = nl + 1;
+// DE_CNotification::Display (0x7017fa70): UserInformation with the core image Not_UserInformation.
+Gui *AppManager::notification_gui() {
+	if (notifications.empty()) return nullptr;
+	if (!notification_gui_) notification_gui_ = std::make_unique<Gui>(*this);
+	if (!notification_shown_) {
+		notification_shown_ = true;
+		Gui &g = *notification_gui_;
+		g.user_information(notifications.front().title, notifications.front().text, g.image("Not_UserInformation"), [this] {
+			notification_shown_ = false;
+			if (!notifications.empty()) notifications.erase(notifications.begin());
+		});
 	}
-	float ok_h = 0.066f, body = std::max(0.19f, 0.02f + l.line * float(l.lines.size()) + ok_h + 0.04f);
-	float h = frame * 2 + title + body;
-	l.x0 = 0.5f - w / 2, l.x1 = 0.5f + w / 2, l.y0 = 0.5f - h / 2, l.y1 = 0.5f + h / 2;
-	l.title_bottom = l.y0 + frame + title;
-	float cs = title * 0.88f;
-	l.close[0] = l.x1 - frame - 0.003f - cs * hx, l.close[1] = l.y0 + frame + 0.003f, l.close[2] = l.x1 - frame - 0.003f, l.close[3] = l.close[1] + cs;
-	l.icon[0] = l.x0 + frame + 0.009f, l.icon[1] = l.title_bottom + 0.008f, l.icon[2] = l.icon[0] + icon * hx, l.icon[3] = l.icon[1] + icon;
-	l.text_top = l.title_bottom + 0.02f + l.line / 2;
-	float bw = 0.29f * w;
-	l.ok[0] = l.x1 - frame - 0.03f * w - bw, l.ok[2] = l.x1 - frame - 0.03f * w;
-	l.ok[1] = std::max(l.text_top + l.line * float(l.lines.size()) - l.line / 2 + 0.008f, l.title_bottom + 0.06f), l.ok[3] = l.ok[1] + ok_h;
-	const float mx = notifications.front().moved_x, my = notifications.front().moved_y;
-	for (float *r : {l.close, l.icon, l.ok}) r[0] += mx, r[1] += my, r[2] += mx, r[3] += my;
-	l.x0 += mx, l.x1 += mx, l.y0 += my, l.y1 += my, l.title_bottom += my;
-	l.text_left += mx, l.text_right += mx, l.text_top += my;
-	return l;
+	return notifications.empty() ? nullptr : notification_gui_.get();
 }
 
 void AppManager::mouse_button(bool down, int clicks) {
-	if (!notifications.empty()) {
-		// The dialog is modal: only OK or the close box (on release over the one pressed) closes it.
-		auto l = notification_layout();
-		auto over = [&](const float *r) { return mouse_x_ >= r[0] && mouse_x_ < r[2] && mouse_y_ >= r[1] && mouse_y_ < r[3]; };
-		bool on = over(l.ok) || over(l.close);
-		// The title bar left of the close box drags the dialog (DE_CTitleBarRobot, Core 0x700db1b0).
-		const float bar[4] = {l.x0, l.y0, l.close[0], l.title_bottom};
-		notification_drag_ = down && !on && over(bar);
-		if (down) notification_press_ = on;
-		else if (notification_press_ && on) notifications.erase(notifications.begin());
-		if (!down) notification_press_ = false;
+	if (Gui *g = notification_gui()) {
+		g->mouse_button(down, clicks);
 		return;
 	}
 	if (!current || !current->activated) return;
@@ -2088,8 +2091,8 @@ void AppManager::key(int sym, int scancode) {
 	// The impulses go first: the robot's pulse reaches its targets before the page's queued click.
 	if (int vk = virtual_key(sym, scancode)) world.impulses->key(vk, true, shift_held, ctrl_held);
 	world.impulses->flush();
-	if (!notifications.empty()) {
-		if (sym == kKeyReturn || sym == kKeyEscape) notifications.erase(notifications.begin());
+	if (Gui *g = notification_gui()) {
+		g->key(sym);
 		return;
 	}
 	if (!current || !current->activated) return;

@@ -104,7 +104,28 @@ void Painter::quad(const float *xy, const Rgba *c) {
 	finish(d);
 }
 
-// The five sections' vertices (CPrimitive::SetPosition 0x701c3c70) and their colours as
+namespace {
+// The five sections' vertices (CPrimitive::SetPosition 0x701c3c70): top, bottom, left, right, face;
+// each v0..v3 as (x index, y index) into {x0, x0 + bx, x1 - bx, x1} and {y0, y0 + by, y1 - by, y1}.
+const int kBevelAt[5][4][2] = {{{0, 0}, {1, 1}, {2, 1}, {3, 0}},
+                               {{1, 2}, {0, 3}, {3, 3}, {2, 2}},
+                               {{0, 0}, {0, 3}, {1, 2}, {1, 1}},
+                               {{2, 1}, {2, 2}, {3, 3}, {3, 0}},
+                               {{1, 1}, {1, 2}, {2, 2}, {2, 1}}};
+}  // namespace
+
+void Painter::bevel_colors(float x0, float y0, float x1, float y1, float bx, float by, const Rgba (&cols)[5][4]) {
+	if (x1 <= x0 || y1 <= y0) return;
+	bx = std::min(bx, (x1 - x0) / 2), by = std::min(by, (y1 - y0) / 2);
+	const float xs[4] = {x0, x0 + bx, x1 - bx, x1}, ys[4] = {y0, y0 + by, y1 - by, y1};
+	for (int s = 0; s < 5; ++s) {
+		float xy[8];
+		for (int k = 0; k < 4; ++k) xy[k * 2] = xs[kBevelAt[s][k][0]], xy[k * 2 + 1] = ys[kBevelAt[s][k][1]];
+		quad(xy, cols[s]);
+	}
+}
+
+// The sections' colours as
 // CreateBevelPanel (0x700f74f0) builds them, swapped by SetDown (0x700c3820).
 void Painter::bevel(float x0, float y0, float x1, float y1, float bx, float by, bool down, const Rgba *face, const Rgba *edges) {
 	if (x1 <= x0 || y1 <= y0) return;
@@ -112,12 +133,6 @@ void Painter::bevel(float x0, float y0, float x1, float y1, float bx, float by, 
 	const float xs[4] = {x0, x0 + bx, x1 - bx, x1}, ys[4] = {y0, y0 + by, y1 - by, y1};
 	const Rgba H = theme::kHilite, D = theme::kDarkShadow;
 	const Rgba Fp = scaled(theme::kFace, 1 + theme::kGradient), Fm = scaled(theme::kFace, 1 - theme::kGradient);
-	// top, bottom, left, right, face; each v0..v3 as (x index, y index).
-	static const int at[5][4][2] = {{{0, 0}, {1, 1}, {2, 1}, {3, 0}},
-	                                {{1, 2}, {0, 3}, {3, 3}, {2, 2}},
-	                                {{0, 0}, {0, 3}, {1, 2}, {1, 1}},
-	                                {{2, 1}, {2, 2}, {3, 3}, {3, 0}},
-	                                {{1, 1}, {1, 2}, {2, 2}, {2, 1}}};
 	Rgba col[5][4] = {{H, H, Fm, Fp}, {Fp, Fm, D, D}, {H, Fp, Fp, H}, {Fm, D, D, Fm}, {Fp, Fm, Fm, Fp}};
 	if (down) {
 		Rgba up[5][4];
@@ -137,7 +152,7 @@ void Painter::bevel(float x0, float y0, float x1, float y1, float bx, float by, 
 		if (s < 4 && (bx <= 0 && by <= 0)) continue;
 		if (s == 4 && !face_shown) continue;
 		float xy[8];
-		for (int k = 0; k < 4; ++k) xy[k * 2] = xs[at[s][k][0]], xy[k * 2 + 1] = ys[at[s][k][1]];
+		for (int k = 0; k < 4; ++k) xy[k * 2] = xs[kBevelAt[s][k][0]], xy[k * 2 + 1] = ys[kBevelAt[s][k][1]];
 		quad(xy, col[s]);
 	}
 }
@@ -1239,6 +1254,85 @@ void Gui::get_string(const std::string &title, const std::string &initial, std::
 	d->on_close = [finish] { finish(false); };
 	layout();
 	set_focus(edit);
+}
+
+namespace {
+
+// DE_CButtonOverlay (0x9b340 / 0x9b390) on OK's box: filled black at alpha 0.2; under the mouse the
+// fill clears and its frame-only child, VPU 8 wide, takes a blue gradient (alpha 0.4 to 0) by corner.
+class ButtonOverlay : public Ctl {
+public:
+	using Ctl::Ctl;
+	void paint(Painter &p) override {
+		bool over = gui.hovered() && gui.hovered()->inside(this);
+		set_fill(over ? Rgba{0, 0, 0, 0} : Rgba{0, 0, 0, 0.2f});
+		paint_visual(p);
+		if (over) {
+			const Rgba A{0, 0, 1, 0.4f}, B{0, 0, 1, 0};
+			const Rgba cols[5][4] = {{A, A, B, B}, {B, B, A, A}, {A, B, B, A}, {B, A, A, B}, {B, B, B, B}};
+			p.bevel_colors(x0, y0, x1, y1, gui.vx(8), gui.vy(8), cols);
+		}
+		paint_children(p);
+	}
+};
+
+}  // namespace
+
+// The dialog's frame (VPU 4) and title bar hold a down panel (VPU 3) filled ColorWindowBack at
+// alpha 0.7: the icon column (VPU 75 wide, ending VPU 60 from the bottom) with the image in a 64 x 64
+// VPU box tinted white at 0.8; the text lines (VPU 14, rows 1.5 high from 10 down, centred right
+// of the column, wrapped as Confirm does but VPU 75 narrower); OK in a VPU 120 x 38 box 10 from the
+// right, centred in a bottom strip. Enter, Esc, OK and the close box close it.
+void Gui::user_information(const std::string &title, const std::string &text, const de::ObjectRef &icon, std::function<void()> done) {
+	float f = vy(14), row = std::trunc(f * 1.5f), icon_w = icon ? vx(75) : 0;
+	float min_w = vx(300) - icon_w;
+	std::vector<std::string> lines;
+	for (const std::string &para : split_lines(text)) {
+		float total = text_width(para, f);
+		if (total <= min_w) {
+			lines.push_back(para);
+			continue;
+		}
+		float wrap = total / (vx(400) - icon_w) < 3 ? vx(400) - icon_w : total / (vx(600) - icon_w) < 9 ? vx(600) - icon_w : vx(700) - icon_w;
+		for (auto &l : wrap_paragraph(*this, para, f, wrap, wrap)) lines.push_back(l);
+	}
+	float widest = min_w;
+	for (auto &l : lines) widest = std::max(widest, text_width(l, f));
+	float text_bottom = 10 + row * float(lines.size());
+	float w = 2 * vx(4) + icon_w + 10 + widest;
+	float h = std::max(180.0f, 2 * vy(4) + vy(30) + vy(60) + text_bottom + 5);
+	Dialog *d = open_dialog(title.empty() ? "User Information" : title, w, h);
+	auto finish = [this, d, done = std::move(done)] {
+		close(d);
+		if (done) done();
+	};
+	d->on_close = finish;
+	d->on_key = [finish](int sym) {
+		if (sym == kKeyReturn || sym == kKeyEscape) finish();
+		return true;
+	};
+	Ctl *panel = d->body->add<Ctl>();
+	panel->set_frame(vx(3), true);
+	panel->frame_y = vy(3);
+	panel->set_fill({theme::kWindowBack.r, theme::kWindowBack.g, theme::kWindowBack.b, 0.7f});
+	if (icon) {
+		Ctl *column = panel->add<Ctl>();
+		column->from_left = 0, column->len_x = icon_w, column->from_bottom = vy(60);
+		auto *image = column->add<Canvas>();
+		image->len_x = vx(64), image->len_y = vy(64), image->align = 6;
+		image->on_paint = [image, icon](Painter &p) { p.image(icon, image->x0, image->y0, image->x1, image->y1, {1, 1, 1, 0.8f}); };
+	}
+	for (size_t i = 0; i < lines.size(); ++i) {
+		auto *t = panel->add<Text>(lines[i], f, theme::kText, 4);
+		t->from_top = 10 + row * float(i), t->len_y = row, t->from_left = icon_w;
+	}
+	Ctl *strip = panel->add<Ctl>();
+	strip->from_bottom = 0, strip->len_y = vy(100);
+	auto *box = strip->add<ButtonOverlay>();
+	box->len_y = vy(38), box->from_right = vx(10), box->len_x = vx(120), box->align = 2;
+	auto *ok = box->add<Button>("OK", Button::Plain, vy(15));
+	ok->on_click = finish;
+	layout();
 }
 
 void Gui::layout() {
