@@ -73,6 +73,12 @@ Controls: arrows walk and turn, A/S left/right punch, Z/X left/right kick, Space
   `--launch Training` starts a match at once, `--choose Elizabeth,Jaguar` has its screens pick those, and
   `--headless N` runs without a window and lists the natives still missing. `--screenshot out.png --frames N` with
   `MOUSE="0.5,0.93@50;down@52;up@54"` (fractions of the 4:3 menu area) scripts the mouse.
+  Screenshot and headless runs depend only on their inputs (data, `MOUSE`, `HOLD`, flags and switches):
+  they pass 20 ms a frame, keep `rand()`'s start value (`OPENBG_SEED=n` picks one; normal play seeds it
+  with the time, as the original does) and read `SystemTime()` as 20 ms a frame (normal play: the wall
+  clock). `SHOTS` and the `OPENBG_DEBUG_*` switches change nothing (`OPENBG_RECORD_AUDIO` does: its music
+  player reports segment ends to the music scripts, as a sound device does); `OPENBG_DEBUG_STATE=N` prints the
+  `rand()` state, a hash of the scene and the robots' positions every N frames, to compare runs.
 - `app/fight.cpp` (`openbg-fight`): a match against a computer-controlled robot, run by the game's own
   Last Man Standing session scripts (countdown, READY/FIGHT, knockouts, rounds, winner), both robots
   driven by their own compiled script brains, in an arena:

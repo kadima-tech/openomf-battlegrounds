@@ -55,7 +55,7 @@ public:
 	}
 
 private:
-	void add(const std::string &stem, std::vector<uint8_t> data);
+	void add(const std::string &stem, std::vector<uint8_t> data, bool overrides);
 	std::filesystem::path dir_;
 	std::map<std::string, std::unique_ptr<ObjectsFile>> files_;
 	std::map<std::array<uint8_t, 16>, ObjectRef> guids_;

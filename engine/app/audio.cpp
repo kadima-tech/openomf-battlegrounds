@@ -155,8 +155,10 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 	software_3d = world.registry_string("Preferences\\Audio\\3D Mode") != "0";
 	auto requests = std::move(world.sound_requests);
 	world.sound_requests.clear();
-	if ((!dev_ && !offline_) || getenv("OPENBG_NO_SOUND")) return;
-	{
+	// Noises are chosen even when nothing is heard: the choice draws on the shared rand() stream.
+	static const bool muted = getenv("OPENBG_NO_SOUND") != nullptr;
+	const bool audible = (dev_ || offline_) && !muted;
+	if (audible) {
 		std::lock_guard<std::mutex> g(lock_);
 		for (auto &v : voices_) update(v, listener, float(world.frame_ms()));
 	}
@@ -189,6 +191,7 @@ void Mixer::play_requests(game::World &world, const de::Transform &listener) {
 		v.rate = std::min(1.0f, float(s->length_ms) / 7000.0f + 0.1f);
 		// NewNoisePlayerSphere: frequency x noise frequency x (1 + CenterRand(variance)).
 		float freq = r.frequency * s->frequency * (1 + (game::random01(world) * 2 - 1) * s->frequency_variance);
+		if (!audible) continue;
 		v.step = double(s->rate) * double(std::max(0.05f, freq)) / double(rate_);
 		v.left = v.right = 0;
 		update(v, listener, 0);

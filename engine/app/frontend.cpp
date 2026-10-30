@@ -15,6 +15,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <chrono>
 #include <iterator>
 #include <cmath>
 #include <cstdio>
@@ -82,6 +83,29 @@ Viewport gui_viewport(int dw, int dh) {
 	return v;
 }
 
+// OPENBG_DEBUG_STATE=N: every N frames, the rand stream, the scene's size and the fighters'
+// places, to compare runs.
+void print_state(game::World &world, int fr) {
+	uint32_t n = 0;
+	uint64_t h = 1469598103934665603ull;
+	std::string fighters;
+	for (game::GameObject *o : world.scene_objects()) {
+		++n;
+		de::Transform t = o->world();
+		for (float f : t.t) {
+			uint32_t b;
+			memcpy(&b, &f, 4);
+			h = (h ^ b) * 1099511628211ull;
+		}
+		if (o->fighter) {
+			char buf[128];
+			snprintf(buf, sizeof buf, " %s %.3f %.3f %.3f", o->name.c_str(), t.t[0], t.t[1], t.t[2]);
+			fighters += buf;
+		}
+	}
+	fprintf(stderr, "[state %d] rand %08x scene %u %016llx%s\n", fr, game::crt_rand_state(), n, (unsigned long long)h, fighters.c_str());
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -143,10 +167,15 @@ int main(int argc, char **argv) {
 	try {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
-		// DE_GLOBAL::SystemInit: srand(time(NULL)). Screenshot and headless runs keep the CRT's
-		// start value (1) so they repeat; OPENBG_SEED picks one.
+		// DE_GLOBAL::SystemInit: srand(time(NULL)), and SystemTime is the wall clock. Screenshot and
+		// headless runs keep the CRT's start value (1) and 20 ms a frame so they repeat; OPENBG_SEED
+		// picks a seed.
 		if (const char *seed = getenv("OPENBG_SEED")) game::crt_srand(uint32_t(strtoul(seed, nullptr, 0)));
 		else if (!shot && !headless) game::crt_srand(uint32_t(time(nullptr)));
+		if (!shot && !headless) {
+			const auto t0 = std::chrono::steady_clock::now();
+			world.system_clock = [t0] { return uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()); };
+		}
 		game::ui::AppManager app(world);
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);
@@ -286,11 +315,9 @@ int main(int argc, char **argv) {
 		}
 		if (headless) {
 			// OPENBG_RECORD_AUDIO=<file>: what is heard, mixed offline (raw f32 stereo, 44100 Hz).
-			std::unique_ptr<audio::Mixer> offline;
-			if (getenv("OPENBG_RECORD_AUDIO")) {
-				offline = std::make_unique<audio::Mixer>();
-				offline->open_offline(44100);
-			}
+			auto offline = std::make_unique<audio::Mixer>();
+			const bool recording = getenv("OPENBG_RECORD_AUDIO") != nullptr;
+			if (recording) offline->open_offline(44100);
 			double audio_carry = 0;
 			de::Transform ear;
 			ear.t = {0.5f, 0.375f, 0.866f};
@@ -305,8 +332,8 @@ int main(int argc, char **argv) {
 				world.tick_gui(0, game::World::kFrameMs);
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
 				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
-				if (offline) {
-					offline->play_requests(world, view.player ? view.ear() : ear);
+				offline->play_requests(world, view.player ? view.ear() : ear);
+				if (recording) {
 					offline->update_music(world);
 					audio_carry += 44100.0 * world.frame_ms() / 1000.0;
 					int n = int(audio_carry);
@@ -486,6 +513,8 @@ int main(int argc, char **argv) {
 			if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, frame_ms);
 			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
 			++fr;
+			static const int state_every = getenv("OPENBG_DEBUG_STATE") ? std::max(1, atoi(getenv("OPENBG_DEBUG_STATE"))) : 0;
+			if (state_every && fr % state_every == 0) print_state(world, fr);
 			mixer.play_requests(world, view.player ? view.ear() : listener);
 			mixer.update_music(world);
 			{

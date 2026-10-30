@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -405,6 +406,39 @@ struct InputRecord {
 	uint32_t start;  // frame this input state began
 };
 
+// The world's GameObjects, in creation order through one reserved address range, so the maps
+// and sets keyed by GameObject pointers iterate alike in every run (malloc's order varies).
+class ObjectArena {
+public:
+	ObjectArena();
+	~ObjectArena();
+	ObjectArena(const ObjectArena &) = delete;
+	ObjectArena &operator=(const ObjectArena &) = delete;
+	void *take(size_t bytes);
+
+private:
+	char *base_ = nullptr, *next_ = nullptr, *committed_ = nullptr, *end_ = nullptr;
+};
+template <class T>
+struct ArenaAllocator {
+	using value_type = T;
+	ObjectArena *arena;
+	explicit ArenaAllocator(ObjectArena *a) : arena(a) {}
+	template <class U>
+	ArenaAllocator(const ArenaAllocator<U> &o) : arena(o.arena) {}
+	T *allocate(size_t n) {
+		if constexpr (std::is_same_v<T, GameObject>) return static_cast<T *>(arena->take(n * sizeof(T)));
+		else return std::allocator<T>().allocate(n);
+	}
+	void deallocate(T *p, size_t n) {
+		if constexpr (!std::is_same_v<T, GameObject>) std::allocator<T>().deallocate(p, n);
+	}
+	template <class U>
+	bool operator==(const ArenaAllocator<U> &o) const { return arena == o.arena; }
+	template <class U>
+	bool operator!=(const ArenaAllocator<U> &o) const { return arena != o.arena; }
+};
+
 class World : public vm::Host {
 public:
 	void physics_step(GameObject &o);
@@ -768,6 +802,10 @@ public:
 	// The nearest point where a segment meets the arena's collision surface (set by the app).
 	std::function<std::optional<std::array<float, 3>>(const std::array<float, 3> &, const std::array<float, 3> &)> segment_hit;
 	bool render_ticks_per_frame = true;  // false when the app calls render_tick per drawn frame
+	// SystemTime (Core gTime): the wall clock in ms when the app sets one (normal play), else
+	// 20 ms a frame, so screenshot and headless runs repeat.
+	std::function<uint32_t()> system_clock;
+	uint32_t system_ms() const { return system_clock ? system_clock() : frame_ * kFrameMs; }
 	// CObject::DeleteThis: unlinks the object (and its branch); handles to it go inactive.
 	void destroy(GameObject *o);
 	// DE_GLOBAL::AddObjectToClean (DeleteThisLater, Die): destroyed by the next housekeeping,
@@ -834,7 +872,8 @@ private:
 
 	de::World data_;
 	vm::Memory mem_;
-	std::deque<GameObject> objects_;
+	ObjectArena arena_;
+	std::deque<GameObject, ArenaAllocator<GameObject>> objects_{ArenaAllocator<GameObject>(&arena_)};
 	std::unordered_map<uint32_t, GameObject *> by_handle_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GameObject *> by_source_;
 	std::map<std::string, uint32_t> strings_;
@@ -923,6 +962,7 @@ void tick_collision_tester(World &w, uint32_t handle);
 // from (Core MATH::Rand / CenterRand stand on it); DE_GLOBAL::SystemInit seeds it with the time.
 int crt_rand();
 void crt_srand(uint32_t seed);
+uint32_t crt_rand_state();
 // MATH::Rand(1): rand() / 32768.
 float random01(World &w);
 

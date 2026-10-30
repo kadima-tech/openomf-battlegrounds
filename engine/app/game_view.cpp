@@ -257,6 +257,7 @@ void GameView::wire_session() {
 void GameView::load_arena(const std::string &stem) {
 	arena = stem;
 	owners_set = false;
+	inherited_owner_.clear();
 	arena_r = render::ArenaRenderer();
 	arena_r.load(world.data(), stem);
 	world.floor = [this](float x, float z, float from) { return arena_r.floor_height(x, z, from); };
@@ -405,7 +406,18 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	const int shadow_type = world.lighting_enabled ? world.shadow_type : 0;
 	shadows_r.append(render::g_lighting);
 	const auto &light_owners = frame_lights.owners;
-	auto light_owner_of = [&](const game::GameObject *o) { return frame_lights.owner_of(o); };
+	// An inherited lighting owner is found once, when the actor's meshes are set up in the scene
+	// (DE_CStandardRenderActor::AssureLightable); reparenting keeps it (FINDINGS 211).
+	for (auto it = inherited_owner_.begin(); it != inherited_owner_.end();) {
+		if (game::in_scene(*it->first)) ++it;
+		else it = inherited_owner_.erase(it);
+	}
+	auto light_owner_of = [&](const game::GameObject *o) -> const void * {
+		if (light_owners.count(o)) return o;
+		auto [it, fresh] = inherited_owner_.try_emplace(o, nullptr);
+		if (fresh && o->parent) it->second = static_cast<const game::GameObject *>(frame_lights.owner_of(o->parent));
+		return it->second && light_owners.count(it->second) ? it->second : nullptr;
+	};
 	// The value objects an actor's modifiers read, as set on that actor or one above it.
 	auto live_of = [this](const game::GameObject *o) -> de::LiveFloat {
 		return [this, o](const de::ObjectRef &r) -> std::optional<float> {

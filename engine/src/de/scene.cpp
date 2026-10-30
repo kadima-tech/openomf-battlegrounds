@@ -188,21 +188,30 @@ std::vector<std::vector<uint8_t>> pe_deobjects_resources(const std::vector<uint8
 	return out;
 }
 
-void World::add(const std::string &stem, std::vector<uint8_t> data) {
+void World::add(const std::string &stem, std::vector<uint8_t> data, bool overrides) {
 	auto f = std::make_unique<ObjectsFile>(std::move(data));
-	for (uint32_t i = 0; i < f->objects().size(); ++i) {
-		guids_.emplace(key(f->objects()[i].guid), ObjectRef{f.get(), i});
+	// Within a file the first object with a GUID is found (InternalFindObjectInfo's linear search).
+	std::map<std::array<uint8_t, 16>, ObjectRef> own;
+	for (uint32_t i = 0; i < f->objects().size(); ++i) own.emplace(key(f->objects()[i].guid), ObjectRef{f.get(), i});
+	for (auto &[g, r] : own) {
+		if (overrides) guids_.insert_or_assign(g, r);
+		else guids_.emplace(g, r);
 	}
 	files_[stem] = std::move(f);
 }
 
 World::World(const std::filesystem::path &dir) : dir_(dir) {
+	// The file agents in NTFS's order (names upper-cased; FINDINGS 192), whatever this file
+	// system lists: DE_CTransferAgent::FindMasterObject(GUID) asks the last agent first.
+	std::vector<std::pair<std::string, std::filesystem::path>> paths;
 	for (auto &e : std::filesystem::directory_iterator(dir)) {
-		if (e.path().extension() != ".DEObjects") {
-			continue;
-		}
-		add(e.path().stem().string(), read_file(e.path()));
+		if (e.path().extension() != ".DEObjects") continue;
+		std::string upper = e.path().filename().string();
+		for (char &ch : upper) ch = char(toupper(uint8_t(ch)));
+		paths.emplace_back(upper, e.path());
 	}
+	std::sort(paths.begin(), paths.end());
+	for (auto &[upper, p] : paths) add(p.stem().string(), read_file(p), true);
 	// The objects files built into the engine modules, named after their master object
 	// (COREMeshes, COREImages).
 	auto engine = dir.parent_path() / "Engine";
@@ -211,7 +220,7 @@ World::World(const std::filesystem::path &dir) : dir_(dir) {
 			try {
 				ObjectsFile probe(res);
 				std::string stem = probe.master().name;
-				if (!stem.empty() && !files_.count(stem)) add(stem, std::move(res));
+				if (!stem.empty() && !files_.count(stem)) add(stem, std::move(res), false);
 			} catch (const std::exception &) {
 			}
 		}
