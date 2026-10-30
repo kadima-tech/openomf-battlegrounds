@@ -364,8 +364,8 @@ int32_t World::faction_team(uint32_t faction) {
 }
 
 // DE_CCreature::ObjProcessContents (Creature 0x10214910): after the actor's chunk, v2-v4 [u32
-// SceneTicksPerUpdate +0x1dc][i32 +0x1e0][f32 global interest +0x1f4]. 2.123's data sets it to 0
-// on the fighters and projectiles that had 1, 0.5 or 0.2.
+// SceneTicksPerUpdate +0x1dc][i32 +0x1e0][f32 global interest +0x1f4]: 1 on the fighters, 0.05-0.5
+// on projectiles; 2.123's data zeroes it in Chronos, Mantis and Force's projectiles.
 float World::own_interest(GameObject &o) {
 	if (!o.interest_loaded) {
 		o.interest_loaded = true;

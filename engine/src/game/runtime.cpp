@@ -724,6 +724,7 @@ GameObject *World::instantiate_file(const std::string &stem) {
 		return nullptr;
 	}
 	auto &objs = f->objects();
+	auto parents = f->parents();
 	std::vector<GameObject *> made(objs.size());
 	for (uint32_t i = 0; i < objs.size(); ++i) {
 		if (auto *existing = object_for(f, i)) {
@@ -731,8 +732,9 @@ GameObject *World::instantiate_file(const std::string &stem) {
 			continue;
 		}
 		made[i] = &make_object(f, i);
+		// A loaded file's objects are not in the scene: only copies of them are put there.
+		if (parents[i] < 0) made[i]->detached = true;
 	}
-	auto parents = f->parents();
 	GameObject *root = nullptr;
 	for (uint32_t i = 0; i < objs.size(); ++i) {
 		if (parents[i] >= 0 && !made[i]->parent) {
