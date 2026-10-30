@@ -471,6 +471,7 @@ int main(int argc, char **argv) {
 			app.update();
 			// Autopause: the scene passes no time while a page that autopauses is up (the
 			// sessions still update).
+			world.scene_paused = app.autopaused() && world.session;
 			world.tick_gui(0, frame_ms);
 			if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, frame_ms);
 			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));

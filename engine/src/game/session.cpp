@@ -267,6 +267,13 @@ void World::enter_scene(GameObject *root) {
 	}
 }
 
+bool scene_audible(World &w, const GameObject *caller) {
+	if (!caller || in_gui(*caller)) return true;
+	SessionState *s = session_of(w, caller);
+	if (!s) s = session_of(w, w.scene_session_of(caller));
+	return !s || s->watchers_active;
+}
+
 GameObject *World::scene_session_of(const GameObject *o) const {
 	while (o && o->parent) o = o->parent;
 	auto it = o ? root_session.find(o) : root_session.end();
@@ -1539,6 +1546,12 @@ void register_session_natives(World &w) {
 		}
 		c.world.enter_scene(o);
 	});
+	// ActivateSceneWatchersCaller (Core 0x7006f020 with 1): the scene viewer's watchers, the audio
+	// player among them, join the caller's scene.
+	reg("CScene::ActivateSceneWatchers()", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) >= 0) return;
+		if (SessionState *s = session_of(c.world, caller_scene(c))) s->watchers_active = true;
+	});
 	// IsPausedCaller (Core 0x7006de90): the scene's +0xf0, set by ObjInitContents and Pause, cleared by
 	// Genesis and Continue. A session's scene starts when a modifier owns the environment.
 	reg("CScene::bool IsPaused()", [caller_scene](const NativeContext &c) {
@@ -1547,7 +1560,7 @@ void register_session_natives(World &w) {
 			return;
 		}
 		SessionState *s = session_of(c.world, caller_scene(c));
-		c.ret_bool(!s || !s->scene_started);
+		c.ret_bool(c.world.scene_paused || !s || !s->scene_started);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it
 	// lives as long as the scene; ours live until deleted anyway.

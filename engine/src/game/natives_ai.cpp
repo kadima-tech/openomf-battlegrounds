@@ -1184,7 +1184,7 @@ void World::jitter_attack_range(GameObject &o) {
 	if (o.user_controlled || (o.creature_ticks & ~63u) != o.creature_ticks) return;
 	GameObject *pilot = nullptr;
 	for (auto *ch : o.children) {
-		if (ch->class_path == "Actor\Creature\Pilot") {
+		if (ch->class_path == "Actor\\Creature\\Pilot") {
 			pilot = ch;
 			break;
 		}

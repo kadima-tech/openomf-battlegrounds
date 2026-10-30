@@ -74,6 +74,7 @@ struct SessionState {
 	int max_player_clients = 2;
 	bool begun = false;
 	bool scene_started = false;  // its scene's Genesis (OwnEnvironment): DE_CScene +0xf0 clear
+	bool watchers_active = false;  // ActivateSceneWatchers: its scene has the audio player (+0x1b8)
 	std::vector<ScriptHook> slot_connect_hooks, slot_disconnect_hooks;
 	// UI managers (description selectors). The menus that would show them are not built yet:
 	// a launched UI whose description has a preset choice completes on the next update with it.
@@ -117,6 +118,9 @@ SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifier
 void destroy_all_sessions(World &w);
 void end_session(World &w, SessionState &s);
 void end_session_object(World &w, GameObject *o);
+// DE_CScene::PlayNoiseSphere / PlayNoiseAmbient play only in a scene holding an active audio
+// player: a session's scene once BRulesDisplay has activated its watchers.
+bool scene_audible(World &w, const GameObject *caller);
 // The session an object belongs to (a session, its modifiers, slots and clients), if any.
 SessionState *session_of(World &w, const GameObject *o);
 // DE_CDescription::NewResource: the description's resource (fighter, pilot, environment,

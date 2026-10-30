@@ -665,7 +665,6 @@ void register_script_natives(World &w) {
 		GameObject *o = c.arg_object(0);
 		c.ret_bool(o && o->is("Session\\Standard"));
 	});
-	stub("CScene::ActivateSceneWatchers()");
 	// --- Sounds (Core DE_CScene::PlayNoiseSphere 0x70072b70, PlayNoiseAmbient 0x70072c20) -----------
 	for (const char *k : {"CScene::PlayNoiseSphere(class CNoise,class CVector,float,float,float)",
 	                      "CScene::PlayNoiseSphere(class CNoise,class CVector,float,float,float,float)",
@@ -680,7 +679,7 @@ void register_script_natives(World &w) {
 			r.falloff = c.arg<float>(3);
 			r.volume = c.arg<float>(4);
 			if (with_frequency) r.frequency = c.arg<float>(5);
-			if (r.noise) c.world.sound_requests.push_back(r);
+			if (r.noise && scene_audible(c.world, c.owner())) c.world.sound_requests.push_back(r);
 			c.ret_u32(0);  // the speaker sphere is not modelled
 		});
 	}
@@ -689,7 +688,7 @@ void register_script_natives(World &w) {
 		r.noise = c.arg_object(0);
 		r.volume = c.arg<float>(1);
 		r.positional = false;
-		if (r.noise) c.world.sound_requests.push_back(r);
+		if (r.noise && scene_audible(c.world, c.owner())) c.world.sound_requests.push_back(r);
 		c.ret_u32(0);
 	});
 	stub("CStreamNoise::PlaySoundEvenOutOfFocus()");
