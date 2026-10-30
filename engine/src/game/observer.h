@@ -43,8 +43,8 @@ private:
 // DE_CCreature::Camera(i): the i-th actor of the creature's camera list (references 2.0); a
 // fighter's passive reference is replaced by the camera it made, the actor carrying a Camera.
 GameObject *creature_camera(World &w, GameObject *creature, int index);
-// Get2DOrientation of a controller that is not a fighter's: the keyboard when bound to a device,
-// else its default orientation (SetDefault2DOrientation).
+// Get2DOrientation of a controller that is not a fighter's: its last input record (its manager's
+// 16 ms tick) when bound to a device, else its default orientation (SetDefault2DOrientation).
 int controller_orientation(World &w, const GameObject *controller);
 // CRenderer::SetCamera (Core DE_CRenderer::SetCamera 0x70184030): the view's actor; the scene's
 // relays hear a RendererSetCamera generic event (Object1 the renderer).

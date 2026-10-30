@@ -435,6 +435,8 @@ GameObject *World::copy_tree(const GameObject &o) {
 	g.ai_vec = {0, 0};
 	g.children.clear();
 	g.detached = false;
+	g.data_encompasser = nullptr;
+	g.data_encompasser_read = false;
 	by_handle_[g.handle] = &g;
 	for (const GameObject *ch : o.children) {
 		GameObject *cc = copy_tree(*ch);
@@ -1037,6 +1039,11 @@ void read_affector(GameObject &g, const de::World &data, const de::ObjectsFile &
 		if (chunks.size() < 3) return;
 		c.seek(chunks[1].first);
 		g.groups = c.u32();
+		if (versions[1] == 3) {
+			c.boolean();
+			g.encompasser = c.boolean();
+			g.auto_encompass = c.boolean();
+		}
 		c.seek(chunks[2].first);
 		if (g.class_path == "Actor\\Affector\\Sphere" && versions[2] == 2) {
 			g.shape = GameObject::Shape::Sphere;
@@ -1343,7 +1350,20 @@ void World::creature_tick(GameObject &o) {
 // age by one per tick. Only the manager bound to a device records: the user's fighter's (the
 // others' have none). `manager` 0 is the stand-in for a user fighter without one.
 void World::input_tick(uint32_t manager) {
-	// The one history is the fighters': the observer's view-switching pad reads the keys itself.
+	// The fighters' managers share one history; another bound pad (the observer's view-switching
+	// UserController) keeps only its last record, which is all Get2DOrientation reads.
+	auto directions = [this] {
+		int dir = -1;  // bit index: 0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left, 7 up-left
+		if (input.up && input.right) dir = 1;
+		else if (input.down && input.right) dir = 3;
+		else if (input.down && input.left) dir = 5;
+		else if (input.up && input.left) dir = 7;
+		else if (input.up) dir = 0;
+		else if (input.right) dir = 2;
+		else if (input.down) dir = 4;
+		else if (input.left) dir = 6;
+		return uint16_t(dir >= 0 ? 1u << dir : 0x100u);
+	};
 	auto records = [](const GameObject *x) {
 		if (!x || x->input_device < 0) return false;
 		for (const GameObject *p = x; p; p = p->parent) {
@@ -1352,7 +1372,9 @@ void World::input_tick(uint32_t manager) {
 		return false;
 	};
 	if (manager) {
-		if (!records(object(manager))) return;  // no device bound: nothing to record
+		GameObject *m = object(manager);
+		if (m && m->input_device >= 0 && !records(m)) m->pad_record = directions();
+		if (!records(m)) return;  // no device bound: nothing to record
 	} else {
 		for (auto &s : temporal_sets_) {
 			for (auto &e : s.elements) {
@@ -1364,16 +1386,7 @@ void World::input_tick(uint32_t manager) {
 	++input_ticks_;
 	uint16_t buttons = uint16_t((input.left_punch ? 1 : 0) | (input.right_punch ? 2 : 0) | (input.left_kick ? 4 : 0) |
 	                            (input.right_kick ? 8 : 0) | (input.jump ? 0x10 : 0) | (input.duck_evade() ? 0x20 : 0));
-	int dir = -1;  // bit index: 0 up, 1 up-right, 2 right, 3 down-right, 4 down, 5 down-left, 6 left, 7 up-left
-	if (input.up && input.right) dir = 1;
-	else if (input.down && input.right) dir = 3;
-	else if (input.down && input.left) dir = 5;
-	else if (input.up && input.left) dir = 7;
-	else if (input.up) dir = 0;
-	else if (input.right) dir = 2;
-	else if (input.down) dir = 4;
-	else if (input.left) dir = 6;
-	uint16_t dirs = uint16_t(dir >= 0 ? 1u << dir : 0x100u);
+	uint16_t dirs = directions();
 	if (input_history.empty() || input_history.back().buttons != buttons || input_history.back().directions != dirs) {
 		input_history.push_back({buttons, dirs, input_ticks_});
 		if (input_history.size() > 64) {
@@ -1423,6 +1436,16 @@ uint32_t World::scene_step(float real_ms) {
 
 uint32_t World::scene_ms_of(const GameObject *o) const {
 	return o && in_gui(*o) ? gui_scene_ms[std::clamp(gui_view(*o), 0, 1)] : scene_ms_;
+}
+
+GameObject *World::scene_object(const GameObject *o) {
+	if (o && in_gui(*o)) return gui_view(*o) == 1 ? create("GUIViewerScene", "Scene") : create("GUIScene", "Scene");
+	return create("Scene", "Scene");
+}
+
+int World::gui_scene_view(const GameObject *scene) {
+	if (!scene || scene->file) return -1;
+	return scene->name == "GUIScene" ? 0 : scene->name == "GUIViewerScene" ? 1 : -1;
 }
 
 void World::tick_gui(int view, uint32_t ms) {
@@ -1530,6 +1553,95 @@ GameObject *World::affector_owner(GameObject *a) {
 		if (p->fighter) return p;
 	}
 	return a;
+}
+
+GameObject *World::encompasser_of(GameObject *a) {
+	if (!a) return nullptr;
+	if (!a->data_encompasser_read) {
+		a->data_encompasser_read = true;
+		if (a->file) {
+			try {
+				de::Contents c(a->file->object_data(a->file->objects()[a->index]).references);
+				for (int k = 0; k < 2 && c.remaining() > 1; ++k) c.seek(de::begin_chunk(c).end);
+				if (c.remaining() > 1 && de::begin_chunk(c).version == 4) {
+					if (c.boolean()) de::Reference::read(c);
+					if (c.boolean()) {
+						if (de::ObjectRef r = data_.resolve(*a->file, de::Reference::read(c))) a->data_encompasser = nearest_copy(a, r);
+					}
+				}
+			} catch (const std::exception &) {
+			}
+		}
+	}
+	if (a->data_encompasser && a->data_encompasser != a) return a->data_encompasser;
+	if (!a->auto_encompass) return nullptr;
+	for (GameObject *p = a->parent; p; p = p->parent) {
+		if (p->shape != GameObject::Shape::None && p->encompasser) return p;
+		for (auto it = p->children.rbegin(); it != p->children.rend(); ++it) {
+			GameObject *ch = *it;
+			if (ch != a && !parked(*ch) && ch->shape != GameObject::Shape::None && ch->encompasser) return ch;
+		}
+	}
+	return nullptr;
+}
+
+void World::walk_affectors(uint32_t groups, const std::function<bool(GameObject *, bool)> &test) {
+	std::vector<GameObject *> list = affectors();
+	std::unordered_map<GameObject *, GameObject *> enc;
+	std::unordered_map<GameObject *, uint32_t> all;
+	std::unordered_map<GameObject *, std::vector<GameObject *>> subs;
+	for (GameObject *a : list) {
+		all[a] |= a->groups;
+		GameObject *e = encompasser_of(a);
+		if (!e) continue;
+		enc[a] = e;
+		// ObjPrepare / InternalAutoEncompase: the groups pass up the encompasser chain.
+		size_t guard = 0;
+		for (GameObject *x = e; x && x != a && guard < 16; x = enc.count(x) ? enc[x] : encompasser_of(x), ++guard) all[x] |= a->groups;
+	}
+	auto is_ancestor = [](const GameObject *p, const GameObject *o) {
+		for (o = o->parent; o; o = o->parent) {
+			if (o == p) return true;
+		}
+		return false;
+	};
+	std::vector<GameObject *> top;
+	for (GameObject *a : list) {
+		if (!all[a]) continue;
+		auto it = enc.find(a);
+		if (it == enc.end()) top.push_back(a);
+		else subs[it->second].push_back(a);
+	}
+	// A sub-affector joins its encompasser's list when it is prepared: pre-order, children last first.
+	for (auto &[e, v] : subs) {
+		std::stable_sort(v.begin(), v.end(), [&](const GameObject *x, const GameObject *y) {
+			if (is_ancestor(x, y)) return true;
+			if (is_ancestor(y, x)) return false;
+			return x->affector_seq < y->affector_seq;
+		});
+	}
+	std::function<bool(GameObject *, int)> inner = [&](GameObject *t, int depth) {
+		if (!(all[t] & groups) || depth > 16) return false;
+		bool record = (t->groups & groups) != 0;
+		if (!test(t, record)) return false;
+		if (record) return true;
+		bool any = false;
+		auto it = subs.find(t);
+		if (it == subs.end()) return false;
+		for (auto s = it->second.rbegin(); s != it->second.rend(); ++s) any |= inner(*s, depth + 1);
+		return any;
+	};
+	static const bool debug = getenv("OPENBG_DEBUG_ENCOMPASS") != nullptr;
+	static uint32_t shown = ~0u;
+	if (debug && frame_ % 300 == 1 && shown != frame_) {
+		shown = frame_;
+		for (auto &[e, v] : subs) {
+			fprintf(stderr, "[encompass %u] %s shape %d under %s (own %#x, all %#x, %s):", frame_, e->name.c_str(), int(e->shape), e->parent ? e->parent->name.c_str() : "-", e->groups, all[e], enc.count(e) ? "sub" : "top");
+			for (GameObject *x : v) fprintf(stderr, " %s(%#x)", x->name.c_str(), x->groups);
+			fprintf(stderr, "\n");
+		}
+	}
+	for (GameObject *t : top) inner(t, 0);
 }
 
 // Creature contents: [actor][creature v2-v4: u32 scene ticks per update, i32, float, flags...].

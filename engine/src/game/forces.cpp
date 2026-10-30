@@ -289,16 +289,18 @@ std::optional<Contact> touch(World &w, GameObject &source, GameObject &target) {
 std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 	std::vector<Contact> out;
 	GameObject *self = top_fighter(&source);
-	for (GameObject *target : w.affectors()) {
-		if (target == &source || !in_scene(*target) || !(target->groups & groups)) continue;
-		if (self && top_fighter(target) == self) continue;
+	w.walk_affectors(groups, [&](GameObject *target, bool record) {
+		if (target == &source) return false;
+		if (self && top_fighter(target) == self) return false;
 		if (target->shape == GameObject::Shape::Mesh && source.shape == GameObject::Shape::Sphere) {
 			auto faces = touch_faces(w, source, *target);
-			out.insert(out.end(), faces.begin(), faces.end());
-		} else if (auto c = touch(w, source, *target)) {
-			out.push_back(*c);
+			if (record) out.insert(out.end(), faces.begin(), faces.end());
+			return !faces.empty();
 		}
-	}
+		auto c = touch(w, source, *target);
+		if (c && record) out.push_back(*c);
+		return c.has_value();
+	});
 	return out;
 }
 
@@ -386,10 +388,10 @@ static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, 
 
 std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t groups, bool one_per_mesh) {
 	std::vector<Contact> out;
-	for (GameObject *target : w.affectors()) {
-		if (!in_scene(*target) || !(target->groups & groups)) continue;
+	w.walk_affectors(groups, [&](GameObject *target, bool record) {
 		std::vector<std::pair<float, Contact>> faces;
 		auto h = segment_hit(target, a, b, &faces);
+		if (!record) return !faces.empty() || h.has_value();
 		if (!faces.empty()) {
 			// NoRepeatOwners keeps the face with the least +0x38, which a line segment leaves zero.
 			if (one_per_mesh) faces.resize(1);
@@ -397,7 +399,8 @@ std::vector<Contact> segment_hits(World &w, const Vec &a, const Vec &b, uint32_t
 		} else if (h) {
 			out.push_back(h->second);
 		}
-	}
+		return !faces.empty() || h.has_value();
+	});
 	return out;
 }
 

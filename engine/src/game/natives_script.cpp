@@ -9,6 +9,7 @@
 //   CGUIDPool      +0 data, +4 count
 //   arrays         +0 data, +4 length, +8 capacity (4-byte elements)
 #include <algorithm>
+#include <filesystem>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -424,18 +425,37 @@ void register_script_natives(World &w) {
 		assign(c.mem(), a, e);
 	});
 	// Gather*: every in-scene object of a class (classtype argument: the class handle's path).
-	// GatherAllObjectsDerivedFromCaller (Core 0x7014d350): DE_CTransferAgent::FindObjectsDerivedFrom,
-	// every master object of the class or a derived one in the data, each appended once.
+	// GatherAllObjectsDerivedFromCaller (Core 0x7014d350): DE_CTransferAgent::FindObjectsDerivedFrom
+	// (0x7005b880) walks the agent list from its last agent back, each agent's object infos in
+	// table order (FindDerivedFrom, ProcessEvent case 9), the GUIDs once each; then every master
+	// object. The file agents join the list as DE_CTransferAgentWinFileFactory::Init finds them,
+	// in the directory's order (taken as NTFS's: names compared upper-cased), after the modules'.
 	reg(ra + "GatherAllObjectsDerivedFrom(classtype )", [](const NativeContext &c) {
 		uint32_t a = c.self_handle();
 		std::string path = c.world.class_path_of_handle(c.arg<uint32_t>(0));
 		if (!a || path.empty()) return;
 		auto e = elements(c.mem(), a);
-		for (const auto &[stem, f] : c.world.data().files()) {
+		std::vector<const de::ObjectsFile *> agents;
+		{
+			std::vector<std::pair<std::string, const de::ObjectsFile *>> on_disk;
+			for (const auto &[stem, f] : c.world.data().files()) {
+				std::string name = stem + ".DEObjects";
+				if (!std::filesystem::exists(c.world.data().dir() / name)) {
+					agents.push_back(f.get());
+					continue;
+				}
+				for (char &ch : name) ch = char(toupper(uint8_t(ch)));
+				on_disk.push_back({name, f.get()});
+			}
+			std::sort(on_disk.begin(), on_disk.end());
+			for (auto &[name, f] : on_disk) agents.push_back(f);
+		}
+		for (auto it = agents.rbegin(); it != agents.rend(); ++it) {
+			const de::ObjectsFile *f = *it;
 			for (uint32_t i = 0; i < f->objects().size(); ++i) {
 				const std::string &cp = f->objects()[i].class_path;
 				if (cp != path && cp.rfind(path + "\\", 0) != 0) continue;
-				GameObject *o = c.world.global_object({f.get(), i});
+				GameObject *o = c.world.global_object({f, i});
 				if (o && std::find(e.begin(), e.end(), o->handle) == e.end()) e.push_back(o->handle);
 			}
 		}
@@ -446,7 +466,9 @@ void register_script_natives(World &w) {
 		uint32_t cls = c.arg<uint32_t>(1);
 		if (!a) return;
 		auto e = elements(c.mem(), a);
+		int view = World::gui_scene_view(c.arg_object(0));
 		for (GameObject *o : c.world.scene_objects()) {
+			if (view >= 0 ? !in_gui(*o) || gui_view(*o) != view : in_gui(*o)) continue;
 			if (o->is_actor && c.world.has_behavior_property(o, cls)) e.push_back(o->handle);
 		}
 		assign(c.mem(), a, e);
@@ -713,10 +735,10 @@ void register_script_natives(World &w) {
 		GameObject *o = c.self();
 		c.ret_bool(o && o->visible);
 	});
-	reg("CActor::class CScene TemporalMasterScene()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
-	// The scene is its own temporal master; it is paused while a page autopauses it.
-	reg("CScene::class CScene TemporalMaster()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
-	reg("CScene::bool IsPaused()", [](const NativeContext &c) { c.ret_bool(c.world.scene_paused); });
+	reg("CActor::class CScene TemporalMasterScene()", [](const NativeContext &c) { c.ret_object(c.world.scene_object(c.self())); });
+	// The scene stands for its temporal master, which shares its pause (Genesis passes it on).
+	reg("CScene::class CScene TemporalMaster()", [](const NativeContext &c) { c.ret_object(c.self()); });
+	reg("CScene::AssureTemporalMaster()", [](const NativeContext &) {});
 	reg("CScene::RegisterRenderTickHook(class CClassExecutorInstance,Method(float))", [](const NativeContext &c) {
 		c.world.render_tick_hooks.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 	});

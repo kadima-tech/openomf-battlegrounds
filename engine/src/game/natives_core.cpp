@@ -203,9 +203,13 @@ void register_core_natives(World &w) {
 		auto *o = c.self();
 		if (!o || !o->parent) return;
 		GameObject *scene = c.world.scene_session_of(o);
+		bool gui = in_gui(*o);
+		int view = gui_view(*o);
 		auto &v = o->parent->children;
 		v.erase(std::remove(v.begin(), v.end(), o), v.end());
 		o->parent = nullptr;
+		o->gui = gui;
+		o->view = view;
 		c.world.root_session[o] = scene;
 		if (std::find(c.world.scene_roots.begin(), c.world.scene_roots.end(), o) == c.world.scene_roots.end()) c.world.scene_roots.push_back(o);
 	});
@@ -354,7 +358,7 @@ void register_core_natives(World &w) {
 	});
 
 	// --- Scene / session --------------------------------------------------------------------
-	reg("CActor::class CScene Scene()", [](const NativeContext &c) { c.ret_object(singleton(c.world, "Scene", "Scene")); });
+	reg("CActor::class CScene Scene()", [](const NativeContext &c) { c.ret_object(c.world.scene_object(c.self())); });
 	// The scene's session: the current one (the match being played).
 	reg("CScene::class CSession Session()", [](const NativeContext &c) {
 		c.ret_object(c.world.session ? c.world.session->obj : singleton(c.world, "Session", "Session"));
@@ -362,7 +366,7 @@ void register_core_natives(World &w) {
 	reg("CCreature::class CCreature Environment()",
 	    [](const NativeContext &c) { c.ret_object(singleton(c.world, "Environment", "Actor\\Creature\\Environment")); });
 	// Scene time is in milliseconds (scripts wait e.g. 200 between navigation commands); 60 frames/s.
-	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(c.world.scene_ms_of(c.owner())); });
+	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(scene_time(c)); });
 	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CActor::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
