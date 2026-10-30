@@ -38,7 +38,8 @@ to present that data, and the few places where the look is our own.
   "Observed Preferences" ("<stat>: <level>"). Text that overflows scrolls with the mouse wheel.
 - **Model picker (Choose Creature's View).** The page's own 3D scene, `LoadScene`'s hangar
   (`ChooseFighterModelPickerEnvironment`), fills the 4:3 field through its `EnvironmentCamera`, the
-  robot on `RobotPedistal` in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:
+  robot (a `FighterTemplate` creature carrying the model, standing undeformed) on `RobotPedistal`
+  in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:
   the model's name (top 30%), the `VCRFastBackward` / `VCRFastForward` images as arrows, Back and
   Next along the bottom 30%. No main frame or backdrop.
 - **Replays screen.** `F.MatchBrowser`: the "Recordings Browser" list (Name, Type, Date, Time, Length
@@ -53,13 +54,14 @@ to present that data, and the few places where the look is our own.
   pale yellow), commentary (14 px, pink), next match (16 px, grey) and progress text in the
   page's markers; the match snapshot (a 256 × 256 capture from the observer's camera) fills the
   MatchScreenShot box once the player has been knocked out or landed a kill.
-- **Notifications** (`DE_CDialog3d::UserInformation`, measured from a screenshot of the
-  original). A centred box 0.737 screen heights wide with a light grey bevelled frame, a navy
-  title bar shading from (0, 0, 0.08) on the left to (0, 0, 0.68) on the right with the title in
-  white and a grey-blue close box with a black X, a grey separator, then a black body: the
-  `Not_UserInformation` icon top left, the text centred and wrapped to the body's width, and OK
-  bottom right in a blue (0.17, 0.16, 0.57) frame on a slate face. Only OK or the close box (or
-  Enter / Esc) closes it.
+- **Notifications** (`DE_CDialog3d::UserInformation`, built from the same controls as every
+  dialog). A centred dialog with the standard VPU 4 up bevel and caption title bar (title, close
+  box), sized to its text: a VPU 3 down panel in the window back colour at alpha 0.7; the
+  `Not_UserInformation` icon (64 × 64 VPU, tinted white at 0.8) centred in a VPU 75 column on the
+  left; the text lines (VPU 14, rows 1.5 high) centred beside it, wrapped at VPU 400 / 600 / 700
+  less the column; OK as a plain 15-VPU label in a VPU 120 × 38 box (black at 0.2) at the bottom
+  right, which under the mouse clears and glows blue from its top-left and bottom-right corners.
+  OK, the close box, Enter or Esc closes it; it drags by its title bar.
 
 ## In game
 

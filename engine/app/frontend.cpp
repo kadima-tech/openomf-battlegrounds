@@ -252,6 +252,17 @@ int main(int argc, char **argv) {
 				if (page && page != app.current && page != app.next) world.rules_displays[rules].shown = false;
 			}
 		};
+		// IsDisplayedCaller: a rules display's page has activated and no page transition is busy. Until
+		// then BRulesDisplay keeps calling AssureRulesDisplay, whose CloseUIManagerStack drops the page
+		// its Begin pushed (Choose Creature, which autopauses) once the rules display is current.
+		auto rules_displayed = [&] {
+			bool busy = false, asked = false;
+			for (auto &[rules, page] : rules_pages) {
+				bool up = page && page == app.current && page->activated;
+				if (up && !asked) busy = app.transition_busy(), asked = true;
+				world.rules_displays[rules].displayed = up && !busy;
+			}
+		};
 		world.show_vcr = [&](game::GameObject *) { app.set_next(app.vcr_controls(), true); };
 		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
 		app.has_local_session = [&] { return world.session != nullptr; };
@@ -290,6 +301,7 @@ int main(int argc, char **argv) {
 					if (m.frame == fr && m.kind == 5) app.key(int(m.x)), app.text(std::string(1, char(m.x)));
 				}
 				app.update();
+				rules_displayed();
 				world.tick_gui(0, game::World::kFrameMs);
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
 				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
@@ -358,7 +370,7 @@ int main(int argc, char **argv) {
 		auto gui_only = [](const game::GameObject *o) { return game::in_gui(*o) && game::gui_view(*o) == 0; };
 		auto picker_only = [](const game::GameObject *o) { return game::in_gui(*o) && game::gui_view(*o) == 1; };
 		render::FighterRenderer picker_model;
-		de::ObjectRef picker_model_shown, picker_pilot_shown;
+		uint32_t picker_robot_shown = 0;
 		Viewport vpt = gui_viewport(W, H);
 		app.text_width = [&](const std::string &t, float size) { return overlay.text_width(t, size, vpt.w, vpt.h); };
 		app.char_offsets = [&](const std::string &t, float size) { return overlay.char_offsets(t, size, vpt.w, vpt.h); };
@@ -469,9 +481,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			app.update();
-			// Autopause: the scene passes no time while a page that autopauses is up (the
-			// sessions still update).
-			world.scene_paused = app.autopaused() && world.session;
+			rules_displayed();
 			world.tick_gui(0, frame_ms);
 			if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, frame_ms);
 			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
@@ -654,29 +664,19 @@ int main(int argc, char **argv) {
 					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}});
 				}
 				actors_r.draw(world.data(), pitems, pvp, ceye);
-				// NewStrippedFighterModel (OMF 0x35038940): the model description's model; painted by
-				// the last selected pilot (FighterTemplate's image filter).
-				de::ObjectRef m = picker->model();
-				auto res = m ? game::passive_references(world.data(), m) : std::vector<de::ObjectRef>{};
-				if (!res.empty() && picker->pedestal) {
-					// UpdateModel makes a new model, painted by its first decode, whenever either changes.
-					const bool new_pilot = picker->pilot.file != picker_pilot_shown.file || picker->pilot.index != picker_pilot_shown.index;
-					if (m.file != picker_model_shown.file || m.index != picker_model_shown.index || new_pilot) {
-						std::string stem = res[0].file->master().name;
+				// The robot creature: its stripped model, undeformed, painted by its pilot through the
+				// template's image filter. Each UpdateModel makes a new robot whose images decode anew.
+				const game::GameObject *fm = game::ui::ModelPicker::robot_model(picker->robot);
+				if (fm && fm->file) {
+					if (picker->robot->handle != picker_robot_shown) {
+						std::string stem = fm->file->master().name;
 						std::string robot = stem.size() > 6 && stem.compare(stem.size() - 6, 6, "Model1") == 0 ? stem.substr(0, stem.size() - 6) : stem;
 						picker_model = render::FighterRenderer();
-						picker_model.load(world.data(), *res[0].file, world.data().file(robot), res[0].index);
-						picker_model_shown = m;
-						picker_pilot_shown = {};
+						picker_model.load(world.data(), *fm->file, world.data().file(robot), fm->index);
+						if (const game::GameObject *p = game::ui::ModelPicker::robot_pilot(picker->robot)) picker_model.set_paint(p->pilot->colours);
+						picker_robot_shown = picker->robot->handle;
 					}
-					if (picker->pilot.file != picker_pilot_shown.file || picker->pilot.index != picker_pilot_shown.index) {
-						auto pres = picker->pilot ? game::passive_references(world.data(), picker->pilot) : std::vector<de::ObjectRef>{};
-						if (!pres.empty()) {
-							if (auto pl = game::read_pilot(*pres[0].file, pres[0].info(), 0)) picker_model.set_paint(pl->colours);
-						}
-						picker_pilot_shown = picker->pilot;
-					}
-					picker_model.draw(pvp, ceye, picker->pedestal->world(), -1, 0);
+					picker_model.draw(pvp, ceye, picker->robot->world(), -1, 0);
 				}
 				particles_r.only = picker_only;
 				particles_r.draw(world, pvp, pview, ceye);
@@ -698,12 +698,7 @@ int main(int argc, char **argv) {
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};
-			if (app.current && app.current->activated) {
-				std::vector<game::ui::DrawItem> items;
-				game::ui::UIPtr page = app.current;
-				if (page->gui) page->gui->paint(items);
-				page->draw(app, items);
-				if (page->gui) page->gui->paint_over(items);
+			auto draw_items = [&](const std::vector<game::ui::DrawItem> &items) {
 				for (auto &d : items) {
 					// A control's clip: the scissor, in the window's pixels (origin bottom left).
 					bool clip = d.clip[2] > d.clip[0];
@@ -722,6 +717,14 @@ int main(int argc, char **argv) {
 					else overlay.label(d.text, d.x0, d.y0, d.size, d.rgba, vpt.w, vpt.h, d.centered);
 					if (clip) glDisable(GL_SCISSOR_TEST);
 				}
+			};
+			if (app.current && app.current->activated) {
+				std::vector<game::ui::DrawItem> items;
+				game::ui::UIPtr page = app.current;
+				if (page->gui) page->gui->paint(items);
+				page->draw(app, items);
+				if (page->gui) page->gui->paint_over(items);
+				draw_items(items);
 				for (auto &c : app.current->controls) {
 					overlay.label(c.text, (c.left + c.right) / 2, (c.top + c.bottom) / 2, 16.0f / 600.0f, white, vpt.w, vpt.h);
 					const float cover[4] = {0, 0, 0, 0.5f};
@@ -731,45 +734,11 @@ int main(int argc, char **argv) {
 			// The doors close over the page's controls, which are 3D controls behind them in the original.
 			actors_r.draw(world.data(), doors, vp, eye);
 			render::g_lighting = game_lighting;
-			if (!app.notifications.empty()) {
-				// DE_CDialog3d::UserInformation, as the original draws it: a light grey bevelled frame,
-				// a navy title bar shading darker to the left with the title and a close box, a black
-				// body with the user-information icon, the text centred, and OK in a blue frame.
-				auto &n = app.notifications.front();
-				auto l = app.notification_layout();
-				const float frame_hi[4] = {0.86f, 0.86f, 0.85f, 1}, frame_lo[4] = {0.45f, 0.44f, 0.45f, 1}, black[4] = {0, 0, 0, 1};
-				overlay.rect(l.x0, l.y0, l.x1, l.y1, frame_lo, vpt.w, vpt.h);
-				overlay.rect(l.x0, l.y0, l.x1 - l.frame * 0.4f, l.y1 - l.frame * 0.4f, frame_hi, vpt.w, vpt.h);
-				float fx = l.frame * 0.75f;
-				overlay.rect(l.x0 + fx, l.y0 + l.frame, l.x1 - fx, l.y1 - l.frame, black, vpt.w, vpt.h);
-				const int strips = 32;
-				for (int k = 0; k < strips; ++k) {
-					float t = (float(k) + 0.5f) / strips;
-					const float c[4] = {0, 0, 0.08f + 0.6f * t, 1};
-					float a0 = l.x0 + fx + (l.x1 - l.x0 - 2 * fx) * float(k) / strips, a1 = l.x0 + fx + (l.x1 - l.x0 - 2 * fx) * float(k + 1) / strips;
-					overlay.rect(a0, l.y0 + l.frame, a1, l.title_bottom, c, vpt.w, vpt.h);
-				}
-				const float sep[4] = {0.43f, 0.45f, 0.47f, 1};
-				overlay.rect(l.x0 + fx, l.title_bottom, l.x1 - fx, l.title_bottom + 0.004f, sep, vpt.w, vpt.h);
-				overlay.label(n.title, l.x0 + l.frame + 0.012f, (l.y0 + l.frame + l.title_bottom) / 2, 0.024f, white, vpt.w, vpt.h, false);
-				const float close_face[4] = {0.31f, 0.31f, 0.51f, 1};
-				overlay.rect(l.close[0], l.close[1], l.close[2], l.close[3], frame_hi, vpt.w, vpt.h);
-				overlay.rect(l.close[0] + 0.002f, l.close[1] + 0.003f, l.close[2] - 0.002f, l.close[3] - 0.003f, close_face, vpt.w, vpt.h);
-				overlay.label("X", (l.close[0] + l.close[2]) / 2, (l.close[1] + l.close[3]) / 2, 0.0284f, black, vpt.w, vpt.h);
-				if (const de::ObjectsFile *core = world.data().file("COREImages")) {
-					for (uint32_t i = 0; i < core->objects().size(); ++i) {
-						if (core->objects()[i].name != "Not_UserInformation") continue;
-						overlay.image_rect({core, i}, l.icon[0], l.icon[1], l.icon[2], l.icon[3], vpt.w, vpt.h);
-						break;
-					}
-				}
-				for (size_t i = 0; i < l.lines.size(); ++i) {
-					overlay.label(l.lines[i], (l.text_left + l.text_right) / 2, l.text_top + l.line * float(i), l.text_size, white, vpt.w, vpt.h);
-				}
-				const float ok_frame[4] = {0.17f, 0.16f, 0.57f, 1}, ok_face[4] = {0.27f, 0.27f, 0.31f, 1};
-				overlay.rect(l.ok[0], l.ok[1], l.ok[2], l.ok[3], ok_frame, vpt.w, vpt.h);
-				overlay.rect(l.ok[0] + 0.004f, l.ok[1] + 0.005f, l.ok[2] - 0.004f, l.ok[3] - 0.005f, ok_face, vpt.w, vpt.h);
-				overlay.label("OK", (l.ok[0] + l.ok[2]) / 2, (l.ok[1] + l.ok[3]) / 2, 0.0213f, white, vpt.w, vpt.h);
+			if (game::ui::Gui *g = app.notification_gui()) {
+				std::vector<game::ui::DrawItem> items;
+				g->paint(items);
+				g->paint_over(items);
+				draw_items(items);
 			}
 			glViewport(0, 0, dw, dh);
 			// The VCR's Snapshot (TakeScreenShot): the drawn frame, saved to the Pictures folder.

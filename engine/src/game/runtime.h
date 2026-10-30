@@ -500,7 +500,6 @@ public:
 	// the model picker's). Neither autopauses (DE_CScene +0x1c0 / +0x1bc), so the app passes them
 	// real time: the first every frame, the second while its page is up (the robot's idle event).
 	uint32_t gui_scene_ms[2] = {0, 0};
-	bool scene_paused = false;  // a page autopauses the session (frontend)
 	// Passes `ms` on GUI scene `view`'s clock, ticking its temporal sets on the way.
 	void tick_gui(int view, uint32_t ms);
 	// The clock of the scene `o` is in.
@@ -615,6 +614,7 @@ public:
 		bool authorized = true;        // +0x120
 		bool prompted = false;         // +0x124: IsAuthorizedToContinue was asked while not authorized
 		bool shown = false;
+		bool displayed = false;  // IsDisplayedCaller (Core): its page is up and no page transition is busy
 	};
 	std::map<const GameObject *, RulesDisplay> rules_displays;
 	std::function<void(GameObject *rules)> show_rules;
