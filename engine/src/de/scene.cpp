@@ -196,7 +196,7 @@ void World::add(const std::string &stem, std::vector<uint8_t> data) {
 	files_[stem] = std::move(f);
 }
 
-World::World(const std::filesystem::path &dir) {
+World::World(const std::filesystem::path &dir) : dir_(dir) {
 	for (auto &e : std::filesystem::directory_iterator(dir)) {
 		if (e.path().extension() != ".DEObjects") {
 			continue;

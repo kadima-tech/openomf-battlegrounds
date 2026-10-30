@@ -85,6 +85,31 @@ static void test_creature_toc(const std::filesystem::path &dir) {
 	CHECK(d.hierarchy.size() == 3);
 }
 
+// SaveToFile's layout reproduces Creature.DEObjects byte for byte, except the never-initialised
+// fields (0xcd fill) of the agent's own entry and +0x84 (meaning unknown, 0 in ours).
+static void test_write_creature(const std::filesystem::path &dir) {
+	auto orig = read_file(dir / "Creature.DEObjects");
+	de::ObjectsFile f(orig);
+	auto &o = f.objects()[0];
+	de::Contents raw(orig);
+	raw.seek(o.data_offset);
+	de::NewObject n{o.name, o.class_path, o.guid, raw.block(), raw.block(), raw.block(), o.flags};
+	auto out = de::write_objects_file(f.master().name, f.master().guid, {n});
+	CHECK(out.size() == orig.size());
+	std::vector<size_t> diff;
+	for (size_t i = 0; i < std::min(out.size(), orig.size()); ++i) {
+		if (out[i] != orig[i]) diff.push_back(i);
+	}
+	for (size_t i : diff) {
+		bool garbage = (i >= 0x71 && i < 0x75) || (i >= 0x7a && i < 0x7e) || (i >= 0xc8 && i < 0xcc);
+		if (!garbage) fprintf(stderr, "write: byte %zx is %02x, want %02x\n", i, out[i], orig[i]);
+		CHECK(garbage);
+	}
+	de::ObjectsFile back(out);
+	CHECK(back.objects().size() == 1 && back.objects()[0].data_offset == o.data_offset);
+	CHECK(back.object_data(back.objects()[0]).contents == f.object_data(o).contents);
+}
+
 static void test_vmc2_health(const std::filesystem::path &dir) {
 	de::ObjectsFile f(read_file(dir / "Fighter.DEObjects"));
 	for (auto &o : f.objects()) {
@@ -355,6 +380,7 @@ int main(int argc, char **argv) {
 		try {
 			test_creature(argv[1]);
 			test_creature_toc(argv[1]);
+			test_write_creature(argv[1]);
 			test_vmc2_health(argv[1]);
 			test_vm_fighter_stats(argv[1]);
 			test_avi(argv[1]);

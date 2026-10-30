@@ -9,6 +9,7 @@
 #include "game/observer.h"
 #include "game/simple_physics.h"
 #include "game/navigation.h"
+#include "game/replay.h"
 #include "game/session.h"
 
 #include <algorithm>
@@ -1317,6 +1318,7 @@ static void pulse(World &w, Brain *b) {
 // fighter's guide and attack trailer points, and for a computer-controlled fighter every 64th
 // update a step of its attack-range base.
 void World::creature_tick(GameObject &o) {
+	if (replay_held(*this, o)) return;
 	if (o.fighter) {
 		validate_animation(o);  // as InternalWorldUpdate does when something needs positions
 		run_commands(o);

@@ -796,7 +796,7 @@ public:
 
 	bool begin(AppManager &app) override {
 		UIManager::begin(app);
-		records_ = list_recordings();
+		records_ = list_recordings(&app.world.data());
 		selected_ = -1;
 		return true;
 	}

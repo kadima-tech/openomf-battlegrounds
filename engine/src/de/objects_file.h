@@ -93,6 +93,19 @@ private:
 	std::vector<Guid> guid_pool_;
 };
 
+// DE_CTransferAgentWinFile::SaveToFile (Core 0x700514b0): a new file whose agent (the master entry,
+// class TransferAgent\Win\File) holds `objects`, none with extended data.
+struct NewObject {
+	std::string name, class_path;
+	Guid guid;
+	std::vector<uint8_t> contents, references, hierarchy;
+	uint32_t flags = 0;  // info +0x2c; contents are stored as given
+};
+std::vector<uint8_t> write_objects_file(const std::string &agent_name, const Guid &agent_guid,
+                                        const std::vector<NewObject> &objects);
+// DE_CGUID::Set(): a new random GUID.
+Guid new_guid();
+
 // Versioned chunk used by every Obj*/Process* method: u8 version, size (u8, or 0xFF + u32),
 // then fields. Readers always seek to the end, so later fields can be skipped safely.
 struct Chunk {

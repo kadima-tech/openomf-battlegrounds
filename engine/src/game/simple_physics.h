@@ -22,6 +22,7 @@ struct SimplePhysics {
 	float lost_on_bounce = 0, multiplier_on_bounce = 1, variation_on_bounce = 0;  // +0x11c..+0x124
 	uint32_t groups = 0;  // +0x94
 	bool push_from_surfaces = false;  // +0x7c
+	bool pack_momentum = false;       // +0x128: its states carry the momentum (PackState 0x701dc5b0)
 	std::vector<GameObject *> affectors;  // +0x50: what it tests
 	GameObject *force = nullptr;          // +0x60: applied to what it touches
 	std::vector<std::pair<Brain *, uint32_t>> bounce_hooks;

@@ -34,7 +34,8 @@ struct Instance {
 	uint32_t members_size = 0;
 	uint32_t self = 0;          // op 9: the object the brain is attached to (executer +0x50)
 	uint32_t handle = 0;        // op 10: the instance itself (executer +0x54)
-	bool master = true;         // IsMaster (op 113)
+	bool master = true;         // IsMaster (op 113): +0x114 clear
+	bool controlled = true;     // ... and +0xf8: its creature is locally controlled
 	int32_t sleep = 0;          // SetSleep (ops 306/307)
 	bool shut_down = false;
 	bool trace_calls = false;   // OPENBG_CALLS debugging: log every method entered

@@ -62,4 +62,35 @@ private:
 	size_t pos_ = 0;
 };
 
+// Write side of DE_CContents (Add*, Insert).
+class ContentsWriter {
+public:
+	const std::vector<uint8_t> &data() const { return data_; }
+	std::vector<uint8_t> take() { return std::move(data_); }
+	size_t size() const { return data_.size(); }
+
+	void u8(uint8_t v) { data_.push_back(v); }
+	void u16(uint16_t v);
+	void u32(uint32_t v);
+	void i32(int32_t v) { u32(uint32_t(v)); }
+	void f32(float v);
+	void boolean(bool v) { u8(v ? 1 : 0); }
+	void bytes(std::span<const uint8_t> b) { data_.insert(data_.end(), b.begin(), b.end()); }
+	void bytes(const void *p, size_t n) { bytes({static_cast<const uint8_t *>(p), n}); }
+	void filler(size_t n) { data_.insert(data_.end(), n, 0); }
+	// Add(DE_CDataBlock&) / Save: u32 length + raw bytes.
+	void block(std::span<const uint8_t> b);
+	// A DE_CDataBlock::Set(char*) string: with its NUL, or empty for "".
+	void string(const std::string &s);
+	void guid(const Guid &g) { bytes(g.bytes, 16); }
+	// DE_CGUIDPool::GenerateContents (Core 0x7001f320): u8 1, u16 count, the GUIDs.
+	void guid_pool(const std::vector<Guid> &pool);
+	// A versioned chunk: the version now, the size inserted by end_chunk (u8, or 0xFF + i32).
+	size_t begin_chunk(uint8_t version);
+	void end_chunk(size_t at);
+
+private:
+	std::vector<uint8_t> data_;
+};
+
 }  // namespace de
