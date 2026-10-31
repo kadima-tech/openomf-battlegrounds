@@ -1,0 +1,61 @@
+name: Dev build and prerelease
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      version: '0.0.0'
+      label: dev-${{ github.run_id }}-${{ github.run_attempt }}
+
+  prerelease:
+    name: Publish dev prerelease
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: Battlegrounds-macos-*
+          path: downloads
+          merge-multiple: true
+
+      - name: Verify downloads
+        working-directory: downloads
+        run: |
+          set -euo pipefail
+          test "$(find . -maxdepth 1 -name '*.zip' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.zip.sha256' | wc -l)" -eq 2
+          sha256sum --check ./*.zip.sha256
+
+      - name: Create prerelease at the built commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_COMMIT: ${{ github.sha }}
+          DEV_TAG: dev-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          gh release create "$DEV_TAG" downloads/*.zip downloads/*.zip.sha256 \
+            --target "$BUILD_COMMIT" --title "Dev build $DEV_TAG" \
+            --prerelease --latest=false --generate-notes \
+            --notes-file .github/release-notes.md

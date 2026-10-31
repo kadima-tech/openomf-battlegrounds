@@ -96,8 +96,47 @@ are downloaded into the player's game folder only when setup is needed.
 No game files, patches or DirectX-derived tables are included in the app.
 
 Build on each supported architecture for separate Apple silicon/Intel releases.
-The script ad-hoc signs for local use; a public release still needs Developer ID
-signing and Apple notarization. This workflow does not publish a release.
+The script ad-hoc signs the app. Developer ID signing and Apple notarization
+are not configured, so macOS Gatekeeper may block a downloaded build. Players
+who trust the download can allow it in System Settings > Privacy & Security,
+following [Apple's instructions](https://support.apple.com/en-us/102445).
+
+### CI builds and releases
+
+GitHub Actions builds the same standalone app on native Apple silicon and Intel
+macOS runners. Each download is a `Battlegrounds-<label>-macos-<arch>.zip` with
+a matching `.zip.sha256` checksum. Both architectures must build and pass the
+installer/native readiness tests, signature and architecture checks before a
+release is published. The engine's data-dependent CTest suite requires the
+original disc files and is not run in CI.
+
+- **Dev:** pushes to `main` and manual runs of **Dev build and prerelease**
+  publish a new prerelease with a unique `dev-<run-id>-<attempt>` tag pointing
+  to the exact built commit. These never replace the latest formal release.
+  Pull requests targeting `main` run the same builds and tests and upload
+  Actions artifacts, without publishing a release.
+- **Release:** push a stable `vMAJOR.MINOR.PATCH` tag, such as `v0.1.0`, to run
+  **Tagged release**. It builds the tagged code and creates a formal GitHub
+  release with both ZIPs, checksums and generated release notes. Other `v*`
+  tags fail validation. An existing published release is never overwritten.
+
+For example, after committing the version you want to release:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflows use the built-in `GITHUB_TOKEN`; no extra publishing secrets are
+needed. Keep GitHub Actions enabled for the repository and allow the publishing
+jobs' `contents: write` permission. Actions artifacts expire after 14 days;
+release assets remain available on the repository's Releases page.
+
+The shared `build-macos.yml` workflow calls `launcher/build-app.sh`. It stamps
+`CFBundleShortVersionString` from the release tag (`0.0.0` for dev builds) and
+`CFBundleVersion` from the workflow run number and attempt before signing.
+Local builds retain `0.1.0` / `1` by default; override them with
+`OPENBG_VERSION` and `OPENBG_BUILD_NUMBER` when needed.
 
 ## Validation
 
