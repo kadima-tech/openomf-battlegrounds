@@ -150,6 +150,8 @@ public:
 	virtual void text(const std::string &) {}
 	// The pre-draw, each frame before layout.
 	virtual void pre_draw() {}
+	// The autosize pass: lengths that follow the contents, for a box `width` wide.
+	virtual void fit(float) {}
 	void pre_draw_tree();
 	// The deepest shown control under (x, y), taking the mouse or not.
 	virtual Ctl *under(float x, float y);
@@ -210,7 +212,7 @@ public:
 // DE_CButtonControl3d (0x700bd420..; DE_CButtonRobot 0x700c4e00).
 class Button : public Ctl {
 public:
-	enum Type { Plain, Push, Radio, Check };
+	enum Type { Plain, Push, Radio, Check };  // New makes Push (ObjInitContents' +0x1f8 = 1, 0x700bd810)
 	Button(Gui &g, std::string label, Type type = Plain, float label_px = -1);
 	Type type;
 	std::string label;
@@ -302,6 +304,33 @@ private:
 	std::vector<float> widths_;
 	float widest_ = 0, wrapped_w_ = -1;
 	std::string wrapped_;
+};
+
+// DE_CTextDisplayControl3d made by New(text, parent, 0) (+0x230): no page viewer of its own, its
+// LenY the wrapped lines' height (BuildWrappedText, 2.123 Core 0x201049b0); `line_align` is its
+// ECenter (+0x234): 2 centres each line, 0 puts it 1 pixel from the left.
+class TextBlock : public Ctl {
+public:
+	TextBlock(Gui &g, std::string text, float px, int line_align = 2);
+	std::string str;
+	float px;
+	Rgba color = theme::kText;
+	int line_align;
+	void fit(float width) override;
+	void paint_self(Painter &p) override;
+
+private:
+	std::vector<std::string> lines_;
+};
+
+// A control's DE_CAutoSizeHorizontalRobot / DE_CAutoSizeVerticalRobot (2.123 Core 0x2009fd40 /
+// 0x2009faa0): per axis none, the children's largest length, or the children stacked from 1 pixel.
+class AutoSize : public Ctl {
+public:
+	using Ctl::Ctl;
+	enum Mode { None, Largest, Stacked };
+	Mode mode_x = None, mode_y = None;
+	void fit(float width) override;
 };
 
 // DE_CListControl3dEx (0x7009e190..) and its entry manager: rows of cells in a page viewer.

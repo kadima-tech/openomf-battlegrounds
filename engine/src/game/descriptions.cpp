@@ -173,19 +173,18 @@ std::string read_string_value(const de::ObjectRef &v) {
 ControlLayout read_control_creator(const de::World &data, const de::ObjectRef &cc) {
 	ControlLayout out;
 	if (!cc) return out;
-	int layout = 0;
 	try {
 		de::Contents c(cc.file->object_data(cc.info()).contents);
 		de::Chunk ch = de::begin_chunk(c);
 		c.string();
 		if (ch.version == 1) {
-			layout = c.i32();
-			out.wrap = c.i32() != 0;
+			out.layout = c.i32();
+			out.align = c.i32();
 			out.text_height = c.i32();
+			out.image_scale = c.f32();
 		}
 	} catch (const std::exception &) {
 	}
-	out.across = layout == 1 || layout == 3;
 	auto lists = reference_lists(data, cc);
 	if (lists.size() < 2 || lists[1].empty()) return out;
 	for (const de::ObjectRef &r : lists[1][0]) {
@@ -196,10 +195,11 @@ ControlLayout read_control_creator(const de::World &data, const de::ObjectRef &c
 			item.kind = ControlLayout::Text;
 			item.text = read_string_value(r);
 			item.text_height = out.text_height;
-			item.wrap = out.wrap;
+			item.align = out.align;
 		} else if (cls.rfind("Image", 0) == 0) {
 			item.kind = ControlLayout::Image;
 			item.image = r;
+			item.image_scale = out.image_scale;
 		} else if (cls == "ControlCreator") {
 			item = read_control_creator(data, r);
 		} else {

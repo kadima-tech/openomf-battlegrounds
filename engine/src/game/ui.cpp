@@ -84,7 +84,7 @@ float flow(AppManager &app, const ControlLayout &l, float x, float y, float widt
 				size_t sp = para.find(' ', q);
 				std::string word = para.substr(q, sp == std::string::npos ? std::string::npos : sp - q);
 				std::string tryline = line.empty() ? word : line + " " + word;
-				if (l.wrap && !line.empty() && app.text_width && app.text_width(tryline, size) > width) {
+				if (!line.empty() && app.text_width && app.text_width(tryline, size) > width) {
 					lines.push_back(line);
 					line = word;
 				} else {
@@ -129,7 +129,7 @@ float flow(AppManager &app, const ControlLayout &l, float x, float y, float widt
 	}
 	float used = 0, cx = x;
 	for (auto &it : l.items) {
-		if (l.across) {
+		if (l.across()) {
 			float h = flow(app, it, cx, y, width - (cx - x), bottom, out);
 			used = std::max(used, h);
 			if (it.kind == ControlLayout::Image) {
@@ -143,6 +143,60 @@ float flow(AppManager &app, const ControlLayout &l, float x, float y, float widt
 		}
 	}
 	return used;
+}
+
+// DE_CControlCreator::CreateNewControl (2.123 Core 0x20224ee0) into `parent`: at the top a page
+// viewer whose page stacks the items downwards (or across) and scrolls; nested, a control sized to
+// its items both ways. Text is a TextBlock, an image a box its size times the scale in virtual pixels.
+Ctl *control_creator(Gui &g, Ctl *parent, const ControlLayout &l, bool top) {
+	AutoSize *group;
+	PageViewer *viewer = nullptr;
+	bool across = l.across(), rows = l.layout == 2 || l.layout == 3;
+	if (top) {
+		viewer = parent->add<PageViewer>();
+		group = viewer->page->add<AutoSize>();
+		viewer->page_height = [group](float w) {
+			group->fit(w);
+			return std::max(0.0f, group->len_y);
+		};
+	} else {
+		group = parent->add<AutoSize>();
+	}
+	(across ? group->mode_x : group->mode_y) = AutoSize::Stacked;
+	if (!top) (across ? group->mode_y : group->mode_x) = AutoSize::Largest;
+	AutoSize *row = nullptr;
+	const ControlLayout *prev = nullptr;
+	for (const ControlLayout &it : l.items) {
+		Ctl *holder = group;
+		if (rows) {
+			bool same = prev && prev->kind == it.kind && (it.kind != ControlLayout::Image || prev->image.info().class_path == it.image.info().class_path);
+			if (!row || !same) {
+				row = group->add<AutoSize>();
+				row->mode_x = across ? AutoSize::Largest : AutoSize::Stacked;
+				row->mode_y = across ? AutoSize::Stacked : AutoSize::Largest;
+				if (l.align == 2) row->align = across ? 2 : 4;
+			}
+			holder = row;
+		}
+		prev = &it;
+		if (it.kind == ControlLayout::Text) {
+			holder->add<TextBlock>(it.text, g.vy(float(it.text_height)), it.align == 0 ? 0 : 2);
+		} else if (it.kind == ControlLayout::Image) {
+			de::Image im;
+			try {
+				im = de::read_image_header(it.image.file->object_data(it.image.info()).contents);
+			} catch (const std::exception &) {
+				continue;
+			}
+			auto *box = holder->add<Canvas>();
+			box->len_x = g.vx(std::trunc(float(im.width) * it.image_scale)), box->len_y = g.vy(std::trunc(float(im.height) * it.image_scale));
+			de::ObjectRef ref = it.image;
+			box->on_paint = [box, ref](Painter &p) { p.image(ref, box->x0, box->y0, box->x1, box->y1, theme::kText); };
+		} else {
+			control_creator(g, holder, it, false);
+		}
+	}
+	return viewer ? static_cast<Ctl *>(viewer) : group;
 }
 
 // gNewDescriptionLeft (Core 0x700968e0): a row VPU 30 high, the label (VPU 16, ":" added) on the
@@ -1175,6 +1229,7 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 	bio_ = panel_->add<TextDisplay>("", g.vy(13));
 	bio_->scale(0.013f, 0.66f, 0.987f, 1);
 	bio_->hidden = true;
+	large_ = nullptr;
 	model_holder_ = nullptr;
 	model_combo_ = nullptr;
 	if (choose_fighter) {
@@ -1210,6 +1265,14 @@ void DescriptionSelector::select(AppManager &app, int i) {
 		bool pilot = d.info().class_path == "Description\\Pilot";
 		bio_->hidden = !pilot;
 		if (pilot) bio_->set_text(pilot_text(app, d));
+	}
+	if (large_) large_->destroy();
+	large_ = nullptr;
+	if (panel_ && d.info().class_path != "Description\\Pilot") {
+		DescriptionInfo info = read_description(app.world.data(), d);
+		if (info.large && info.large.info().class_path == "ControlCreator") {
+			large_ = control_creator(*gui, panel_->parent, read_control_creator(app.world.data(), info.large), true);
+		}
 	}
 	if (choose_fighter) {
 		models_ = fighter_models(app.world.data(), d);
@@ -1369,12 +1432,6 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 				out.push_back(e);
 				out.push_back(sq);
 			}
-		}
-	} else if (selected_ >= 0) {
-		DescriptionInfo info = read_description(app.world.data(), entries_[size_t(selected_)]);
-		if (info.large && info.large.info().class_path == "ControlCreator") {
-			flow(app, read_control_creator(app.world.data(), info.large), window_->left + 2 * pad, window_->top + 2 * pad,
-			     window_->right - window_->left - 4 * pad, window_->bottom - pad, out);
 		}
 	}
 }
@@ -1957,6 +2014,10 @@ void AppManager::transition_ui() {
 
 // UpdateUI (Core 0x201a1720), then DE_COMF2Manager::ObjUpdate's way back to the main menu.
 void AppManager::update() {
+	if (frames_to_wait > 0) {
+		--frames_to_wait;
+		return;
+	}
 	bool needed = !first_transition && ((current && current->uses_transition && page_finished) || (next && next->uses_transition));
 	if (!current && !next && transition_state == 0) {
 		set_active(transition, false);
