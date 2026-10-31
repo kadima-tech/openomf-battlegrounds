@@ -1,0 +1,50 @@
+[
+  {
+    "name": "omf-battlegrounds-patch-v2090-to-v2095.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/omf-battlegrounds-patch-v2090-to-v2095.exe",
+    "size": 9140298,
+    "sha256": "c9706ce61edfb28f6100c37b13228453afa7b897c1520e84c67c6fa87d6d5f94"
+  },
+  {
+    "name": "omf-battlegrounds-v2095-v2096.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/omf-battlegrounds-v2095-v2096.exe",
+    "size": 4744753,
+    "sha256": "9b87203ae5cd061dd0ee53743c7aa839a711a904f623b68bedec43b30bf0079e"
+  },
+  {
+    "name": "omf-battlegrounds-v2096-v2097.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/omf-battlegrounds-v2096-v2097.exe",
+    "size": 1375362,
+    "sha256": "b4ac8deee52189a4cc94c1778bd0462b2121cff563d6901e24fa2e451b52a377"
+  },
+  {
+    "name": "one-must-fall-battlegrounds-v2097-to-v2100-patch.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/one-must-fall-battlegrounds-v2097-to-v2100-patch.exe",
+    "size": 13293250,
+    "sha256": "5dbb9d2e6200bc2b20527dbea87d2d39f59676f2ffaa938216ebd6fda5647218"
+  },
+  {
+    "name": "one-must-fall-v2101-to-v2111-patch.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/one-must-fall-v2101-to-v2111-patch.exe",
+    "size": 4817069,
+    "sha256": "79eb8e3d9c74a9bd264db603da54e84104399efb48bb6b9c09284dc97ba11062"
+  },
+  {
+    "name": "one-must-fall-v2111-to-v2112-patch.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/one-must-fall-v2111-to-v2112-patch.exe",
+    "size": 2296798,
+    "sha256": "7e901b6ff4089ea5adab32ba547c09640d832e20d4e519a6a81ff127027e0c69"
+  },
+  {
+    "name": "one-must-fall-battlegrounds-v2112-to-v2121-patch.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/one-must-fall-battlegrounds-v2112-to-v2121-patch.exe",
+    "size": 4244189,
+    "sha256": "8a212deedc787c2c104d7262e9cd623748ee4b9554cc86961f9eceb4c131636c"
+  },
+  {
+    "name": "one-must-fall-battlegrounds-v2121-to-v2123-patch.exe",
+    "url": "https://files.lonebullet.com/one-must-fall-battlegrounds/patches/one-must-fall-battlegrounds-v2121-to-v2123-patch.exe",
+    "size": 3482679,
+    "sha256": "55d3d6489273db0c0a35928a229df3198bbbe24ca915bbfbb73718303688eae2"
+  }
+]
