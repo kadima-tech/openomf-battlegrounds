@@ -7,6 +7,12 @@ build="$here/build"
 app="$repo/dist/Battlegrounds.app"
 arch=$(uname -m)
 sdk=$(xcrun --show-sdk-path)
+version=${OPENBG_VERSION:-0.1.0}
+build_number=${OPENBG_BUILD_NUMBER:-1}
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$build_number" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    echo "OPENBG_VERSION must be major.minor.patch; OPENBG_BUILD_NUMBER must have one to three numeric components." >&2
+    exit 1
+fi
 mkdir -p "$build" "$app/Contents/MacOS" "$app/Contents/Resources/bin" "$app/Contents/Resources/assets"
 resources="$app/Contents/Resources"
 
@@ -77,6 +83,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 # Ad-hoc signing is useful for local runs. Public releases still need Developer ID
 # signing and notarization; this script does not pretend to provide either.
 codesign --force --deep --sign - "$app"

@@ -1,0 +1,94 @@
+name: Build macOS downloads
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Numeric app version (major.minor.patch)
+        required: true
+        type: string
+      label:
+        description: Version or dev identifier used in download filenames
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Check build tools and architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          cmake --version
+          xcrun swiftc --version
+
+      - name: Test installer and native readiness
+        run: |
+          python3 -m unittest discover -s launcher -p 'test_*.py' -v
+          mkdir -p launcher/build
+          xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift \
+            -o launcher/build/test-readiness
+          launcher/build/test-readiness
+
+      - name: Build standalone app
+        env:
+          OPENBG_VERSION: ${{ inputs.version }}
+          OPENBG_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: launcher/build-app.sh
+
+      - name: Verify and archive app
+        env:
+          DOWNLOAD_LABEL: ${{ inputs.label }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          [[ "$DOWNLOAD_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          app=dist/Battlegrounds.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          for binary in Contents/MacOS/Battlegrounds Contents/Resources/bin/{openbg,unshield,uv,worker}; do
+            test -x "$app/$binary"
+            # Xcode 16's lipo consumes all arguments after -verify_arch as architectures.
+            lipo "$app/$binary" -verify_arch "$EXPECTED_ARCH"
+          done
+          "$app/Contents/Resources/bin/uv" --version
+          "$app/Contents/Resources/bin/unshield" -V
+          archive="Battlegrounds-$DOWNLOAD_LABEL-macos-$EXPECTED_ARCH.zip"
+          # ditto preserves the app bundle's executable bits, symlinks and signature.
+          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/$archive"
+          (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
+
+      - name: Upload download and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Battlegrounds-macos-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

@@ -17,6 +17,13 @@ The port follows the game's final official patch, **2.123**.
 
 ## Launcher (macOS)
 
+Download the Apple silicon (`arm64`) or Intel (`x86_64`) ZIP from
+[Releases](https://github.com/kadima-tech/openomf-battlegrounds/releases), unzip it,
+and open **`Battlegrounds.app`** on macOS 13 or newer. Dev builds are marked
+**Pre-release**. Downloads include the compiled engine and launcher; you still
+need your own game CD/ISO. See [launcher/README.md](launcher/README.md#ci-builds-and-releases)
+for build triggers and signing details.
+
 Double-click **`launch.command`** to build and open the native launcher. On first
 run, choose your original English game CD/ISO; an inserted CD is detected
 automatically. The launcher extracts the game, downloads and applies the official
