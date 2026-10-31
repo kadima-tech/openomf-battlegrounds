@@ -73,21 +73,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
-# Python extensions live in resource subdirectories. Sign each Mach-O explicitly
-# instead of depending on --deep to discover code outside standard bundle paths.
-python3 - "$resources" <<'PY'
-from pathlib import Path
-import subprocess
-import sys
-magic = {b'\xfe\xed\xfa\xce', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'}
-for folder in ('python', 'python-packages'):
-    for path in (Path(sys.argv[1]) / folder).rglob('*'):
-        if path.is_file() and not path.is_symlink():
-            with path.open('rb') as stream:
-                native = stream.read(4) in magic
-            if native:
-                subprocess.run(['codesign', '--force', '--sign', '-', str(path)], check=True)
-PY
+# Helpers and Python extensions live in resource subdirectories. Sign each
+# Mach-O explicitly; --deep does not discover all of this embedded code.
+python3 "$here/signing.py" "$resources"
 # Ad-hoc signing is useful for local runs. Public releases still need Developer ID
 # signing and notarization; this script does not pretend to provide either.
 codesign --force --deep --sign - "$app"
