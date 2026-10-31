@@ -1,6 +1,5 @@
 """Installer failure boundaries; no original game data is needed for these tests."""
 import hashlib
-import io
 import json
 from pathlib import Path
 import tempfile
@@ -86,23 +85,6 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((self.root / "game/ready").exists())
         self.assertFalse(backup.exists())
 
-    def test_bad_patch_download_does_not_replace_valid_cache(self):
-        target = self.root / "patch.exe"
-        target.write_bytes(b"previous")
-        expected = dict(size=4, sha256=hashlib.sha256(b"good").hexdigest())
-        with patch("urllib.request.urlopen", return_value=io.BytesIO(b"evil")):
-            with self.assertRaisesRegex(ValueError, "integrity"):
-                install.download("https://example.test/patch.exe", target, expected)
-        self.assertEqual(target.read_bytes(), b"previous")
-        self.assertFalse(target.with_suffix(".exe.part").exists())
-
-    def test_oversized_download_stops_and_removes_partial(self):
-        target = self.root / "patch.exe"
-        with patch("urllib.request.urlopen", return_value=io.BytesIO(b"unexpected HTML page")):
-            with self.assertRaisesRegex(ValueError, "size"):
-                install.download("https://example.test/patch.exe", target, dict(size=4, sha256=""))
-        self.assertFalse(target.exists())
-        self.assertFalse(target.with_suffix(".exe.part").exists())
 
 
 if __name__ == "__main__":

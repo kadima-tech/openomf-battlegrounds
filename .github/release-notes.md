@@ -3,8 +3,9 @@ Requires **macOS 13 or newer**. Unzip and open `Battlegrounds.app`; no compiler,
 Homebrew or system Python installation is required.
 
 You need your own English retail CD/ISO of *One Must Fall: Battlegrounds*.
-Choose it in the launcher on first run. Setup needs an internet connection and
-at least 3 GB of free space. Game data is not included in these downloads.
+Choose it in the launcher on first run. Setup works offline and needs at least
+3 GB of free space. The cumulative update and setup tools are bundled; a complete
+game installation is not included.
 
 These builds are ad-hoc signed and are **not Apple notarized**. macOS Gatekeeper
 may block opening a downloaded app. If you trust the download, follow

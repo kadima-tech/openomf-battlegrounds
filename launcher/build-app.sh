@@ -16,6 +16,8 @@ fi
 mkdir -p "$build" "$app/Contents/MacOS" "$app/Contents/Resources/bin" "$app/Contents/Resources/assets"
 resources="$app/Contents/Resources"
 
+python3 "$here/patching.py" "$here"
+
 if [ "${1:-}" != "--ui-only" ]; then
     cmake -S "$here/cmake" -B "$build/runtime" \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -42,32 +44,18 @@ if [ "${1:-}" != "--ui-only" ]; then
     cp "$indeo/LICENSE" "$resources/licenses/openindeo.txt"
 fi
 
-# Download the pinned standalone uv executable only into the app bundle.
-if [ ! -x "$resources/bin/uv" ]; then
-    case "$arch" in
-        arm64) triple=aarch64-apple-darwin; checksum=35572b9619fc14d67fc1cd72582c3cfc5c9c66d97f310192e04f26fb3fe96005 ;;
-        x86_64) triple=x86_64-apple-darwin; checksum=41946d87e1576c297d6d3cca88b089b6942b8777a5a25e70de1ef8c57b94b9cf ;;
-        *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
-    esac
-    archive="$build/uv.tar.gz"
-    curl --proto '=https' --tlsv1.2 -fL --retry 2 "https://github.com/astral-sh/uv/releases/download/0.9.7/uv-$triple.tar.gz" -o "$archive"
-    echo "$checksum  $archive" | shasum -a 256 -c -
-    tar -xzf "$archive" -C "$build" "uv-$triple/uv"
-    cp "$build/uv-$triple/uv" "$resources/bin/uv"
-fi
-
-mkdir -p "$resources/licenses"
-for license in LICENSE-MIT LICENSE-APACHE; do
-    if [ ! -f "$resources/licenses/uv-$license" ]; then
-        curl --proto '=https' --tlsv1.2 -fsSL --retry 2 "https://raw.githubusercontent.com/astral-sh/uv/0.9.7/$license" -o "$resources/licenses/uv-$license"
-    fi
-done
+# Bundle a relocatable Python and decoder before signing. Player setup is offline.
+bash "$here/bundle-setup.sh" "$resources"
+# Clean up resources left by the former download/emulation-based installer.
+rm -f "$resources/bin/uv" "$resources/rtpatch_emu.py" "$resources/patches.json"
 
 xcrun swiftc -O -parse-as-library -target "$arch-apple-macosx13.0" \
     "$here/Launcher.swift" "$here/Readiness.swift" -o "$app/Contents/MacOS/Battlegrounds" -framework SwiftUI -framework AppKit
 xcrun clang -Os -mmacosx-version-min=13.0 "$here/worker.c" -o "$resources/bin/worker"
-cp "$here/bootstrap.sh" "$here/install.py" "$here/requirements.txt" "$here/patches.json" "$here/game-files.json" "$resources/"
-cp "$repo/re/scripts/rtpatch_emu.py" "$resources/"
+cp "$here/bootstrap.sh" "$here/install.py" "$here/patching.py" "$here/requirements.txt" "$here/cumulative-patch.json" "$here/game-files.json" "$resources/"
+mkdir -p "$resources/patches"
+cp "$here/patches/english-2090-2123.obgpatch" "$resources/patches/"
+"$resources/python/bin/python3" -I -B "$resources/patching.py" "$resources"
 cp "$here/assets/robot-blueprint.png" "$resources/assets/"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -85,6 +73,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
+# Helpers and Python extensions live in resource subdirectories. Sign each
+# Mach-O explicitly; --deep does not discover all of this embedded code.
+python3 "$here/signing.py" "$resources"
 # Ad-hoc signing is useful for local runs. Public releases still need Developer ID
 # signing and notarization; this script does not pretend to provide either.
 codesign --force --deep --sign - "$app"

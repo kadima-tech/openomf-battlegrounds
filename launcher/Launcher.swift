@@ -20,7 +20,7 @@ struct Stage {
 @MainActor final class LauncherModel: ObservableObject {
     @Published var stages = [
         Stage(title: "Game files", detail: "From your original CD or ISO", symbol: "doc.on.doc"),
-        Stage(title: "Official patches", detail: "Updated automatically to version 2.123", symbol: "wrench.and.screwdriver"),
+        Stage(title: "Bundled update", detail: "Updated offline to version 2.123", symbol: "wrench.and.screwdriver"),
         Stage(title: "Local setup", detail: "Everything installed in your game folder", symbol: "shippingbox")
     ]
     @Published var busy = false
@@ -172,7 +172,7 @@ struct Stage {
                     self.busy = false
                     self.worker = nil
                     if !self.ready && self.error == nil {
-                        self.error = "Setup stopped before it finished. Check your connection and free space, then retry. Details are in the setup log."
+                        self.error = "Setup stopped before it finished. Check your disc and free space, then retry. Details are in the setup log."
                     }
                 }
             }
@@ -439,9 +439,9 @@ struct LauncherView: View {
     var helpPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Getting arena-ready").font(.title2.bold()).foregroundStyle(ivory)
-            Text("Choose an ISO of your original English Battlegrounds 2.090 disc, or insert the CD. An inserted game CD is detected automatically. Setup downloads the official patches, prepares a private set of tools, and verifies the finished installation.")
+            Text("Choose an ISO of your original English Battlegrounds 2.090 disc, or insert the CD. An inserted game CD is detected automatically. Setup uses the update and tools bundled with this app, then verifies the finished installation.")
             Text("When everything is ready, the game starts. Next time, this screen is skipped automatically. Your original disc and ISO are never changed.")
-            Text("An internet connection and 3 GB of free space are needed for first-time setup. No administrator password or system-wide packages are required.")
+            Text("First-time setup works offline and needs 3 GB of free space. No administrator password or system-wide packages are required.")
             Button("Done") { model.showHelp = false }.keyboardShortcut(.defaultAction)
         }.font(.system(size: 14)).foregroundStyle(muted).padding(30).frame(width: 480).background(bayPanel)
     }
@@ -450,7 +450,7 @@ struct LauncherView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Your game folder").font(.title2.bold()).foregroundStyle(ivory)
             Text(model.home.path).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-            Text("Game files, patches, setup tools and download caches stay here. Nothing is added to your shell or system package manager. A verified installation opens directly into the game.")
+            Text("Your extracted and updated game files stay here. Setup tools and the update are included in the app. Nothing is added to your shell or system package manager. A verified installation opens directly into the game.")
             HStack {
                 Button("Open folder", action: model.revealFolder)
                 Spacer()
