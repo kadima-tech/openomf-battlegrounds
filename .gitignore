@@ -1,4 +1,5 @@
-# The game (your own copy) and everything derived from it stay local.
+# Full game installs and analysis artifacts stay local. The cumulative update
+# under launcher/patches is intentionally versioned for offline app packaging.
 /source/
 /re/*
 !/re/FINDINGS.md
@@ -9,6 +10,7 @@
 
 engine/build*/
 /launcher/build/
+/launcher/patches/*.part
 /dist/
 __pycache__/
 .DS_Store

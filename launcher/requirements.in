@@ -1,3 +1,2 @@
-# Used only in the launcher's private virtual environment.
-unicorn==2.1.4
-pefile==2024.8.26
+# Installed into the app bundle at build time, never fetched by players.
+bsdiff4==1.2.6

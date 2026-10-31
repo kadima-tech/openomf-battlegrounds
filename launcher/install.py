@@ -8,30 +8,21 @@ from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import json
 from pathlib import Path
-import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-import urllib.request
+
+from patching import apply_patch, digest
 
 PRODUCT_GUID = "b8ef8b5a-6d15-436c-ac07-5f2bd5e1aa1b"
 
 
 def emit(stage: str, status: str, detail: str) -> None:
     print(json.dumps(dict(stage=stage, status=status, detail=detail)), flush=True)
-
-
-def digest(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 def verify(root: Path, manifest: dict) -> None:
@@ -75,25 +66,6 @@ def disc_setup(root: Path) -> Path:
         if not child_named(setup, name).is_file():
             raise ValueError(f"The game disc is incomplete ({name} is missing).")
     return setup
-
-
-def download(url: str, destination: Path, expected: dict) -> None:
-    """Never accept an HTML error page, truncated download or changed patch."""
-    temporary = destination.with_suffix(destination.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "OpenBG-Launcher/1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=45) as response, temporary.open("wb") as out:
-            total = 0
-            while block := response.read(256 * 1024):
-                total += len(block)
-                if total > expected["size"]:
-                    raise ValueError("The patch download has an unexpected size.")
-                out.write(block)
-        if total != expected["size"] or digest(temporary) != expected["sha256"]:
-            raise ValueError("The patch download failed its integrity check. Please retry.")
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def run(command: list[str | Path], log, **kwargs) -> None:
@@ -155,34 +127,14 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 unpacked = work / "unpacked"
                 run([resources / "bin/unshield", "-d", unpacked, "x", child_named(setup, "data1.cab")], log)
                 game = unpacked / "App_Executables"
-                if not (game / "AutoPatch/patchw32.dll").is_file() or not (game / "Data/OMFBGGUI.DEObjects").is_file():
+                if not (game / "Data/OMFBGGUI.DEObjects").is_file():
                     raise ValueError("This disc edition is not supported. Use the original English 2.090 CD.")
                 emit("files", "done", "Original game files extracted")
-                patches = json.loads((resources / "patches.json").read_text())
-                cache = home / "patches"
-                cache.mkdir(exist_ok=True)
-                for index, patch in enumerate(patches, 1):
-                    name = patch["name"]
-                    target = cache / name
-                    if not (target.is_file() and target.stat().st_size == patch["size"] and digest(target) == patch["sha256"]):
-                        local = project / "source/patches" / name if project else None
-                        if local and local.is_file() and digest(local) == patch["sha256"]:
-                            shutil.copyfile(local, target)
-                        else:
-                            emit("patches", "active", f"Downloading official patch {index} of {len(patches)}…")
-                            download(patch["url"], target, patch)
-                    emit("patches", "active", f"Applying official patch {index} of {len(patches)}…")
-                    patch_log = work / "patch.log"
-                    with patch_log.open("w") as output:
-                        command = [sys.executable, "-I", str(resources / "rtpatch_emu.py"),
-                                   str(game / "AutoPatch/patchw32.dll"), str(target), str(game),
-                                   "-NOBACKUP", "-NOUNDO", "-NOCONFIRM"]
-                        result = subprocess.run(command, stdout=output, stderr=output)
-                    report = patch_log.read_text(errors="replace")
-                    log.write(report)
-                    if result.returncode or re.search(r"Old Files Invalid\.+ \(\s*[1-9]|error ept", report, re.I):
-                        raise ValueError(f"Official patch {index} could not be applied. Your disc may be a different edition.")
-                emit("patches", "done", "All official patches applied · 2.123")
+                emit("patches", "active", "Checking your disc and the bundled update…")
+                apply_patch(game, resources, lambda done, total: emit(
+                    "patches", "active", f"Applying bundled update · {done}/{total} files"))
+                log.write("Bundled cumulative update applied · 2.090 → 2.123\n")
+                emit("patches", "done", "Bundled update applied · 2.123")
                 emit("runtime", "active", "Verifying every game file…")
                 manifest = json.loads((resources / "game-files.json").read_text())
                 verify(game, manifest)

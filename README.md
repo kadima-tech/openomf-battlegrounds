@@ -26,9 +26,9 @@ for build triggers and signing details.
 
 Double-click **`launch.command`** to build and open the native launcher. On first
 run, choose your original English game CD/ISO; an inserted CD is detected
-automatically. The launcher extracts the game, downloads and applies the official
-patches, installs its setup tools privately in the game folder, then starts the
-game. Once a complete 2.123 installation is present, future launches skip setup.
+automatically. The launcher extracts the game and applies its bundled cumulative
+update offline, then starts the game. The update and setup tools ship inside the
+app. Once a complete 2.123 installation is present, future launches skip setup.
 
 The source build needs Xcode's command-line tools, CMake and Python 3. The resulting
 **`dist/Battlegrounds.app`** can be distributed without those build tools or
@@ -38,8 +38,9 @@ remain available for development.
 
 ## You need the game
 
-No game data is included in this repository. You need your own copy of *One Must Fall:
-Battlegrounds*, either the Windows CD or an ISO image of it, and the official patches up to 2.123.
+You need your own copy of *One Must Fall: Battlegrounds*, either the original English
+Windows CD or an ISO image of it. The launcher includes a cumulative 2.090 → 2.123
+update; a complete game installation is not included.
 
 ## Building
 
@@ -62,7 +63,11 @@ cmake --build engine/build -j
 The Indeo video decoder, [openindeo](https://github.com/kadima-tech/openindeo), is fetched by CMake
 automatically. Run `ctest --test-dir engine/build` to check that your game data parses.
 
-## Installing the game data
+## Reconstructing the historical patch chain
+
+The launcher installs directly from your disc/ISO using its bundled cumulative update,
+with no network access. The steps below are for developers reproducing the original
+version trees for analysis; they are not needed to use the app.
 
 **1. Unpack the disc.** Copy your ISO into `source/` and extract its installer:
 
