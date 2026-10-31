@@ -15,6 +15,20 @@ engine, so the game can be played on modern machines.
 
 The port follows the game's final official patch, **2.123**.
 
+## Launcher (macOS)
+
+Double-click **`launch.command`** to build and open the native launcher. On first
+run, choose your original English game CD/ISO; an inserted CD is detected
+automatically. The launcher extracts the game, downloads and applies the official
+patches, installs its setup tools privately in the game folder, then starts the
+game. Once a complete 2.123 installation is present, future launches skip setup.
+
+The source build needs Xcode's command-line tools, CMake and Python 3. The resulting
+**`dist/Battlegrounds.app`** can be distributed without those build tools or
+Homebrew dependencies. See [launcher/README.md](launcher/README.md) for packaging,
+storage locations and validation. The manual build/install instructions below
+remain available for development.
+
 ## You need the game
 
 No game data is included in this repository. You need your own copy of *One Must Fall:

@@ -8,6 +8,8 @@
 /re/proto/__pycache__/
 
 engine/build*/
+/launcher/build/
+/dist/
 __pycache__/
 .DS_Store
 .claude/worktrees/

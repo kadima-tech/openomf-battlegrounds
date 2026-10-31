@@ -1,0 +1,385 @@
+{
+  "version": "2.123",
+  "files": [
+    {
+      "path": "Data/ArenaDescriptions.DEObjects",
+      "size": 1889959,
+      "sha256": "854cf389125fb07cd49b26a67360e8406619a8726a118df7849388f067223189"
+    },
+    {
+      "path": "Data/BladePit.DEObjects",
+      "size": 15252439,
+      "sha256": "3b1d3713743366770eae9f7f79b9a3217a46db1d60779f7ba2f51fba163c3eed"
+    },
+    {
+      "path": "Data/Canyon.DEObjects",
+      "size": 47841718,
+      "sha256": "6e41b0d9fabfca3c0619ef4bb69a0f048b0884deab769c3d603da1f96368c774"
+    },
+    {
+      "path": "Data/Chronos.DEObjects",
+      "size": 4949896,
+      "sha256": "f54fe36beb2d90a58488ca24b473164fad1b1965f787049263c8c7a1f74cfe09"
+    },
+    {
+      "path": "Data/ChronosModel1.DEObjects",
+      "size": 23446362,
+      "sha256": "72867061d8136994e0460d518264a845ccc7f9623fc74c940b82c520902b6f15"
+    },
+    {
+      "path": "Data/CinematicCharacterCollection.DEObjects",
+      "size": 2122094,
+      "sha256": "c4f8394a4c3a691394539e0b13451804782e5dec29045048064e6c27ee55c946"
+    },
+    {
+      "path": "Data/CinematicKingOfHill.DEObjects",
+      "size": 14137340,
+      "sha256": "ff8265eb9efa99e9f7134e01def18bedc09aa7bb6a69d50424ace9aff1aa6017"
+    },
+    {
+      "path": "Data/CinematicMasters.DEObjects",
+      "size": 19778025,
+      "sha256": "32840ad0196879303060284ae4e99e27ee7045c34a08a538bf09246b9bc710b8"
+    },
+    {
+      "path": "Data/CinematicPhoenixBuilding.DEObjects",
+      "size": 11328407,
+      "sha256": "f2c87f22f08ec0d1ef525b7d59c72c45465e4bda1c74ba61c74ac28eedb5d879"
+    },
+    {
+      "path": "Data/CinematicSimpleCity.DEObjects",
+      "size": 7181938,
+      "sha256": "c8ffaa2b7a393758180bb14cf1df6eb3944ef20468c8742752e2ce56b84a8b48"
+    },
+    {
+      "path": "Data/City.DEObjects",
+      "size": 21404834,
+      "sha256": "3b337de8069170fde3644f209ebafd0faab023bdb86ca178dc18e8fa44fa5768"
+    },
+    {
+      "path": "Data/Controllers.DEObjects",
+      "size": 1983,
+      "sha256": "93efad99805b4893ade9ccfb226fe75b147e39ea21ea811002f07658dfa8c0f3"
+    },
+    {
+      "path": "Data/Creature.DEObjects",
+      "size": 598,
+      "sha256": "a4602d617d41386cd8c6719cb2780c19cc6f0dbf208e9fda5d919ce38e5093b7"
+    },
+    {
+      "path": "Data/Desert.DEObjects",
+      "size": 22451646,
+      "sha256": "85eda189a666f442d984c9953e84505da82278c24cc885680cdf5b478c5d62a4"
+    },
+    {
+      "path": "Data/DesertRings.DEObjects",
+      "size": 18191490,
+      "sha256": "cc000726abe1264261b763fd6ebce32bf11ac6c3a59ee0e84062115e1bc973fd"
+    },
+    {
+      "path": "Data/Effects.DEObjects",
+      "size": 1387575,
+      "sha256": "d1da2424ef687edb708fb4f5756c726b59091517e3eb255543f40cddc3cb63cc"
+    },
+    {
+      "path": "Data/Fighter.DEObjects",
+      "size": 843798,
+      "sha256": "8a3174e96f68548eceb1d79348567564d4a37cfaa1f10102ab43ba27d693ca1f"
+    },
+    {
+      "path": "Data/FirePit.DEObjects",
+      "size": 14955069,
+      "sha256": "fbc7baa36178688454f6d14cf1637dbd8a5d76667618379b2655fac6e59fca6a"
+    },
+    {
+      "path": "Data/Flyers.DEObjects",
+      "size": 485440,
+      "sha256": "8da30ed03ba7c51f34811cce6262c84e0784b2006a999ca9044e29b8088cb6a0"
+    },
+    {
+      "path": "Data/Force.DEObjects",
+      "size": 3041756,
+      "sha256": "0454846bfa619e213c67f75c431ab8c74da1f60f8638afd7e69f35104028ecca"
+    },
+    {
+      "path": "Data/ForceModel1.DEObjects",
+      "size": 25954196,
+      "sha256": "4d80623dbf071a380cfc6ed6d043e7a2ea52129ae76bef32db32c766ce554bba"
+    },
+    {
+      "path": "Data/Forces.DEObjects",
+      "size": 730,
+      "sha256": "75b7e60d938e62e3b8865f609a5ac2fb4bc36fa523b200cfe8a642c2c82b65c3"
+    },
+    {
+      "path": "Data/Gargoyle.DEObjects",
+      "size": 2302776,
+      "sha256": "ee54fcc492233bc2b88f7c5dc24ebfe3a3291d841687f3507bbda4a84ba67b81"
+    },
+    {
+      "path": "Data/GargoyleModel1.DEObjects",
+      "size": 26829706,
+      "sha256": "7db07bdb05bc3018065e915e511b8fed22217f57fbc7009d2a410a85f0196433"
+    },
+    {
+      "path": "Data/Grudge Match Arena.DEObjects",
+      "size": 19054604,
+      "sha256": "8b57aea45e2d3e565ac5f5983be76d76d4db4d5cc483aa61779c190de068b386"
+    },
+    {
+      "path": "Data/Iceberg.DEObjects",
+      "size": 24383311,
+      "sha256": "393e3958b79368162805abe5210cf0ef01811a61e677417eccba7ede00eebc45"
+    },
+    {
+      "path": "Data/Jaguar.DEObjects",
+      "size": 2577818,
+      "sha256": "c43c236dcb447fea066a742cc3425dbc60746bb50073647e58f9e5d1a4038e39"
+    },
+    {
+      "path": "Data/JaguarModel1.DEObjects",
+      "size": 23168673,
+      "sha256": "a2ae89eff90db03331e32e0b54262ab05a6c4138205b2e0e5f83eba696738119"
+    },
+    {
+      "path": "Data/Katana.DEObjects",
+      "size": 3368436,
+      "sha256": "40eb662494e0d21772732556b4cf4881ebc3d9e8a7b39380cb371585e48ba158"
+    },
+    {
+      "path": "Data/KatanaModel1.DEObjects",
+      "size": 21006788,
+      "sha256": "a74e9c850971b44fd5910f83264193c33283ce5d8ec962ece6f9bf84d10d3d6c"
+    },
+    {
+      "path": "Data/LoadScene.DEObjects",
+      "size": 6593106,
+      "sha256": "af8ce4d6b13246bbd503b1c7778404752d5981acef0f3ee0a95650f8fbb0fa22"
+    },
+    {
+      "path": "Data/Mantis.DEObjects",
+      "size": 4108530,
+      "sha256": "79a732493089203f4e4f4de363273313e20fc5ec847d06ed352b78ad5f4d21e4"
+    },
+    {
+      "path": "Data/MantisModel1.DEObjects",
+      "size": 24156364,
+      "sha256": "bebacb797d281c69d4a888268792576e1f4359f0d03fff6d3d88527c28f418e5"
+    },
+    {
+      "path": "Data/Materials.DEObjects",
+      "size": 267837,
+      "sha256": "a85e34f5ab6345c69933da8ca8425f9ad6797116a29d9819bce497221c324641"
+    },
+    {
+      "path": "Data/Music.DEObjects",
+      "size": 406370,
+      "sha256": "185e69e182470df92e705eadd553bfc4fd9b8c69c7735d29cbd64a63da8343e5"
+    },
+    {
+      "path": "Data/MusicCrystalCold.DEObjects",
+      "size": 4512341,
+      "sha256": "1a52ce1b39500b6befb7ce63472905884a11988b984f9639add2b1121cf5da17"
+    },
+    {
+      "path": "Data/MusicExecutor.DEObjects",
+      "size": 4667438,
+      "sha256": "2bba0b64b67f7788dd8309adad94de368cd59dbec86aa3b884707dc9c08d9321"
+    },
+    {
+      "path": "Data/MusicHexed.DEObjects",
+      "size": 4123142,
+      "sha256": "a6d017026643b7dd98e7b7962fa41aa3455581079f1f6e1fe178f83a4552ad62"
+    },
+    {
+      "path": "Data/MusicHighOrbit.DEObjects",
+      "size": 3537793,
+      "sha256": "371491df0a9704b8c8b9e69dafaed88d333a056dc8979456d4ece5720ee73fcd"
+    },
+    {
+      "path": "Data/MusicK-Faktor.DEObjects",
+      "size": 2315203,
+      "sha256": "12e096dd73679d30bce657aa1d2f17f4a8e19359097706bca8485db57beca457"
+    },
+    {
+      "path": "Data/MusicRebellion.DEObjects",
+      "size": 3356239,
+      "sha256": "3d62f3b2b9e317ae8a1e767c7a3822bf721fc474705129f6537200986133f758"
+    },
+    {
+      "path": "Data/MusicSnakeirons.DEObjects",
+      "size": 3364306,
+      "sha256": "947b83bec8b4058642e1c68dde2f6df9407e8b6a7126d0aad7a5ebdebd5873f1"
+    },
+    {
+      "path": "Data/MusicSongNine.DEObjects",
+      "size": 3354473,
+      "sha256": "1f683029ef2d194b6738ee212ecbbd4f1c0b1d26a021fcf057fd592e1d8ae2fb"
+    },
+    {
+      "path": "Data/MusicTheme.DEObjects",
+      "size": 6065605,
+      "sha256": "5ef0f63e51f966c731bb2febfe92507813e5a38a9835e0253a301b7f3f31e45e"
+    },
+    {
+      "path": "Data/MusicWTMI.DEObjects",
+      "size": 3204766,
+      "sha256": "3ce2b8f22978b205dfcf3926d0190a7255f35e89768059acc2265c3d22377c9a"
+    },
+    {
+      "path": "Data/OMFBGGUI.DEObjects",
+      "size": 12039479,
+      "sha256": "9116d001e1247335b496a627ab500338bc412dd8a4ba018326cd1ae21ec26bf2"
+    },
+    {
+      "path": "Data/OMFHelp.DEObjects",
+      "size": 31669628,
+      "sha256": "2e7454e3f9ed5ec09cac06873a525db8f4bede7a882a3539555e3d9ccd8b585c"
+    },
+    {
+      "path": "Data/Pickups.DEObjects",
+      "size": 4881744,
+      "sha256": "51cdc909585b7c433ea1c1a5bf720d084bbd6d2d857f129fecfd343949d04d71"
+    },
+    {
+      "path": "Data/Pilots.DEObjects",
+      "size": 12451040,
+      "sha256": "a5431dfd65a115484ea37574228fbb87b9421a8bb2e5cf03901817850570feaa"
+    },
+    {
+      "path": "Data/PowerPlant.DEObjects",
+      "size": 13376478,
+      "sha256": "903dacb0e927cb866b96af2260bd5c7f7dc4be6ecaac545a331bdb461702c696"
+    },
+    {
+      "path": "Data/PracticeArena.DEObjects",
+      "size": 10051097,
+      "sha256": "daa886fecbe5898f419bc8a186f129a30478f317d45e94d27c119ddcfb59cc32"
+    },
+    {
+      "path": "Data/Pyros.DEObjects",
+      "size": 3773528,
+      "sha256": "f1abc7c1b7274dba1dd4591ef5ceff6007cc9843eb4787ad7a15bc2bcf3c63ad"
+    },
+    {
+      "path": "Data/PyrosModel1.DEObjects",
+      "size": 23972335,
+      "sha256": "20399f00322e63d28fe3f9b891854aaaabc8afda9b6932b618f38c4f1f09fe87"
+    },
+    {
+      "path": "Data/Session.DEObjects",
+      "size": 14548304,
+      "sha256": "97393084f43e58baff376e9b6a6e7bdbabdfbeadd6eeb5e8544caa6445a6264a"
+    },
+    {
+      "path": "Data/SharedObjects.DEObjects",
+      "size": 10828071,
+      "sha256": "3277394907cbf9c46b30528fe3e51652c99343a49b161c39e668638a2a1c31bb"
+    },
+    {
+      "path": "Data/SinglePlayer.DEObjects",
+      "size": 6354817,
+      "sha256": "e123593795fc4b1664c83560fdf1513073588f689c3ace9455d07fd7cd6672cd"
+    },
+    {
+      "path": "Data/SinglePlayerFull.DEObjects",
+      "size": 13583584,
+      "sha256": "2e8e0651838e1fbd3c6e02c37d0c31437f133a6b1f714f81f60a704d5f746591"
+    },
+    {
+      "path": "Data/SpaceStation.DEObjects",
+      "size": 24426280,
+      "sha256": "2ffc1eed379ba465fd27a3f9ebe4a6955d6207343817280221ef980b8ab2f97f"
+    },
+    {
+      "path": "Data/Sport.DEObjects",
+      "size": 17712283,
+      "sha256": "3a7d4c95ef5c1cc377cd03de57eca3b3eed6af68d6244f2726ce308cf191d6fd"
+    },
+    {
+      "path": "Data/Trophy Room.DEObjects",
+      "size": 17961545,
+      "sha256": "6f61feb2e6c49c7abf17fe7bec31ba7b7ed0740fc9de5373e7198adcc0c6777e"
+    },
+    {
+      "path": "Data/TrophyRoomFull.DEObjects",
+      "size": 6833454,
+      "sha256": "a23b087e761dff88dee0f09c63c2c65b0fc43e006a71e43aaca26990a4055786"
+    },
+    {
+      "path": "Data/Unranked Challenger Cinematic.DEObjects",
+      "size": 16698000,
+      "sha256": "4983b1e3308f6c95e321c520c5b09aad6668cbf3223b8c5af50bdc0537df9871"
+    },
+    {
+      "path": "Data/Volcano.DEObjects",
+      "size": 22720552,
+      "sha256": "12681b7464cb4d5cf8140aa76732cb23d24f619564482f7e83f7faeb9f9d8167"
+    },
+    {
+      "path": "Data/Warlord.DEObjects",
+      "size": 5847323,
+      "sha256": "26fbadc52e6e0f562722eb016ad9601bf42be2853749f14f0d4155ccc577813f"
+    },
+    {
+      "path": "Data/WarlordModel1.DEObjects",
+      "size": 26334453,
+      "sha256": "2fbefa6ba6dd99506e172ad7aa2eb3337822747f28bf0054fed7ea170fec12a7"
+    },
+    {
+      "path": "Engine/AudioPlayer.ModuleDLL",
+      "size": 264451,
+      "sha256": "01ecffe846c059c4460e1ab206e3664bbb59990be1f877d7e879e20866b399c0"
+    },
+    {
+      "path": "Engine/Core.ModuleDLL",
+      "size": 9612012,
+      "sha256": "bafc77ebae0b5192865e2dc214cb1f7a44967d67b721a05996ee2701d148b786"
+    },
+    {
+      "path": "Engine/Creature.ModuleDLL",
+      "size": 703556,
+      "sha256": "67ebd493a31568d06fddf5cfe51d588ff4b96e64a8b47f59edb9495a8cb862e2"
+    },
+    {
+      "path": "Engine/Direct3D.ModuleDLL",
+      "size": 1901280,
+      "sha256": "4d0ddc6d7d4a527e6ff81aae00e655b25835af92c0cf942ae77af0e50c7b3d97"
+    },
+    {
+      "path": "Engine/GameSpy.ModuleDLL",
+      "size": 159539,
+      "sha256": "ac3787235022d3ea56824ce1a9f1b3b781808f98783879e113547dd8952a14dd"
+    },
+    {
+      "path": "Engine/Input2.ModuleDLL",
+      "size": 124078,
+      "sha256": "1a5b03a4969a3fc33610d3c1c236788737c6ee0f6fffa16d9dc6d6abea9a4628"
+    },
+    {
+      "path": "Engine/OMF.ModuleDLL",
+      "size": 1651663,
+      "sha256": "6262c6832b0d89bae077ae336bc3f80b78bc259cdd7adb41a821dee3a2f86d4b"
+    },
+    {
+      "path": "Engine/OMFBG.exe",
+      "size": 1404565,
+      "sha256": "863aee52ddfcc806d92213648979989682b825b6e186715e8e1c6d5124f2e2ab"
+    },
+    {
+      "path": "Engine/Particles.ModuleDLL",
+      "size": 371797,
+      "sha256": "10d9e3ac9e605d3f9eb5a1ade4fab5ade04c0467ce3dc183abc5fea5072b9dc6"
+    },
+    {
+      "path": "Engine/Session.ModuleDLL",
+      "size": 483747,
+      "sha256": "c813fc9e72d4754658419ee33a931a97f5d61ab6929a7f07650af6779f6f0e80"
+    },
+    {
+      "path": "Engine/dbghelp.dll",
+      "size": 163088,
+      "sha256": "a29056a9810ff08c708505f1ac20d0263d5d894a223696e20217c0e9d132bf84"
+    }
+  ]
+}
