@@ -15,6 +15,9 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$build_number" =~ ^[0
 fi
 mkdir -p "$build" "$app/Contents/MacOS" "$app/Contents/Resources/bin" "$app/Contents/Resources/assets"
 resources="$app/Contents/Resources"
+mkdir -p "$resources/licenses"
+cp "$repo/LICENSE" "$resources/licenses/openomf-battlegrounds.txt"
+cp "$repo/THIRD_PARTY_NOTICES.md" "$resources/licenses/THIRD_PARTY_NOTICES.md"
 
 python3 "$here/patching.py" "$here"
 
@@ -33,7 +36,6 @@ if [ "${1:-}" != "--ui-only" ]; then
             exit 1
         fi
     done
-    mkdir -p "$resources/licenses"
     cp "$build/runtime/_deps/sdl2-src/LICENSE.txt" "$resources/licenses/SDL2.txt"
     cp "$build/runtime/_deps/unshield-src/LICENSE" "$resources/licenses/unshield.txt"
     cp "$repo/engine/third_party/dmusic/VENDORED.md" "$resources/licenses/dmusic.md"

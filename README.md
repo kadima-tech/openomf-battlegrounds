@@ -136,15 +136,29 @@ read from. The copy-protected game executable is never decrypted.
 
 ## Contributing
 
-Contributions and bug reports are welcome. [DEVELOPING.md](DEVELOPING.md) describes the code, the
-tools and the debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) is the list of open work;
-[PATCHES.md](PATCHES.md) documents what the official patches changed.
+Contributions and bug reports are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md)
+and our [Code of Conduct](CODE_OF_CONDUCT.md). [DEVELOPING.md](DEVELOPING.md) describes
+the code, tools and debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) lists open
+work; [PATCHES.md](PATCHES.md) documents the official patches. Report vulnerabilities
+using [SECURITY.md](SECURITY.md).
+
+## License
+
+This project's original code and documentation are available under the
+[MIT license](LICENSE), including its warranty disclaimer and limitation of liability.
+The macOS downloads include this license and the dependency notices in
+`Battlegrounds.app/Contents/Resources/licenses/`.
+
+Third-party components retain their own terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The original game and its update
+data, including the bundled cumulative update, are not covered by this project's
+MIT license. You still need your own copy of the game.
 
 ## Credits
 
 *One Must Fall: Battlegrounds* was developed by Diversions Entertainment and belongs to its rights
-holders. This project is not affiliated with or endorsed by them, and contains none of the game's
-data.
+holders. This project is not affiliated with or endorsed by them and does not include
+a complete copy of the game.
 
 Third-party code included in this repository keeps its own licence: GothicKit's
 [dmusic](https://github.com/GothicKit/dmusic) (MIT, vendored in `engine/third_party/dmusic`) and a C
