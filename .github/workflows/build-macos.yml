@@ -72,7 +72,8 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           for binary in Contents/MacOS/Battlegrounds Contents/Resources/bin/{openbg,unshield,uv,worker}; do
             test -x "$app/$binary"
-            lipo -verify_arch "$EXPECTED_ARCH" "$app/$binary"
+            # Xcode 16's lipo consumes all arguments after -verify_arch as architectures.
+            lipo "$app/$binary" -verify_arch "$EXPECTED_ARCH"
           done
           "$app/Contents/Resources/bin/uv" --version
           "$app/Contents/Resources/bin/unshield" -V
