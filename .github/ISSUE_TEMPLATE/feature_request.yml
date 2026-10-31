@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an improvement or compatibility feature.
+body:
+  - type: markdown
+    attributes:
+      value: Check existing issues and PLACEHOLDERS.md for planned or missing features.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe who is affected and the current limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired result and the original game's behavior, if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and context
+      description: Include workarounds, related issues or supporting screenshots. Do not upload game assets.

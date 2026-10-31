@@ -88,7 +88,11 @@ launcher/build-app.sh
 
 Distribute `dist/Battlegrounds.app` as a zip. The build script includes the
 engine, static extractor, cumulative update, relocatable CPython 3.12.12 and
-bsdiff4 1.2.6, together with upstream license files. Python and its decoder are
+bsdiff4 1.2.6, together with the project's MIT license, third-party notice index
+and upstream license files in `Contents/Resources/licenses/`. Additional runtime
+and package notices remain inside `python/` and `python-packages/`. See
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for the component list and the
+separate status of original game/update data. Python and its decoder are
 private to the app; no Homebrew packages, system Python or player-side downloads
 are used. uv 0.9.7 is a pinned build-time tool and is not shipped in the app.
 The build machine needs network access to fetch pinned dependencies. A complete

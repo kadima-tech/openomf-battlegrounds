@@ -70,6 +70,11 @@ jobs:
         run: |
           [[ "$DOWNLOAD_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
           app=dist/Battlegrounds.app
+          cmp LICENSE "$app/Contents/Resources/licenses/openomf-battlegrounds.txt"
+          cmp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/licenses/THIRD_PARTY_NOTICES.md"
+          for notice in SDL2.txt unshield.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt Python.txt; do
+            test -s "$app/Contents/Resources/licenses/$notice"
+          done
           codesign --verify --deep --strict --verbose=2 "$app"
           for binary in Contents/MacOS/Battlegrounds Contents/Resources/bin/{openbg,unshield,worker} Contents/Resources/python/bin/python3; do
             test -x "$app/$binary"
