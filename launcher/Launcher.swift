@@ -27,6 +27,7 @@ struct Stage {
     @Published var ready = false
     @Published var error: String?
     @Published var disc: URL?
+    @Published var pendingSource: URL?
     @Published var sourceName: String?
     @Published var dropping = false
     @Published var showHelp = false
@@ -112,11 +113,10 @@ struct Stage {
         scanDiscs()
     }
 
-    func scanDiscs() {
+    func scanDiscs(volumes: [URL]? = nil) {
         guard !preview, !busy, !ready else { return }
-        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []
+        let volumes = volumes ?? FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []
         disc = volumes.first { Self.setupOnDisc($0) }
-        if let disc, disc != lastSource, error == nil { install(disc) }
     }
 
     func chooseISO() {
@@ -124,19 +124,30 @@ struct Stage {
         picker.title = "Choose your Battlegrounds disc image"
         picker.allowedContentTypes = [UTType(filenameExtension: "iso") ?? .diskImage]
         picker.allowsMultipleSelection = false
-        if picker.runModal() == .OK, let url = picker.url { install(url) }
+        if picker.runModal() == .OK, let url = picker.url { requestInstall(url) }
     }
 
     func useCD() {
         scanDiscs()
-        if !busy, let disc { install(disc) }
+        if !busy, let disc { requestInstall(disc) }
     }
 
-    func install(_ source: URL) {
+    func requestInstall(_ source: URL) {
         guard !busy, !preview, !ready else { return }
         if !source.hasDirectoryPath && source.pathExtension.lowercased() != "iso" {
             error = "Choose an ISO disc image, or insert your original Battlegrounds CD."; return
         }
+        pendingSource = source
+    }
+
+    func confirmInstall() {
+        guard let source = pendingSource else { return }
+        pendingSource = nil
+        install(source)
+    }
+
+    private func install(_ source: URL) {
+        guard !busy, !preview, !ready else { return }
         lastSource = source
         sourceName = source.lastPathComponent
         error = nil
@@ -277,6 +288,15 @@ struct LauncherView: View {
         .frame(minWidth: 1000, minHeight: 700)
         .sheet(isPresented: $model.showHelp) { helpPanel }
         .sheet(isPresented: $model.showSettings) { settingsPanel }
+        .alert("Set up Battlegrounds?", isPresented: Binding(
+            get: { model.pendingSource != nil },
+            set: { if !$0 { model.pendingSource = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { model.pendingSource = nil }
+            Button("Start setup") { model.confirmInstall() }
+        } message: {
+            Text("Setup uses \(model.pendingSource?.lastPathComponent ?? "your game disc"), downloads the official patches and private setup tools, and needs at least 3 GB of free space in \(model.home.path).")
+        }
     }
 
     var sidebar: some View {
@@ -342,7 +362,7 @@ struct LauncherView: View {
                     .onDrop(of: [.fileURL], isTargeted: $model.dropping) { providers in
                         guard !model.busy, !model.ready, let provider = providers.first else { return false }
                         _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                            if let url { DispatchQueue.main.async { model.install(url) } }
+                            if let url { DispatchQueue.main.async { model.requestInstall(url) } }
                         }
                         return true
                     }
@@ -351,7 +371,7 @@ struct LauncherView: View {
                     VStack(spacing: 13) {
                         Image(systemName: "opticaldisc").font(.system(size: 42, weight: .ultraLight))
                         Text("Use game CD").font(.custom("DINCondensed-Bold", size: 24))
-                        Text(model.disc == nil ? "Insert disc to begin" : "Disc detected")
+                        Text(model.disc == nil ? "Insert your game disc" : "Disc detected · click to set up")
                             .font(.system(size: 11)).foregroundStyle(muted)
                     }.foregroundStyle(model.disc == nil ? ivory.opacity(0.7) : amber)
                         .frame(width: 171, height: 136)
@@ -401,7 +421,7 @@ struct LauncherView: View {
             Label(message, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(amber).fixedSize(horizontal: false, vertical: true)
             HStack {
                 if let source = model.lastSource, !model.ready {
-                    Button("Try again") { model.install(source) }.disabled(model.busy)
+                    Button("Try again") { model.requestInstall(source) }.disabled(model.busy)
                 }
                 Button("Open setup log", action: model.openLog)
             }.font(.system(size: 11)).buttonStyle(.bordered)
@@ -439,7 +459,7 @@ struct LauncherView: View {
     var helpPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Getting arena-ready").font(.title2.bold()).foregroundStyle(ivory)
-            Text("Choose an ISO of your original English Battlegrounds 2.090 disc, or insert the CD. An inserted game CD is detected automatically. Setup downloads the official patches, prepares a private set of tools, and verifies the finished installation.")
+            Text("Choose an ISO of your original English Battlegrounds 2.090 disc, or insert the CD and click Use game CD. An inserted game CD is detected automatically. Confirm Start setup to download the official patches, prepare a private set of tools, and verify the finished installation.")
             Text("When everything is ready, the game starts. Next time, this screen is skipped automatically. Your original disc and ISO are never changed.")
             Text("An internet connection and 3 GB of free space are needed for first-time setup. No administrator password or system-wide packages are required.")
             Button("Done") { model.showHelp = false }.keyboardShortcut(.defaultAction)
@@ -511,6 +531,7 @@ struct LauncherView: View {
     func windowShouldClose(_ sender: NSWindow) -> Bool { NSApp.terminate(nil); return false }
 }
 
+#if !LAUNCHER_MODEL_TESTS
 @main struct Launcher {
     @MainActor static func main() {
         let delegate = AppDelegate()
@@ -518,3 +539,4 @@ struct LauncherView: View {
         withExtendedLifetime(delegate) { NSApplication.shared.run() }
     }
 }
+#endif
