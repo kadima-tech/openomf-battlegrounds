@@ -153,17 +153,15 @@ Local builds retain `0.1.0` / `1` by default; override them with
 ```sh
 python3 -m pip install --require-hashes --only-binary=:all: -r launcher/requirements.txt
 python3 -m unittest discover -s launcher -p 'test_*.py' -v
+mkdir -p launcher/build
 xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift \
   -o launcher/build/test-readiness
-xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library \
-  launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift \
-  -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
-launcher/build/test-launcher
 launcher/build/test-readiness
 xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library \
   launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift \
   -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
 launcher/build/test-launcher
+launcher/build-app.sh
 python3 launcher/install.py --home /path/to/private-state \
   --verify /path/to/game --resources launcher
 ```

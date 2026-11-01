@@ -295,7 +295,7 @@ struct LauncherView: View {
             Button("Cancel", role: .cancel) { model.pendingSource = nil }
             Button("Start setup") { model.confirmInstall() }
         } message: {
-            Text("Setup uses \(model.pendingSource?.lastPathComponent ?? "your game disc"), uses the update and tools bundled with this app offline, and needs at least 3 GB of free space in \(model.home.path).")
+            Text("Setup will install \(model.pendingSource?.lastPathComponent ?? "your game disc") using the bundled update and tools. It works offline and needs at least 3 GB of free space in \(model.home.path).")
         }
     }
 
