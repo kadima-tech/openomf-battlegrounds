@@ -26,7 +26,8 @@ for build triggers and signing details.
 
 Double-click **`launch.command`** to build and open the native launcher. On first
 run, choose your original English game CD/ISO; an inserted CD is detected
-automatically. The launcher extracts the game and applies its bundled cumulative
+automatically. Confirm **Start setup** before installation (3 GB free space
+required). The launcher extracts the game and applies its bundled cumulative
 update offline, then starts the game. The update and setup tools ship inside the
 app. Once a complete 2.123 installation is present, future launches skip setup.
 

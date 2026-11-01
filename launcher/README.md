@@ -16,20 +16,27 @@ Double-click `launch.command`, or run:
 The first source build needs Xcode command-line tools, CMake 3.20+ and Python 3.
 It fetches pinned SDL2, unshield and openindeo sources into `launcher/build/`,
 compiles them and creates `dist/Battlegrounds.app`. SDL2 and unshield are linked
-statically; Homebrew libraries are not used by the finished app. After changing
-launcher or engine code, rebuild with `launcher/build-app.sh`.
+statically; Homebrew libraries are not used by the finished app. `launch.command`
+rebuilds when launcher, engine or packaging inputs change, including added or
+deleted files after a pull. It records a source fingerprint only after a
+successful full build; failed or UI-only builds require another full build.
+You can also rebuild directly with `launcher/build-app.sh`.
 
 ## First run
 
 1. Choose an ISO image, drag one onto the ISO panel, or insert your original
    English 2.090 game CD. Matching mounted discs are detected at startup and on
-   macOS mount notifications, and start setup automatically. Unrelated discs are
-   ignored; an already mounted ISO works as a disc too.
-2. The launcher extracts your disc and applies one bundled cumulative update
+   macOS mount notifications. Click **Use game CD** to select a detected disc.
+   Unrelated discs are ignored; an already mounted ISO works as a disc too.
+2. Confirm **Start setup** after reviewing the install location and 3 GB
+   free-space requirement. Canceling leaves setup idle; mounting a disc never
+   starts installation. ISO selection, drag and drop, and retries also require
+   confirmation.
+3. The launcher extracts your disc and applies one bundled cumulative update
    directly from 2.090 to 2.123. The 17.5 MiB update, private Python runtime and
    hash-locked binary-delta decoder ship inside the app. Setup works completely
    offline: no mirrors, patch executables, CPU emulator or package downloads.
-3. All 76 original game data/module files are checked against the recorded
+4. All 76 original game data/module files are checked against the recorded
    English 2.123 SHA-256 manifest. Only then is the completed installation
    published and the native engine started.
 
@@ -146,9 +153,15 @@ Local builds retain `0.1.0` / `1` by default; override them with
 ```sh
 python3 -m pip install --require-hashes --only-binary=:all: -r launcher/requirements.txt
 python3 -m unittest discover -s launcher -p 'test_*.py' -v
+mkdir -p launcher/build
 xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift \
   -o launcher/build/test-readiness
 launcher/build/test-readiness
+xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library \
+  launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift \
+  -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
+launcher/build/test-launcher
+launcher/build-app.sh
 python3 launcher/install.py --home /path/to/private-state \
   --verify /path/to/game --resources launcher
 ```
@@ -164,8 +177,11 @@ dist/Battlegrounds.app/Contents/Resources/bin/worker \
 The backend emits JSON progress events. Unit tests cover checksum readiness,
 disc identity, corrupt updates, wrong versions, delta output bounds, cancellation,
 offline retry, atomic publication and rollback.
-Native tests cover cached readiness, same-size edits, changed expected patches,
-missing game files and malformed caches.
+Native tests cover shared Python/Swift caches, same-size edits, changed expected
+patches, missing game files, malformed caches, and setup consent. Launch tests
+cover rebuilding after changed/added/deleted inputs and refusing stale apps
+after failed builds. CI runs these tests and verifies the source fingerprint
+alongside the full app build on both supported architectures.
 CI runs `launcher/check-bundle.py` on both architectures after building. It moves
 the bundled tools to a path with spaces, starts them with a fresh home and
 untrusted Python environment variables, and denies network access with the macOS

@@ -24,7 +24,11 @@ enum Readiness {
         let files: [Stamp]
     }
     static func verify(_ root: URL, manifest: GameManifest, cacheURL: URL) -> Bool {
-        let canonicalRoot = root.resolvingSymlinksInPath().path
+        // Foundation rewrites /private/var to /var even after resolving links.
+        // Use POSIX realpath, as pathlib.Path.resolve() does in install.py.
+        guard let resolved = realpath(root.path, nil) else { return false }
+        let canonicalRoot = String(cString: resolved)
+        free(resolved)
         let cache = (try? Data(contentsOf: cacheURL)).flatMap { try? JSONDecoder().decode(Cache.self, from: $0) }
         let previous = cache?.root == canonicalRoot ? Dictionary(cache!.files.map { ($0.path, $0) }, uniquingKeysWith: { _, last in last }) : [:]
         var stamps: [Stamp] = []

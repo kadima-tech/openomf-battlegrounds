@@ -56,6 +56,10 @@ jobs:
           xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift \
             -o launcher/build/test-readiness
           launcher/build/test-readiness
+          xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library \
+            launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift \
+            -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
+          launcher/build/test-launcher
 
       - name: Build standalone app
         env:
@@ -70,6 +74,7 @@ jobs:
         run: |
           [[ "$DOWNLOAD_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
           app=dist/Battlegrounds.app
+          python3 launcher/build_state.py --check dist/.launcher-build-state
           cmp LICENSE "$app/Contents/Resources/licenses/openomf-battlegrounds.txt"
           cmp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/licenses/THIRD_PARTY_NOTICES.md"
           for notice in SDL2.txt unshield.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt Python.txt; do

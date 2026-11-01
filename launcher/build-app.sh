@@ -15,6 +15,10 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$build_number" =~ ^[0
 fi
 mkdir -p "$build" "$app/Contents/MacOS" "$app/Contents/Resources/bin" "$app/Contents/Resources/assets"
 resources="$app/Contents/Resources"
+# Failed and UI-only builds must not mark a partially updated app as current.
+state="$repo/dist/.launcher-build-state"
+build_state=$(python3 "$here/build_state.py")
+rm -f "$state"
 mkdir -p "$resources/licenses"
 cp "$repo/LICENSE" "$resources/licenses/openomf-battlegrounds.txt"
 cp "$repo/THIRD_PARTY_NOTICES.md" "$resources/licenses/THIRD_PARTY_NOTICES.md"
@@ -81,4 +85,7 @@ python3 "$here/signing.py" "$resources"
 # Ad-hoc signing is useful for local runs. Public releases still need Developer ID
 # signing and notarization; this script does not pretend to provide either.
 codesign --force --deep --sign - "$app"
+if [ "${1:-}" != "--ui-only" ]; then
+    printf '%s\n' "$build_state" > "$state"
+fi
 printf '\nBuilt %s\n' "$app"
