@@ -9,6 +9,11 @@ arch=$(uname -m)
 sdk=$(xcrun --show-sdk-path)
 mkdir -p "$build" "$app/Contents/MacOS" "$app/Contents/Resources/bin" "$app/Contents/Resources/assets"
 resources="$app/Contents/Resources"
+# Invalidate before changing the bundle. Failed and UI-only builds must never
+# make launch.command treat a partially updated app as a complete build.
+state="$repo/dist/.launcher-build-state"
+build_state=$(python3 "$here/build_state.py")
+rm -f "$state"
 
 if [ "${1:-}" != "--ui-only" ]; then
     cmake -S "$here/cmake" -B "$build/runtime" \
@@ -52,8 +57,16 @@ fi
 
 mkdir -p "$resources/licenses"
 for license in LICENSE-MIT LICENSE-APACHE; do
-    if [ ! -f "$resources/licenses/uv-$license" ]; then
-        curl --proto '=https' --tlsv1.2 -fsSL --retry 2 "https://raw.githubusercontent.com/astral-sh/uv/0.9.7/$license" -o "$resources/licenses/uv-$license"
+    case "$license" in
+        LICENSE-MIT) checksum=860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c ;;
+        LICENSE-APACHE) checksum=c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4 ;;
+    esac
+    destination="$resources/licenses/uv-$license"
+    if ! echo "$checksum  $destination" | shasum -a 256 -c - >/dev/null 2>&1; then
+        temporary="$build/uv-$license.part"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 2 "https://raw.githubusercontent.com/astral-sh/uv/0.9.7/$license" -o "$temporary"
+        echo "$checksum  $temporary" | shasum -a 256 -c -
+        mv "$temporary" "$destination"
     fi
 done
 
@@ -80,4 +93,7 @@ PLIST
 # Ad-hoc signing is useful for local runs. Public releases still need Developer ID
 # signing and notarization; this script does not pretend to provide either.
 codesign --force --deep --sign - "$app"
+if [ "${1:-}" != "--ui-only" ]; then
+    printf '%s\n' "$build_state" > "$state"
+fi
 printf '\nBuilt %s\n' "$app"
