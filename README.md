@@ -17,12 +17,19 @@ The port follows the game's final official patch, **2.123**.
 
 ## Launcher (macOS)
 
+Download the Apple silicon (`arm64`) or Intel (`x86_64`) ZIP from
+[Releases](https://github.com/kadima-tech/openomf-battlegrounds/releases), unzip it,
+and open **`Battlegrounds.app`** on macOS 13 or newer. Dev builds are marked
+**Pre-release**. Downloads include the compiled engine and launcher; you still
+need your own game CD/ISO. See [launcher/README.md](launcher/README.md#ci-builds-and-releases)
+for build triggers and signing details.
+
 Double-click **`launch.command`** to build and open the native launcher. On first
 run, choose your original English game CD/ISO; an inserted CD is detected
-automatically. Confirm **Start setup** to allow downloads and installation
-(internet access and 3 GB free space required). The launcher extracts the game, downloads and applies the official
-patches, installs its setup tools privately in the game folder, then starts the
-game. Once a complete 2.123 installation is present, future launches skip setup.
+automatically. Confirm **Start setup** before installation (3 GB free space
+required). The launcher extracts the game and applies its bundled cumulative
+update offline, then starts the game. The update and setup tools ship inside the
+app. Once a complete 2.123 installation is present, future launches skip setup.
 
 The source build needs Xcode's command-line tools, CMake and Python 3. The resulting
 **`dist/Battlegrounds.app`** can be distributed without those build tools or
@@ -32,8 +39,9 @@ remain available for development.
 
 ## You need the game
 
-No game data is included in this repository. You need your own copy of *One Must Fall:
-Battlegrounds*, either the Windows CD or an ISO image of it, and the official patches up to 2.123.
+You need your own copy of *One Must Fall: Battlegrounds*, either the original English
+Windows CD or an ISO image of it. The launcher includes a cumulative 2.090 → 2.123
+update; a complete game installation is not included.
 
 ## Building
 
@@ -56,7 +64,11 @@ cmake --build engine/build -j
 The Indeo video decoder, [openindeo](https://github.com/kadima-tech/openindeo), is fetched by CMake
 automatically. Run `ctest --test-dir engine/build` to check that your game data parses.
 
-## Installing the game data
+## Reconstructing the historical patch chain
+
+The launcher installs directly from your disc/ISO using its bundled cumulative update,
+with no network access. The steps below are for developers reproducing the original
+version trees for analysis; they are not needed to use the app.
 
 **1. Unpack the disc.** Copy your ISO into `source/` and extract its installer:
 
@@ -125,15 +137,29 @@ read from. The copy-protected game executable is never decrypted.
 
 ## Contributing
 
-Contributions and bug reports are welcome. [DEVELOPING.md](DEVELOPING.md) describes the code, the
-tools and the debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) is the list of open work;
-[PATCHES.md](PATCHES.md) documents what the official patches changed.
+Contributions and bug reports are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md)
+and our [Code of Conduct](CODE_OF_CONDUCT.md). [DEVELOPING.md](DEVELOPING.md) describes
+the code, tools and debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) lists open
+work; [PATCHES.md](PATCHES.md) documents the official patches. Report vulnerabilities
+using [SECURITY.md](SECURITY.md).
+
+## License
+
+This project's original code and documentation are available under the
+[MIT license](LICENSE), including its warranty disclaimer and limitation of liability.
+The macOS downloads include this license and the dependency notices in
+`Battlegrounds.app/Contents/Resources/licenses/`.
+
+Third-party components retain their own terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The original game and its update
+data, including the bundled cumulative update, are not covered by this project's
+MIT license. You still need your own copy of the game.
 
 ## Credits
 
 *One Must Fall: Battlegrounds* was developed by Diversions Entertainment and belongs to its rights
-holders. This project is not affiliated with or endorsed by them, and contains none of the game's
-data.
+holders. This project is not affiliated with or endorsed by them and does not include
+a complete copy of the game.
 
 Third-party code included in this repository keeps its own licence: GothicKit's
 [dmusic](https://github.com/GothicKit/dmusic) (MIT, vendored in `engine/third_party/dmusic`) and a C

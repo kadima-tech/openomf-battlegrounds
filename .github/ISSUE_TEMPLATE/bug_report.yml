@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a launcher, engine or gameplay problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check existing issues and PLACEHOLDERS.md first. For security issues, follow SECURITY.md.
+        Do not attach game files, disc images, extracted scripts, decompiler dumps or private information.
+  - type: input
+    id: version
+    attributes:
+      label: App version or commit
+      description: Include the release/dev build identifier, or the source commit.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: macOS version and CPU architecture
+      placeholder: macOS 15, Apple silicon (arm64) or Intel (x86_64)
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Installation and game setup
+      description: Launcher or source build? English disc/ISO or existing installation? Which game version?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the tournament, robot, pilot and arena when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and screenshots
+      description: Remove personal paths and private information before attaching logs.

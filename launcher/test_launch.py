@@ -13,7 +13,7 @@ class LaunchTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
         source = Path(__file__).resolve().parent.parent
-        for name in ("launch.command", "launcher/build_state.py", "re/scripts/rtpatch_emu.py",
+        for name in ("launch.command", "launcher/build_state.py", "LICENSE", "THIRD_PARTY_NOTICES.md",
                      "re/scripts/directx_tables.py"):
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
