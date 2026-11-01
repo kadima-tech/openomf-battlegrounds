@@ -1,0 +1,37 @@
+name: macOS launcher
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python regression tests
+        run: python3 -m unittest discover -s launcher -p 'test_*.py' -v
+      - name: Swift readiness and cache compatibility
+        run: |
+          mkdir -p launcher/build
+          xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift -o launcher/build/test-readiness
+          launcher/build/test-readiness
+      - name: Setup consent regression tests
+        run: |
+          xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
+          launcher/build/test-launcher
+      - name: Build complete app
+        run: launcher/build-app.sh
+      - name: Verify bundle and source fingerprint
+        run: |
+          codesign --verify --deep --strict dist/Battlegrounds.app
+          python3 launcher/build_state.py --check dist/.launcher-build-state

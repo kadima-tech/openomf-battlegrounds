@@ -16,21 +16,28 @@ Double-click `launch.command`, or run:
 The first source build needs Xcode command-line tools, CMake 3.20+ and Python 3.
 It fetches pinned SDL2, unshield and openindeo sources into `launcher/build/`,
 compiles them and creates `dist/Battlegrounds.app`. SDL2 and unshield are linked
-statically; Homebrew libraries are not used by the finished app. After changing
-launcher or engine code, rebuild with `launcher/build-app.sh`.
+statically; Homebrew libraries are not used by the finished app. `launch.command`
+rebuilds when the launcher, engine or packaging inputs change, including added
+or deleted files after a pull. It records a source fingerprint only after a
+successful full build; failed or UI-only builds require another full build.
+You can also rebuild directly with `launcher/build-app.sh`.
 
 ## First run
 
 1. Choose an ISO image, drag one onto the ISO panel, or insert your original
    English 2.090 game CD. Matching mounted discs are detected at startup and on
-   macOS mount notifications, and start setup automatically. Unrelated discs are
-   ignored; an already mounted ISO works as a disc too.
-2. The launcher downloads a private Python runtime and the hash-locked patching
+   macOS mount notifications. Click **Use game CD** to select a detected disc.
+   Unrelated discs are ignored; an already mounted ISO works as a disc too.
+2. Confirm **Start setup** after reviewing the downloads, install location and
+   3 GB free-space requirement. Canceling leaves setup idle; mounting a disc
+   never starts installation. This confirmation also applies to ISO selection,
+   drag and drop, and retries.
+3. The launcher downloads a private Python runtime and the hash-locked patching
    packages. It extracts your disc, downloads and verifies the eight official
    patch executables, and applies them using the existing RTPatch CPU emulator.
    Windows executables are never run natively. Locally supplied patches in
    `source/patches/` are reused only when their checksums match.
-3. All 76 original game data/module files are checked against the recorded
+4. All 76 original game data/module files are checked against the recorded
    English 2.123 SHA-256 manifest. Only then is the completed installation
    published and the native engine started.
 
@@ -91,6 +98,8 @@ launcher/build-app.sh
 
 Distribute `dist/Battlegrounds.app` as a zip. The build script includes the
 engine, static extractor, pinned standalone uv and third-party license notices.
+The uv archive and both uv license notices have pinned SHA-256 checksums;
+cached notices are checked on each build and replaced only after verification.
 It rejects non-system dynamic library dependencies. Python and patch packages
 are downloaded into the player's game folder only when setup is needed.
 No game files, patches or DirectX-derived tables are included in the app.
@@ -103,9 +112,15 @@ signing and Apple notarization. This workflow does not publish a release.
 
 ```sh
 python3 -m unittest discover -s launcher -p 'test_*.py' -v
+mkdir -p launcher/build
 xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift \
   -o launcher/build/test-readiness
 launcher/build/test-readiness
+xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library \
+  launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift \
+  -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
+launcher/build/test-launcher
+launcher/build-app.sh
 python3 launcher/install.py --home /path/to/private-state \
   --verify /path/to/game --resources launcher
 ```
@@ -120,8 +135,11 @@ dist/Battlegrounds.app/Contents/Resources/bin/worker \
 
 The backend emits JSON progress events. Unit tests cover checksum readiness,
 disc identity, corrupt/oversized downloads, atomic publication and rollback.
-Native tests cover cached readiness, same-size edits, changed expected patches,
-missing game files and malformed caches.
+Native tests cover shared Python/Swift caches, same-size edits, changed expected
+patches, missing game files, malformed caches, and setup consent. Launch tests
+cover rebuilding after changed/added/deleted sources and refusing stale apps
+after failed builds. The macOS launcher workflow runs these tests and the full
+app build on pull requests and pushes to main.
 Real-disc end-to-end testing needs your own game data; none is committed.
 
 Patch URLs and checksums are in `patches.json`, from the

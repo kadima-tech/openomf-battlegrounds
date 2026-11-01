@@ -19,7 +19,8 @@ The port follows the game's final official patch, **2.123**.
 
 Double-click **`launch.command`** to build and open the native launcher. On first
 run, choose your original English game CD/ISO; an inserted CD is detected
-automatically. The launcher extracts the game, downloads and applies the official
+automatically. Confirm **Start setup** to allow downloads and installation
+(internet access and 3 GB free space required). The launcher extracts the game, downloads and applies the official
 patches, installs its setup tools privately in the game folder, then starts the
 game. Once a complete 2.123 installation is present, future launches skip setup.
 
