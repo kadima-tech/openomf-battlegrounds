@@ -1,5 +1,5 @@
 """ISO 9660 reading used by Windows setup; synthetic images, no game disc needed."""
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import struct
 import tempfile
 import unittest
@@ -174,18 +174,19 @@ class LockTests(unittest.TestCase):
             self.assertEqual(install.unshield_path(cabinet),
                              "C:/Users/player/Battlegrounds Files/.install-1a/disc/Setup/data1.cab")
         with patch.object(install, "WINDOWS", False):
-            self.assertEqual(install.unshield_path(Path("/tmp/disc/Setup/data1.cab")), "/tmp/disc/Setup/data1.cab")
+            self.assertEqual(install.unshield_path(PurePosixPath("/tmp/disc/Setup/data1.cab")), "/tmp/disc/Setup/data1.cab")
 
     def test_unshield_creates_relative_folders_on_windows(self):
         # unshield creates folders from the start of the path; a bare "C:" cannot be created.
         work = PureWindowsPath(r"C:\Users\player\Battlegrounds Files\.install-1a")
         cabinet = PureWindowsPath(r"D:\Setup\data1.cab")  # a real CD
         with patch.object(install, "WINDOWS", True):
-            command, folder = install.unshield_command(Path("res"), work, work / "unpacked", cabinet)
+            command, folder = install.unshield_command(PureWindowsPath("res"), work, work / "unpacked", cabinet)
         self.assertEqual(command[1:], ["-d", "unpacked", "x", "D:/Setup/data1.cab"])
         self.assertEqual(folder, work)
         with patch.object(install, "WINDOWS", False):
-            command, folder = install.unshield_command(Path("res"), Path("/w"), Path("/w/unpacked"), Path("/cd/Setup/data1.cab"))
+            command, folder = install.unshield_command(PurePosixPath("res"), PurePosixPath("/w"), PurePosixPath("/w/unpacked"),
+                                                      PurePosixPath("/cd/Setup/data1.cab"))
         self.assertEqual(command[1:], ["-d", "/w/unpacked", "x", "/cd/Setup/data1.cab"])
         self.assertIsNone(folder)
 
