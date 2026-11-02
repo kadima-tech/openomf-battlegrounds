@@ -36,7 +36,11 @@ set(USE_OUR_OWN_MD5 ON CACHE BOOL "" FORCE)
 FetchContent_Declare(unshield
     URL https://codeload.github.com/twogood/unshield/tar.gz/refs/tags/1.5.1
     URL_HASH SHA256=34cd97ff1e6f764436d71676e3d6842dc7bd8e2dd5014068da5c560fe4661f60)
+# unshield's bundled MD5 code uses K&R declarations, which C23 (GCC 15+'s default, as in MSYS2)
+# rejects. Build it as C17, what Apple clang defaults to.
+set(CMAKE_C_STANDARD 17)
 FetchContent_MakeAvailable(unshield)
+unset(CMAKE_C_STANDARD)
 
 set(OPENINDEO_GIT_TAG "5452df0c8900f0892e701253481bf5c311a9a9d7" CACHE STRING "" FORCE)
 set(OPENINDEO_DIR "${CMAKE_CURRENT_BINARY_DIR}/no-local-openindeo" CACHE PATH "" FORCE)
