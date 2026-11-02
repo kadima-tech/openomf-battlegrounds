@@ -39,6 +39,11 @@ FetchContent_Declare(unshield
 # unshield's bundled MD5 code uses K&R declarations, which C23 (GCC 15+'s default, as in MSYS2)
 # rejects. Build it as C17, what Apple clang defaults to.
 set(CMAKE_C_STANDARD 17)
+if(WIN32)
+    # iconv only serves unshield's -e (filename encoding) option, which setup does not use.
+    # MSYS2 has a libiconv that would make unshield.exe need libiconv-2.dll; skip the probe.
+    set(HAVE_ICONV "" CACHE INTERNAL "unshield: iconv disabled on Windows")
+endif()
 FetchContent_MakeAvailable(unshield)
 unset(CMAKE_C_STANDARD)
 
