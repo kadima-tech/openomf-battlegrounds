@@ -138,6 +138,14 @@ int wmain(int argc, wchar_t **argv) {
 	CHECK(!model.pending_source && model.error && !model.busy, "Confirmation must enter setup");
 	CHECK(fs::exists(home), "Confirmation must create the game folder");
 
+	// Setup runs in the game folder: a relative choice must reach it as an absolute path.
+	const fs::path original = fs::current_path();
+	fs::current_path(root);
+	model.request_install(L"game.iso");
+	fs::current_path(original);
+	CHECK(model.pending_source == root / L"game.iso", "A relative source must become absolute");
+	model.cancel_pending();
+
 	// Arguments survive the round trip through the Windows command line.
 	for (std::wstring a : {L"plain", L"with space", L"C:\\Games\\", L"C:\\Program Files\\x\\", L"quote\"inside", L"", L"tail\\\\"}) {
 		std::wstring line = L"prog.exe " + quote_argument(a);

@@ -617,9 +617,11 @@ void LauncherModel::scan_discs(const std::vector<fs::path> &volumes) {
 	changed();
 }
 
-void LauncherModel::request_install(const fs::path &source) {
+void LauncherModel::request_install(const fs::path &requested) {
 	if (busy || preview || ready) return;
 	std::error_code ec;
+	// Setup runs in the game folder, so a relative path would point somewhere else there.
+	const fs::path source = fs::absolute(requested, ec);
 	std::wstring ext = source.extension().wstring();
 	std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
 	if (!fs::is_directory(source, ec) && ext != L".iso") {
