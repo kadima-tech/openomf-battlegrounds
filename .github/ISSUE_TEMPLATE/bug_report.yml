@@ -16,8 +16,9 @@ body:
   - type: input
     id: system
     attributes:
-      label: macOS version and CPU architecture
-      placeholder: macOS 15, Apple silicon (arm64) or Intel (x86_64)
+      label: Operating system and CPU architecture
+      description: For Linux, include the distribution, desktop (X11 or Wayland) and GPU driver.
+      placeholder: macOS 15 on Apple silicon (arm64), or Ubuntu 24.04 GNOME Wayland, Mesa, x86_64
     validations:
       required: true
   - type: textarea

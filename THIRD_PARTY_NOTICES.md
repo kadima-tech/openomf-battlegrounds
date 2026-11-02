@@ -5,9 +5,10 @@ covers this project's original code and documentation.
 Third-party components retain their own copyrights and license terms. Preserve
 their notices when redistributing source or binaries.
 
-## Components in the macOS app
+## Components in the macOS and Linux apps
 
-The paths below are relative to `Battlegrounds.app/Contents/Resources/`.
+The paths below are relative to `Battlegrounds.app/Contents/Resources/` on macOS
+and `Battlegrounds/resources/` on Linux.
 The full upstream texts, rather than this index, define each component's terms.
 
 | Component | Upstream / version | License and bundled notice |
@@ -20,6 +21,7 @@ The full upstream texts, rather than this index, define each component's terms.
 | openindeo | [kadima-tech/openindeo](https://github.com/kadima-tech/openindeo), commit `5452df0c8900f0892e701253481bf5c311a9a9d7` | MIT; `licenses/openindeo.txt` |
 | CPython runtime and included libraries | Python 3.12.12, managed by [uv](https://github.com/astral-sh/uv) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
 | bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.2.6 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.2.6.dist-info/` |
+| Tcl/Tk (Linux runtime only) | Included in the Linux CPython runtime ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)), which also links X11 client libraries into Tk; the launcher does not use Tk | Tcl/Tk BSD-style license; `licenses/Tcl-Tk.txt`; X.Org libraries under MIT/X11-style terms |
 
 The vendored dmusic source notices are also available in
 [`engine/third_party/dmusic/`](https://github.com/kadima-tech/openomf-battlegrounds/tree/main/engine/third_party/dmusic).
@@ -27,6 +29,10 @@ Dependency versions
 and integrity pins live in `launcher/cmake/CMakeLists.txt`, `launcher/bundle-setup.sh`
 and `launcher/requirements.txt`. uv is a build-time tool and is not distributed
 in the finished app. macOS system frameworks and libraries are supplied by macOS.
+On Linux, glibc, zlib, OpenGL, GTK 3 and its libraries, and the X11/Wayland and
+audio client libraries SDL2 opens at runtime are supplied by the player's
+distribution and are not bundled. The SDL2 and C++ runtime code linked into the
+Linux engine retains the notices above and GCC's runtime library exception.
 
 ## Original game and update data
 

@@ -2,6 +2,9 @@
 # Developer packaging step. The resulting .app needs no compiler or Homebrew.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
+if [ "$(uname -s)" != Darwin ]; then
+    exec "$here/build-linux.sh" "$@"
+fi
 repo=$(cd "$here/.." && pwd)
 build="$here/build"
 app="$repo/dist/Battlegrounds.app"

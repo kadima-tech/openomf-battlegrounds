@@ -9,13 +9,14 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 
+import iso9660
 from patching import apply_patch, digest
 
 PRODUCT_GUID = "b8ef8b5a-6d15-436c-ac07-5f2bd5e1aa1b"
@@ -39,7 +40,7 @@ def verify(root: Path, manifest: dict) -> None:
 def record_verified(root: Path, manifest: dict, destination: Path) -> None:
     """Seed the native readiness cache only after full checksum verification.
 
-    macOS ctime/mtime nanoseconds and inode detect replacements and ordinary
+    ctime/mtime nanoseconds and inode detect replacements and ordinary
     edits without rereading 730 MB on every start. Expected digests invalidate
     the cache if a future app targets a different official data version.
     """
@@ -54,7 +55,41 @@ def record_verified(root: Path, manifest: dict, destination: Path) -> None:
 
 
 def child_named(root: Path, name: str) -> Path:
+    if not root.is_dir():
+        return root / name
     return next((p for p in root.iterdir() if p.name.casefold() == name.casefold()), root / name)
+
+
+def match_manifest_case(root: Path, manifest: dict) -> None:
+    """Rename extracted entries whose names differ from the manifest only by case.
+
+    A no-op on macOS's case-insensitive volumes; on Linux it keeps the verified
+    tree identical to the recorded file list whatever case the cabinet used.
+    """
+    for item in manifest["files"]:
+        current = root
+        for part in PurePosixPath(item["path"]).parts:
+            wanted = current / part
+            if not wanted.exists() and current.is_dir():
+                found = child_named(current, part)
+                if found.exists() and not found.is_symlink():
+                    found.rename(wanted)
+            current = wanted
+
+
+def extract_setup(source: Path, disc: Path, log) -> Path:
+    """Copy the installer folder off an ISO image into `disc`."""
+    if sys.platform == "darwin":
+        listing = subprocess.check_output(["/usr/bin/bsdtar", "-tf", str(source)], text=True)
+        entry = next((x for x in listing.splitlines() if x.strip("./").lower() == "setup"), None)
+        if not entry:
+            raise ValueError("This image does not contain the Battlegrounds installer.")
+        run(["/usr/bin/bsdtar", "-xf", source, "-C", disc, entry], log)
+        return disc
+    log.write(f"\n> extract Setup from {source}\n")
+    if iso9660.extract_directory(source, "Setup", disc) is None:
+        raise ValueError("This image does not contain the Battlegrounds installer.")
+    return disc
 
 
 def disc_setup(root: Path) -> Path:
@@ -115,18 +150,19 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 else:
                     if not source.is_file() or source.suffix.lower() != ".iso":
                         raise ValueError("Choose a Battlegrounds ISO image or insert the original game CD.")
-                    listing = subprocess.check_output(["/usr/bin/bsdtar", "-tf", str(source)], text=True)
-                    entry = next((x for x in listing.splitlines() if x.strip("./").lower() == "setup"), None)
-                    if not entry:
-                        raise ValueError("This image does not contain the Battlegrounds installer.")
                     disc = work / "disc"
                     disc.mkdir()
-                    run(["/usr/bin/bsdtar", "-xf", source, "-C", disc, entry], log)
-                    setup = disc_setup(disc)
+                    setup = disc_setup(extract_setup(source, disc, log))
                 emit("files", "active", "Unpacking the original game files…")
                 unpacked = work / "unpacked"
-                run([resources / "bin/unshield", "-d", unpacked, "x", child_named(setup, "data1.cab")], log)
-                game = unpacked / "App_Executables"
+                try:
+                    run([resources / "bin/unshield", "-d", unpacked, "x", child_named(setup, "data1.cab")], log)
+                except subprocess.CalledProcessError:
+                    raise ValueError("The game disc could not be unpacked. Check the disc or ISO image and retry; "
+                                     "details are in the setup log.") from None
+                game = child_named(unpacked, "App_Executables")
+                manifest = json.loads((resources / "game-files.json").read_text())
+                match_manifest_case(game, manifest)
                 if not (game / "Data/OMFBGGUI.DEObjects").is_file():
                     raise ValueError("This disc edition is not supported. Use the original English 2.090 CD.")
                 emit("files", "done", "Original game files extracted")
@@ -136,7 +172,6 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 log.write("Bundled cumulative update applied · 2.090 → 2.123\n")
                 emit("patches", "done", "Bundled update applied · 2.123")
                 emit("runtime", "active", "Verifying every game file…")
-                manifest = json.loads((resources / "game-files.json").read_text())
                 verify(game, manifest)
                 publish(game, home / "game")
                 try:

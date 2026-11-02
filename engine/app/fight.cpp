@@ -39,6 +39,7 @@
 #include "render.h"
 #include "glow.h"
 #include "game_view.h"
+#include "gl_window.h"
 #include "de/lighting.h"
 
 namespace {
@@ -596,10 +597,9 @@ int main(int argc, char **argv) {
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 		const int W = 1280, H = 720;
 		std::string title = "One Must Fall: Battlegrounds — " + name + (fighters.size() > 1 ? " vs " + opponent : "") + " in " + arena;
-		SDL_Window *win = SDL_CreateWindow(title.c_str(),
-		                                   SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
-		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
-		SDL_GLContext ctx = SDL_GL_CreateContext(win);
+		SDL_GLContext ctx = nullptr;
+		SDL_Window *win = glu::create_gl_window(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
+		                                        SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN), &ctx);
 		SDL_GL_SetSwapInterval(1);
 		if (shot) {
 			glu::offscreen(W, H);

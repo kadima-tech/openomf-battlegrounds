@@ -2,7 +2,8 @@
 
 ## First-run launcher
 
-The native macOS setup app (`launcher/Launcher.swift`) uses a service-bay theme:
+The native setup app (`launcher/Launcher.swift` on macOS, `launcher/linux-launcher.c`
+with GTK 3 on Linux) uses a service-bay theme:
 graphite panels, warm ivory type, amber actions and a robot engineering schematic.
 The artwork is original and available before the player's disc is unpacked. Its
 left rail carries the brand and schematic; the main panel has ISO/drop and CD
@@ -13,7 +14,8 @@ opens directly into the engine without displaying the setup window.
 
 Launcher colors: panel `#141718`, ivory `#E8E3D4`, muted `#878F8C`, amber
 `#FFB529`. Typography uses native system sans serif, rounded heavy headings and
-monospaced technical labels. This setup interface is separate from the original
+monospaced technical labels; on Linux, the desktop's fonts (a condensed face for
+headings when one is installed). This setup interface is separate from the original
 game menus documented below.
 
 This project reimplements a 2003 game, so its look is the original's: the menus, HUD, fonts and

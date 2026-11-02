@@ -129,6 +129,9 @@ set_tests_properties(de-all-files PROPERTIES LABELS full)
 if(NOT TARGET SDL2::SDL2)
 	find_package(SDL2 REQUIRED)
 endif()
+# On Linux, link libGL.so.1: every OpenGL driver stack provides it, while GLVND's
+# libOpenGL.so.0 is a separate package some distributions do not install.
+set(OpenGL_GL_PREFERENCE LEGACY)
 find_package(OpenGL REQUIRED)
 add_executable(openbg-viewer app/viewer.cpp)
 target_link_libraries(openbg-viewer PRIVATE de SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)

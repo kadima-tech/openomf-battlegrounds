@@ -2,7 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 project(openbg_launcher_runtime LANGUAGES C CXX)
 include(FetchContent)
 
-# Both libraries are linked statically. End users need no Homebrew packages.
+# Linux players need no particular C++ runtime: link it statically. SDL2 still
+# loads X11/Wayland, audio servers and libGL from the desktop at runtime.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	add_link_options(-static-libstdc++ -static-libgcc)
+endif()
+
+# Both libraries are linked statically. End users need no Homebrew or distro packages.
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)

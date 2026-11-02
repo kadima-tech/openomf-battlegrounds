@@ -1,8 +1,15 @@
 // Small shared helpers for the SDL2 + OpenGL 4.1 core apps.
 #pragma once
 
+#if defined(__APPLE__)
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl3.h>
+#else
+// Core-profile declarations only, like macOS's gl3.h. libGL/libOpenGL (Mesa,
+// GLVND and the proprietary drivers) export every core entry point directly.
+#define GL_GLEXT_PROTOTYPES 1
+#include <GL/glcorearb.h>
+#endif
 #include <zlib.h>
 
 #include <cmath>

@@ -12,6 +12,7 @@
 #include <random>
 
 #include "de/contents.h"
+#include "de/user_dirs.h"
 #include "game/runtime.h"
 #include "game/session.h"
 #include "game/simple_physics.h"
@@ -1298,10 +1299,7 @@ StateRecord *SessionRecord::find(const std::string &id) const {
 	return nullptr;
 }
 
-std::string recordings_dir() {
-	const char *home = getenv("HOME");
-	return std::string(home ? home : ".") + "/Library/Application Support/openbg/Recordings";
-}
+std::string recordings_dir() { return de::user_data_dir() + "/Recordings"; }
 
 // DE_CRecordingListUIManager::Begin (OMF 0x35062040) finds every SessionRecord in the loaded
 // files: ours are the data folder's and the Recordings folder's.

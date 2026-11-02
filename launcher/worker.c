@@ -1,4 +1,5 @@
 // Give setup its own process group, so closing the app also stops its children.
+#include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -10,8 +11,17 @@ int main(int argc, char **argv) {
     if (getpgrp() != getpid() && setsid() < 0 && setpgid(0, 0) < 0) { perror("setup process group"); return 1; }
     char path[PATH_MAX];
     if (snprintf(path, sizeof(path), "%s/bootstrap.lock", argv[2]) >= (int)sizeof(path)) return 1;
+    // The game folder may not exist yet when setup is started from a terminal.
+    if (mkdir(argv[2], 0755) < 0 && errno != EEXIST) {
+        puts("{\"stage\":\"error\",\"status\":\"error\",\"detail\":\"Could not create the game folder. Check its location and permissions.\"}");
+        return 1;
+    }
     int lock = open(path, O_CREAT | O_RDWR, 0600);
-    if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB) < 0) {
+    if (lock < 0) {
+        puts("{\"stage\":\"error\",\"status\":\"error\",\"detail\":\"Could not open the game folder. Check its location and permissions.\"}");
+        return 1;
+    }
+    if (flock(lock, LOCK_EX | LOCK_NB) < 0) {
         puts("{\"stage\":\"error\",\"status\":\"error\",\"detail\":\"Setup is already running in another window.\"}");
         return 1;
     }
