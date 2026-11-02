@@ -4,6 +4,7 @@
 // images, with the top control's input routing (capture, hover, focus, modal dialogs, popups).
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <memory>
@@ -353,8 +354,11 @@ public:
 	// collapsed at first, each level in row order.
 	bool tree = false;
 	std::string title;
-	float entry_h = 20;  // SetMinEntrySize, pixels
+	float entry_h = 20;  // SetMinEntrySize: the smallest row height, pixels
 	float text_px;       // SizeListControlEntryText
+	// A row is at least entry_h and at least as tall as its text. The original's 20 is a minimum:
+	// at 1024x768 its ~19-pixel text fits it, and the text grows with the resolution (vy(16)).
+	float row_h() const { return std::max(entry_h, text_px); }
 	int selected = -1, hover = -1;
 	std::function<void(int)> on_select, on_double;
 	PageViewer *viewer;
@@ -368,8 +372,8 @@ public:
 	bool wheel(int dy) override { return viewer->wheel(dy); }
 
 private:
-	float title_h() const { return title.empty() ? 0 : entry_h; }
-	float header_h() const { return columns.size() > 1 ? entry_h : 0; }
+	float title_h() const { return title.empty() ? 0 : row_h(); }
+	float header_h() const { return columns.size() > 1 ? row_h() : 0; }
 	int row_at(float y) const;
 	void rebuild();
 	float indent(int row) const { return float(depth_[size_t(row)] + 1) * 20; }
