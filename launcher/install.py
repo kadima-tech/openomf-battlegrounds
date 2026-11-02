@@ -102,6 +102,13 @@ def tool(resources: Path, name: str) -> Path:
     return resources / "bin" / (name + ".exe" if WINDOWS else name)
 
 
+def unshield_path(path: Path) -> str:
+    """A path as unshield 1.5.1 can take it apart. It finds a cabinet's other volumes
+    (data1.hdr, data2.cab) by splitting at the last "/", so on Windows a path with
+    backslashes sends it looking for the wrong files. Windows accepts forward slashes."""
+    return path.as_posix() if WINDOWS else str(path)
+
+
 class SetupLock:
     """An exclusive, non-blocking lock that the OS releases if setup is killed."""
 
@@ -211,7 +218,8 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                     setup = disc_setup(extract_setup(source, work, log))
                 emit("files", "active", "Unpacking the original game files…")
                 unpacked = work / "unpacked"
-                run([tool(resources, "unshield"), "-d", unpacked, "x", child_named(setup, "data1.cab")], log)
+                run([tool(resources, "unshield"), "-d", unshield_path(unpacked), "x",
+                     unshield_path(child_named(setup, "data1.cab"))], log)
                 game = unpacked / "App_Executables"
                 if not (game / "Data/OMFBGGUI.DEObjects").is_file():
                     raise ValueError("This disc edition is not supported. Use the original English 2.090 CD.")

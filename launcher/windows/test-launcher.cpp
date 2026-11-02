@@ -68,6 +68,8 @@ static int packaged_setup(const fs::path &app, const fs::path &image, const fs::
 	CHECK_SETUP(!model.ready && !fs::exists(home / L"game"), "A failed setup must not publish a game");
 	auto log = read_file(home / L"install.log");
 	CHECK_SETUP(log && log->find("read ISO 9660 image") != std::string::npos, "Setup must read the image itself");
+	// unshield finds the cabinet's other volumes by splitting its path at the last "/".
+	CHECK_SETUP(log->find("/disc/SETUP/DATA1.CAB") != std::string::npos, "The extractor must get a forward-slash cabinet path");
 	CHECK_SETUP(fs::exists(home / L"bootstrap.log"), "Setup diagnostics must go to bootstrap.log");
 #undef CHECK_SETUP
 	printf("Packaged setup checks passed (bundled Python, image reading, extractor, error events)\n");

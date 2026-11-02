@@ -1,5 +1,5 @@
 """ISO 9660 reading used by Windows setup; synthetic images, no game disc needed."""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import struct
 import tempfile
 import unittest
@@ -166,6 +166,15 @@ class LockTests(unittest.TestCase):
                         pass
             with install.SetupLock(path):
                 pass
+
+    def test_unshield_gets_forward_slashes_on_windows(self):
+        # unshield finds data1.hdr and data2.cab by splitting the cabinet path at the last "/".
+        cabinet = PureWindowsPath(r"C:\Users\player\Battlegrounds Files\.install-1a\disc\Setup\data1.cab")
+        with patch.object(install, "WINDOWS", True):
+            self.assertEqual(install.unshield_path(cabinet),
+                             "C:/Users/player/Battlegrounds Files/.install-1a/disc/Setup/data1.cab")
+        with patch.object(install, "WINDOWS", False):
+            self.assertEqual(install.unshield_path(Path("/tmp/disc/Setup/data1.cab")), "/tmp/disc/Setup/data1.cab")
 
     def test_windows_tools_have_exe_names(self):
         with patch.object(install, "WINDOWS", True):
