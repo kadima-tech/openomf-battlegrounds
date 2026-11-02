@@ -893,14 +893,19 @@ static gboolean draw_stage_ring(GtkWidget *widget, cairo_t *cr, gpointer index) 
 	return FALSE;
 }
 
+// Render the window offscreen rather than reading it back from the display:
+// gdk_pixbuf_get_from_window() aborts with cairo 1.16 (Ubuntu 22.04), and
+// reading back does not work on Wayland.
 static gboolean take_screenshot(gpointer data) {
 	(void)data;
-	GdkWindow *window = gtk_widget_get_window(V.window);
-	GdkPixbuf *shot = gdk_pixbuf_get_from_window(window, 0, 0, gdk_window_get_width(window), gdk_window_get_height(window));
-	if (shot) {
-		gdk_pixbuf_save(shot, V.screenshot, "png", NULL, NULL);
-		g_object_unref(shot);
-	}
+	int width = gtk_widget_get_allocated_width(V.window), height = gtk_widget_get_allocated_height(V.window);
+	cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+	cairo_t *cr = cairo_create(surface);
+	gtk_widget_draw(V.window, cr);
+	cairo_destroy(cr);
+	cairo_status_t status = cairo_surface_write_to_png(surface, V.screenshot);
+	cairo_surface_destroy(surface);
+	if (status != CAIRO_STATUS_SUCCESS) g_printerr("Could not save %s: %s\n", V.screenshot, cairo_status_to_string(status));
 	gtk_main_quit();
 	return G_SOURCE_REMOVE;
 }
