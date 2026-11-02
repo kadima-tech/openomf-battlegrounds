@@ -70,7 +70,7 @@ def record_verified(root: Path, manifest: dict, destination: Path) -> None:
         files.append(dict(item, modified=f"{info.st_mtime_ns // 10**9}:{info.st_mtime_ns % 10**9}",
                           changed=f"{changed // 10**9}:{changed % 10**9}", inode=info.st_ino))
     temporary = destination.with_suffix(".tmp")
-    temporary.write_text(json.dumps(dict(root=str(root.resolve()), files=files)))
+    temporary.write_text(json.dumps(dict(root=str(root.resolve()), files=files)), encoding="utf-8")
     temporary.replace(destination)
 
 
@@ -81,7 +81,7 @@ def child_named(root: Path, name: str) -> Path:
 def disc_setup(root: Path) -> Path:
     setup = child_named(root, "Setup")
     ini = child_named(setup, "setup.ini")
-    if PRODUCT_GUID not in ini.read_text(errors="replace").lower():
+    if PRODUCT_GUID not in ini.read_text(encoding="latin-1").lower():
         raise ValueError("This is not a One Must Fall: Battlegrounds game disc.")
     for name in ("data1.cab", "data1.hdr", "data2.cab"):
         if not child_named(setup, name).is_file():
@@ -191,7 +191,9 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
     with SetupLock(home / "install.lock"):
         if shutil.disk_usage(home).free < 3 * 1024**3:
             raise ValueError("Setup needs at least 3 GB of free space. Free some space and retry.")
-        with (home / "install.log").open("w", buffering=1) as log:
+        # Explicit UTF-8: the default is the locale's encoding (cp1252 on most Windows systems),
+        # which cannot write the log's arrows and middle dots.
+        with (home / "install.log").open("w", buffering=1, encoding="utf-8") as log:
             # Remove only abandoned private staging directories, while holding the lock.
             for stale in home.glob(".install-*"):
                 if stale.is_dir() and not stale.is_symlink():
@@ -220,7 +222,7 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 log.write("Bundled cumulative update applied · 2.090 → 2.123\n")
                 emit("patches", "done", "Bundled update applied · 2.123")
                 emit("runtime", "active", "Verifying every game file…")
-                manifest = json.loads((resources / "game-files.json").read_text())
+                manifest = json.loads((resources / "game-files.json").read_text(encoding="utf-8"))
                 verify(game, manifest)
                 publish(game, home / "game")
                 try:
@@ -246,7 +248,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, cancelled)
     try:
         if args.verify:
-            verify(args.verify, json.loads((args.resources / "game-files.json").read_text()))
+            verify(args.verify, json.loads((args.resources / "game-files.json").read_text(encoding="utf-8")))
         elif args.source:
             install(args.source.resolve(), args.home.resolve(), args.resources.resolve(), args.project)
         else:

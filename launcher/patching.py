@@ -30,14 +30,14 @@ def matches(data: bytes, item: dict, prefix: str = "") -> bool:
 @contextmanager
 def bundled_patch(resources: Path):
     """Validate the complete archive before accepting any disc files or deltas."""
-    expected = json.loads((resources / "cumulative-patch.json").read_text())
+    expected = json.loads((resources / "cumulative-patch.json").read_text(encoding="utf-8"))
     path = resources / "patches" / PATCH_NAME
     if not path.is_file() or path.stat().st_size != expected["size"]:
         raise ValueError("The bundled game update is missing or incomplete. Reinstall the app.")
     payload = path.read_bytes()
     if not matches(payload, expected):
         raise ValueError("The bundled game update failed its integrity check. Reinstall the app.")
-    target = json.loads((resources / "game-files.json").read_text())
+    target = json.loads((resources / "game-files.json").read_text(encoding="utf-8"))
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         if archive.getinfo("manifest.json").file_size > 512 * 1024:
             raise ValueError("The bundled game update manifest is too large.")
