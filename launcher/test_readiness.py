@@ -32,6 +32,11 @@ class ReadinessTests(unittest.TestCase):
         with patch("readiness.digest", side_effect=AssertionError("unchanged files must not be reread")):
             self.assertTrue(readiness.verify(self.root, self.manifest, self.cache))
         self.file.write_bytes(b"damaged")  # Same size.
+        # ext4 and others keep coarse (millisecond-tick) timestamps, so a rewrite
+        # microseconds after verification can keep the same mtime and ctime. Real
+        # edits come later; date this one a second on, as a later edit would be.
+        info = self.file.stat()
+        os.utime(self.file, ns=(info.st_atime_ns, info.st_mtime_ns + 10**9))
         self.assertFalse(readiness.verify(self.root, self.manifest, self.cache))
         self.file.write_bytes(GOOD)
         self.assertTrue(readiness.verify(self.root, self.manifest, self.cache))

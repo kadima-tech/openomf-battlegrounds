@@ -61,7 +61,7 @@ rm -f "$resources/bin/uv" "$resources/rtpatch_emu.py" "$resources/patches.json"
 xcrun swiftc -O -parse-as-library -target "$arch-apple-macosx13.0" \
     "$here/Launcher.swift" "$here/Readiness.swift" -o "$app/Contents/MacOS/Battlegrounds" -framework SwiftUI -framework AppKit
 xcrun clang -Os -mmacosx-version-min=13.0 "$here/worker.c" -o "$resources/bin/worker"
-cp "$here/bootstrap.sh" "$here/install.py" "$here/patching.py" "$here/requirements.txt" "$here/cumulative-patch.json" "$here/game-files.json" "$resources/"
+cp "$here/bootstrap.sh" "$here/install.py" "$here/patching.py" "$here/iso9660.py" "$here/requirements.txt" "$here/cumulative-patch.json" "$here/game-files.json" "$resources/"
 mkdir -p "$resources/patches"
 cp "$here/patches/english-2090-2123.obgpatch" "$resources/patches/"
 "$resources/python/bin/python3" -I -B "$resources/patching.py" "$resources"
