@@ -49,13 +49,27 @@ static int packaged_setup(const fs::path &app, const fs::path &image, const fs::
 		if (next) next();
 		else std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
-	CHECK(!model.busy && !model.worker, "Setup must finish");
-	CHECK(reading, "Setup must report reading the disc");
-	CHECK(model.error && model.error->find(L"unshield") != std::wstring::npos, "The extractor's failure must be reported");
-	CHECK(!model.ready && !fs::exists(home / L"game"), "A failed setup must not publish a game");
+	// On failure, show what setup reported and logged: CI has no other window into it.
+	auto dump = [&] {
+		fprintf(stderr, "setup error: %s\n", model.error ? narrow(*model.error).c_str() : "(none)");
+		for (auto name : {L"install.log", L"bootstrap.log"}) {
+			auto text = read_file(home / name);
+			fprintf(stderr, "--- %ls ---\n%s\n", name, text ? text->c_str() : "(missing)");
+		}
+	};
+#define CHECK_SETUP(condition, message) \
+	do {                                \
+		if (!(condition)) dump();       \
+		CHECK(condition, message);      \
+	} while (0)
+	CHECK_SETUP(!model.busy && !model.worker, "Setup must finish");
+	CHECK_SETUP(reading, "Setup must report reading the disc");
+	CHECK_SETUP(model.error && model.error->find(L"unshield") != std::wstring::npos, "The extractor's failure must be reported");
+	CHECK_SETUP(!model.ready && !fs::exists(home / L"game"), "A failed setup must not publish a game");
 	auto log = read_file(home / L"install.log");
-	CHECK(log && log->find("read ISO 9660 image") != std::string::npos, "Setup must read the image itself");
-	CHECK(fs::exists(home / L"bootstrap.log"), "Setup diagnostics must go to bootstrap.log");
+	CHECK_SETUP(log && log->find("read ISO 9660 image") != std::string::npos, "Setup must read the image itself");
+	CHECK_SETUP(fs::exists(home / L"bootstrap.log"), "Setup diagnostics must go to bootstrap.log");
+#undef CHECK_SETUP
 	printf("Packaged setup checks passed (bundled Python, image reading, extractor, error events)\n");
 	return 0;
 }
