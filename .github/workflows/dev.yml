@@ -21,9 +21,15 @@ jobs:
       version: '0.0.0'
       label: dev-${{ github.run_id }}-${{ github.run_attempt }}
 
+  build-windows:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: '0.0.0'
+      label: dev-${{ github.run_id }}-${{ github.run_attempt }}
+
   prerelease:
     name: Publish dev prerelease
-    needs: build
+    needs: [build, build-windows]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -36,7 +42,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: Battlegrounds-macos-*
+          pattern: Battlegrounds-*
           path: downloads
           merge-multiple: true
 
@@ -44,8 +50,9 @@ jobs:
         working-directory: downloads
         run: |
           set -euo pipefail
-          test "$(find . -maxdepth 1 -name '*.zip' | wc -l)" -eq 2
-          test "$(find . -maxdepth 1 -name '*.zip.sha256' | wc -l)" -eq 2
+          # macOS arm64 and x86_64, Windows x64
+          test "$(find . -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
+          test "$(find . -maxdepth 1 -name '*.zip.sha256' | wc -l)" -eq 3
           sha256sum --check ./*.zip.sha256
 
       - name: Create prerelease at the built commit

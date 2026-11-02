@@ -1,0 +1,124 @@
+name: Build Windows download
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Numeric app version (major.minor.patch)
+        required: true
+        type: string
+      label:
+        description: Version or dev identifier used in download filenames
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x64
+    # Windows Server 2025 shares the Windows 11 24H2 code base. The download targets Windows 10
+    # and 11: it links only system DLLs, uses no API newer than Windows 10 1607 and has a manifest
+    # declaring Windows 10/11 support.
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - name: Check build tools
+        run: |
+          echo "PYTHON=$(cygpath -u "$pythonLocation")/python.exe" >> "$GITHUB_ENV"
+          gcc --version
+          cmake --version
+          "$(cygpath -u "$pythonLocation")/python.exe" --version
+
+      - name: Test installer
+        shell: pwsh
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r launcher/requirements.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m unittest discover -s launcher -p 'test_*.py' -v
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Build standalone app
+        env:
+          OPENBG_VERSION: ${{ inputs.version }}
+          OPENBG_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: launcher/windows/build-windows.sh
+
+      - name: Test native launcher and packaged setup
+        shell: pwsh
+        run: |
+          python -c "import sys; sys.path.insert(0, 'launcher'); from test_iso9660 import ImageBuilder, disc_tree; open('fake disc.iso', 'wb').write(ImageBuilder().build(disc_tree()))"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:OPENBG_TEST_PYTHON = (Get-Command python).Source
+          launcher/build/windows/runtime/test-readiness.exe launcher
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          launcher/build/windows/runtime/test-launcher.exe dist/Battlegrounds "fake disc.iso"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Verify and archive app
+        env:
+          DOWNLOAD_LABEL: ${{ inputs.label }}
+        run: |
+          [[ "$DOWNLOAD_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          app=dist/Battlegrounds
+          "$PYTHON" launcher/build_state.py --check dist/.launcher-build-state-windows
+          cmp LICENSE "$app/resources/licenses/openomf-battlegrounds.txt"
+          cmp THIRD_PARTY_NOTICES.md "$app/resources/licenses/THIRD_PARTY_NOTICES.md"
+          for notice in SDL2.txt unshield.txt zlib.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt Python.txt; do
+            test -s "$app/resources/licenses/$notice"
+          done
+          # x64 only, and no DLLs a fresh Windows 10/11 installation lacks.
+          "$PYTHON" launcher/windows/check-imports.py "$app/Battlegrounds.exe" "$app/resources/bin/openbg.exe" "$app/resources/bin/unshield.exe"
+          "$app/resources/python/python.exe" -I --version
+          "$app/resources/bin/unshield.exe" -V
+          # The engine starts (all its DLLs load) and prints its usage without game data.
+          "$app/resources/bin/openbg.exe" > dist/openbg-usage.txt 2>&1 || true
+          grep -q 'usage:' dist/openbg-usage.txt
+          "$PYTHON" launcher/check-bundle.py "$app/resources"
+          # Render the real setup window to a PNG for review.
+          "$app/Battlegrounds.exe" --screenshot "$(cygpath -w "$PWD/dist/launcher-windows.png")"
+          test -s dist/launcher-windows.png
+          archive="Battlegrounds-$DOWNLOAD_LABEL-windows-x64.zip"
+          "$PYTHON" -c 'import shutil, sys; shutil.make_archive(sys.argv[1], "zip", "dist", "Battlegrounds")' "dist/${archive%.zip}"
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+
+      - name: Upload download and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Battlegrounds-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload launcher screenshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: launcher-screenshot-windows
+          path: dist/launcher-windows.png
+          if-no-files-found: error
+          retention-days: 14

@@ -13,6 +13,7 @@
 #include <string>
 
 #include "de/objects_file.h"
+#include "de/platform.h"
 #include "vm/disasm.h"
 #include "vm/executor.h"
 #include "vm/script.h"
@@ -69,6 +70,7 @@ struct LoggingHost : vm::Host {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <file.DEObjects> <Class> [entry] [pulses]\n", argv[0]);
 		return 2;

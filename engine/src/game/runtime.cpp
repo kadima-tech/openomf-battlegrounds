@@ -1,6 +1,7 @@
 #include "game/runtime.h"
 #include "game/impulses.h"
 
+#include "de/platform.h"
 #include "de/value.h"
 
 #include "game/forces.h"
@@ -19,7 +20,6 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
-#include <sys/mman.h>
 
 #include "vm/compiler.h"
 #include "vm/disasm.h"
@@ -201,13 +201,13 @@ void NativeContext::ret_f32(float v) const { mem().set<float>(args, v); }
 
 ObjectArena::ObjectArena() {
 	const size_t size = size_t(16) << 30;
-	void *p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-	if (p == MAP_FAILED) throw std::bad_alloc();
+	void *p = de::reserve_pages(size);
+	if (!p) throw std::bad_alloc();
 	base_ = next_ = committed_ = static_cast<char *>(p);
 	end_ = base_ + size;
 }
 
-ObjectArena::~ObjectArena() { munmap(base_, size_t(end_ - base_)); }
+ObjectArena::~ObjectArena() { de::release_pages(base_, size_t(end_ - base_)); }
 
 void *ObjectArena::take(size_t bytes) {
 	bytes = (bytes + 63) & ~size_t(63);
@@ -218,7 +218,7 @@ void *ObjectArena::take(size_t bytes) {
 		const size_t step = size_t(64) << 20;
 		size_t grow = (size_t(next_ - committed_) + step - 1) / step * step;
 		grow = std::min(grow, size_t(end_ - committed_));
-		if (mprotect(committed_, grow, PROT_READ | PROT_WRITE) != 0) throw std::bad_alloc();
+		if (!de::commit_pages(committed_, grow)) throw std::bad_alloc();
 		committed_ += grow;
 	}
 	return p;

@@ -15,27 +15,36 @@ engine, so the game can be played on modern machines.
 
 The port follows the game's final official patch, **2.123**.
 
-## Launcher (macOS)
+## Launcher (macOS and Windows)
 
-Download the Apple silicon (`arm64`) or Intel (`x86_64`) ZIP from
-[Releases](https://github.com/kadima-tech/openomf-battlegrounds/releases), unzip it,
-and open **`Battlegrounds.app`** on macOS 13 or newer. Dev builds are marked
-**Pre-release**. Downloads include the compiled engine and launcher; you still
-need your own game CD/ISO. See [launcher/README.md](launcher/README.md#ci-builds-and-releases)
-for build triggers and signing details.
+From [Releases](https://github.com/kadima-tech/openomf-battlegrounds/releases):
 
-Double-click **`launch.command`** to build and open the native launcher. On first
+- **macOS 13 or newer:** download the Apple silicon (`arm64`) or Intel (`x86_64`) ZIP,
+  unzip it and open **`Battlegrounds.app`**.
+- **Windows 10 or 11 (64-bit):** download the `windows-x64` ZIP, extract all files and
+  run **`Battlegrounds\Battlegrounds.exe`**. No installer, administrator rights,
+  Visual C++ runtime or Python installation are needed. Windows 11 on Arm runs it
+  through x64 emulation.
+
+Dev builds are marked **Pre-release**. Downloads include the compiled engine and
+launcher; you still need your own game CD/ISO. See
+[launcher/README.md](launcher/README.md#ci-builds-and-releases) for build triggers and
+signing details.
+
+From a source checkout, double-click **`launch.command`** (macOS) or **`launch.cmd`**
+(Windows, see [Building on Windows](#building-on-windows)) to build and open the native
+launcher. On first
 run, choose your original English game CD/ISO; an inserted CD is detected
 automatically. Confirm **Start setup** before installation (3 GB free space
 required). The launcher extracts the game and applies its bundled cumulative
 update offline, then starts the game. The update and setup tools ship inside the
 app. Once a complete 2.123 installation is present, future launches skip setup.
 
-The source build needs Xcode's command-line tools, CMake and Python 3. The resulting
+The macOS source build needs Xcode's command-line tools, CMake and Python 3. The resulting
 **`dist/Battlegrounds.app`** can be distributed without those build tools or
-Homebrew dependencies. See [launcher/README.md](launcher/README.md) for packaging,
-storage locations and validation. The manual build/install instructions below
-remain available for development.
+Homebrew dependencies. On Windows the result is the **`dist\Battlegrounds`** folder.
+See [launcher/README.md](launcher/README.md) for packaging, storage locations and
+validation. The manual build/install instructions below remain available for development.
 
 ## You need the game
 
@@ -45,7 +54,8 @@ update; a complete game installation is not included.
 
 ## Building
 
-openomf-battlegrounds currently builds on **macOS** (Apple silicon or Intel). You need CMake 3.20 or
+openomf-battlegrounds builds on **macOS** (Apple silicon or Intel) and **Windows 10/11** (x64, see
+[below](#building-on-windows)). The engine also compiles on Linux. On macOS you need CMake 3.20 or
 newer, a C++20 compiler (Xcode's command-line tools), and a few packages from Homebrew:
 
 ```sh
@@ -63,6 +73,33 @@ cmake --build engine/build -j
 
 The Indeo video decoder, [openindeo](https://github.com/kadima-tech/openindeo), is fetched by CMake
 automatically. Run `ctest --test-dir engine/build` to check that your game data parses.
+
+### Building on Windows
+
+Windows builds use MinGW-w64 from [MSYS2](https://www.msys2.org). Install MSYS2 in its default
+folder (`C:\msys64`), open the **MSYS2 UCRT64** shell and install the tools:
+
+```sh
+pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
+  mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-python \
+  mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-zlib
+```
+
+Double-clicking **`launch.cmd`** in a checkout then builds the standalone launcher
+(`dist\Battlegrounds`, with SDL2, zlib and unshield fetched at pinned versions and linked in) and
+opens it. Set `MSYS2_ROOT` if MSYS2 is installed elsewhere. For engine development, build in the
+UCRT64 shell as on macOS:
+
+```sh
+cmake -S engine -B engine/build -G Ninja
+cmake --build engine/build
+```
+
+That development build uses MSYS2's SDL2 and zlib DLLs, so run its programs from the UCRT64 shell.
+The game needs a graphics driver with OpenGL 4.1, which every Windows 10/11 driver for GPUs from
+roughly 2012 onwards provides. Linux developers can cross-compile the Windows download with
+`launcher/windows/build-windows.sh` after installing MinGW-w64 (`g++-mingw-w64-x86-64-posix` on
+Debian and Ubuntu), CMake and Ninja.
 
 ## Reconstructing the historical patch chain
 
@@ -101,7 +138,7 @@ The `source/` folder is ignored by git, so your game files never end up in a com
 engine/build/openbg source/patched/v2123/Data
 ```
 
-This starts the game at its main menu. Choose **Single Player** and pick a tournament, Practice or
+(On Windows: `engine\build\openbg.exe source\patched\v2123\Data`.) This starts the game at its main menu. Choose **Single Player** and pick a tournament, Practice or
 Training.
 
 **Fight controls:**
@@ -147,8 +184,9 @@ using [SECURITY.md](SECURITY.md).
 
 This project's original code and documentation are available under the
 [MIT license](LICENSE), including its warranty disclaimer and limitation of liability.
-The macOS downloads include this license and the dependency notices in
-`Battlegrounds.app/Contents/Resources/licenses/`.
+The downloads include this license and the dependency notices in
+`Battlegrounds.app/Contents/Resources/licenses/` (macOS) or `Battlegrounds\resources\licenses\`
+(Windows).
 
 Third-party components retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The original game and its update

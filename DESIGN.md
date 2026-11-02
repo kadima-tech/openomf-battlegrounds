@@ -2,7 +2,8 @@
 
 ## First-run launcher
 
-The native macOS setup app (`launcher/Launcher.swift`) uses a service-bay theme:
+The native setup app (`launcher/Launcher.swift` on macOS, `launcher/windows/Launcher.cpp`
+on Windows 10/11, drawn to the same layout) uses a service-bay theme:
 graphite panels, warm ivory type, amber actions and a robot engineering schematic.
 The artwork is original and available before the player's disc is unpacked. Its
 left rail carries the brand and schematic; the main panel has ISO/drop and CD

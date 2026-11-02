@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "de/anim.h"
+#include "de/platform.h"
 #include "de/image.h"
 #include "de/mesh.h"
 #include "de/objects_file.h"
@@ -266,6 +267,7 @@ void main() {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	const char *model_path = nullptr, *spec = nullptr, *shot = nullptr, *data = nullptr, *fighter = nullptr;
 	std::string anim = "Standing";
 	float fixed_time = -1;
@@ -345,6 +347,8 @@ int main(int argc, char **argv) {
 			throw std::runtime_error(SDL_GetError());
 		}
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
+		if (!ctx) throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		GLuint prog = glu::program(kVertexShader, kFragmentShader);
 

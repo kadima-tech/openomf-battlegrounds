@@ -31,6 +31,7 @@
 #include <tuple>
 
 #include "game/forces.h"
+#include "de/platform.h"
 #include "game/runtime.h"
 #include "game/session.h"
 #include "audio.h"
@@ -142,6 +143,7 @@ static std::optional<de::Guid> environment_description(game::World &world, const
 }
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <Data dir> <Fighter> [--arena Desert] [--pilot Lucas] [--watch] [--headless [frames]] [--screenshot out.png --frames N]\n",
 		        argv[0]);
@@ -600,6 +602,8 @@ int main(int argc, char **argv) {
 		                                   SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
 		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
+		if (!ctx) throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		if (shot) {
 			glu::offscreen(W, H);

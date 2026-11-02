@@ -1,0 +1,3 @@
+// Windows resources for openbg.exe: the application manifest (see openbg.manifest).
+#include <winuser.h>
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "openbg.manifest"

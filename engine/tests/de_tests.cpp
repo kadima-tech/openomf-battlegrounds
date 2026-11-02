@@ -7,6 +7,7 @@
 #include <string>
 
 #include "de/avi.h"
+#include "de/platform.h"
 #include "de/contents.h"
 #include "de/image.h"
 #include "de/mesh.h"
@@ -376,6 +377,7 @@ static void test_avi(const std::filesystem::path &dir) {
 }
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	test_squeezed();
 	test_md5();
 	if (argc > 1) {

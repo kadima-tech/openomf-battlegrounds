@@ -17,6 +17,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
 - `src/de`: the data layer. All shipped `.DEObjects` files parse (65 files, 28,115 objects), including Behavior script source.
 - `src/vm`: the script VM. It reads the compiled VMC2 bytecode (249 classes, 10,582 methods) and runs it natively; shipped fighter-stat methods execute correctly.
 - `src/de/scene.cpp`: actor hierarchy, transforms and materials, with cross-file references resolved through a `World` of all files.
+- `src/de/platform.cpp` and `app/gl_api.h`: the operating-system layer. Reserved, lazily committed memory for the script and object arenas (mmap or VirtualAlloc), the user's settings folder (`~/Library/Application Support/openbg`, `%APPDATA%\openbg`, or `$XDG_DATA_HOME/openbg` on Linux) and Pictures folder, and the OpenGL 4.1 entry points (from the OpenGL framework on macOS, loaded through SDL elsewhere). Everything else is portable C++20 and SDL2; the engine builds on macOS, on Windows 10/11 with MinGW-w64 ([README](README.md#building-on-windows)) and on Linux.
 - `app/viewer.cpp` (`openbg-viewer`): native SDL2/OpenGL fighter viewer with pilot recolouring and skeletal animation:
   `engine/build/openbg-viewer --data source/patched/v2123/Data --fighter Jaguar --anim LeftMediumPunch`
   (Left/Right cycles through the fighter's moves; `--list` prints them; Space pauses.)

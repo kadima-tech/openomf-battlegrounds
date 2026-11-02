@@ -108,7 +108,10 @@ class CumulativePatchTests(unittest.TestCase):
         outside = self.root / "outside"
         outside.write_bytes(original.read_bytes())
         original.unlink()
-        original.symlink_to(outside)
+        try:
+            original.symlink_to(outside)
+        except OSError:
+            self.skipTest("Windows allows symbolic links only with Developer Mode or administrator rights")
         with self.assertRaisesRegex(ValueError, "Unsupported disc file"):
             patching.apply_patch(self.game, self.resources)
         self.assertEqual(outside.read_bytes(), b"old fighter")

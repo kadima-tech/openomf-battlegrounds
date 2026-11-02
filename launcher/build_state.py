@@ -9,6 +9,8 @@ import sys
 def fingerprint(repo: Path) -> str:
     inputs = [repo / name for name in ("launch.command", "LICENSE", "THIRD_PARTY_NOTICES.md",
                                      "re/scripts/directx_tables.py")]
+    # The Windows entry point, when present, counts as well.
+    inputs += [path for path in [repo / "launch.cmd"] if path.is_file()]
     for directory in ("engine", "launcher"):
         base = repo / directory
         for current, directories, filenames in os.walk(base):

@@ -20,6 +20,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
@@ -27,6 +29,7 @@
 
 #include "de/contents.h"
 #include "de/lighting.h"
+#include "de/platform.h"
 #include "game/replay.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -43,32 +46,26 @@
 namespace {
 
 // The game's registry (HKCU\Software\Diversions Ent\One Must Fall Battlegrounds in the original),
-// kept as "name=value" lines in the user's Application Support folder.
-std::string registry_path() {
-	const char *home = getenv("HOME");
-	return std::string(home ? home : ".") + "/Library/Application Support/openbg/registry.txt";
-}
+// kept as "name=value" lines in the user's settings folder (de::user_data_dir()).
+std::filesystem::path registry_path() { return de::user_data_dir() / "registry.txt"; }
 bool load_registry(std::map<std::string, std::string> &reg) {
-	FILE *f = fopen(registry_path().c_str(), "r");
+	std::ifstream f(registry_path(), std::ios::binary);
 	if (!f) return false;
-	char line[1024];
-	while (fgets(line, sizeof line, f)) {
-		std::string l = line;
+	std::string l;
+	while (std::getline(f, l)) {
 		while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
 		size_t eq = l.find('=');
 		if (eq != std::string::npos) reg[l.substr(0, eq)] = l.substr(eq + 1);
 	}
-	fclose(f);
 	return true;
 }
 void save_registry(const std::map<std::string, std::string> &reg) {
-	std::string dir = registry_path().substr(0, registry_path().rfind('/'));
-	std::string cmd = "mkdir -p '" + dir + "'";
-	if (system(cmd.c_str()) != 0) return;
-	FILE *f = fopen(registry_path().c_str(), "w");
+	std::error_code ec;
+	std::filesystem::create_directories(registry_path().parent_path(), ec);
+	if (ec) return;
+	std::ofstream f(registry_path(), std::ios::binary | std::ios::trunc);
 	if (!f) return;
-	for (auto &[k, v] : reg) fprintf(f, "%s=%s\n", k.c_str(), v.c_str());
-	fclose(f);
+	for (auto &[k, v] : reg) f << k << '=' << v << '\n';
 }
 
 // The GUI's viewport: the whole window. InitGUI (2004 build 0x408b20) hangs the UI parent actor,
@@ -109,6 +106,7 @@ void print_state(game::World &world, int fr) {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 2) {
 		fprintf(stderr, "usage: %s <Data dir> [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
@@ -383,6 +381,8 @@ int main(int argc, char **argv) {
 		app.key_name = [](int sc) { return std::string(SDL_GetScancodeName(SDL_Scancode(sc))); };
 		SDL_StartTextInput();
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
+		if (!ctx) throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		if (shot) glu::offscreen(W, H);
 		view.init_gl();
@@ -783,8 +783,7 @@ int main(int argc, char **argv) {
 				char name[96];
 				time_t now = time(nullptr);
 				strftime(name, sizeof name, "OMFBG Snapshot %Y-%m-%d %H-%M-%S.png", localtime(&now));
-				const char *home = getenv("HOME");
-				std::string out = std::string(home ? home : ".") + "/Pictures/" + name;
+				std::string out = (de::pictures_dir() / name).string();
 				glu::write_png(out.c_str(), dw, dh, px);
 				printf("snapshot %s\n", out.c_str());
 			}
