@@ -76,8 +76,19 @@ automatically. Run `ctest --test-dir engine/build` to check that your game data 
 
 ### Building on Windows
 
-Windows builds use MinGW-w64 from [MSYS2](https://www.msys2.org). Install MSYS2 in its default
-folder (`C:\msys64`), open the **MSYS2 UCRT64** shell and install the tools:
+Windows builds use MinGW-w64 from [MSYS2](https://www.msys2.org). Double-click **`launch.cmd`** in
+a checkout. It sets up whatever is missing, asking before each step:
+
+1. Without MSYS2 in `C:\msys64`, it offers to install it with `winget`, the package manager in
+   Windows 11 and current Windows 10. Windows then asks for administrator approval.
+2. It offers to install any missing build packages (GCC, CMake, Ninja, Python, Git) with MSYS2's
+   `pacman`, about 1 GB.
+
+It then builds the standalone launcher (`dist\Battlegrounds`, with SDL2, zlib and unshield
+fetched at pinned versions and linked in) and opens it. Later runs rebuild only when the sources
+changed. Set `MSYS2_ROOT` if MSYS2 is installed elsewhere. To set things up by hand instead,
+install MSYS2 and run this in its **MSYS2 UCRT64** shell (SDL2 and zlib are only needed for the
+engine development build below):
 
 ```sh
 pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
@@ -85,10 +96,7 @@ pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
   mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-zlib
 ```
 
-Double-clicking **`launch.cmd`** in a checkout then builds the standalone launcher
-(`dist\Battlegrounds`, with SDL2, zlib and unshield fetched at pinned versions and linked in) and
-opens it. Set `MSYS2_ROOT` if MSYS2 is installed elsewhere. For engine development, build in the
-UCRT64 shell as on macOS:
+For engine development, build in the UCRT64 shell as on macOS:
 
 ```sh
 cmake -S engine -B engine/build -G Ninja

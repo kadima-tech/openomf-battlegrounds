@@ -18,8 +18,9 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$build_number" =~ ^[0
     echo "OPENBG_VERSION must be major.minor.patch; OPENBG_BUILD_NUMBER must have one to three numeric components." >&2
     exit 1
 fi
-python=${PYTHON:-$(command -v python3 || command -v python)}
-export PYTHON="$python"
+source "$here/require-tools.sh"
+require_windows_build_tools || exit 1
+python=$PYTHON
 jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) native=1 ;;

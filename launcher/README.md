@@ -242,8 +242,12 @@ and no administrator rights are needed.
 
 ### Run from this checkout
 
-Install MSYS2 and its UCRT64 packages as described in the main
-[README](../README.md#building-on-windows), then double-click `launch.cmd`. Like
+Double-click `launch.cmd`. It offers to install MSYS2 (with `winget`) and any
+missing UCRT64 build packages (with `pacman`), asking before each step; see the
+main [README](../README.md#building-on-windows). Without a terminal to ask in,
+such as in CI, nothing is installed and the missing tools are listed instead.
+The build scripts check their tools up front and report the command and line of
+any failure. Like
 `launch.command`, it rebuilds `dist\Battlegrounds` whenever launcher, engine or
 packaging inputs change (tracked in `dist\.launcher-build-state-windows`) and
 then opens the launcher. You can also build directly in the UCRT64 shell:
