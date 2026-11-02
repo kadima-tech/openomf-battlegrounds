@@ -108,7 +108,10 @@ class CumulativePatchTests(unittest.TestCase):
         outside = self.root / "outside"
         outside.write_bytes(original.read_bytes())
         original.unlink()
-        original.symlink_to(outside)
+        try:
+            original.symlink_to(outside)
+        except OSError:
+            self.skipTest("Windows allows symbolic links only with Developer Mode or administrator rights")
         with self.assertRaisesRegex(ValueError, "Unsupported disc file"):
             patching.apply_patch(self.game, self.resources)
         self.assertEqual(outside.read_bytes(), b"old fighter")
@@ -132,8 +135,9 @@ class CumulativePatchTests(unittest.TestCase):
         (home / "game").mkdir(parents=True)
         (home / "game/previous").write_text("keep this install")
 
-        def extract(command, _log):
-            shutil.copytree(self.game, Path(command[2]) / "App_Executables")
+        def extract(command, _log, cwd=None):
+            # On Windows the output folder is relative to the folder unshield runs in.
+            shutil.copytree(self.game, Path(cwd or "") / command[2] / "App_Executables")
 
         def cancel(stage, status, detail):
             if stage == "patches" and detail.startswith("Applying bundled"):

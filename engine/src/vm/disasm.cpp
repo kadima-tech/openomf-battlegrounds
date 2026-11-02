@@ -1,5 +1,6 @@
 #include "vm/disasm.h"
 
+#include <cstdio>
 #include <cstring>
 #include <map>
 

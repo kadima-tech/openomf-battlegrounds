@@ -20,8 +20,11 @@
 #include <set>
 #include <memory>
 #include <string>
+#include <algorithm>
+#include <cctype>
 
 #include "de/font.h"
+#include "de/platform.h"
 #include "de/particles.h"
 #include "de/avi.h"
 #include "de/contents.h"
@@ -350,7 +353,7 @@ static int cmd_image(const char *path, const char *object, const char *out, int 
 	const de::ObjectsFile *fp = nullptr;
 	if (std::filesystem::is_directory(path) && strchr(object, ':')) {
 		world = std::make_unique<de::World>(path);
-		std::string stem(object, strchr(object, ':'));
+		std::string stem(object, size_t(strchr(object, ':') - object));
 		fp = world->file(stem);
 		object = strchr(object, ':') + 1;
 		if (!fp) {
@@ -582,6 +585,7 @@ static int cmd_scene(const char *dir, const char *stem) {
 }
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s header|toc|toc+|blocks <file> [outdir]\n", argv[0]);
 		return 2;

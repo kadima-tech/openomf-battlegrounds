@@ -1,6 +1,7 @@
 #include "game/descriptions.h"
 
 #include <algorithm>
+#include <cctype>
 
 #include "de/contents.h"
 #include "game/runtime.h"

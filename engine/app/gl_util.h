@@ -1,11 +1,11 @@
 // Small shared helpers for the SDL2 + OpenGL 4.1 core apps.
 #pragma once
 
-#define GL_SILENCE_DEPRECATION
-#include <OpenGL/gl3.h>
+#include "gl_api.h"
 #include <zlib.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>

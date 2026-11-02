@@ -3,20 +3,33 @@
 
 Only this file's staging directory is patched. The CD/ISO and existing installs
 are never modified. A complete, checksum-verified tree is published atomically.
+Runs on macOS and on Windows 10/11 with the app's private Python.
 """
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
+import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 
-from patching import apply_patch, digest
+# The app starts its private Python isolated (-I), which leaves the script's own folder off
+# sys.path. Find the sibling modules and the bundled decoder package next to this file.
+_here = Path(__file__).resolve().parent
+for _path in (_here / "python-packages", _here):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from iso9660 import extract_directory  # noqa: E402
+from patching import apply_patch, digest  # noqa: E402
+
+WINDOWS = os.name == "nt"
 
 PRODUCT_GUID = "b8ef8b5a-6d15-436c-ac07-5f2bd5e1aa1b"
 
@@ -36,20 +49,28 @@ def verify(root: Path, manifest: dict) -> None:
             raise ValueError(f"Game file needs repair: {item['path']}")
 
 
+def changed_ns(info: os.stat_result) -> int:
+    """The second timestamp the native launchers compare: the inode change time on macOS,
+    and on Windows the creation time (a file replaced by another gets a new one)."""
+    return getattr(info, "st_birthtime_ns", info.st_ctime_ns) if WINDOWS else info.st_ctime_ns
+
+
 def record_verified(root: Path, manifest: dict, destination: Path) -> None:
     """Seed the native readiness cache only after full checksum verification.
 
-    macOS ctime/mtime nanoseconds and inode detect replacements and ordinary
-    edits without rereading 730 MB on every start. Expected digests invalidate
-    the cache if a future app targets a different official data version.
+    ctime (Windows: creation time), mtime nanoseconds and inode (Windows: file ID)
+    detect replacements and ordinary edits without rereading 730 MB on every start.
+    Expected digests invalidate the cache if a future app targets a different
+    official data version.
     """
     files = []
     for item in manifest["files"]:
         info = (root / item["path"]).stat()
+        changed = changed_ns(info)
         files.append(dict(item, modified=f"{info.st_mtime_ns // 10**9}:{info.st_mtime_ns % 10**9}",
-                          changed=f"{info.st_ctime_ns // 10**9}:{info.st_ctime_ns % 10**9}", inode=info.st_ino))
+                          changed=f"{changed // 10**9}:{changed % 10**9}", inode=info.st_ino))
     temporary = destination.with_suffix(".tmp")
-    temporary.write_text(json.dumps(dict(root=str(root.resolve()), files=files)))
+    temporary.write_text(json.dumps(dict(root=str(root.resolve()), files=files)), encoding="utf-8")
     temporary.replace(destination)
 
 
@@ -60,7 +81,7 @@ def child_named(root: Path, name: str) -> Path:
 def disc_setup(root: Path) -> Path:
     setup = child_named(root, "Setup")
     ini = child_named(setup, "setup.ini")
-    if PRODUCT_GUID not in ini.read_text(errors="replace").lower():
+    if PRODUCT_GUID not in ini.read_text(encoding="latin-1").lower():
         raise ValueError("This is not a One Must Fall: Battlegrounds game disc.")
     for name in ("data1.cab", "data1.hdr", "data2.cab"):
         if not child_named(setup, name).is_file():
@@ -71,43 +92,136 @@ def disc_setup(root: Path) -> Path:
 def run(command: list[str | Path], log, **kwargs) -> None:
     log.write("\n> " + " ".join(map(str, command)) + "\n")
     log.flush()
+    if WINDOWS:
+        # Setup runs without a console; keep console tools from opening a window of their own.
+        kwargs.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)
     subprocess.run(list(map(str, command)), stdout=log, stderr=log, check=True, **kwargs)
+
+
+def tool(resources: Path, name: str) -> Path:
+    return resources / "bin" / (name + ".exe" if WINDOWS else name)
+
+
+def unshield_path(path: Path) -> str:
+    """A path as unshield 1.5.1 can take it apart. It finds a cabinet's other volumes
+    (data1.hdr, data2.cab) by splitting at the last "/", so on Windows a path with
+    backslashes sends it looking for the wrong files. Windows accepts forward slashes."""
+    return path.as_posix() if WINDOWS else str(path)
+
+
+def unshield_command(resources: Path, work: Path, unpacked: Path, cabinet: Path) -> tuple[list[str], Path | None]:
+    """The extraction command and the folder to run it in.
+
+    unshield also creates output folders one "/"-separated part at a time from the start
+    of the path. On Windows the first part of an absolute path is a bare drive ("C:"),
+    which the C runtime cannot stat, so every folder failed. There it runs in the work
+    folder with a relative output folder instead. The cabinet stays absolute (it may be
+    on the CD) with forward slashes."""
+    if WINDOWS:
+        return ([str(tool(resources, "unshield")), "-d", unpacked.relative_to(work).as_posix(), "x",
+                 unshield_path(cabinet)], work)
+    return [str(tool(resources, "unshield")), "-d", str(unpacked), "x", str(cabinet)], None
+
+
+class SetupLock:
+    """An exclusive, non-blocking lock that the OS releases if setup is killed."""
+
+    def __init__(self, path: Path):
+        # Append mode: never truncate a file another installer has locked (Windows refuses).
+        self.stream = path.open("a+")
+
+    def __enter__(self):
+        try:
+            if WINDOWS:
+                import msvcrt
+                self.stream.seek(0)
+                msvcrt.locking(self.stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.stream.close()
+            raise ValueError("Setup is already running in another window.") from None
+        return self
+
+    def __exit__(self, *_):
+        self.stream.close()
+
+
+def retry(action, attempts: int = 1):
+    """Windows briefly refuses renames and deletes of folders that an antivirus scanner or the
+    search indexer has just opened. Retry those for a few seconds; macOS needs one attempt."""
+    for attempt in range(attempts):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+
+
+ATTEMPTS = 20 if WINDOWS else 1
+
+
+def remove_tree(path: Path) -> None:
+    def writable(function, name, _error):
+        os.chmod(name, stat.S_IWRITE)  # Windows will not delete read-only files.
+        function(name)
+    handler = dict(onexc=writable) if sys.version_info >= (3, 12) else dict(onerror=writable)
+    retry(lambda: shutil.rmtree(path, **handler), ATTEMPTS)
 
 
 def publish(staged: Path, destination: Path) -> None:
     backup = destination.with_name("game.previous")
     # A previous interrupted publish is recoverable; never delete the only copy.
     if backup.exists() and not destination.exists():
-        backup.replace(destination)
+        retry(lambda: backup.replace(destination), ATTEMPTS)
     if backup.exists():
-        shutil.rmtree(backup)
+        remove_tree(backup)
     if destination.exists():
-        destination.replace(backup)
+        retry(lambda: destination.replace(backup), ATTEMPTS)
     try:
-        staged.replace(destination)
+        retry(lambda: staged.replace(destination), ATTEMPTS)
     except OSError:
         if backup.exists():
-            backup.replace(destination)
+            retry(lambda: backup.replace(destination), ATTEMPTS)
         raise
     if backup.exists():
-        shutil.rmtree(backup)
+        remove_tree(backup)
+
+
+def extract_setup(source: Path, work: Path, log) -> Path:
+    """Copy the disc image's Setup folder into the private work folder."""
+    disc = work / "disc"
+    disc.mkdir()
+    bsdtar = Path("/usr/bin/bsdtar")
+    if not WINDOWS and bsdtar.is_file():
+        listing = subprocess.check_output([str(bsdtar), "-tf", str(source)], text=True)
+        entry = next((x for x in listing.splitlines() if x.strip("./").lower() == "setup"), None)
+        if not entry:
+            raise ValueError("This image does not contain the Battlegrounds installer.")
+        run([bsdtar, "-xf", source, "-C", disc, entry], log)
+    else:
+        log.write(f"\n> read ISO 9660 image {source}\n")
+        extract_directory(source, "Setup", disc)
+    return disc
 
 
 def install(source: Path, home: Path, resources: Path, project: Path | None = None) -> None:
     home.mkdir(parents=True, exist_ok=True)
-    with (home / "install.lock").open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError("Setup is already running in another window.") from None
+    with SetupLock(home / "install.lock"):
         if shutil.disk_usage(home).free < 3 * 1024**3:
             raise ValueError("Setup needs at least 3 GB of free space. Free some space and retry.")
-        with (home / "install.log").open("w", buffering=1) as log:
+        # Explicit UTF-8: the default is the locale's encoding (cp1252 on most Windows systems),
+        # which cannot write the log's arrows and middle dots.
+        with (home / "install.log").open("w", buffering=1, encoding="utf-8") as log:
             # Remove only abandoned private staging directories, while holding the lock.
             for stale in home.glob(".install-*"):
                 if stale.is_dir() and not stale.is_symlink():
-                    shutil.rmtree(stale)
-            with tempfile.TemporaryDirectory(prefix=".install-", dir=home) as tmp:
+                    remove_tree(stale)
+            # A folder Windows still holds open is removed with the stale ones next time.
+            cleanup = dict(ignore_cleanup_errors=True) if WINDOWS else {}
+            with tempfile.TemporaryDirectory(prefix=".install-", dir=home, **cleanup) as tmp:
                 work = Path(tmp)
                 emit("files", "active", "Reading your game disc…")
                 if source.is_dir():
@@ -115,17 +229,11 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 else:
                     if not source.is_file() or source.suffix.lower() != ".iso":
                         raise ValueError("Choose a Battlegrounds ISO image or insert the original game CD.")
-                    listing = subprocess.check_output(["/usr/bin/bsdtar", "-tf", str(source)], text=True)
-                    entry = next((x for x in listing.splitlines() if x.strip("./").lower() == "setup"), None)
-                    if not entry:
-                        raise ValueError("This image does not contain the Battlegrounds installer.")
-                    disc = work / "disc"
-                    disc.mkdir()
-                    run(["/usr/bin/bsdtar", "-xf", source, "-C", disc, entry], log)
-                    setup = disc_setup(disc)
+                    setup = disc_setup(extract_setup(source, work, log))
                 emit("files", "active", "Unpacking the original game files…")
                 unpacked = work / "unpacked"
-                run([resources / "bin/unshield", "-d", unpacked, "x", child_named(setup, "data1.cab")], log)
+                command, folder = unshield_command(resources, work, unpacked, child_named(setup, "data1.cab"))
+                run(command, log, **(dict(cwd=folder) if folder else {}))
                 game = unpacked / "App_Executables"
                 if not (game / "Data/OMFBGGUI.DEObjects").is_file():
                     raise ValueError("This disc edition is not supported. Use the original English 2.090 CD.")
@@ -136,7 +244,7 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 log.write("Bundled cumulative update applied · 2.090 → 2.123\n")
                 emit("patches", "done", "Bundled update applied · 2.123")
                 emit("runtime", "active", "Verifying every game file…")
-                manifest = json.loads((resources / "game-files.json").read_text())
+                manifest = json.loads((resources / "game-files.json").read_text(encoding="utf-8"))
                 verify(game, manifest)
                 publish(game, home / "game")
                 try:
@@ -162,7 +270,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, cancelled)
     try:
         if args.verify:
-            verify(args.verify, json.loads((args.resources / "game-files.json").read_text()))
+            verify(args.verify, json.loads((args.resources / "game-files.json").read_text(encoding="utf-8")))
         elif args.source:
             install(args.source.resolve(), args.home.resolve(), args.resources.resolve(), args.project)
         else:

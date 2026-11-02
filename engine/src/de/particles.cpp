@@ -1,5 +1,6 @@
 #include "de/particles.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "de/contents.h"
