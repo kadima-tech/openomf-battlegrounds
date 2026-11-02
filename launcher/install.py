@@ -109,6 +109,20 @@ def unshield_path(path: Path) -> str:
     return path.as_posix() if WINDOWS else str(path)
 
 
+def unshield_command(resources: Path, work: Path, unpacked: Path, cabinet: Path) -> tuple[list[str], Path | None]:
+    """The extraction command and the folder to run it in.
+
+    unshield also creates output folders one "/"-separated part at a time from the start
+    of the path. On Windows the first part of an absolute path is a bare drive ("C:"),
+    which the C runtime cannot stat, so every folder failed. There it runs in the work
+    folder with a relative output folder instead. The cabinet stays absolute (it may be
+    on the CD) with forward slashes."""
+    if WINDOWS:
+        return ([str(tool(resources, "unshield")), "-d", unpacked.relative_to(work).as_posix(), "x",
+                 unshield_path(cabinet)], work)
+    return [str(tool(resources, "unshield")), "-d", str(unpacked), "x", str(cabinet)], None
+
+
 class SetupLock:
     """An exclusive, non-blocking lock that the OS releases if setup is killed."""
 
@@ -218,8 +232,8 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                     setup = disc_setup(extract_setup(source, work, log))
                 emit("files", "active", "Unpacking the original game files…")
                 unpacked = work / "unpacked"
-                run([tool(resources, "unshield"), "-d", unshield_path(unpacked), "x",
-                     unshield_path(child_named(setup, "data1.cab"))], log)
+                command, folder = unshield_command(resources, work, unpacked, child_named(setup, "data1.cab"))
+                run(command, log, **(dict(cwd=folder) if folder else {}))
                 game = unpacked / "App_Executables"
                 if not (game / "Data/OMFBGGUI.DEObjects").is_file():
                     raise ValueError("This disc edition is not supported. Use the original English 2.090 CD.")

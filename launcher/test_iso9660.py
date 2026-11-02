@@ -176,6 +176,19 @@ class LockTests(unittest.TestCase):
         with patch.object(install, "WINDOWS", False):
             self.assertEqual(install.unshield_path(Path("/tmp/disc/Setup/data1.cab")), "/tmp/disc/Setup/data1.cab")
 
+    def test_unshield_creates_relative_folders_on_windows(self):
+        # unshield creates folders from the start of the path; a bare "C:" cannot be created.
+        work = PureWindowsPath(r"C:\Users\player\Battlegrounds Files\.install-1a")
+        cabinet = PureWindowsPath(r"D:\Setup\data1.cab")  # a real CD
+        with patch.object(install, "WINDOWS", True):
+            command, folder = install.unshield_command(Path("res"), work, work / "unpacked", cabinet)
+        self.assertEqual(command[1:], ["-d", "unpacked", "x", "D:/Setup/data1.cab"])
+        self.assertEqual(folder, work)
+        with patch.object(install, "WINDOWS", False):
+            command, folder = install.unshield_command(Path("res"), Path("/w"), Path("/w/unpacked"), Path("/cd/Setup/data1.cab"))
+        self.assertEqual(command[1:], ["-d", "/w/unpacked", "x", "/cd/Setup/data1.cab"])
+        self.assertIsNone(folder)
+
     def test_windows_tools_have_exe_names(self):
         with patch.object(install, "WINDOWS", True):
             self.assertEqual(install.tool(Path("res"), "unshield"), Path("res/bin/unshield.exe"))

@@ -70,6 +70,8 @@ static int packaged_setup(const fs::path &app, const fs::path &image, const fs::
 	CHECK_SETUP(log && log->find("read ISO 9660 image") != std::string::npos, "Setup must read the image itself");
 	// unshield finds the cabinet's other volumes by splitting its path at the last "/".
 	CHECK_SETUP(log->find("/disc/SETUP/DATA1.CAB") != std::string::npos, "The extractor must get a forward-slash cabinet path");
+	// ...and creates output folders from the start of the path, where a bare "C:" fails.
+	CHECK_SETUP(log->find(" -d unpacked x ") != std::string::npos, "The extractor must get a relative output folder");
 	CHECK_SETUP(fs::exists(home / L"bootstrap.log"), "Setup diagnostics must go to bootstrap.log");
 #undef CHECK_SETUP
 	printf("Packaged setup checks passed (bundled Python, image reading, extractor, error events)\n");
@@ -164,6 +166,7 @@ int wmain(int argc, wchar_t **argv) {
 	CHECK(model.stages[1].status == "active" && model.stages[1].detail == L"Applying \u00b7 1/76", "Events must update their stage");
 	model.receive({{"stage", "error"}, {"detail", "Setup is already running in another window."}});
 	CHECK(model.error == L"Setup is already running in another window.", "Error events must be shown");
+	CHECK(model.stages[1].status == "waiting", "An error must stop the working stage's spinner");
 	CHECK(!parse_event("not json") && !parse_event("[1, 2]"), "Other output must be ignored");
 	CHECK(Json::parse("{\"inode\": 340282366920938463463374607431768211455}")->unsigned_number("inode") == std::nullopt,
 	      "File IDs too large for 64 bits must not be truncated");

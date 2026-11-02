@@ -740,6 +740,9 @@ void LauncherModel::receive(const std::map<std::string, std::string> &event) {
 	std::string stage = get("stage");
 	if (stage.empty()) return;
 	if (stage == "error") {
+		// Setup has stopped: no stage is still working.
+		for (auto &s : stages)
+			if (s.status == "active") s.status = "waiting";
 		fail(widen(get("detail")));
 		return;
 	}

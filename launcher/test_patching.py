@@ -135,8 +135,9 @@ class CumulativePatchTests(unittest.TestCase):
         (home / "game").mkdir(parents=True)
         (home / "game/previous").write_text("keep this install")
 
-        def extract(command, _log):
-            shutil.copytree(self.game, Path(command[2]) / "App_Executables")
+        def extract(command, _log, cwd=None):
+            # On Windows the output folder is relative to the folder unshield runs in.
+            shutil.copytree(self.game, Path(cwd or "") / command[2] / "App_Executables")
 
         def cancel(stage, status, detail):
             if stage == "patches" and detail.startswith("Applying bundled"):
