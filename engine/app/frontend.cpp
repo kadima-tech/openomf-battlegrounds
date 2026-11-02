@@ -13,6 +13,7 @@
 // MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
 // of the window, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
+#include <cstdlib>
 
 #include <algorithm>
 #include <chrono>

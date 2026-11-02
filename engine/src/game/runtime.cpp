@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <cstdlib>
 
 #include "vm/compiler.h"
 #include "vm/disasm.h"

@@ -20,6 +20,8 @@
 #include <set>
 #include <memory>
 #include <string>
+#include <algorithm>
+#include <cctype>
 
 #include "de/font.h"
 #include "de/platform.h"

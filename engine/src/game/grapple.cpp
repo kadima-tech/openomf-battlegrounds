@@ -10,6 +10,8 @@
 // matching its orientation; every bone, hit sphere and anchor under it moves with it until the
 // next AnimSetTime poses the skeleton again.
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 
 #include "game/runtime.h"

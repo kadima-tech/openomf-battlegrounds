@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <strings.h>
+#include <cctype>
 
 #include "game/session.h"
 #include "game/impulses.h"

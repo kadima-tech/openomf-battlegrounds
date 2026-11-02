@@ -8,6 +8,7 @@
 // from <Name>.DEObjects. Drag to orbit, scroll to zoom, Left/Right to change move, Space to
 // pause, Esc to quit.
 #include <SDL.h>
+#include <cstdlib>
 
 #include <array>
 #include <cmath>

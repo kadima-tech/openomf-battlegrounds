@@ -17,6 +17,7 @@
 // stand-in pilot. Headless mode prints what the brains do, the session's on-screen messages
 // and which natives are still missing. Drag to orbit the camera, scroll to zoom, Esc to quit.
 #include <SDL.h>
+#include <cstdlib>
 
 #include <algorithm>
 #include <cctype>
