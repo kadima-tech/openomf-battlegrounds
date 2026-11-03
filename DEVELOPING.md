@@ -10,6 +10,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
 - `re/FINDINGS.md`: the reverse-engineering ledger. What each part of the original engine does, with the module addresses it was read from. `re/opcodes.md` documents the script VM's bytecode.
 - `re/scripts/` (Ghidra scripts: export, symbol fixes, cross-references) and `re/proto/` (the first Python prototypes of the data formats). The Ghidra scripts expect `GHIDRA_INSTALL_DIR`. They regenerate a local `re/dump/` of decompiled modules from your own copy of the game; those dumps are never committed.
 - `PLACEHOLDERS.md`: every stand-in, fixed answer and missing piece.
+- `tools/`: standalone modding tools. `tools/deobjects-editor` (`deobjects-edit`) unpacks a `.DEObjects` file to editable JSON and packs it back byte for byte; [docs/DEOBJECTS_FORMAT.md](docs/DEOBJECTS_FORMAT.md) documents the format.
 
 ## The engine
 
