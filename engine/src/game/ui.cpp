@@ -615,7 +615,7 @@ private:
 		combo(g, column, "BitsPerPixel", {"16 BPP", "32 BPP"}, &st->o.bit_depth, 0.5f);
 		combo(g, column, "Resolutions", names, &st->res, 0.5f);
 		combo(g, column, "Texture Detail", {"High Quality", "Medium Quality", "Low Quality"}, &st->o.texture, 0.5f);
-		auto *apply = column->add<Button>("Apply");
+		auto *apply = column->add<Button>("Apply", Button::Push);
 		apply->len_y = 30;
 		apply->scale(0.3f, 0, 0.7f, 1);
 		apply->disabled = true;
@@ -793,13 +793,13 @@ private:
 			st->keys->set_rows(k);
 			st->remove->disabled = true;
 		};
-		st->assign = body->add<Button>("Assign");
+		st->assign = body->add<Button>("Assign", Button::Push);
 		st->assign->scale(0.55f, 0.45f, 0.77f, 0.55f);
 		st->assign->disabled = true;
-		st->remove = body->add<Button>("Remove");
+		st->remove = body->add<Button>("Remove", Button::Push);
 		st->remove->scale(0.78f, 0.45f, 1, 0.55f);
 		st->remove->disabled = true;
-		auto *defaults = body->add<Button>("Set Defaults");
+		auto *defaults = body->add<Button>("Set Defaults", Button::Push);
 		defaults->scale(0, 0.9f, 0.5f, 1);
 		Ctl *desc = body->add<Ctl>()->scale(0.55f, 0.6f, 1, 1);
 		desc->add<TextDisplay>("", g.vy(13));
@@ -952,7 +952,7 @@ private:
 			x += g.vx(50);
 		}
 		Ctl *b = right->add<Ctl>()->scale(0.6f, 0, 1, 1);
-		auto *del = b->add<Button>("Delete");
+		auto *del = b->add<Button>("Delete", Button::Push);
 		del->sb = 0.25f;
 		del->on_click = [this] {
 			gui->confirm("Delete Replay", "Are you sure you want to delete this replay?", [this](bool yes) {
@@ -963,7 +963,7 @@ private:
 				refresh();
 			});
 		};
-		auto *ren = b->add<Button>("Rename");
+		auto *ren = b->add<Button>("Rename", Button::Push);
 		ren->scale(0, 0.375f, 1, 0.625f);
 		ren->on_click = [this] {
 			if (!current()) return;
@@ -1053,7 +1053,7 @@ public:
 		speed->add<Combo>(std::vector<std::string>{"2X", "4X", "8X", "16X"}, &fast_index_)->scale(0.54f, 0, 0.96f, 1);
 		fill_->add<Slider>(&slider_)->scale(0.4f, 0, 1, 0.3f);
 		fill_->add<Combo>(std::vector<std::string>{"Auto Observer", "Manual Observer"}, &observer_mode_)->scale(0.6f, 0.7f, 0.88f, 1);
-		auto *snap = fill_->add<Button>("Snapshot");
+		auto *snap = fill_->add<Button>("Snapshot", Button::Push);
 		snap->scale(0.9f, 0.7f, 1, 1);
 		snap->bound = &snapshot_;
 		last_ = app.world.system_ms();
@@ -1651,7 +1651,7 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 		Ctl *row = strip->add<Ctl>();
 		row->sr = 0.7f;
 		model_holder_ = describe(g, row, "Model", 0.5f);
-		auto *view = strip->add<Button>("View");
+		auto *view = strip->add<Button>("View", Button::Push);
 		view->scale(0.73f, 0, 0.97f, 1);
 		view->on_click = [this, &app] {
 			if (models_.empty()) return;
