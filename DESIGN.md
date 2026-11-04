@@ -1,5 +1,22 @@
 # Design
 
+## First-run launcher
+
+The native setup app (`launcher/Launcher.swift` on macOS, `launcher/windows/Launcher.cpp`
+on Windows 10/11, drawn to the same layout) uses a service-bay theme:
+graphite panels, warm ivory type, amber actions and a robot engineering schematic.
+The artwork is original and available before the player's disc is unpacked. Its
+left rail carries the brand and schematic; the main panel has ISO/drop and CD
+actions, three preparation stages, launch, and contextual errors. Settings shows
+the local install folder; Help explains disc requirements and first-time setup.
+CDs are recognized by the game's installer GUID. A verified ready installation
+opens directly into the engine without displaying the setup window.
+
+Launcher colors: panel `#141718`, ivory `#E8E3D4`, muted `#878F8C`, amber
+`#FFB529`. Typography uses native system sans serif, rounded heavy headings and
+monospaced technical labels. This setup interface is separate from the original
+game menus documented below.
+
 This project reimplements a 2003 game, so its look is the original's: the menus, HUD, fonts and
 colours all come from the game's own data files. This file records the conventions our engine uses
 to present that data, and the few places where the look is our own.
@@ -11,6 +28,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Scene.** The 3D GUI scene in OMFBGGUI.DEObjects: persistent `V.*` actors (the frame, the
   transition doors, the tunnel backdrop, the environment) and one `F.<Screen>` folder per page, its
   `VE.*` actors the buttons. Their meshes, materials, lights, particles and scripts are the game's.
+- **Backdrop squares.** 2.123's tunnel backdrop drifts large translucent pale-blue squares
+  (additive, (0.62, 0.86, 1) at 0.09): the backdrop's `SpotsRenderer` lost its `Blinklightimage`
+  texture in 2.123, so its 5-unit billboards draw untextured.
 - **Frame.** The GUI is laid out in a 4:3 field (x 0..1, y 0..0.75), drawn through a 60° horizontal
   field of view looking down −Z and stretched to fill the window (FINDINGS 126, 161).
 - **Buttons.** A hit rectangle over each button's `DisplayArea` mesh. Hover, leave and click go to
@@ -22,7 +42,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Page changes.** The doors (`V.MainDoors`) are an iris: 16 leaves turned 22.5° apart, swung in
   along `IrisLeafPath` (410 ms), the page swapped behind them, then swung open. The launch shows the
   main menu with the iris opening once and nothing closing first. The main frame shows on every page
-  except the main menu and in-game menus. The iris covers everything on the page, its text, images
+  except the main menu and in-game menus. At launch the screen stays black for the app manager's
+  first five frames; the menu then shows for the doors' 55 ms opening delay before the leaves
+  (parked off screen until then) appear almost closed and swing open, as in the original. The iris covers everything on the page, its text, images
   and bars included; only notifications draw over it.
 - **Controls** (the engine's 3D GUI controls, `game/controls.*`). Bevelled frames (5 quads, per-corner
   highlight / shadow colours with a slight face gradient, swapped when pressed); faces grey 0.5 at
@@ -64,7 +86,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   `Not_UserInformation` icon (64 × 64 VPU, tinted white at 0.8) centred in a VPU 75 column on the
   left; the text lines (VPU 14, rows 1.5 high) centred beside it, wrapped at VPU 400 / 600 / 700
   less the column; OK as a plain 15-VPU label in a VPU 120 × 38 box (black at 0.2) centred in a
-  bottom strip VPU(VPU 60) high, at the right, which under the mouse clears and glows blue from its top-left and bottom-right corners.
+  bottom strip VPU(VPU 60) high, at the right, filled by a push button (2-pixel up bevel, grey face
+  at half alpha), which under the mouse glows blue over the button from the box's top-left and
+  bottom-right corners.
   OK, the close box, Enter or Esc closes it; it drags by its title bar.
 
 ## In game
@@ -75,7 +99,10 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   Every text primitive is on screen (crowd responses and pilot quotes too). Stat bars fill along
   their length with a glowing cap at the value's end; the upright bars use the texture turned.
 - **Help.** A tree list: Plus / Minus icons 10 px wide at depth × 20 + 5, text at (depth + 1) × 20,
-  branches collapsed at first, no tree lines.
+  branches collapsed at first, no tree lines. The topic's page fills the Window: its text blocks
+  word-wrapped to the page less the scroll bar's width and twice the font, left-aligned in 2.123's
+  data (centred where a page asks, as Credits does), stacked downwards; a page taller than the
+  Window gets the launcher's 24-pixel vertical scroll bar and scrolls by bar, track or wheel.
 - **Shadows (off by default).** Each robot's silhouette darkens the floor under it to about half (Medium, High), from the static lights' direction (High adds one from the moving lights); Low casts one from straight above, darker.
 - **Camera.** The game's fight camera (the player's `CameraActor`, 70.5° horizontal at 4:3) while the
   player fights. Before and between rounds, after the player's fighter is beaten, and through a whole

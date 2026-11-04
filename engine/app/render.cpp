@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <set>
+#include <string>
 
 #include "de/avi.h"
 #include "de/image.h"
@@ -308,7 +310,12 @@ struct AnimatedTexture {
 	bool mipmap = true;
 	std::vector<GLuint> textures;
 	size_t shown = 0;
+	std::string name;    // for OPENBG_DEBUG_AVI
+	size_t changes = 0;  // frames uploaded since the last OPENBG_DEBUG_AVI report
 };
+// OPENBG_DEBUG_AVI=1: each animated texture's decoding, and every 250 updates the phase its
+// scripts last set, the frame shown and how often it changed.
+const bool g_debug_avi = getenv("OPENBG_DEBUG_AVI") != nullptr;
 std::map<std::pair<const de::ObjectsFile *, uint32_t>, AnimatedTexture> g_animated;
 
 std::vector<uint8_t> rgb_to_rgba(const std::vector<uint8_t> &rgb) {
@@ -345,12 +352,20 @@ void upload_avi_frame(GLuint t, const AnimatedTexture &a, const std::vector<uint
 }  // namespace
 
 void update_animated_textures(const std::map<std::pair<const de::ObjectsFile *, uint32_t>, float> &phases) {
+	static unsigned updates = 0;
+	const bool report = g_debug_avi && ++updates % 250 == 0;
 	for (auto &[k, a] : g_animated) {
 		auto it = phases.find(k);
 		size_t f = it == phases.end() ? 0 : a.video.frame_for_phase(it->second);
 		f = std::min(f, a.video.frames.size() - 1);
+		if (report) {
+			if (it == phases.end()) fprintf(stderr, "[avi] %s: no phase set; frame %zu, %zu changes\n", a.name.c_str(), f, a.changes);
+			else fprintf(stderr, "[avi] %s: phase %g -> frame %zu of %u, %zu changes\n", a.name.c_str(), double(it->second), f, a.video.length, a.changes);
+			a.changes = 0;
+		}
 		if (f == a.shown) continue;
 		a.shown = f;
+		++a.changes;
 		auto px = rgb_to_rgba(a.video.frames[f]);
 		for (GLuint t : a.textures) upload_avi_frame(t, a, px, false);
 	}
@@ -371,6 +386,12 @@ GLuint texture_of(std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint>
 			if (a.textures.empty()) {
 				a.video = de::decode_avi(de::avi_of_image(r.file->object_data(r.info()).contents));
 				a.mipmap = de::read_image_header(r.file->object_data(r.info()).contents).mipmap;
+				a.name = r.info().name;
+				if (g_debug_avi) {
+					std::set<std::vector<uint8_t>> distinct(a.video.frames.begin(), a.video.frames.end());
+					fprintf(stderr, "[avi] %s: %s %dx%d, %u frames in the stream, %zu decoded, %zu distinct\n", a.name.c_str(),
+					        a.video.codec.c_str(), a.video.width, a.video.height, a.video.length, a.video.frames.size(), distinct.size());
+				}
 			}
 			if (a.video.decoded()) {
 				auto px = rgb_to_rgba(a.video.frames[a.shown]);

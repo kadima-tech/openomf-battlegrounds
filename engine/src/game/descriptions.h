@@ -48,19 +48,23 @@ std::vector<de::ObjectRef> fighter_models(const de::World &data, const de::Objec
 // A Value\String's text.
 std::string read_string_value(const de::ObjectRef &value);
 
-// DE_CControlCreator (Core: ObjProcessContents 0x7021c270, CreateNewControl 0x7021c520): contents
-// v1 [name][i32 layout +0x44][i32 wrap +0x40][i32 text height +0x48, virtual pixels][f32 +0x4c];
-// references, its items in order: a Value\String is a text block of that height (word-wrapped
-// unless +0x40 is 0), an image keeps its own size, a ControlCreator nests. Items stack downwards,
-// or across for layouts 1 and 3.
+// DE_CControlCreator (Core: ObjProcessContents 0x7021c270, CreateNewControl 0x7021c520; 2.123
+// 0x20224c30, 0x20224ee0): contents v1 [name][i32 layout +0x44][i32 alignment +0x40][i32 text
+// height +0x48, virtual pixels][f32 image scale +0x4c]; references, its items in order: a Value\String is a
+// wrapped text block of that height, an image is its size times the scale, a ControlCreator nests. Items
+// stack downwards, or across for layouts 1 and 3; layouts 2 and 3 put each run of items of one class
+// in a row (a column), centred when the alignment is 2. Text lines are centred at alignment 2, else
+// at the left.
 struct ControlLayout {
 	enum Kind { Group, Text, Image } kind = Group;
-	bool across = false;
-	bool wrap = true;
+	int layout = 0;
+	int align = 2;
 	int text_height = 16;
+	float image_scale = 1;
 	std::string text;
 	de::ObjectRef image;
 	std::vector<ControlLayout> items;
+	bool across() const { return layout == 1 || layout == 3; }
 };
 ControlLayout read_control_creator(const de::World &data, const de::ObjectRef &creator);
 

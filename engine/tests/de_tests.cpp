@@ -1,12 +1,16 @@
 // Data-layer tests against the original game files. Usage: de-tests <Data dir>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 #include "de/avi.h"
+#include "de/platform.h"
 #include "de/contents.h"
 #include "de/image.h"
 #include "de/mesh.h"
@@ -376,6 +380,7 @@ static void test_avi(const std::filesystem::path &dir) {
 }
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	test_squeezed();
 	test_md5();
 	if (argc > 1) {

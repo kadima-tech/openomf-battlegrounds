@@ -1,5 +1,6 @@
 #include "de/lzrw3a.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 

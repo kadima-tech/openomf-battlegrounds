@@ -188,7 +188,7 @@ private:
 	Control list_rect_, window_rect_;
 	Control *next_ = nullptr, *back_ = nullptr;
 	List *list_ = nullptr;
-	Ctl *panel_ = nullptr, *model_holder_ = nullptr;
+	Ctl *panel_ = nullptr, *model_holder_ = nullptr, *large_ = nullptr;
 	Combo *model_combo_ = nullptr;
 	TextDisplay *bio_ = nullptr;
 };
@@ -207,6 +207,7 @@ public:
 	std::vector<UIPtr> stack;
 	int transition_state = 1;  // +0x74, 1 from ObjInitContents (FINDINGS 225)
 	bool first_transition = true;  // m_FirstTransition (Core 0x20356188)
+	int frames_to_wait = 5;  // UpdateUI's FramesToWait (Core 0x20356190): its first calls return at once
 	bool page_finished = false;  // +0x78
 	bool auto_select_mode = false;  // +0x7c
 	bool quit_requested = false;  // g_QuiteOnNextUpdate

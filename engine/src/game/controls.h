@@ -4,6 +4,7 @@
 // images, with the top control's input routing (capture, hover, focus, modal dialogs, popups).
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <memory>
@@ -150,6 +151,8 @@ public:
 	virtual void text(const std::string &) {}
 	// The pre-draw, each frame before layout.
 	virtual void pre_draw() {}
+	// The autosize pass: lengths that follow the contents, for a box `width` wide.
+	virtual void fit(float) {}
 	void pre_draw_tree();
 	// The deepest shown control under (x, y), taking the mouse or not.
 	virtual Ctl *under(float x, float y);
@@ -210,7 +213,7 @@ public:
 // DE_CButtonControl3d (0x700bd420..; DE_CButtonRobot 0x700c4e00).
 class Button : public Ctl {
 public:
-	enum Type { Plain, Push, Radio, Check };
+	enum Type { Plain, Push, Radio, Check };  // New makes Push (ObjInitContents' +0x1f8 = 1, 0x700bd810)
 	Button(Gui &g, std::string label, Type type = Plain, float label_px = -1);
 	Type type;
 	std::string label;
@@ -304,6 +307,33 @@ private:
 	std::string wrapped_;
 };
 
+// DE_CTextDisplayControl3d made by New(text, parent, 0) (+0x230): no page viewer of its own, its
+// LenY the wrapped lines' height (BuildWrappedText, 2.123 Core 0x201049b0); `line_align` is its
+// ECenter (+0x234): 2 centres each line, 0 puts it 1 pixel from the left.
+class TextBlock : public Ctl {
+public:
+	TextBlock(Gui &g, std::string text, float px, int line_align = 2);
+	std::string str;
+	float px;
+	Rgba color = theme::kText;
+	int line_align;
+	void fit(float width) override;
+	void paint_self(Painter &p) override;
+
+private:
+	std::vector<std::string> lines_;
+};
+
+// A control's DE_CAutoSizeHorizontalRobot / DE_CAutoSizeVerticalRobot (2.123 Core 0x2009fd40 /
+// 0x2009faa0): per axis none, the children's largest length, or the children stacked from 1 pixel.
+class AutoSize : public Ctl {
+public:
+	using Ctl::Ctl;
+	enum Mode { None, Largest, Stacked };
+	Mode mode_x = None, mode_y = None;
+	void fit(float width) override;
+};
+
 // DE_CListControl3dEx (0x7009e190..) and its entry manager: rows of cells in a page viewer.
 class List : public Ctl {
 public:
@@ -324,8 +354,11 @@ public:
 	// collapsed at first, each level in row order.
 	bool tree = false;
 	std::string title;
-	float entry_h = 20;  // SetMinEntrySize, pixels
+	float entry_h = 20;  // SetMinEntrySize: the smallest row height, pixels
 	float text_px;       // SizeListControlEntryText
+	// A row is at least entry_h and at least as tall as its text. The original's 20 is a minimum:
+	// at 1024x768 its ~19-pixel text fits it, and the text grows with the resolution (vy(16)).
+	float row_h() const { return std::max(entry_h, text_px); }
 	int selected = -1, hover = -1;
 	std::function<void(int)> on_select, on_double;
 	PageViewer *viewer;
@@ -339,8 +372,8 @@ public:
 	bool wheel(int dy) override { return viewer->wheel(dy); }
 
 private:
-	float title_h() const { return title.empty() ? 0 : entry_h; }
-	float header_h() const { return columns.size() > 1 ? entry_h : 0; }
+	float title_h() const { return title.empty() ? 0 : row_h(); }
+	float header_h() const { return columns.size() > 1 ? row_h() : 0; }
 	int row_at(float y) const;
 	void rebuild();
 	float indent(int row) const { return float(depth_[size_t(row)] + 1) * 20; }

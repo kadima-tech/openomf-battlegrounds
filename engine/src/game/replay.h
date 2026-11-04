@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -52,7 +53,7 @@ std::vector<std::shared_ptr<SessionRecord>> list_recordings(const de::World *dat
 std::shared_ptr<SessionRecord> load_recording(const std::string &path);
 bool delete_recording(const SessionRecord &r);
 bool rename_recording(SessionRecord &r, const std::string &name);
-std::string recordings_dir();
+std::filesystem::path recordings_dir();
 
 // DE_CSessionMasterDescription +0xfc (contents v1): the game type is recorded.
 bool recordable(const de::ObjectRef &master_description);

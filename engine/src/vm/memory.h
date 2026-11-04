@@ -48,6 +48,7 @@ public:
 private:
 	uint8_t *base_ = nullptr;
 	uint32_t reserved_;
+	uint32_t committed_ = 0;
 	uint32_t top_ = 16;  // keep low addresses unused so small offsets never look valid
 };
 

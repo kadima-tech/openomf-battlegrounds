@@ -15,14 +15,47 @@ engine, so the game can be played on modern machines.
 
 The port follows the game's final official patch, **2.123**.
 
+## Launcher (macOS and Windows)
+
+From [Releases](https://github.com/kadima-tech/openomf-battlegrounds/releases):
+
+- **macOS 13 or newer:** download the Apple silicon (`arm64`) or Intel (`x86_64`) ZIP,
+  unzip it and open **`Battlegrounds.app`**.
+- **Windows 10 or 11 (64-bit):** download the `windows-x64` ZIP, extract all files and
+  run **`Battlegrounds\Battlegrounds.exe`**. No installer, administrator rights,
+  Visual C++ runtime or Python installation are needed. Windows 11 on Arm runs it
+  through x64 emulation.
+
+Dev builds are marked **Pre-release**. Downloads include the compiled engine and
+launcher; you still need your own game CD/ISO. See
+[launcher/README.md](launcher/README.md#ci-builds-and-releases) for build triggers and
+signing details.
+
+From a source checkout, double-click **`launch.command`** (macOS) or **`launch.cmd`**
+(Windows, see [Building on Windows](#building-on-windows)) to build and open the native
+launcher. On first
+run, choose your original English game CD/ISO; an inserted CD is detected
+automatically. Confirm **Start setup** before installation (3 GB free space
+required). The launcher extracts the game and applies its bundled cumulative
+update offline, then starts the game. The update and setup tools ship inside the
+app. Once a complete 2.123 installation is present, future launches skip setup.
+
+The macOS source build needs Xcode's command-line tools, CMake and Python 3. The resulting
+**`dist/Battlegrounds.app`** can be distributed without those build tools or
+Homebrew dependencies. On Windows the result is the **`dist\Battlegrounds`** folder.
+See [launcher/README.md](launcher/README.md) for packaging, storage locations and
+validation. The manual build/install instructions below remain available for development.
+
 ## You need the game
 
-No game data is included in this repository. You need your own copy of *One Must Fall:
-Battlegrounds*, either the Windows CD or an ISO image of it, and the official patches up to 2.123.
+You need your own copy of *One Must Fall: Battlegrounds*, either the original English
+Windows CD or an ISO image of it. The launcher includes a cumulative 2.090 → 2.123
+update; a complete game installation is not included.
 
 ## Building
 
-openomf-battlegrounds currently builds on **macOS** (Apple silicon or Intel). You need CMake 3.20 or
+openomf-battlegrounds builds on **macOS** (Apple silicon or Intel) and **Windows 10/11** (x64, see
+[below](#building-on-windows)). The engine also compiles on Linux. On macOS you need CMake 3.20 or
 newer, a C++20 compiler (Xcode's command-line tools), and a few packages from Homebrew:
 
 ```sh
@@ -41,7 +74,46 @@ cmake --build engine/build -j
 The Indeo video decoder, [openindeo](https://github.com/kadima-tech/openindeo), is fetched by CMake
 automatically. Run `ctest --test-dir engine/build` to check that your game data parses.
 
-## Installing the game data
+### Building on Windows
+
+Windows builds use MinGW-w64 from [MSYS2](https://www.msys2.org). Double-click **`launch.cmd`** in
+a checkout. It sets up whatever is missing, asking before each step:
+
+1. Without MSYS2 in `C:\msys64`, it offers to install it with `winget`, the package manager in
+   Windows 11 and current Windows 10. Windows then asks for administrator approval.
+2. It offers to install any missing build packages (GCC, CMake, Ninja, Python, Git) with MSYS2's
+   `pacman`, about 1 GB.
+
+It then builds the standalone launcher (`dist\Battlegrounds`, with SDL2, zlib and unshield
+fetched at pinned versions and linked in) and opens it. Later runs rebuild only when the sources
+changed. Set `MSYS2_ROOT` if MSYS2 is installed elsewhere. To set things up by hand instead,
+install MSYS2 and run this in its **MSYS2 UCRT64** shell (SDL2 and zlib are only needed for the
+engine development build below):
+
+```sh
+pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
+  mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-python \
+  mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-zlib
+```
+
+For engine development, build in the UCRT64 shell as on macOS:
+
+```sh
+cmake -S engine -B engine/build -G Ninja
+cmake --build engine/build
+```
+
+That development build uses MSYS2's SDL2 and zlib DLLs, so run its programs from the UCRT64 shell.
+The game needs a graphics driver with OpenGL 4.1, which every Windows 10/11 driver for GPUs from
+roughly 2012 onwards provides. Linux developers can cross-compile the Windows download with
+`launcher/windows/build-windows.sh` after installing MinGW-w64 (`g++-mingw-w64-x86-64-posix` on
+Debian and Ubuntu), CMake and Ninja.
+
+## Reconstructing the historical patch chain
+
+The launcher installs directly from your disc/ISO using its bundled cumulative update,
+with no network access. The steps below are for developers reproducing the original
+version trees for analysis; they are not needed to use the app.
 
 **1. Unpack the disc.** Copy your ISO into `source/` and extract its installer:
 
@@ -74,7 +146,7 @@ The `source/` folder is ignored by git, so your game files never end up in a com
 engine/build/openbg source/patched/v2123/Data
 ```
 
-This starts the game at its main menu. Choose **Single Player** and pick a tournament, Practice or
+(On Windows: `engine\build\openbg.exe source\patched\v2123\Data`.) This starts the game at its main menu. Choose **Single Player** and pick a tournament, Practice or
 Training.
 
 **Fight controls:**
@@ -110,15 +182,30 @@ read from. The copy-protected game executable is never decrypted.
 
 ## Contributing
 
-Contributions and bug reports are welcome. [DEVELOPING.md](DEVELOPING.md) describes the code, the
-tools and the debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) is the list of open work;
-[PATCHES.md](PATCHES.md) documents what the official patches changed.
+Contributions and bug reports are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md)
+and our [Code of Conduct](CODE_OF_CONDUCT.md). [DEVELOPING.md](DEVELOPING.md) describes
+the code, tools and debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) lists open
+work; [PATCHES.md](PATCHES.md) documents the official patches. Report vulnerabilities
+using [SECURITY.md](SECURITY.md).
+
+## License
+
+This project's original code and documentation are available under the
+[MIT license](LICENSE), including its warranty disclaimer and limitation of liability.
+The downloads include this license and the dependency notices in
+`Battlegrounds.app/Contents/Resources/licenses/` (macOS) or `Battlegrounds\resources\licenses\`
+(Windows).
+
+Third-party components retain their own terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The original game and its update
+data, including the bundled cumulative update, are not covered by this project's
+MIT license. You still need your own copy of the game.
 
 ## Credits
 
 *One Must Fall: Battlegrounds* was developed by Diversions Entertainment and belongs to its rights
-holders. This project is not affiliated with or endorsed by them, and contains none of the game's
-data.
+holders. This project is not affiliated with or endorsed by them and does not include
+a complete copy of the game.
 
 Third-party code included in this repository keeps its own licence: GothicKit's
 [dmusic](https://github.com/GothicKit/dmusic) (MIT, vendored in `engine/third_party/dmusic`) and a C
