@@ -371,6 +371,7 @@ struct Brain {
 	std::vector<std::string> behavior_names;
 	bool started = false;  // its entry has been run up to its first wait (activation)
 	bool initial_tick = true;  // ClassExecutor +0x48: its entry runs as the scene adds it
+	int states_at_once = -1;  // ClassExecutor +0x4c (IsExecuteStatesFromAllInstant); -1 not read from one
 	// Its ClassExecutor's interval (+0x44, ms): a temporal of that rate (DE_CClassExecutorInstance::
 	// Setup), 0 none. A creature's behaviour executor is ticked by the creature instead.
 	uint32_t interval = 0;
