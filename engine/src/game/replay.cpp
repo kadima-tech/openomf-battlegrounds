@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -12,6 +13,7 @@
 #include <random>
 
 #include "de/contents.h"
+#include "de/platform.h"
 #include "game/runtime.h"
 #include "game/session.h"
 #include "game/simple_physics.h"
@@ -1298,10 +1300,7 @@ StateRecord *SessionRecord::find(const std::string &id) const {
 	return nullptr;
 }
 
-std::string recordings_dir() {
-	const char *home = getenv("HOME");
-	return std::string(home ? home : ".") + "/Library/Application Support/openbg/Recordings";
-}
+std::filesystem::path recordings_dir() { return de::user_data_dir() / "Recordings"; }
 
 // DE_CRecordingListUIManager::Begin (OMF 0x35062040) finds every SessionRecord in the loaded
 // files: ours are the data folder's and the Recordings folder's.
@@ -1411,7 +1410,7 @@ void replay_session_ended(World &w, SessionState &s) {
 		r.guid = record_guid(repeatable);
 		std::error_code ec;
 		std::filesystem::create_directories(recordings_dir(), ec);
-		r.path = recordings_dir() + "/" + stamp + ".DEObjects";
+		r.path = (recordings_dir() / (std::string(stamp) + ".DEObjects")).string();
 		size_t states = 0;
 		for (auto &m : r.managers) {
 			states += m->states.size();

@@ -11,15 +11,36 @@ endif()
 
 add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra> $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>)
 
+# Windows 10 and 11 build with MinGW-w64 (GCC or Clang; MSYS2's UCRT64 environment, or a cross
+# compiler). The C++ runtime is linked in, so the programs need no compiler DLLs, and an embedded
+# manifest makes UTF-8 the process code page, so narrow-string file APIs take any path.
+if(WIN32)
+	add_compile_definitions(_USE_MATH_DEFINES NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+	if(MINGW)
+		add_link_options(-static -static-libgcc -static-libstdc++)
+	endif()
+	enable_language(RC)
+	set(OPENBG_WINDOWS_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/app/windows/openbg.rc)
+endif()
+
 # GothicKit dmusic (third_party/dmusic, MIT): DirectMusic style segments and DLS synthesis for the
-# songs. Built here as a static library; macOS has no C11 <threads.h>, so it uses its POSIX shim.
+# songs. Built here as a static library; macOS has no C11 <threads.h>, so it uses its POSIX shim
+# (Windows its Win32 one).
 file(GLOB DMUSIC_SOURCES third_party/dmusic/src/*.c third_party/dmusic/src/io/*.c)
-add_library(dmusic STATIC ${DMUSIC_SOURCES}
-	third_party/dmusic/src/thread/Thread.Posix.c)
+if(WIN32)
+	set(DMUSIC_THREAD third_party/dmusic/src/thread/Thread.Win32.c)
+else()
+	set(DMUSIC_THREAD third_party/dmusic/src/thread/Thread.Posix.c)
+endif()
+add_library(dmusic STATIC ${DMUSIC_SOURCES} ${DMUSIC_THREAD})
 set_target_properties(dmusic PROPERTIES C_STANDARD 11)
 target_include_directories(dmusic PUBLIC third_party/dmusic/include PRIVATE third_party/dmusic/src)
 target_compile_definitions(dmusic PUBLIC DM_STATIC=1 PRIVATE DM_BUILD=1)
 target_compile_options(dmusic PRIVATE -w)
+if(MINGW)
+	# MinGW declares gmtime_r (used by dmusic's logger) only for POSIX thread-safe functions.
+	target_compile_definitions(dmusic PRIVATE _POSIX_THREAD_SAFE_FUNCTIONS=200112L)
+endif()
 # dmusic tables that are DirectX's own data (dmsynth.dll's filter coefficients, dmime.dll's curve
 # shapes) are read from the game disc at build time; without the disc they fall back.
 set(OPENBG_GAME_ISO "${CMAKE_CURRENT_SOURCE_DIR}/../source/Battlegrounds.iso" CACHE FILEPATH "the game disc image")
@@ -41,7 +62,8 @@ if(EXISTS "${OPENINDEO_DIR}/CMakeLists.txt")
 	add_subdirectory(${OPENINDEO_DIR} openindeo)
 else()
 	include(FetchContent)
-	FetchContent_Declare(openindeo GIT_REPOSITORY https://github.com/kadima-tech/openindeo.git GIT_TAG main)
+	set(OPENINDEO_GIT_TAG "main" CACHE STRING "openindeo revision")
+	FetchContent_Declare(openindeo GIT_REPOSITORY https://github.com/kadima-tech/openindeo.git GIT_TAG ${OPENINDEO_GIT_TAG})
 	FetchContent_MakeAvailable(openindeo)
 endif()
 
@@ -63,9 +85,13 @@ add_library(de STATIC
 	src/de/scene.cpp
 	src/de/anim.cpp
 	src/de/lighting.cpp
+	src/de/platform.cpp
 )
 target_include_directories(de PUBLIC src)
 target_link_libraries(de PRIVATE openindeo)
+if(WIN32)
+	target_link_libraries(de PRIVATE shell32 ole32 uuid)
+endif()
 
 # Script VM: compiled VMCode (VMC2) reader, bytecode decoder.
 add_library(vm STATIC
@@ -125,19 +151,32 @@ add_test(NAME de-all-files COMMAND de-tests "${OPENBG_DATA_DIR}" --all)
 set_tests_properties(de-all-files PROPERTIES LABELS full)
 
 # Native viewer (SDL2 + OpenGL 4.1 core).
-find_package(SDL2 REQUIRED)
+if(NOT TARGET SDL2::SDL2)
+	find_package(SDL2 REQUIRED)
+endif()
 find_package(OpenGL REQUIRED)
+# SDL's main() wrapper turns the Windows command line into UTF-8 arguments.
+set(OPENBG_SDL_LIBS SDL2::SDL2)
+if(WIN32 AND TARGET SDL2::SDL2main)
+	set(OPENBG_SDL_LIBS SDL2::SDL2main SDL2::SDL2)
+endif()
 add_executable(openbg-viewer app/viewer.cpp)
-target_link_libraries(openbg-viewer PRIVATE de SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
+target_link_libraries(openbg-viewer PRIVATE de ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg-arena app/arena.cpp app/render.cpp app/glow.cpp)
-target_link_libraries(openbg-arena PRIVATE de SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
+target_link_libraries(openbg-arena PRIVATE de ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 add_executable(pcc tools/pcc.cpp)
 target_link_libraries(pcc PRIVATE vm)
 add_executable(openbg-brain tools/brain.cpp)
 target_link_libraries(openbg-brain PRIVATE vm)
 add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
-target_link_libraries(openbg-fight PRIVATE game dmusic SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
+target_link_libraries(openbg-fight PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
-target_link_libraries(openbg PRIVATE game dmusic SDL2::SDL2 OpenGL::GL ZLIB::ZLIB)
+target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
+if(WIN32)
+	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
+	foreach(program deobj-dump de-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg)
+		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
+	endforeach()
+endif()

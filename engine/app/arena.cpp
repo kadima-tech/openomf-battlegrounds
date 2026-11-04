@@ -14,12 +14,14 @@
 #include <optional>
 
 #include "de/lighting.h"
+#include "de/platform.h"
 #include "de/scene.h"
 #include "gl_util.h"
 #include "glow.h"
 #include "render.h"
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <Data dir> <arena stem> [--screenshot out.png]\n", argv[0]);
 		return 2;
@@ -68,6 +70,8 @@ int main(int argc, char **argv) {
 		                                   SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
 		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
 		SDL_GLContext ctx = SDL_GL_CreateContext(win);
+		if (!ctx) throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		render::g_live_values = [&](const de::ObjectRef &r) -> std::optional<float> {
 			if (r.file == file && r.info().name == "SceneTime") return scene_ms;

@@ -5,7 +5,9 @@
 // Every intrinsic call is logged by signature and answered with a zero result, and the run
 // stops at the first opcode the VM cannot execute yet. The report drives which parts of the
 // native API to implement next.
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -13,6 +15,7 @@
 #include <string>
 
 #include "de/objects_file.h"
+#include "de/platform.h"
 #include "vm/disasm.h"
 #include "vm/executor.h"
 #include "vm/script.h"
@@ -69,6 +72,7 @@ struct LoggingHost : vm::Host {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 3) {
 		fprintf(stderr, "usage: %s <file.DEObjects> <Class> [entry] [pulses]\n", argv[0]);
 		return 2;

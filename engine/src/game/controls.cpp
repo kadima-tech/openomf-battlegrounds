@@ -63,6 +63,19 @@ std::vector<std::string> wrap_paragraph(const Gui &gui, std::string para, float 
 	}
 }
 
+// BuildWrappedText (0x700ff8a0): the width less the scroll bar's and twice the font; a line is
+// broken while its letters start before that less VPU 10.
+std::vector<std::string> wrapped_lines(const Gui &gui, const std::string &t, float px, float width) {
+	float W = std::max(0.0f, width - gui.vy(24) - 2 * px);
+	std::vector<std::string> out;
+	for (const std::string &para : split_lines(t)) {
+		for (auto &l : wrap_paragraph(gui, para, px, W, W - gui.vx(10))) out.push_back(l);
+	}
+	return out;
+}
+
+float line_pitch(const Gui &gui, float px) { return px + gui.vy(1) + std::floor((px + 2) / 3); }
+
 }  // namespace
 
 // ---- Painter ----
@@ -542,11 +555,10 @@ TextDisplay::TextDisplay(Gui &g, std::string text, float h, Rgba c) : Ctl(g), st
 	viewer = add<PageViewer>();
 	viewer->page_height = [this](float) {
 		wrap(viewer->w());
-		float f = px, pitch = f + gui.vy(1) + std::floor((f + 2) / 3);
-		return float(lines_.size()) * pitch + std::floor((f + 2) / 3);
+		return float(lines_.size()) * line_pitch(gui, px) + std::floor((px + 2) / 3);
 	};
 	viewer->page->on_paint = [this](Painter &p) {
-		float f = px, pitch = f + gui.vy(1) + std::floor((f + 2) / 3);
+		float f = px, pitch = line_pitch(gui, px);
 		float cw = viewer->cx1 - viewer->cx0, left = viewer->page->x0 + (cw - widest_) / 2;
 		for (size_t i = 0; i < lines_.size(); ++i) {
 			float top = viewer->page->y0 + float(i) * pitch;
@@ -563,22 +575,66 @@ void TextDisplay::set_text(const std::string &t) {
 	viewer->scroll_top();
 }
 
-// BuildWrappedText (0x700ff8a0): the width less the scroll bar's and twice the font; a line is
-// broken while its letters start before that less VPU 10.
+// BuildWrappedText (0x700ff8a0) at the page viewer's width.
 void TextDisplay::wrap(float width) {
 	if (width == wrapped_w_ && wrapped_ == str) return;
 	wrapped_w_ = width, wrapped_ = str;
-	float W = width - gui.vy(24) - 2 * px;
-	lines_.clear();
+	lines_ = wrapped_lines(gui, str, px, width);
 	widths_.clear();
 	widest_ = 0;
-	for (const std::string &para : split_lines(str)) {
-		for (auto &l : wrap_paragraph(gui, para, px, W, W - gui.vx(10))) {
-			lines_.push_back(l);
-			widths_.push_back(gui.text_width(l, px));
-			widest_ = std::max(widest_, widths_.back());
+	for (auto &l : lines_) {
+		widths_.push_back(gui.text_width(l, px));
+		widest_ = std::max(widest_, widths_.back());
+	}
+}
+
+// ---- TextBlock ----
+
+TextBlock::TextBlock(Gui &g, std::string text, float h, int a) : Ctl(g), str(std::move(text)), px(h), line_align(a) {}
+
+void TextBlock::fit(float width) {
+	lines_ = wrapped_lines(gui, str, px, len_x >= 0 ? len_x : width);
+	len_y = float(lines_.size()) * line_pitch(gui, px) + std::floor((px + 2) / 3);
+}
+
+// Each line a gNewText `px` high, OffsetFromTopWithLen(i x pitch, px).
+void TextBlock::paint_self(Painter &p) {
+	float pitch = line_pitch(gui, px);
+	for (size_t i = 0; i < lines_.size(); ++i) {
+		float top = y0 + float(i) * pitch;
+		if (line_align == 2) p.text(lines_[i], (x0 + x1) / 2, top, px, color, true);
+		else p.text(lines_[i], x0 + (line_align == 0 ? 1 : 0), top, px, color);
+	}
+}
+
+// ---- AutoSize ----
+
+// ProcessControlEvent on 0x3b: a length is set only when it comes to more than 0; stacked children
+// with no length are skipped.
+void AutoSize::fit(float width) {
+	auto measure = [this](bool across, Mode m) {
+		float v = 0, at = 1;
+		for (auto &c : children) {
+			float len = across ? c->len_x : c->len_y;
+			if (m == Largest) v = std::max(v, len);
+			else if (len >= 0) {
+				v += len;
+				(across ? c->from_left : c->from_top) = at;
+				at += len;
+			}
+		}
+		if (v <= 0) return;
+		(across ? len_x : len_y) = m == Stacked ? at : v;
+	};
+	float w = len_x >= 0 ? len_x : width;
+	for (auto &c : children) c->fit(w);
+	if (mode_x != None) {
+		measure(true, mode_x);
+		if (len_x >= 0 && len_x != w) {
+			for (auto &c : children) c->fit(len_x);
 		}
 	}
+	if (mode_y != None) measure(false, mode_y);
 }
 
 // ---- List ----
@@ -587,7 +643,7 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 	columns = {{"", -1}};
 	viewer = add<PageViewer>();
 	body_ = viewer->page;
-	viewer->page_height = [this](float) { return float(shown_.size()) * entry_h; };
+	viewer->page_height = [this](float) { return float(shown_.size()) * row_h(); };
 	viewer->page_width = [this](float w) {
 		if (columns.size() > 1) return w;
 		float widest = 0;
@@ -605,8 +661,8 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 		float top_vis = viewer->cy0, bottom_vis = viewer->cy1;
 		for (size_t n = 0; n < shown_.size(); ++n) {
 			int i = shown_[n];
-			float y = body_->y0 + float(n) * entry_h;
-			if (y + entry_h < top_vis || y > bottom_vis) continue;
+			float y = body_->y0 + float(n) * row_h();
+			if (y + row_h() < top_vis || y > bottom_vis) continue;
 			const Row &r = rows[size_t(i)];
 			if (tree) {
 				// CEntry::SetupHierarchy / PositionEntry (0x700a72d0 / 0x700a6320): a 10-pixel
@@ -614,27 +670,27 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 				// hug the text from (depth + 1) x 20 (CalcMinSize).
 				const std::string &t = r.cells.empty() ? std::string() : r.cells[0];
 				float tx = body_->x0 + indent(i), tw = gui.text_width(t, text_px) + 5;
-				if (i == selected) p.rect(tx, y, tx + tw, y + entry_h, theme::kListSelection);
-				else if (i == hover && r.selectable) p.rect(tx, y, tx + tw, y + entry_h, {0, 0, 0.5f, 0.5f});
+				if (i == selected) p.rect(tx, y, tx + tw, y + row_h(), theme::kListSelection);
+				else if (i == hover && r.selectable) p.rect(tx, y, tx + tw, y + row_h(), {0, 0, 0.5f, 0.5f});
 				if (has_kids_[size_t(i)]) {
-					float bx = tx - 15, by = y + (entry_h - 10) / 2;
+					float bx = tx - 15, by = y + (row_h() - 10) / 2;
 					p.image(gui.image(expanded_[size_t(i)] ? "Minus" : "Plus"), bx, by, bx + 10, by + 10, {1, 1, 1, 1});
 				}
 				Rgba c = r.color;
 				if (!r.selectable) c.a *= 0.5f;
-				p.text(t, tx, y + (entry_h - text_px) / 2, text_px, c);
+				p.text(t, tx, y + (row_h() - text_px) / 2, text_px, c);
 				continue;
 			}
 			// CColEntry::ShowAsSelected (0x700a7510) and the hover (control 0x25): the highlight's alpha.
-			if (i == selected) p.rect(body_->x0, y, body_->x1, y + entry_h, theme::kListSelection);
-			else if (i == hover && r.selectable) p.rect(body_->x0, y, body_->x1, y + entry_h, {0, 0, 0.5f, 0.5f});
+			if (i == selected) p.rect(body_->x0, y, body_->x1, y + row_h(), theme::kListSelection);
+			else if (i == hover && r.selectable) p.rect(body_->x0, y, body_->x1, y + row_h(), {0, 0, 0.5f, 0.5f});
 			float x = body_->x0;
 			for (size_t k = 0; k < columns.size() && k < r.cells.size(); ++k) {
 				float cw = columns[k].width < 0 ? body_->x1 - x : columns[k].width * pw;
 				Rgba c = r.color;
 				if (!r.selectable) c.a *= 0.5f;
-				p.push_clip(x, y, x + cw, y + entry_h);
-				p.text(r.cells[k], x + gui.vx(3), y + (entry_h - text_px) / 2, text_px, c);
+				p.push_clip(x, y, x + cw, y + row_h());
+				p.text(r.cells[k], x + gui.vx(3), y + (row_h() - text_px) / 2, text_px, c);
 				p.pop_clip();
 				x += cw;
 			}
@@ -684,13 +740,13 @@ void List::layout_children() {
 void List::paint_self(Painter &p) {
 	float cx0, cy0, cx1, cy1;
 	client(cx0, cy0, cx1, cy1);
-	if (!title.empty()) p.text(title, (cx0 + cx1) / 2, cy0 + (entry_h - text_px) / 2, text_px, theme::kText, true);
+	if (!title.empty()) p.text(title, (cx0 + cx1) / 2, cy0 + (row_h() - text_px) / 2, text_px, theme::kText, true);
 	if (columns.size() < 2) return;
 	float y = cy0 + title_h(), x = cx0, pw = viewer->cx1 - viewer->cx0;
 	for (auto &c : columns) {
 		float cw = c.width < 0 ? cx1 - x : c.width * pw;
-		p.push_clip(x, y, x + cw, y + entry_h);
-		p.text(c.name, x + gui.vx(3), y + (entry_h - text_px) / 2, text_px, {0.75f, 0.8f, 0.85f, 1});
+		p.push_clip(x, y, x + cw, y + row_h());
+		p.text(c.name, x + gui.vx(3), y + (row_h() - text_px) / 2, text_px, {0.75f, 0.8f, 0.85f, 1});
 		p.pop_clip();
 		x += cw;
 	}
@@ -698,7 +754,7 @@ void List::paint_self(Painter &p) {
 
 int List::row_at(float y) const {
 	if (y < viewer->cy0 || y >= viewer->cy1) return -1;
-	int n = int(std::floor((y - body_->y0) / entry_h));
+	int n = int(std::floor((y - body_->y0) / row_h()));
 	return n >= 0 && n < int(shown_.size()) ? shown_[size_t(n)] : -1;
 }
 
@@ -748,7 +804,7 @@ void List::select(int i, bool notify) {
 	if (opened) rebuild();
 	selected = i;
 	float at = float(std::max(0, pos_[size_t(i)]));
-	viewer->scroll_to(at * entry_h, (at + 1) * entry_h);
+	viewer->scroll_to(at * row_h(), (at + 1) * row_h());
 	if (notify && on_select) on_select(i);
 }
 
@@ -756,7 +812,7 @@ void List::select(int i, bool notify) {
 bool List::key(int sym) {
 	if (shown_.empty()) return false;
 	int count = int(shown_.size());
-	int page = std::max(1, int(std::lround((viewer->cy1 - viewer->cy0) / entry_h)));
+	int page = std::max(1, int(std::lround((viewer->cy1 - viewer->cy0) / row_h())));
 	int at = selected >= 0 ? pos_[size_t(selected)] : -1, s = at;
 	if (sym == kKeyUp) s = std::max(0, at - 1);
 	else if (sym == kKeyDown) s = at + 1;
@@ -1221,7 +1277,7 @@ void Gui::confirm(const std::string &title, const std::string &text, std::functi
 	}
 	float x = vx(5);
 	for (auto [label, yes] : {std::pair{"No", false}, std::pair{"Yes", true}}) {
-		auto *b = body->add<Button>(label);
+		auto *b = body->add<Button>(label, Button::Push);
 		b->from_right = x, b->len_x = vx(80), b->from_bottom = vy(5), b->len_y = row;
 		b->on_click = [finish, yes = yes] { finish(yes); };
 		x += vx(80) + vx(5);
@@ -1269,12 +1325,13 @@ public:
 		bool over = gui.hovered() && gui.hovered()->inside(this);
 		set_fill(over ? Rgba{0, 0, 0, 0} : Rgba{0, 0, 0, 0.2f});
 		paint_visual(p);
+		paint_children(p);
+		// The frame child is made after the button, so it draws over the button's face.
 		if (over) {
 			const Rgba A{0, 0, 1, 0.4f}, B{0, 0, 1, 0};
 			const Rgba cols[5][4] = {{A, A, B, B}, {B, B, A, A}, {A, B, B, A}, {B, A, A, B}, {B, B, B, B}};
 			p.bevel_colors(x0, y0, x1, y1, gui.vx(8), gui.vy(8), cols);
 		}
-		paint_children(p);
 	}
 };
 
@@ -1284,7 +1341,7 @@ public:
 // alpha 0.7: the icon column (VPU 75 wide, ending VPU 60 from the bottom) with the image in a 64 x 64
 // VPU box tinted white at 0.8; the text lines (VPU 14, rows 1.5 high from 10 down, centred right
 // of the column, wrapped as Confirm does but VPU 75 narrower); OK in a VPU 120 x 38 box 10 from the
-// right, centred in a bottom strip. Enter, Esc, OK and the close box close it.
+// right, centred in a bottom strip, a push button filling it. Enter, Esc, OK and the close box close it.
 void Gui::user_information(const std::string &title, const std::string &text, const de::ObjectRef &icon, std::function<void()> done) {
 	float f = vy(14), row = std::trunc(f * 1.5f), icon_w = icon ? vx(75) : 0;
 	float min_w = vx(300) - icon_w;
@@ -1333,7 +1390,7 @@ void Gui::user_information(const std::string &title, const std::string &text, co
 	strip->from_bottom = 0, strip->len_y = vy(vy(60));
 	auto *box = strip->add<ButtonOverlay>();
 	box->len_y = vy(38), box->from_right = vx(10), box->len_x = vx(120), box->align = 2;
-	auto *ok = box->add<Button>("OK", Button::Plain, vy(15));
+	auto *ok = box->add<Button>("OK", Button::Push, vy(15));
 	ok->on_click = finish;
 	layout();
 }

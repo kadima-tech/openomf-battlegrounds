@@ -1,0 +1,319 @@
+# Battlegrounds launcher
+
+The launcher is a native SwiftUI macOS app (macOS 13+, Apple silicon or Intel) and
+a native Win32 app for Windows 10 and 11 (x64; see [Windows](#windows-10-and-11)).
+Both share the setup backend (`install.py`, `patching.py`, `iso9660.py`), the
+manifests and the bundled update. Its service-bay design uses graphite, amber and
+an original robot schematic. The artwork was generated with the built-in imagegen
+tool; no disc assets are needed to display setup.
+
+## Run from this checkout
+
+Double-click `launch.command`, or run:
+
+```sh
+./launch.command
+```
+
+The first source build needs Xcode command-line tools, CMake 3.20+ and Python 3.
+It fetches pinned SDL2, unshield and openindeo sources into `launcher/build/`,
+compiles them and creates `dist/Battlegrounds.app`. SDL2 and unshield are linked
+statically; Homebrew libraries are not used by the finished app. `launch.command`
+rebuilds when launcher, engine or packaging inputs change, including added or
+deleted files after a pull. It records a source fingerprint only after a
+successful full build; failed or UI-only builds require another full build.
+You can also rebuild directly with `launcher/build-app.sh`.
+
+## First run
+
+1. Choose an ISO image, drag one onto the ISO panel, or insert your original
+   English 2.090 game CD. Matching mounted discs are detected at startup and on
+   macOS mount notifications. Click **Use game CD** to select a detected disc.
+   Unrelated discs are ignored; an already mounted ISO works as a disc too.
+2. Confirm **Start setup** after reviewing the install location and 3 GB
+   free-space requirement. Canceling leaves setup idle; mounting a disc never
+   starts installation. ISO selection, drag and drop, and retries also require
+   confirmation.
+3. The launcher extracts your disc and applies one bundled cumulative update
+   directly from 2.090 to 2.123. The 17.5 MiB update, private Python runtime and
+   hash-locked binary-delta decoder ship inside the app. Setup works completely
+   offline: no mirrors, patch executables, CPU emulator or package downloads.
+4. All 76 original game data/module files are checked against the recorded
+   English 2.123 SHA-256 manifest. Only then is the completed installation
+   published and the native engine started.
+
+On subsequent launches the app checks the actual files and starts the game
+without displaying setup or needing Python/network access. Existing complete
+`source/patched/v2123` installs are also recognized. A missing, truncated,
+corrupted or different-version installation opens setup again. No first-run
+boolean can make an incomplete installation count as ready. After full checksum
+verification, a local readiness cache records each file's size, inode and macOS
+modification/change timestamps. Unchanged verified files need no reread; changed
+files are hashed again. The cache also checks the expected digest from the app's
+manifest. It is a startup optimization, not protection against deliberate local
+tampering or silent storage corruption that leaves all file metadata unchanged.
+The explicit `--verify` command below always reads and hashes every file.
+
+Closing during installation stops the whole setup process group. A retry starts
+with fresh staging files; incomplete staging files never count as ready.
+Both the native worker and Python installer lock setup to prevent overlapping
+installs. Publishing uses a same-volume rename with rollback; the original ISO,
+CD and any existing legacy installation remain untouched.
+
+## Files and isolation
+
+In a source checkout, everything setup installs lives in `source/launcher/`:
+
+```text
+game/          Verified Data and Engine folders
+install.log    Extraction and patch diagnostics
+bootstrap.log  Bundled setup tool diagnostics
+game.log       Native engine output
+```
+
+For a standalone app in a writable folder, files go into the adjacent
+`Battlegrounds Files/` folder. In `/Applications` or a read-only location they go
+into the user's `~/Library/Application Support/OpenBG/` folder. Settings shows
+the exact location. No shell profiles, system Python environments, Homebrew
+packages or administrator privileges are involved. The engine continues to keep
+its preferences and recordings in its existing Application Support location.
+
+`OPENBG_HOME=/absolute/path` overrides the install location;
+`OPENBG_PROJECT_ROOT=/absolute/path` enables legacy-data discovery.
+The app's `--preview` switch shows setup without installing or launching. For
+visual verification, `--screenshot /absolute/path.png` renders the actual native
+setup view and exits. `OPENBG_GAME_ARGS` supplies space-separated engine arguments
+for development smoke tests (for example `--headless 10`).
+
+First-time setup works offline and needs at least 3 GB free space.
+The supported source is the English 2.090 retail disc; other localizations and
+later disc editions fail validation rather than mixing incompatible game data.
+
+## Package for players
+
+```sh
+launcher/build-app.sh
+```
+
+Distribute `dist/Battlegrounds.app` as a zip. The build script includes the
+engine, static extractor, cumulative update, relocatable CPython 3.12.12 and
+bsdiff4 1.2.6, together with the project's MIT license, third-party notice index
+and upstream license files in `Contents/Resources/licenses/`. Additional runtime
+and package notices remain inside `python/` and `python-packages/`. See
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for the component list and the
+separate status of original game/update data. Python and its decoder are
+private to the app; no Homebrew packages, system Python or player-side downloads
+are used. uv 0.9.7 is a pinned build-time tool and is not shipped in the app.
+The build machine needs network access to fetch pinned dependencies. A complete
+game installation and disc-derived DirectX tables are not included.
+
+Build on each supported architecture for separate Apple silicon/Intel releases.
+The script ad-hoc signs the app. Developer ID signing and Apple notarization
+are not configured, so macOS Gatekeeper may block a downloaded build. Players
+who trust the download can allow it in System Settings > Privacy & Security,
+following [Apple's instructions](https://support.apple.com/en-us/102445).
+
+### CI builds and releases
+
+GitHub Actions builds the same standalone app on native Apple silicon and Intel
+macOS runners, and the Windows app on a Windows runner (`build-windows.yml`).
+Each download is a `Battlegrounds-<label>-macos-<arch>.zip` or
+`Battlegrounds-<label>-windows-x64.zip` with a matching `.zip.sha256` checksum.
+Every platform must build and pass the installer/native readiness tests, offline
+relocation checks, signature (macOS), dependency and architecture checks before a
+release is published. The engine's data-dependent CTest suite requires the
+original disc files and is not run in CI.
+
+- **Dev:** pushes to `main` and manual runs of **Dev build and prerelease**
+  publish a new prerelease with a unique `dev-<run-id>-<attempt>` tag pointing
+  to the exact built commit. These never replace the latest formal release.
+  Pull requests targeting `main` run the same builds and tests and upload
+  Actions artifacts, without publishing a release.
+- **Release:** push a stable `vMAJOR.MINOR.PATCH` tag, such as `v0.1.0`, to run
+  **Tagged release**. It builds the tagged code and creates a formal GitHub
+  release with all three ZIPs, checksums and generated release notes. Other `v*`
+  tags fail validation. An existing published release is never overwritten.
+
+For example, after committing the version you want to release:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflows use the built-in `GITHUB_TOKEN`; no extra publishing secrets are
+needed. Keep GitHub Actions enabled for the repository and allow the publishing
+jobs' `contents: write` permission. Actions artifacts expire after 14 days;
+release assets remain available on the repository's Releases page.
+
+The shared `build-macos.yml` workflow calls `launcher/build-app.sh`. It stamps
+`CFBundleShortVersionString` from the release tag (`0.0.0` for dev builds) and
+`CFBundleVersion` from the workflow run number and attempt before signing.
+Local builds retain `0.1.0` / `1` by default; override them with
+`OPENBG_VERSION` and `OPENBG_BUILD_NUMBER` when needed.
+
+## Validation
+
+```sh
+python3 -m pip install --require-hashes --only-binary=:all: -r launcher/requirements.txt
+python3 -m unittest discover -s launcher -p 'test_*.py' -v
+mkdir -p launcher/build
+xcrun swiftc -parse-as-library launcher/Readiness.swift launcher/test-readiness.swift \
+  -o launcher/build/test-readiness
+launcher/build/test-readiness
+xcrun swiftc -D LAUNCHER_MODEL_TESTS -parse-as-library \
+  launcher/Launcher.swift launcher/Readiness.swift launcher/test-launcher.swift \
+  -o launcher/build/test-launcher -framework SwiftUI -framework AppKit
+launcher/build/test-launcher
+launcher/build-app.sh
+python3 launcher/install.py --home /path/to/private-state \
+  --verify /path/to/game --resources launcher
+```
+
+The installer can be exercised without the GUI using the bundled tools:
+
+```sh
+dist/Battlegrounds.app/Contents/Resources/bin/worker \
+  dist/Battlegrounds.app/Contents/Resources/bootstrap.sh \
+  /absolute/path/to/private-state --source /absolute/path/to/Battlegrounds.iso
+```
+
+The backend emits JSON progress events. Unit tests cover checksum readiness,
+disc identity, corrupt updates, wrong versions, delta output bounds, cancellation,
+offline retry, atomic publication and rollback.
+Native tests cover shared Python/Swift caches, same-size edits, changed expected
+patches, missing game files, malformed caches, and setup consent. Launch tests
+cover rebuilding after changed/added/deleted inputs and refusing stale apps
+after failed builds. CI runs these tests and verifies the source fingerprint
+alongside the full app build on both supported architectures.
+CI runs `launcher/check-bundle.py` on both architectures after building. It moves
+the bundled tools to a path with spaces, starts them with a fresh home and
+untrusted Python environment variables, and denies network access with the macOS
+sandbox. Real-disc end-to-end testing needs your own game disc.
+
+## Cumulative update provenance
+
+`patches/english-2090-2123.obgpatch` is versioned so CI packages the same update
+without downloading game patches. `cumulative-patch.json` pins its size and SHA-256.
+The archive contains 64 direct BSDIFF40 deltas and a manifest for all 76 original
+Data/Engine files: the other 12 are unchanged. Each source file is checked before
+any file is modified, and every final file is checked against `game-files.json`
+before the installation is published. The archive contains update differences,
+not a complete copy of the game; players still need their own English disc.
+
+Rebuild it from your local disc and byte-exact official final tree:
+
+```sh
+python3 re/scripts/build_cumulative_patch.py \
+  source/extracted/App_Executables source/patched/v2123 --jobs 2
+python3 launcher/patching.py launcher
+```
+
+The builder fixes ZIP metadata and JSON formatting for reproducible output, checks
+all final file hashes, and round-trips every delta. It requires the pinned
+`launcher/requirements.txt` dependency. No disc files or original updater executables
+are needed on CI. The historical tools in `re/scripts/rtpatch_chain.sh` and
+`rtpatch_emu.py` remain for auditing; original patch URLs/checksums are recorded in
+`re/scripts/official-patches.json`. The chain and its changes are documented in
+`PATCHES.md`.
+
+## Windows 10 and 11
+
+`windows/` holds the Windows launcher: `Battlegrounds.exe`, a per-monitor
+DPI-aware Win32 window drawn with GDI+ in the same service-bay design. Its logic
+(`windows/core.cpp`) mirrors `Launcher.swift` and `Readiness.swift`: the same
+consent rules, readiness cache, disc detection and setup events. It needs
+Windows 10 version 1607 or later; Windows 11 on Arm runs it through x64
+emulation. The download is a folder:
+
+```text
+Battlegrounds\
+  Battlegrounds.exe          The launcher
+  resources\bin\             openbg.exe (engine) and unshield.exe (extractor)
+  resources\python\          Private CPython 3.12.12 for Windows x64
+  resources\python-packages\ bsdiff4 1.2.6
+  resources\...               Setup scripts, manifests, bundled update, artwork, licenses
+```
+
+The executables link only DLLs that every Windows 10/11 installation has; the C++
+runtime, SDL2, zlib and unshield are compiled in. The bundled Python carries its
+own Visual C++ runtime DLLs. Nothing is installed, registered or added to `PATH`,
+and no administrator rights are needed.
+
+### Run from this checkout
+
+Double-click `launch.cmd`. It offers to install MSYS2 (with `winget`) and any
+missing UCRT64 build packages (with `pacman`), asking before each step; see the
+main [README](../README.md#building-on-windows). Without a terminal to ask in,
+such as in CI, nothing is installed and the missing tools are listed instead.
+The build scripts check their tools up front and report the command and line of
+any failure. Like
+`launch.command`, it rebuilds `dist\Battlegrounds` whenever launcher, engine or
+packaging inputs change (tracked in `dist\.launcher-build-state-windows`) and
+then opens the launcher. You can also build directly in the UCRT64 shell:
+
+```sh
+launcher/windows/build-windows.sh
+```
+
+The script works natively in MSYS2 and as a cross build from Linux or macOS with
+MinGW-w64 (`windows/mingw-w64-x86_64.cmake`). It fetches pinned SDL2, zlib,
+unshield and openindeo sources, uv 0.9.7 for the build host and the
+python-build-standalone CPython archive for Windows (checksums pinned in
+`windows/bundle-python.sh`), and refuses to package an executable that is not x64
+or imports a non-system DLL (`windows/check-imports.py`). `OPENBG_VERSION` and
+`OPENBG_BUILD_NUMBER` set the version resource, as on macOS; `OPENBG_CMAKE_ARGS`
+passes extra CMake arguments, such as `-DFETCHCONTENT_SOURCE_DIR_SDL2=...` for
+offline builds from local checkouts.
+
+### Differences from macOS
+
+- **Discs and ISOs.** Optical and removable drives with media are checked at
+  startup and whenever Windows reports a volume arriving or leaving. An ISO
+  opened (mounted) in File Explorer appears as a CD drive and is detected too.
+  A chosen ISO file is read directly by `iso9660.py`, without mounting it or any
+  external tool. Drag an ISO onto the window, or use **Choose ISO file**.
+  Confirmation is still required before setup starts.
+- **Files.** In a checkout, setup uses `source\launcher\` as on macOS. A
+  standalone copy keeps its files in a `Battlegrounds Files` folder next to the
+  `Battlegrounds` folder when that location is writable and not under
+  `Program Files`; otherwise in `%LOCALAPPDATA%\OpenBG`. `OPENBG_HOME` and
+  `OPENBG_PROJECT_ROOT` work as on macOS. The engine keeps its settings and
+  recordings in `%APPDATA%\openbg` and VCR snapshots in your Pictures folder.
+- **Cancellation.** Setup runs in a kill-on-close job object, Windows' process
+  group: closing the launcher during setup, or the launcher ending in any other
+  way, stops setup and the extractor. Abandoned staging folders are removed on
+  the next attempt.
+- **Readiness cache.** The cache shared with `install.py` records the NTFS file
+  ID, last-write time and creation time instead of the inode and ctime.
+- **Signing.** The executables are not Authenticode signed, so Microsoft
+  Defender SmartScreen may warn about a downloaded copy. If you trust the
+  download, choose **More info** and **Run anyway**. Files extracted from a
+  downloaded ZIP keep its "downloaded from the internet" mark; right-click the
+  ZIP, choose **Properties** and **Unblock** before extracting to avoid repeated
+  prompts.
+- The `--preview` and `--screenshot C:\path\shot.png` switches and
+  `OPENBG_GAME_ARGS` behave as on macOS.
+
+### Windows validation
+
+On Windows, with Python 3.12 on `PATH` (in PowerShell):
+
+```powershell
+python -m pip install --require-hashes --only-binary=:all: -r launcher/requirements.txt
+python -m unittest discover -s launcher -p 'test_*.py' -v
+$env:OPENBG_TEST_PYTHON = (Get-Command python).Source
+launcher\build\windows\runtime\test-readiness.exe launcher
+launcher\build\windows\runtime\test-launcher.exe dist\Battlegrounds C:\path\to\disc.iso
+python launcher\check-bundle.py dist\Battlegrounds\resources
+```
+
+`test-readiness.exe` covers the cache shared with Python (written by the real
+`install.py`), same-size edits, changed expected patches, malformed caches and
+missing files. `test-launcher.exe` covers setup consent, folder detection and
+command-line quoting. Given the app folder and a disc image, it also runs the
+packaged setup through the launcher's own process, job and pipe handling; CI
+passes a generated image whose cabinets are fake, so the extractor's failure must
+arrive as a setup error. `check-bundle.py` runs the relocated bundle (in a folder
+with spaces and non-ASCII characters) with Python's user settings cleared.
+

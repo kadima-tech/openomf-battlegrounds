@@ -1,6 +1,7 @@
 #include "vm/compiler.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <functional>

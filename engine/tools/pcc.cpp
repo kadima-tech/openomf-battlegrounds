@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "de/objects_file.h"
+#include "de/platform.h"
 #include "de/scene.h"
 #include "vm/compiler.h"
 #include "vm/disasm.h"
@@ -41,6 +42,7 @@ void print(const vm::VMClass &c, const char *label) {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 4) {
 		fprintf(stderr, "usage: %s <Data dir> <file stem> <Class> [nth]\n", argv[0]);
 		return 2;

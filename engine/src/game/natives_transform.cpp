@@ -7,6 +7,8 @@
 // actor whenever a coordinate-system native changes it.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <map>
