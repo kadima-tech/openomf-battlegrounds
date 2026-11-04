@@ -25,6 +25,7 @@ struct StateRecord {
 	std::string id;
 	std::vector<std::pair<uint32_t, std::vector<uint8_t>>> states;
 	size_t cursor = 0;
+	bool rebased = false;  // an earlier port build's scene-time stamps, moved to the session's clock
 };
 
 // DE_CSessionRecord.
@@ -34,6 +35,9 @@ struct SessionRecord {
 	std::vector<de::Guid> modifiers;  // +0x3c
 	de::Guid factory{};        // +0x58: the session's class
 	uint32_t end_ms = 0;       // +0x6c: scene ms at the end
+	// Port builds before the per-session scene clocks stamped scene times on one shared clock: the
+	// recorded session's Begin on it, found at playback (0 for every other recording).
+	uint32_t shared_clock_begin = 0;
 	int64_t date = 0;          // +0x70: time(NULL) when saved
 	int32_t auto_delete = 1;   // +0x74
 	float length = 0;          // +0x78: seconds
@@ -66,9 +70,12 @@ void replay_session_ended(World &w, SessionState &s);
 // DE_CSessionRecord::Replay (Core 0x70203e30): a server session from the record's master
 // description and modifiers, replaying it. Returns false when the description is missing.
 bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec);
-// Once per session update (DE_CSession::Update): managers join, the recorder's end time follows the
-// scene, a replay's managers take their newest recorded state, and a replay past its end ends.
+// DE_CSession::Update before its scene passes: managers join, the recorder's end time follows the
+// scene, a replay past its end ends, and a replay's managers fetch their newest recorded state.
 void replay_update(World &w);
+// After the scene's pass: a rewind's run-time actors go, and each manager whose fetch added a
+// state restores its newest (NeedFixup, SetupOwnerForState).
+void replay_after_pass(World &w);
 // The session being recorded or replayed, if any.
 SessionState *replay_session(World &w);
 // Register*State (CreateCurrentState): the owner's current state joins its manager's history,

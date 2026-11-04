@@ -283,6 +283,11 @@ struct GameObject {
 	bool path_moved = false;      // placed by an AnimationStreamPlayer path (drawn live)
 	bool copied = false;          // made at run time (NewCopy, passive references): drawn live
 	const GameObject *copied_from = nullptr;  // the instance copy_tree copied (its references' context)
+	// The copies one NewCopy made, by the instance each copies, and when (World::referent).
+	std::shared_ptr<std::unordered_map<const GameObject *, GameObject *>> copies;
+	uint64_t copy_seq = 0;
+	GameObject *replaced_by = nullptr;  // ReplaceWithThenDie re-pointed the references to it
+	uint64_t replaced_seq = 0;
 	// A texture manager's or mesh's image property as scripts set it (AddProperty,
 	// RemoveAllProperty, ReplaceWithThenDie of its image): this instance's, null for none.
 	GameObject *image = nullptr;
@@ -508,6 +513,10 @@ public:
 	GameObject *current_target_of(GameObject &f);
 	// CObject::NewCopy: a deep copy of `o` and its children (no brains), unparented.
 	GameObject *copy_tree(const GameObject &o);
+	// DE_CObject::ReplaceWithThenDie's re-pointing: what referred to `o` refers to `by` from now on.
+	void replace_references(GameObject *o, GameObject *by);
+	// What a reference to `o` reaches now, after the replacements since; null once destroyed.
+	GameObject *replacement(GameObject *o) const;
 	// Set every bone actor under a fighter from its current animation pose.
 	void pose_skeleton(GameObject &fighter);
 	// DE_COMF2Fighter::ValidateAnimationTime: when the pose is stale, pose the skeleton and turn
@@ -555,6 +564,9 @@ public:
 		// a target at a rate per ms, pauses and passed time (+0x1c8, +0x1e8, +0x1f0, +0x1d8, +0x1e0).
 		bool master = false, master_started = false;
 		double master_scale = 1, master_target = 1, master_rate = 0, master_pause = 0, master_passed = 0;
+		// The master's global time (+0x1f8) PreciseTime took since the scene last passed.
+		double master_given = 0;
+		uint32_t last_global = 0;  // +0x15c: the global time the scene last passed at
 	};
 	// The scene of a session (null: what is in no session's).
 	SceneClock &scene_clock(const GameObject *session);
@@ -585,10 +597,21 @@ public:
 	// the model picker's). Neither autopauses (DE_CScene +0x1c0 / +0x1bc), so the app passes them
 	// real time: the first every frame, the second while its page is up (the robot's idle event).
 	uint32_t gui_scene_ms[2] = {0, 0};
+	uint32_t gui_scene_global[2] = {0, 0};  // their +0x15c
 	// Passes `ms` on GUI scene `view`'s clock, ticking its temporal sets on the way.
 	void tick_gui(int view, uint32_t ms);
 	// The clock of the scene `o` is in.
 	uint32_t scene_ms_of(const GameObject *o) const;
+	// DE_CScene::PreciseTime (Core 0x7006f990; 2.123 0x20073880) of the scene `o` is in, or of GUI
+	// scene `view`: its time plus the global time since it last passed, at its scale.
+	uint32_t precise_ms_of(const GameObject *o, int view = -1);
+	// gTime as the scenes' TemporalGlobalTime sees it: the wall clock, else the frame's 20 ms steps,
+	// the GUI's passes (made before World::tick counts the frame) counting as the frame's and the
+	// render ticks a frame begins with (render_ticks_per_frame) as the last frame's render.
+	uint32_t global_ms() const {
+		return system_clock ? system_clock() : (frame_ + (gui_passing_ ? 1 : 0) - (render_lag ? 1 : 0)) * kFrameMs;
+	}
+	bool render_lag = false;
 	// What Scene() returns for `o` (its actor's +0x10, else the game's): one object per GUI scene,
 	// one for the game's (sessions' scenes are told apart by the caller).
 	GameObject *scene_object(const GameObject *o);
@@ -678,10 +701,11 @@ public:
 	// DE_COMF2Fighter::Tick's attack-range step (natives_ai.cpp).
 	void jitter_attack_range(GameObject &fighter);
 	GameObject *resolve_passive_reference(GameObject *reference);
-	// The instance of data object `r` that a reference from `from` reaches, as a copy's references
-	// are re-pointed into the copy: `from`'s branch, then each ancestor's, then (from a copy's
-	// root) the branch it was copied from; null when none is instantiated there.
-	GameObject *instance_near(const GameObject *from, const de::ObjectRef &r) const;
+	// The instance a reference from `from` to data object `r` points at (FINDINGS 262): a loaded
+	// object's at r's loaded instance; a copy's where its source's pointed when it was copied, or
+	// to that instance's copy when the same NewCopy made one (DE_CTransferAgent::CPassiveReference::
+	// New); then wherever ReplaceWithThenDie re-pointed it since. Null when that one is gone.
+	GameObject *referent(const GameObject *from, const de::ObjectRef &r) const;
 	// DE_CCreatureModel::Setup (OMF 0x35037470): hooks a creature model up to its creature. A data
 	// FighterModel brings its own lists; one made at run time (NewStrippedFighterModel) only
 	// `properties`.
@@ -965,8 +989,12 @@ private:
 	std::deque<de::AnimBank> banks_;
 	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
+	uint64_t reference_seq_ = 0;  // orders copies and replacements
+	GameObject *copy_node(const GameObject &o);
 	std::map<const GameObject *, SceneClock> clocks_;
 	const GameObject *clock_ = nullptr;  // the scene scene_ms_ is the time of
+	bool scene_ms_set_ = false;          // at_scene_ms: the time is +0x1b0 (+0x1ac set)
+	bool gui_passing_ = false;
 	uint32_t clock_ms(const GameObject *session) const;
 	bool input_registered_ = false;
 	uint64_t affector_seq_ = 0;
@@ -1029,8 +1057,6 @@ void register_need_natives(World &w);
 void register_music_natives(World &w);
 // The pilot behind a pilot object or a fighter (the fighter's own, else a child pilot's).
 const Pilot *pilot_of(GameObject *o);
-// The copy of data object `r` nearest `from` (its own subtree, then each ancestor's).
-GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r);
 void register_simple_physics_natives(World &w);
 // A CData's bytes (DE_CDataBlock), by its block in script memory.
 std::vector<uint8_t> &cdata_bytes(uint32_t block);

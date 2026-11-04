@@ -43,14 +43,18 @@ void set_transparent_sink(std::vector<DeferredDraw> *sink);
 // A projector-lit mesh as the light projector passes see it (DE_CD3DRenderMeshElement::
 // AssureProjectedTargetOctree, Direct3D 0x2002e1f0): every face once, in mesh order, and the
 // octree that picks the faces a light touches (DE_CD3DLight::UpdateTouchedPolygons 0x2002cd00).
+// Its vertices are placed in the world as its actor stood when its meshes were set up when the
+// actor is position-static, else left in mesh space; the passes draw them as world positions.
 struct ProjectorTarget {
 	GLuint vao = 0, vbo = 0;
 	de::Octree octree;     // in mesh space
-	de::Transform place;   // mesh space to world
+	de::Transform place;   // mesh space to where the vertices are
+	de::Transform frame;   // its actor's, where the lights look for its faces
 	std::vector<bool> drawn;  // the face is in a drawn material
 	bool position_static = false;
 	const void *light_owner = nullptr;
 	float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
+	std::string name;  // debugging: its mesh
 };
 
 struct MeshBatch {
@@ -209,8 +213,14 @@ public:
 		const void *light_owner = nullptr;  // see SceneLight::reaches
 		// This actor's values as its scripts set them (each instance has its own); else g_live_values.
 		de::LiveFloat live;
-		// This instance's image for a stage (its texture manager, the data's image); none: the data's.
-		std::function<std::optional<LayerImage>(const de::ObjectRef &manager, const de::ObjectRef &image)> image_of;
+		// This instance's image for a stage (its mesh, texture manager and the data's image); none:
+		// the data's.
+		std::function<std::optional<LayerImage>(const de::ObjectRef &mesh, const de::ObjectRef &manager, const de::ObjectRef &image)> image_of;
+		// The instance (its projector targets are its own) and DE_CActor::IsPositionStatic.
+		const void *instance = nullptr;
+		bool position_static = false;
+		// Its projector-lit meshes are light projector targets (false: the arena keeps them).
+		bool projected = true;
 	};
 	void draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye);
 	// Their glow and specular-glow passes, for the meshes `draw` built.
@@ -226,8 +236,15 @@ private:
 	uint32_t built_version_ = 0;
 	// Batches by actor and the images its stages draw.
 	std::map<std::string, std::vector<MeshBatch>> meshes_;
-	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<std::pair<de::ObjectRef, de::ObjectRef>>> stages_;
+	struct Stage {
+		de::ObjectRef mesh, manager, image;
+	};
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<Stage>> stages_;
 	std::vector<const std::vector<MeshBatch> *> drawn_;  // per item of the last draw
+	// Each projector-lit mesh's target in mesh space, and a position-static instance's placed ones.
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, ProjectorTarget> mesh_targets_;
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<de::ObjectRef>> actor_meshes_;
+	std::map<const void *, std::map<std::pair<const de::ObjectsFile *, uint32_t>, ProjectorTarget>> placed_targets_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures_;
 	std::map<std::string, GLuint> painted_;
 };

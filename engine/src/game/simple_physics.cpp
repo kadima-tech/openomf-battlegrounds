@@ -78,12 +78,12 @@ SimplePhysics &SimplePhysicsSystem::state(GameObject &p) {
 		if (lists.size() > 2 && !lists[2].empty() && actor) {
 			for (auto &r : lists[2][0]) {
 				if (!r) continue;
-				if (GameObject *a = nearest_copy(actor, r)) {
+				if (GameObject *a = w_.referent(actor, r)) {
 					if (a->is("Actor\\Affector")) s.affectors.push_back(a);
 				}
 			}
 			if (lists[2].size() > 1 && !lists[2][1].empty() && lists[2][1][0]) {
-				if (GameObject *f = nearest_copy(actor, lists[2][1][0]); f && f->is("UniqueActorProperty\\Force")) s.force = f;
+				if (GameObject *f = w_.referent(actor, lists[2][1][0]); f && f->is("UniqueActorProperty\\Force")) s.force = f;
 			}
 		}
 	} catch (const std::exception &) {

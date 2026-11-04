@@ -87,26 +87,6 @@ std::optional<std::vector<uint8_t>> value_payload(const GameObject *v) {
 	}
 }
 
-// A reference held inside a copied branch to an object of the branch it was copied from names
-// that object's copy (a Training pad's Activator switches its own pad, not the template).
-GameObject *copy_of_target(GameObject *holder, GameObject *t) {
-	for (GameObject *p = holder; p; p = p->parent) {
-		if (!p->copied || !p->file) continue;
-		for (const GameObject *a = t; a; a = a->parent) {
-			if (a->file != p->file || a->index != p->index) continue;
-			std::function<GameObject *(GameObject *)> find = [&](GameObject *o) -> GameObject * {
-				if (o->file == t->file && o->index == t->index) return o;
-				for (GameObject *c : o->children) {
-					if (GameObject *h = find(c)) return h;
-				}
-				return nullptr;
-			};
-			if (GameObject *c = find(p)) return c;
-		}
-	}
-	return t;
-}
-
 }  // namespace
 
 // Object values: Set*Value at run time, else the Value\\* data child of that name. A session
@@ -133,7 +113,8 @@ World::ObjectValue *World::object_value(GameObject *o, const std::string &name) 
 				for (auto &lists : reference_lists(data(), de::ObjectRef{v->file, v->index})) {
 					for (auto &l : lists) {
 						for (auto &r : l) {
-							if (GameObject *t = global_object(r)) val.objects.push_back(copy_of_target(v, t)->handle);
+							global_object(r);
+							if (GameObject *t = referent(v, r)) val.objects.push_back(t->handle);
 						}
 					}
 				}
@@ -201,6 +182,10 @@ void register_script_natives(World &w) {
 		std::string text = c.arg_string(0);
 		if (text.empty()) text = o->name + " will now be available.";
 		if (c.world.notify_user) c.world.notify_user("Feature Unlocked", text);
+	});
+	// NotifyUserCaller (Core 2.123 0x200495e0): DE_CNotification::NewUserInformation(title, text).
+	reg("CObject::NotifyUser(string,string)", [](const NativeContext &c) {
+		if (c.world.notify_user) c.world.notify_user(c.arg_string(0), c.arg_string(1));
 	});
 	reg("CDescription::Unlock(dword)", [](const NativeContext &c) {
 		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, c.arg<uint32_t>(0));

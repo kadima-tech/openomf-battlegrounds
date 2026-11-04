@@ -233,12 +233,12 @@ private:
 	std::map<const GameObject *, LightState> lights_;
 	std::vector<GameObject *> kills_;  // KillWithParticles victims, deleted after the step
 	std::vector<SparkBurst> sparks_;
-	void step_sparks(float now);
+	void step_sparks();
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::unique_ptr<de::PointStreamerDef>> streamer_defs_;
 	std::map<const GameObject *, std::vector<const de::PointStreamerDef *>> actor_streamers_;
 	std::vector<std::unique_ptr<Trail>> trails_;
 	std::map<const GameObject *, bool> trail_enabled_;
-	void step_trails(float now);
+	void step_trails();
 };
 
 // Scene time in milliseconds (the game runs at 60 frames a second).

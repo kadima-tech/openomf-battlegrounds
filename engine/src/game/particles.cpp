@@ -210,9 +210,10 @@ void ParticleSystem::set_trail_enabled(GameObject *mesh, bool on) {
 	}
 }
 
-void ParticleSystem::step_trails(float now) {
+void ParticleSystem::step_trails() {
 	for (GameObject *o : w_.scene_objects()) {
 		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
+		const float now = float(w_.scene_ms_of(o));
 		auto it = actor_streamers_.find(o);
 		if (it == actor_streamers_.end()) {
 			std::vector<const de::PointStreamerDef *> list;
@@ -234,7 +235,7 @@ void ParticleSystem::step_trails(float now) {
 				auto nt = std::make_unique<Trail>();
 				nt->actor = o;
 				nt->def = def;
-				nt->mesh = nearest_copy(o, def->object);
+				nt->mesh = w_.referent(o, def->object);
 				if (auto e = trail_enabled_.find(nt->mesh); nt->mesh && e != trail_enabled_.end()) nt->enabled = e->second;
 				t = trails_.emplace_back(std::move(nt)).get();
 				static const bool debug = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
@@ -261,9 +262,11 @@ void ParticleSystem::step_trails(float now) {
 	              trails_.end());
 }
 
-void ParticleSystem::step_sparks(float now) {
+void ParticleSystem::step_sparks() {
 	for (size_t i = 0; i < sparks_.size();) {
 		SparkBurst &b = sparks_[i];
+		const bool alive = b.actor && w_.object(b.actor->handle) == b.actor;
+		const float now = alive ? float(w_.scene_ms_of(b.actor)) : b.last_ms;
 		// DE_CSparkProcess::Tick (OMF 0x3502f890): once when made, then as a temporal at the
 		// fighter's rate (16 ms) on the scene clock's multiples of it.
 		auto tick = [&] {
@@ -282,8 +285,8 @@ void ParticleSystem::step_sparks(float now) {
 			tick();
 			b.next_tick += kRate;
 		}
-		if (b.life < 0 || !b.actor || w_.object(b.actor->handle) != b.actor) {
-			if (b.actor && w_.object(b.actor->handle) == b.actor) w_.destroy(b.actor);
+		if (b.life < 0 || !alive) {
+			if (alive) w_.destroy(b.actor);
 			sparks_.erase(sparks_.begin() + long(i));
 			continue;
 		}
@@ -332,7 +335,6 @@ void ParticleSystem::step_sparks(float now) {
 }
 
 void ParticleSystem::step() {
-	float now = scene_time_ms(w_);
 	for (GameObject *o : w_.scene_objects()) {
 		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
 		for (auto *def : renderers_of(o)) {
@@ -342,8 +344,8 @@ void ParticleSystem::step() {
 	}
 	for (GameObject *k : kills_) w_.destroy(k);
 	kills_.clear();
-	step_sparks(now);
-	step_trails(now);
+	step_sparks();
+	step_trails();
 	// OPENBG_DEBUG_PARTICLES=1: the live effects once a second.
 	static const bool debug = getenv("OPENBG_DEBUG_PARTICLES") != nullptr;
 	if (debug) {
@@ -442,7 +444,7 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 			if (m.kind == "LighteningSpawner" && m.bolt_follow && pm.bolt_target_set && !m.bolt_targets.empty()) {
 				// DE_CLighteningSpawner::ManageParticles (0x4000bb70): with follow, the bolts' points
 				// move with the first target, each by how far along its bolt it is.
-				if (GameObject *target = nearest_copy(in.actor, m.bolt_targets[0])) {
+				if (GameObject *target = w_.referent(in.actor, m.bolt_targets[0])) {
 					Vec now = target->world().t;
 					if (gen.local) {
 						de::Transform t = in.actor->world();
@@ -566,7 +568,7 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 					const Vec from = p.pos;
 					const float size = p.size, inv_life = p.inv_life;
 					for (const auto &tr : m.bolt_targets) {
-						GameObject *target = nearest_copy(in.actor, tr);
+						GameObject *target = w_.referent(in.actor, tr);
 						if (!target) continue;
 						Vec to = target->world().t;
 						if (gen.local) {
@@ -689,7 +691,7 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 			} else if (m.kind == "AutoExternalSpawner" && m.auto_spawner) {
 				// DE_CAutoExternalSpawner::ManageParticleUserData (0x40001560): chosen new particles
 				// have the external manual spawner spawn one where they are.
-				GameObject *ext = nearest_copy(in.actor, m.auto_spawner);
+				GameObject *ext = w_.referent(in.actor, m.auto_spawner);
 				if (ext) {
 					de::Transform t = in.actor->world();
 					fresh([&](Particle &p) {
@@ -785,7 +787,7 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 			if (left < 999999) left = std::max(0.0f, left - dt);
 		} else if (in.particles.empty()) {
 			for (auto &k : m.kill) {
-				if (GameObject *victim = nearest_copy(in.actor, k)) kills_.push_back(victim);
+				if (GameObject *victim = w_.referent(in.actor, k)) kills_.push_back(victim);
 			}
 			left = 999999;
 		}
@@ -1094,7 +1096,7 @@ void register_particle_natives(World &w) {
 		i.orientation = t.r;
 		i.size = c.arg<float>(1);
 		i.life_span = c.arg<float>(2);
-		i.time = scene_time_ms(c.world);
+		i.time = float(c.world.scene_ms_of(c.self()));
 	});
 	reg("CManualParticleSpawner::SetLastIntensity(float)", [queue](const NativeContext &c) {
 		if (auto *q = queue(c); q && !q->empty()) q->back().intensity = c.arg<float>(0);

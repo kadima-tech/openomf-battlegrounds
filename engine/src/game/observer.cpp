@@ -632,7 +632,7 @@ GameObject *creature_camera(World &w, GameObject *creature, int index) {
 	if (creature->file) {
 		auto lists = reference_lists(w.data(), {creature->file, creature->index});
 		if (lists.size() > 2 && !lists[2].empty() && size_t(index) < lists[2][0].size() && lists[2][0][size_t(index)]) {
-			GameObject *c = nearest_copy(creature, lists[2][0][size_t(index)]);
+			GameObject *c = w.referent(creature, lists[2][0][size_t(index)]);
 			if (c && c->is_actor && !c->is("Actor\\PassiveReference") && w.object(c->handle) == c) return c;
 		}
 	}

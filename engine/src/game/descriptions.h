@@ -39,6 +39,12 @@ void unlock_description(World &w, const de::ObjectRef &description, uint32_t id 
 void lock_description(World &w, const de::ObjectRef &description, uint32_t id, bool unlock);
 // Older registry files kept a "DLock <guid> [id]" value per unlocked id.
 void migrate_lock_records(std::map<std::string, std::string> &registry);
+// A DE_CGUIDPool's contents (Core 2.123 GenerateContents 0x20022c20: 01, a u16 count, the GUIDs'
+// bytes), the registry's DataStream value, kept as lower-case hex.
+std::string guid_pool_value(const std::vector<de::Guid> &pool);
+// ProcessContents (0x20022c60): no GUIDs unless the format byte is 1. Older registry files kept
+// the GUIDs as text separated by spaces.
+std::vector<de::Guid> read_guid_pool_value(const std::string &value);
 
 // DE_CGUID::Get (Core 0x7001eee0): lower-case hex, 8-4-4-16.
 std::string guid_string(const de::Guid &g);
