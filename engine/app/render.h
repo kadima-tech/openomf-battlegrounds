@@ -135,11 +135,13 @@ struct SceneLight {
 	bool has_image = false;  // a sphere light with one gets no projector pass
 	std::string name;        // debugging: its affector / light
 	std::pair<uint32_t, uint32_t> id{0, 0};  // the light from frame to frame (object handle, Light index; 0 none)
+	bool rendered = true;  // its affector's own rendered flag (DE_CActor +0x108)
 };
 struct Lighting {
 	std::array<float, 3> ambient{0.3f, 0.3f, 0.3f};  // the environment's ambient (de::read_ambient)
 	std::vector<SceneLight> lights;
 	uint32_t serial = 0;  // a new one each time the lights are gathered (a renderer's frame)
+	int renderer = 0;     // which view gathered them: each renderer keeps its own lights
 };
 // The frame's lights; the app fills it before drawing.
 extern Lighting g_lighting;
