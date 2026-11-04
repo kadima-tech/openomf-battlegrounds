@@ -15,7 +15,9 @@
 
 #include <cstdint>
 #include <map>
+#include <vector>
 
+#include "de/sound.h"
 #include "game/runtime.h"
 
 namespace game {
@@ -33,6 +35,15 @@ public:
 		float volume = 1;               // its Volume value (+0x9c), which SetVolume sets
 		uint32_t started = 0;           // scene ms of the last Play
 		uint32_t wave_ms = 0;           // a wave noise's playing time; 0 for none or a segment
+		// A script's own speaker (not the music player's): its contents (DE_CSpeaker::
+		// ObjProcessContents, Core 2.123 0x20221d70) and the state DE_CSpeaker::Process
+		// (0x20222500) trades with its speaker element every audio update.
+		bool loop = false, autoplay = false, track = false;  // +0xb8, +0xbc, +0xc4
+		float frequency = 1;                                 // +0xb0
+		GameObject *to_play = nullptr;                       // +0x94: GetNoiseToPlay's pick
+		float play_frequency = 1;                            // +0xb4
+		bool play_pending = false, stop_pending = false;     // +0xcc, +0xd8
+		float progress = 0;                                  // +0xd4 (playing is +0xd0)
 	};
 	explicit MusicSystem(World &w) : w_(w) {}
 	Speaker &speaker(GameObject *s);
@@ -52,11 +63,18 @@ public:
 	void play(GameObject *s);
 	// DE_CSpeaker::Process's +0xd4: the wave's play position over its length, 0 when none plays.
 	float play_progress(GameObject *s);
+	// DE_CSpeaker::SetActiveNoise (Core 2.123 0x202226a0) for a script's own speaker.
+	void set_active_noise(GameObject *s, GameObject *noise);
+	// Every speaker the scripts have used (the music player's too), in first-use order.
+	const std::vector<GameObject *> &own_speakers() const { return own_; }
 
 private:
 	World &w_;
 	std::map<const GameObject *, uint32_t> wave_ms_;
 	std::map<const GameObject *, Speaker> speakers_;
+	std::vector<GameObject *> own_;
+	std::map<const GameObject *, de::Sound> info_;  // noises' contents and alternates, no samples
+	const de::Sound &noise_info(GameObject *noise);
 };
 
 void register_music_natives(World &w);
