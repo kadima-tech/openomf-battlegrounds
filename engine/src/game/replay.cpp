@@ -1245,7 +1245,20 @@ void rewind_time(World &w, GameObject &o, Clock &c, uint32_t to) {
 // creature re-ticks up to it, at most 100 ticks; ahead of it, it rewinds.
 void set_time(World &w, GameObject &o, uint32_t ms) {
 	uint32_t rate = w.creature_rate(&o);
-	if (!rate) return;
+	if (!rate) {
+		Clock &c = rw(w).clocks[o.handle];
+		// Never ticked: DeltaTick(0), then its state at or before the time.
+		if (!c.ticked) {
+			if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s has never ticked: one delta tick at %u ms\n", w.frame(), o.name.c_str(), ms);
+			creature_delta_tick(w, o);
+			c.ticked = true;
+			if (StateManager *sm = manager_of(w, &o)) {
+				if (auto st = newest_state(*sm, 0, ms)) restore(w, *sm, *st);
+			}
+		}
+		o.creature_ticks = ms;
+		return;
+	}
 	Clock &c = clock_of(w, o, rate);
 	if (ms < c.base) {
 		o.creature_ticks = 0;
@@ -1734,7 +1747,10 @@ bool replay_driven(World &w, const GameObject *o) {
 	auto &R = rw(w);
 	if (!R.record || R.record->recording) return false;
 	for (; o; o = o->component_owner && o->component_owner != o ? o->component_owner : o->parent) {
-		if (StateManager *sm = manager_of(w, o)) return sm->replay;
+		StateManager *sm = manager_of(w, o);
+		// DE_CStateManager::ObjPrepare joins the record before the owner's executors run their entries.
+		if (!sm && !o->is("StateManager") && !in_gui(*o) && has_state_manager(*o) && in_session(w, o)) sm = &join(w, *const_cast<GameObject *>(o));
+		if (sm) return sm->replay;
 	}
 	return false;
 }
