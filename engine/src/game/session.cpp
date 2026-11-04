@@ -895,7 +895,11 @@ void scene_delta_tick(World &w, const GameObject *session, float ms) {
 }
 
 void update_session(World &w) {
-	if (w.render_ticks_per_frame) render_tick(w, float(w.frame_ms()));
+	if (w.render_ticks_per_frame) {
+		w.render_lag = true;
+		render_tick(w, float(w.frame_ms()));
+		w.render_lag = false;
+	}
 	// Sessions whose object has been deleted (EndAndDie) are gone, with their scenes; the current
 	// one falls back to the session that made it.
 	for (size_t i = 0; i < w.sessions.size();) {

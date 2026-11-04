@@ -77,34 +77,25 @@ std::optional<render::ActorMeshRenderer::LayerImage> filtered(game::World &world
 
 }  // namespace
 
-// What an instance's texture stages draw: a texture manager instance near it whose image a script
-// set (AddProperty, ReplaceWithThenDie), and an image instance's fighter paint filter. Only data
-// objects some instance has changed are looked up.
-std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &)> GameView::images_of(const game::GameObject *o) {
+// What an instance's texture stages draw: the image its mesh's texture manager reaches (one a
+// script set with AddProperty, else its reference as copies and replacements re-pointed it), with
+// that image's fighter paint filter. Only data objects some instance has changed are looked up.
+std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &, const de::ObjectRef &)>
+GameView::images_of(const game::GameObject *o) {
 	if (world.instance_images.empty()) return nullptr;
-	return [this, o](const de::ObjectRef &manager, const de::ObjectRef &image) -> std::optional<render::ActorMeshRenderer::LayerImage> {
+	return [this, o](const de::ObjectRef &mesh, const de::ObjectRef &manager, const de::ObjectRef &image) -> std::optional<render::ActorMeshRenderer::LayerImage> {
 		auto changed = [this](const de::ObjectRef &r) { return r && world.instance_images.count({r.file, r.index}); };
-		de::ObjectRef img = image;
-		const game::GameObject *from = o;
-		bool set = false;
-		if (changed(manager)) {
-			if (const game::GameObject *t = world.instance_near(o, manager)) {
-				from = t;
-				if (t->image_set) {
-					set = true;
-					img = t->image && t->image->file ? de::ObjectRef{t->image->file, t->image->index} : de::ObjectRef{};
-					if (t->image && t->image->image_filter) {
-						if (auto f = filtered(world, t->image->image_filter, img)) return f;
-					}
-				}
-			}
+		if (!changed(manager) && !changed(image)) return std::nullopt;
+		const game::GameObject *from = world.referent(o, mesh);
+		if (!from) from = o;
+		const game::GameObject *t = world.referent(from, manager);
+		const bool set = t && t->image_set;
+		const game::GameObject *i = set ? world.replacement(t->image) : world.referent(t ? t : from, image);
+		de::ObjectRef img = i && i->file ? de::ObjectRef{i->file, i->index} : set ? de::ObjectRef{} : image;
+		if (i && i->image_filter) {
+			if (auto f = filtered(world, i->image_filter, img)) return f;
 		}
-		if (!set && changed(img)) {
-			if (const game::GameObject *i = world.instance_near(from, img); i && i->image_filter) {
-				if (auto f = filtered(world, i->image_filter, img)) return f;
-			}
-		}
-		if (!set) return std::nullopt;
+		if (!set && img.file == image.file && img.index == image.index) return std::nullopt;
 		return render::ActorMeshRenderer::LayerImage{img, std::nullopt, {}};
 	};
 }
@@ -482,7 +473,10 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		std::set<uint32_t> moving;
 		std::function<void(game::GameObject *)> add = [&](game::GameObject *o) {
 			if (!o->file || o->file != arena_file) return;
-			if (o->is_actor) moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o)});
+			if (o->is_actor) {
+				const bool fixed = game::position_static(*o);
+				moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o), o, fixed, !fixed});
+			}
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
@@ -530,7 +524,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 			}
-			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o)});
+			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o), o, game::position_static(*o)});
 			static const bool dbg_debris = getenv("OPENBG_DEBUG_DEBRIS") != nullptr;
 			if (dbg_debris && live && o->name.rfind("Piece", 0) == 0 && world.world_to_screen) {
 				auto sp = world.world_to_screen(o->world().t);

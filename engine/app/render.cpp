@@ -951,7 +951,28 @@ bool cone_touches_sphere(const SceneLight &l, const std::array<float, 3> &c, flo
 // add (ONE, ONE); a cone with its own image blends by its light (SetStates: 0/3 ONE/ONE, 1/5
 // SRCALPHA/INVSRCALPHA, 2 ZERO/INVSRCCOLOR, 4 ONE/INVSRCCOLOR); a sphere with its own image has
 // no projector.
-void draw_splashes(GLuint prog, const std::vector<ProjectorTarget> &targets) {
+int g_arena_draws = 0;  // debugging: ArenaRenderer::draw calls
+
+struct SplashTarget {
+	const ProjectorTarget *target;
+	de::Transform frame;  // where its actor is now: the lights' queries
+	std::array<float, 3> bmin, bmax;
+	const void *light_owner;
+	bool position_static;
+};
+
+SplashTarget splash_target(const ProjectorTarget &t, const de::Transform &frame, bool baked) {
+	SplashTarget s{&t, frame, {t.bmin[0], t.bmin[1], t.bmin[2]}, {t.bmax[0], t.bmax[1], t.bmax[2]}, t.light_owner, t.position_static};
+	if (baked) return s;
+	s.bmin = {1e30f, 1e30f, 1e30f}, s.bmax = {-1e30f, -1e30f, -1e30f};
+	for (int c = 0; c < 8; ++c) {
+		auto p = frame.apply({c & 1 ? t.bmax[0] : t.bmin[0], c & 2 ? t.bmax[1] : t.bmin[1], c & 4 ? t.bmax[2] : t.bmin[2]});
+		for (size_t k = 0; k < 3; ++k) s.bmin[k] = std::fmin(s.bmin[k], p[k]), s.bmax[k] = std::fmax(s.bmax[k], p[k]);
+	}
+	return s;
+}
+
+void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 	static const bool off = getenv("OPENBG_NO_PROJECTORS") != nullptr;  // debugging: vertex lighting only
 	if (!g_lightmap || off) return;
 	glUniform1i(glGetUniformLocation(prog, "lightmap"), 5);
@@ -994,17 +1015,18 @@ void draw_splashes(GLuint prog, const std::vector<ProjectorTarget> &targets) {
 		glUniform1f(glGetUniformLocation(prog, "splash_tan"), std::tan(std::clamp(l.penumbra, 1.0f, 89.0f) * 0.017453292f));
 		// Row-major rotation rows are the local axes; GL takes columns, so pass it transposed.
 		glUniformMatrix3fv(glGetUniformLocation(prog, "splash_axes"), 1, GL_TRUE, l.frame.r.data());
-		for (auto &t : targets) {
-			if ((l.reaches_all && l.position_static && t.position_static) || !l.lights(t.light_owner)) continue;
+		for (auto &st : targets) {
+			const ProjectorTarget &t = *st.target;
+			if ((l.reaches_all && l.position_static && st.position_static) || !l.lights(st.light_owner)) continue;
 			bool overlaps = true;
-			for (int k = 0; k < 3; ++k) overlaps = overlaps && l.pos[size_t(k)] + l.outer >= t.bmin[k] && l.pos[size_t(k)] - l.outer <= t.bmax[k];
+			for (size_t k = 0; k < 3; ++k) overlaps = overlaps && l.pos[k] + l.outer >= st.bmin[k] && l.pos[k] - l.outer <= st.bmax[k];
 			if (!overlaps) continue;
 			faces.clear();
 			if (l.shape == SceneLight::kSphere) {
-				t.octree.sphere_faces(t.place.inverse().apply(l.pos), l.outer, faces);
+				t.octree.sphere_faces(st.frame.inverse().apply(l.pos), l.outer, faces);
 			} else {
 				t.octree.affector_faces([&l](const std::array<float, 3> &p, float r) { return cone_touches_sphere(l, p, r); },
-				                        [&t](const std::array<float, 3> &p) { return t.place.apply(p); }, faces);
+				                        [&st](const std::array<float, 3> &p) { return st.frame.apply(p); }, faces);
 			}
 			first.clear(), count.clear();
 			for (uint32_t f : faces) {
@@ -1013,6 +1035,13 @@ void draw_splashes(GLuint prog, const std::vector<ProjectorTarget> &targets) {
 				else first.push_back(GLint(f * 3)), count.push_back(3);
 			}
 			if (first.empty()) continue;
+			static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
+			if (debug) {
+				size_t n = 0;
+				for (GLsizei k : count) n += size_t(k) / 3;
+				fprintf(stderr, "[projector %d] %s on %s%s: %zu faces at %.0f %.0f %.0f\n", g_arena_draws, l.name.c_str(), t.name.c_str(), st.position_static ? " (position-static)" : "", n,
+				        st.frame.t[0], st.frame.t[1], st.frame.t[2]);
+			}
 			glBindVertexArray(t.vao);
 			glMultiDrawArrays(GL_TRIANGLES, first.data(), count.data(), GLsizei(first.size()));
 		}
@@ -1027,11 +1056,30 @@ void draw_splashes(GLuint prog, const std::vector<ProjectorTarget> &targets) {
 
 // AssureProjectedTargetOctree: the mesh's stored "D3DProjectedTargetOctree", else one built with
 // cells of at most 100 (the element has a render affector).
+void load_projector_images(const de::World &world) {
+	static bool loaded = false;
+	if (loaded) return;
+	loaded = true;
+	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures;
+	const de::ObjectsFile *core = world.file("COREImages");
+	for (uint32_t i = 0; core && i < core->objects().size(); ++i) {
+		if (core->objects()[i].name == "LightMap") g_lightmap = texture_of(textures, {core, i});
+		if (core->objects()[i].name == "ShadowAttenuation") {
+			// Sampled with D3DTADDRESS_CLAMP (SetupConeProjector's stage 1).
+			g_shadow_atten = texture_of(textures, {core, i});
+			glBindTexture(GL_TEXTURE_2D, g_shadow_atten);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		}
+	}
+}
+
 ProjectorTarget make_projector_target(const de::Mesh &mesh, const de::ObjectRef &object, const de::Transform &place,
                                       const std::array<float, 3> &scale, const std::vector<bool> &drawn) {
 	ProjectorTarget t;
 	t.place = place;
 	t.drawn = drawn;
+	t.name = object.info().name;
 	de::Mesh scaled = mesh;
 	for (auto &v : scaled.vertices) v = {v[0] * scale[0], v[1] * scale[1], v[2] * scale[2]};
 	t.octree = de::read_octree(*object.file, object.info());
@@ -1141,20 +1189,7 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 		}
 	}
 	g_lighting.ambient = de::read_ambient(world, *file);
-	if (!g_lightmap) {
-		if (const de::ObjectsFile *core = world.file("COREImages")) {
-			for (uint32_t i = 0; i < core->objects().size(); ++i) {
-				if (core->objects()[i].name == "LightMap") g_lightmap = texture_of(textures_, {core, i});
-				if (core->objects()[i].name == "ShadowAttenuation") {
-					// Sampled with D3DTADDRESS_CLAMP (SetupConeProjector's stage 1).
-					g_shadow_atten = texture_of(textures_, {core, i});
-					glBindTexture(GL_TEXTURE_2D, g_shadow_atten);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-				}
-			}
-		}
-	}
+	load_projector_images(world);
 	// Floor: the fighting-surface collision mesh (world-space; it lives in a plain folder).
 	for (auto &o : file->objects()) {
 		if (o.class_path == "Mesh\\Standard" && o.name.find("FightingSurfaceCollision") != std::string::npos) {
@@ -1193,7 +1228,8 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 			chains_.push_back(chain);
 		}
 		if (item.mesh.projector_lit()) {
-			targets_.push_back(make_projector_target(item.mesh, item.mesh_object, item.world, ms.fixed, drawn));
+			targets_.push_back(make_projector_target(item.mesh, item.mesh_object, item.position_static ? item.world : de::Transform{}, ms.fixed, drawn));
+			targets_.back().frame = item.world;
 			targets_.back().position_static = item.position_static;
 			target_chains_.push_back(chain);
 		}
@@ -1214,11 +1250,13 @@ void ArenaRenderer::set_moving(const std::set<uint32_t> &actors) {
 	}
 	batches_.resize(k);
 	chains_.resize(k);
+	// A position-static actor's target stays where its vertices were placed; ActorMeshRenderer
+	// gives the others theirs.
 	k = 0;
 	for (size_t i = 0; i < targets_.size(); ++i) {
 		bool moved = false;
 		for (uint32_t a : target_chains_[i]) moved = moved || actors.count(a);
-		if (moved) continue;
+		if (moved && !targets_[i].position_static) continue;
 		if (k != i) targets_[k] = std::move(targets_[i]), target_chains_[k] = std::move(target_chains_[i]);
 		++k;
 	}
@@ -1234,8 +1272,11 @@ void ArenaRenderer::set_light_owners(const std::function<const void *(const std:
 void ArenaRenderer::draw(const float *vp, const float *eye) {
 	use_mesh_program(prog_, vp, eye);
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
+	++g_arena_draws;
 	draw_batches(prog_, batches_, 0);
-	draw_splashes(prog_, targets_);
+	std::vector<SplashTarget> splash;
+	for (const ProjectorTarget &t : targets_) splash.push_back(splash_target(t, t.frame, t.position_static));
+	draw_splashes(prog_, splash);
 	draw_batches(prog_, batches_, 1);
 }
 
@@ -1381,11 +1422,13 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		auto akey = std::make_pair(a.actor.file, a.actor.index);
 		auto st = stages_.find(akey);
 		if (st == stages_.end()) {
-			std::vector<std::pair<de::ObjectRef, de::ObjectRef>> stages;
+			std::vector<Stage> stages;
+			auto &meshes = actor_meshes_[akey];
 			try {
-				for (auto &m : de::actor_meshes(data, a.actor, false)) {
+				meshes = de::actor_meshes(data, a.actor, false);
+				for (auto &m : meshes) {
 					for (auto &mat : de::read_materials(data, m)) {
-						for (auto &l : mat.layers) stages.emplace_back(l.manager, l.image);
+						for (auto &l : mat.layers) stages.push_back({m, l.manager, l.image});
 					}
 				}
 			} catch (const std::exception &) {
@@ -1397,8 +1440,8 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		std::string key;
 		ref_key(key, a.actor);
 		if (a.image_of) {
-			for (auto &[manager, image] : st->second) {
-				auto c = a.image_of(manager, image);
+			for (auto &[mesh, manager, image] : st->second) {
+				auto c = a.image_of(mesh, manager, image);
 				if (!c) continue;
 				key += "|";
 				ref_key(key, manager);
@@ -1462,8 +1505,14 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 							if (l.image && c->second.paint) painted_by[std::make_pair(l.image.file, l.image.index)] = &c->second;
 						}
 					}
-					auto b = build_batches(mesh, materials, de::Transform{}, tex, nullptr, nullptr, false, mesh_scale(data, m));
+					std::vector<bool> drawn;
+					MeshScale ms = mesh_scale(data, m);
+					auto b = build_batches(mesh, materials, de::Transform{}, tex, nullptr, nullptr, false, ms, &drawn);
 					all.insert(all.end(), b.begin(), b.end());
+					if (mesh.projector_lit() && !mesh_targets_.count({m.file, m.index})) {
+						mesh_targets_.emplace(std::make_pair(m.file, m.index), make_projector_target(mesh, m, de::Transform{}, ms.fixed, drawn));
+						if (getenv("OPENBG_DEBUG_PROJECTORS")) fprintf(stderr, "[projector] target %s of %s%s\n", m.info().name.c_str(), a.actor.info().name.c_str(), a.position_static ? " (position-static)" : "");
+					}
 				}
 			} catch (const std::exception &) {
 			}
@@ -1478,6 +1527,47 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		draw_batches(prog_, it->second, -1, &t.t, a.light_owner);
 		g_item_live = nullptr;
 	}
+	// The light projector passes on the drawn projector-lit meshes; a position-static instance's
+	// vertices are placed where it first stood (FINDINGS 263).
+	std::vector<SplashTarget> splash;
+	std::set<const void *> seen;
+	for (size_t ai = 0; ai < actors.size(); ++ai) {
+		const Item &a = actors[ai];
+		if (!a.projected || !drawn_[ai] || drawn_[ai]->empty()) continue;
+		auto am = actor_meshes_.find(std::make_pair(a.actor.file, a.actor.index));
+		if (am == actor_meshes_.end()) continue;
+		seen.insert(a.instance);
+		for (const de::ObjectRef &m : am->second) {
+			auto mt = mesh_targets_.find(std::make_pair(m.file, m.index));
+			if (mt == mesh_targets_.end()) continue;
+			if (!a.position_static) {
+				ProjectorTarget &t = mt->second;
+				t.light_owner = a.light_owner, t.position_static = false;
+				splash.push_back(splash_target(t, a.world, false));
+				continue;
+			}
+			auto &placed = placed_targets_[a.instance];
+			auto pt = placed.find(mt->first);
+			if (pt == placed.end()) {
+				auto mesh = de::read_mesh(*m.file, m.info());
+				pt = placed.emplace(mt->first, make_projector_target(mesh, m, a.world, mesh_scale(data, m).fixed, mt->second.drawn)).first;
+			}
+			pt->second.light_owner = a.light_owner, pt->second.position_static = true;
+			splash.push_back(splash_target(pt->second, pt->second.place, true));
+		}
+	}
+	for (auto it = placed_targets_.begin(); it != placed_targets_.end();) {
+		if (seen.count(it->first)) {
+			++it;
+			continue;
+		}
+		for (auto &[k, t] : it->second) glDeleteBuffers(1, &t.vbo), glDeleteVertexArrays(1, &t.vao);
+		it = placed_targets_.erase(it);
+	}
+	if (splash.empty()) return;
+	load_projector_images(data);
+	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
+	draw_splashes(prog_, splash);
 }
 
 void ActorMeshRenderer::draw_glow(const std::vector<Item> &actors, const float *vp, const float *eye) {

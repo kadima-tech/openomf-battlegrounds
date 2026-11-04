@@ -450,9 +450,28 @@ GameObject *World::create_child(GameObject *parent, const std::string &name, con
 }
 
 GameObject *World::copy_tree(const GameObject &o) {
+	auto copies = std::make_shared<std::unordered_map<const GameObject *, GameObject *>>();
+	const uint64_t seq = ++reference_seq_;
+	std::function<GameObject *(const GameObject &)> copy = [&](const GameObject &from) {
+		GameObject *c = copy_node(from);
+		c->copies = copies;
+		c->copy_seq = seq;
+		(*copies)[&from] = c;
+		for (const GameObject *ch : from.children) {
+			GameObject *cc = copy(*ch);
+			cc->parent = c;
+			c->children.push_back(cc);
+		}
+		return c;
+	};
+	return copy(o);
+}
+
+GameObject *World::copy_node(const GameObject &o) {
 	GameObject &g = objects_.emplace_back(o);
 	g.copied = true;
 	g.copied_from = &o;
+	g.replaced_by = nullptr;
 	g.handle = mem_.alloc(kObjectBlock);
 	memcpy(mem_.ptr(g.handle, kObjectBlock), mem_.ptr(o.handle, kObjectBlock), kObjectBlock);
 	g.vec_world_pos = g.handle + kWorldPosOffset;
@@ -468,36 +487,38 @@ GameObject *World::copy_tree(const GameObject &o) {
 	g.data_encompasser = nullptr;
 	g.data_encompasser_read = false;
 	by_handle_[g.handle] = &g;
-	for (const GameObject *ch : o.children) {
-		GameObject *cc = copy_tree(*ch);
-		cc->parent = &g;
-		g.children.push_back(cc);
-	}
 	return &g;
 }
 
-GameObject *World::instance_near(const GameObject *from, const de::ObjectRef &r) const {
+GameObject *World::referent(const GameObject *from, const de::ObjectRef &r) const {
 	if (!r) return nullptr;
-	std::function<GameObject *(GameObject *, const GameObject *)> find = [&](GameObject *o, const GameObject *skip) -> GameObject * {
-		if (o == skip) return nullptr;
-		if (o->file == r.file && o->index == r.index) return o;
-		for (GameObject *ch : o->children) {
-			if (GameObject *h = find(ch, skip)) return h;
-		}
-		return nullptr;
+	std::vector<const GameObject *> sources;
+	for (const GameObject *o = from; o && sources.size() < 256; o = o->copied_from) sources.push_back(o);
+	GameObject *t = object_for(r.file, r.index);
+	auto replaced = [&t](uint64_t before) {
+		while (t && t->replaced_by && t->replaced_seq < before) t = t->replaced_by;
 	};
-	const GameObject *skip = nullptr;
-	for (int hops = 0; from && hops < 64; ++hops) {
-		if (GameObject *h = find(const_cast<GameObject *>(from), skip)) return h;
-		if (from->parent) {
-			skip = from;
-			from = from->parent;
-		} else {
-			skip = nullptr;
-			from = from->copied_from;
-		}
+	for (size_t i = sources.size(); i-- > 0;) {
+		const GameObject *o = sources[i];
+		if (!o->copies) continue;
+		replaced(o->copy_seq);
+		if (auto it = t ? o->copies->find(t) : o->copies->end(); it != o->copies->end()) t = it->second;
 	}
-	return nullptr;
+	replaced(UINT64_MAX);
+	return t && object(t->handle) == t ? t : nullptr;
+}
+
+void World::replace_references(GameObject *o, GameObject *by) {
+	if (!o || !by || o == by) return;
+	o->replaced_by = by;
+	o->replaced_seq = ++reference_seq_;
+	if (o->file && o->is("Image")) instance_images.insert({o->file, o->index});
+	++texture_override_version;
+}
+
+GameObject *World::replacement(GameObject *o) const {
+	while (o && o->replaced_by) o = o->replaced_by;
+	return o && object(o->handle) == o ? o : nullptr;
 }
 
 void World::set_instance_image(GameObject *manager, GameObject *image) {
@@ -522,7 +543,7 @@ void World::setup_creature_model(GameObject *model, GameObject *creature, const 
 		static const std::vector<de::ObjectRef> none;
 		auto list = [&](size_t i) -> const std::vector<de::ObjectRef> & { return lists.size() > 1 && i < lists[1].size() ? lists[1][i] : none; };
 		for (auto &r : list(1)) {
-			if (GameObject *p = instance_near(model, r)) creature->components.push_back(p);
+			if (GameObject *p = referent(model, r)) creature->components.push_back(p);
 		}
 		for (auto &r : list(0)) {
 			if (GameObject *tpl = global_object(r)) {
@@ -1520,9 +1541,12 @@ void World::retick(GameObject &o, uint32_t at_ms) {
 
 void World::at_scene_ms(uint32_t at_ms, const std::function<void()> &f) {
 	uint32_t now = scene_ms_;
+	bool was = scene_ms_set_;
 	scene_ms_ = at_ms;
+	scene_ms_set_ = true;
 	f();
 	scene_ms_ = now;
+	scene_ms_set_ = was;
 }
 
 // DE_CJoystickInputManager::Tick (Creature 0x150020c0): a record per input change; older records
@@ -1630,6 +1654,7 @@ void World::scene_genesis(const GameObject *session) {
 	if (c.started) return;
 	c.started = true;
 	c.master_started = c.master;
+	c.last_global = global_ms();
 	const GameObject *was = clock_;
 	use_clock(session);
 	scene_ms_ = 0;
@@ -1667,6 +1692,8 @@ uint32_t World::scene_step(SceneClock &c, uint32_t real_ms, double &global) {
 		double total = x + c.master_passed;
 		global = std::trunc(total);
 		c.master_passed = total - global;
+		global += c.master_given;
+		c.master_given = 0;
 	}
 	if (autopaused && c.autopauses) global = 0;
 	float x = float(global) * float(c.scale) + c.carry;
@@ -1711,6 +1738,7 @@ void World::pass_scene(const GameObject *session, uint32_t real_ms) {
 	replay_temporal_update(*this, session);
 	double global = 0;
 	uint32_t left = scene_step(c, real_ms, global);
+	const uint32_t now_global = global_ms();
 	// The set whose next tick comes first (the first made, on a tie) advances, the clock standing at
 	// that tick, until the next tick lies beyond what passes.
 	for (;;) {
@@ -1728,7 +1756,28 @@ void World::pass_scene(const GameObject *session, uint32_t real_ms) {
 		start_pending_brains();
 	}
 	scene_ms_ += left;
+	c.last_global = now_global;
 	scene_delta_tick(*this, session, float(global * c.scale));
+}
+
+// A scene with a temporal master is given what the master passed since (TemporalPassTime), which
+// its next pass then takes as already given; any other the wall clock since its last pass.
+uint32_t World::precise_ms_of(const GameObject *o, int view) {
+	if (view < 0 && o && in_gui(*o)) view = std::clamp(gui_view(*o), 0, 1);
+	if (view >= 0) return gui_scene_ms[view] + uint32_t(global_ms() - gui_scene_global[view]);
+	const GameObject *key = o ? clock_key(o) : clock_;
+	if (key == clock_ && scene_ms_set_) return scene_ms_;
+	SceneClock &c = scene_clock(key);
+	uint32_t since;
+	if (c.master) {
+		double given = std::trunc(c.master_passed);
+		c.master_passed -= given;
+		c.master_given += given;
+		since = uint32_t(int64_t(c.master_given));
+	} else {
+		since = global_ms() - c.last_global;
+	}
+	return clock_ms(key) + uint32_t(int64_t(double(since) * c.scale));
 }
 
 uint32_t World::scene_ms_of(const GameObject *o) const {
@@ -1750,6 +1799,7 @@ int World::gui_scene_view(const GameObject *scene) {
 void World::tick_gui(int view, uint32_t ms) {
 	uint32_t &now = gui_scene_ms[view];
 	uint32_t left = ms;
+	gui_passing_ = true;
 	for (;;) {
 		register_temporals();
 		TemporalSet *first = nullptr;
@@ -1769,6 +1819,8 @@ void World::tick_gui(int view, uint32_t ms) {
 		}
 	}
 	now += left;
+	gui_scene_global[view] = global_ms();
+	gui_passing_ = false;
 }
 
 void World::close_instance(vm::Executor &, uint32_t instance) { instances_closed_.push_back(instance); }
@@ -1820,22 +1872,6 @@ void World::tick(uint32_t ms) {
 
 // Affector references: [object][actor properties][affector v4: BOOL owner actor, BOOL
 // encompassing affector]...
-GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r) {
-	std::function<GameObject *(GameObject *, GameObject *)> find = [&](GameObject *o, GameObject *skip) -> GameObject * {
-		if (o->file == r.file && o->index == r.index) return o;
-		for (GameObject *c : o->children) {
-			if (c == skip) continue;
-			if (GameObject *h = find(c, nullptr)) return h;
-		}
-		return nullptr;
-	};
-	GameObject *skip = nullptr;
-	for (GameObject *p = from; p; skip = p, p = p->parent) {
-		if (GameObject *h = find(p, skip)) return h;
-	}
-	return nullptr;
-}
-
 GameObject *World::affector_owner(GameObject *a) {
 	if (!a) return nullptr;
 	if (a->owner_actor) return a->owner_actor;
@@ -1846,7 +1882,7 @@ GameObject *World::affector_owner(GameObject *a) {
 			if (lists.size() > 2 && !lists[2].empty() && !lists[2][0].empty() && lists[2][0][0]) {
 				// The nearest copy: several copies of one template (a pickup on each spawner)
 				// share the data object, so search outwards from the affector.
-				a->data_owner = nearest_copy(a, lists[2][0][0]);
+				a->data_owner = referent(a, lists[2][0][0]);
 			}
 		}
 	}
@@ -1868,7 +1904,7 @@ GameObject *World::encompasser_of(GameObject *a) {
 				if (c.remaining() > 1 && de::begin_chunk(c).version == 4) {
 					if (c.boolean()) de::Reference::read(c);
 					if (c.boolean()) {
-						if (de::ObjectRef r = data_.resolve(*a->file, de::Reference::read(c))) a->data_encompasser = nearest_copy(a, r);
+						if (de::ObjectRef r = data_.resolve(*a->file, de::Reference::read(c))) a->data_encompasser = referent(a, r);
 					}
 				}
 			} catch (const std::exception &) {
