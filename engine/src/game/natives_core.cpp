@@ -105,6 +105,22 @@ void write_vec(vm::Memory &m, uint32_t a, const std::array<float, 3> &v) {
 	m.set<float>(a + 8, v[2]);
 }
 
+// A texture manager's images (references chunk v1-v2 after DE_CObject's: a count, then references).
+static std::vector<de::ObjectRef> texture_manager_images(const de::World &data, const de::ObjectRef &tm) {
+	std::vector<de::ObjectRef> out;
+	try {
+		de::Contents c(tm.file->object_data(tm.info()).references);
+		c.seek(de::begin_chunk(c).end);
+		if (c.remaining() < 2) return out;
+		de::Chunk ch = de::begin_chunk(c);
+		if (ch.version != 1 && ch.version != 2) return out;
+		int32_t n = c.i32();
+		for (int32_t i = 0; i < n && c.pos() < ch.end; ++i) out.push_back(data.resolve(*tm.file, de::Reference::read(c)));
+	} catch (const std::exception &) {
+	}
+	return out;
+}
+
 void register_core_natives(World &w) {
 	auto reg = [&](const char *key, Native fn) { w.register_native(key, std::move(fn)); };
 	auto stub = [&](const char *key) { w.register_native(key, [](const NativeContext &) {}); };
@@ -228,8 +244,7 @@ void register_core_natives(World &w) {
 				r->children.push_back(ch);
 				c.world.parented(ch, was);
 			}
-			// The texture managers in its tree whose image reference reaches this instance: each
-			// copy of a branch has its own images and references (FINDINGS 243).
+			// The texture managers in its tree whose image reference reaches this instance (FINDINGS 245).
 			if (o->is("Image")) {
 				GameObject *root = o;
 				while (root->parent) root = root->parent;
@@ -237,13 +252,10 @@ void register_core_natives(World &w) {
 				for (size_t i = 0; i < branch.size(); ++i) branch.insert(branch.end(), branch[i]->children.begin(), branch[i]->children.end());
 				for (GameObject *t : branch) {
 					if (!t->is("TextureManager")) continue;
-					bool refers = t->image_set ? t->image == o : false;
+					bool refers = t->image_set && t->image == o;
 					if (!t->image_set && t->file && o->file) {
-						for (auto &l : reference_lists(c.world.data(), {t->file, t->index})) {
-							for (auto &refs : l) {
-								for (auto &ref : refs) refers = refers || (ref.file == o->file && ref.index == o->index && c.world.instance_near(t, ref) == o);
-							}
-						}
+						for (auto &ref : texture_manager_images(c.world.data(), {t->file, t->index}))
+							refers = refers || (ref.file == o->file && ref.index == o->index && c.world.instance_near(t, ref) == o);
 					}
 					if (refers) c.world.set_instance_image(t, r);
 				}
