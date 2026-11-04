@@ -68,7 +68,8 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   is not the first stays raised, as in the original), over a sunken panel with its description
   centred. Back and Next on the 3D buttons. Hosting, "Available Arenas:" (14 virtual pixels) and
   the multiplayer arenas under the casts, each a check box (the dark sunken box, a white X when
-  checked) and its name; all checked at first.
+  checked) and its name, in the list's ordinary 20-pixel rows (the box, 23 pixels at 768, overlaps
+  its neighbours slightly); all checked at first.
 - **Pilot panel.** The name centred at the top; the photo (to 0.58 across) in a pale frame; beside it
   four stat rows (icon tinted (0.5, 1, 1), name, a teal well filled cyan) and "Colors" over the
   pilot's three colour swatches; the biography centred below, then "RECON DATA" and the unlocked

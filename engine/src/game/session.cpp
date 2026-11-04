@@ -929,12 +929,17 @@ void update_session(World &w) {
 	for (auto &sp : all) {
 		if (sp->ended) continue;
 		w.session = sp;
-		w.pass_scene(sp->obj, w.frame_ms());
-		w.use_clock(sp->obj);
-		if (replay_session(w) == sp.get()) {
+		const bool recorded = replay_session(w) == sp.get();
+		if (recorded) {
+			// It checks its record and fetches the replayed states before its scene passes.
+			w.use_clock(sp->obj);
 			replay_seen = true;
 			replay_update(w);
+			if (sp->ended) continue;
 		}
+		w.pass_scene(sp->obj, w.frame_ms());
+		w.use_clock(sp->obj);
+		if (recorded) replay_after_pass(w);
 		if (!sp->begun || sp->ended) continue;
 		update_one(w, *sp);
 	}

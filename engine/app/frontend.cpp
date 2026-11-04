@@ -223,11 +223,11 @@ int main(int argc, char **argv) {
 		// DE_COMF2Manager::ProcessEvent on the session chooser's Complete (FINDINGS 125): a session
 		// from the chosen master description's resource (its master modifier), a local
 		// user-controlled client named "User", then Begin.
-		app.launch_session = [&](const de::ObjectRef &desc, bool single_player) {
+		app.launch_session = [&](const de::ObjectRef &desc, bool single_player) -> game::SessionState * {
 			auto res = game::passive_references(world.data(), desc);
 			if (res.empty()) {
 				app.notify(desc.info().name, "This match has no session to start.");
-				return;
+				return nullptr;
 			}
 			printf("launching %s (%s)%s\n", desc.info().name.c_str(), res[0].info().name.c_str(), single_player ? ", single player" : "");
 			auto &ss = game::start_session(world, {res[0]});
@@ -247,6 +247,7 @@ int main(int argc, char **argv) {
 				app.set_registry_bool("SinglePlayerPlayed", true);
 			};
 			if (app.satisfy_master_requirements(ss, begin)) begin();
+			return sp;
 		};
 		// A UI manager the session scripts launch (FINDINGS 127): a description selector over the
 		// script's pool; Next completes it for the script.
@@ -308,7 +309,8 @@ int main(int argc, char **argv) {
 		};
 		world.show_vcr = [&](game::GameObject *) { app.set_next(app.vcr_controls(), true); };
 		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
-		app.has_local_session = [&] { return world.session != nullptr; };
+		// AddIfAbsentLocalSession comes with the session's Begin: one Choose Cast made is not local.
+		app.has_local_session = [&] { return world.session != nullptr && world.session->begun; };
 		app.session_fully_sequenced = [] { return true; };
 		app.session_scene_rendering = [&] { return world.session != nullptr && view.has_arena(); };
 		if (!launch.empty()) {

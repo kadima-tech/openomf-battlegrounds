@@ -11,6 +11,7 @@
 #include <cstring>
 #include <ctime>
 #include <optional>
+#include <utility>
 
 #include "de/image.h"
 #include "de/mesh.h"
@@ -1216,24 +1217,23 @@ public:
 		return true;
 	}
 
-	// LoadModifiers (0x201edb40): the registry's Session\Modifiers\<master description> become the
-	// session's attached modifier descriptions.
+	// LoadModifiers (0x201edb40): when the registry holds Session\Modifiers\<master description>,
+	// the GUID pool it holds replaces the session's attached modifier descriptions (each once).
 	void load_modifiers(AppManager &app) {
 		SessionState *s = session(app);
 		if (!s || !s->master_description || !s->master_description->file) return;
 		std::string v = app.registry_string("Session\\Modifiers\\" + guid_string(s->master_description->file->objects()[s->master_description->index].guid));
 		if (v.empty()) return;
 		s->attached_guids.clear();
-		for (size_t p = 0; p < v.size();) {
-			size_t q = v.find(' ', p);
-			std::string g = v.substr(p, q == std::string::npos ? std::string::npos : q - p);
-			for (const auto &[stem, f] : app.world.data().files()) {
-				for (const auto &o : f->objects()) {
-					if (o.class_path.rfind("Description", 0) == 0 && guid_string(o.guid) == g) s->attached_guids.push_back(o.guid);
-				}
+		for (const de::Guid &g : read_guid_pool_value(v)) {
+			if (std::none_of(s->attached_guids.begin(), s->attached_guids.end(), [&](const de::Guid &a) { return std::equal(g.bytes, g.bytes + 16, a.bytes); }))
+				s->attached_guids.push_back(g);
+		}
+		if (getenv("OPENBG_DEBUG_SESSION")) {
+			for (const de::Guid &g : s->attached_guids) {
+				de::ObjectRef d = app.world.data().by_guid(g);
+				fprintf(stderr, "[session] Choose Cast loads %s (%s)\n", guid_string(g).c_str(), d ? d.info().name.c_str() : "?");
 			}
-			if (q == std::string::npos) break;
-			p = q + 1;
 		}
 	}
 
@@ -1262,7 +1262,6 @@ public:
 			label->scale(0, 0.4f, 1, 0.45f);
 			auto *arenas = left->add<List>();
 			arenas->st = 0.45f;
-			arenas->entry_h = std::max(arenas->entry_h, g.vx(18) + 2);
 			// DE_CLockedContentTokenList::InternalValidate (0x201f0000) and its control generator
 			// 0x201ede00: a check holding IsLocked(0xffff) per visible member, a locked one's name VPU 23 in.
 			arena_descs_.clear();
@@ -1351,11 +1350,8 @@ public:
 		if (&c == next_) {
 			finish(app);
 		} else if (&c == back_) {
-			// The original leaves the session it made unbegun; ours ends it, as nothing else would.
-			if (SessionState *s = session(app)) {
-				s->settings_active = false;
-				end_session(app.world, *s);
-			}
+			// The unbegun session stays until Choose Match begins again and deletes it.
+			if (SessionState *s = session(app)) s->settings_active = false;
 			app.set_last();
 		}
 	}
@@ -1570,16 +1566,15 @@ void SessionSettings::finish(AppManager &app) {
 	done_ = true;
 	if (chosen_.empty() && casts_.empty()) prepare(app);
 	s->attached_guids.clear();
-	std::string saved;
 	for (const de::ObjectRef &m : chosen_) {
 		if (!m) continue;
 		const de::Guid &g = m.info().guid;
 		if (std::any_of(s->attached_guids.begin(), s->attached_guids.end(), [&](const de::Guid &a) { return std::equal(g.bytes, g.bytes + 16, a.bytes); })) continue;
 		s->attached_guids.push_back(g);
-		saved += (saved.empty() ? "" : " ") + guid_string(g);
 	}
 	if (s->master_description && s->master_description->file)
-		app.set_registry_string("Session\\Modifiers\\" + guid_string(s->master_description->file->objects()[s->master_description->index].guid), saved);
+		app.set_registry_string("Session\\Modifiers\\" + guid_string(s->master_description->file->objects()[s->master_description->index].guid),
+		                        guid_pool_value(s->attached_guids));
 	app.world.values[s->description]["StartingMatch"].bits = uint32_t(g_starting_match);
 	s->settings_active = false;
 	complete(app);
@@ -2053,7 +2048,9 @@ bool AppManager::is_locked(const de::ObjectRef &d) const {
 	return description_locked(world, d);
 }
 
-bool UIManager::begin(AppManager &) {
+// DE_CUIManager::Begin (Core 2.123 0x201f2e30) deletes what the last completion made.
+bool UIManager::begin(AppManager &app) {
+	for (uint32_t h : std::exchange(created, {})) app.world.clean_later(app.world.object(h));
 	begun = true;
 	return true;
 }
@@ -2086,7 +2083,11 @@ void UIManager::activate(AppManager &app) {
 }
 
 // DE_CUIManager::Deactivate (Core 0x701eb6e0).
+// Deactivate (0x201f30d0): backed out, also what the last completion made.
 void UIManager::deactivate(AppManager &app) {
+	if (backed_out) {
+		for (uint32_t h : std::exchange(created, {})) app.world.clean_later(app.world.object(h));
+	}
 	deactivated(app);
 	if (root_) app.world.clean_later(root_);
 	root_ = nullptr;
@@ -2544,9 +2545,11 @@ void AppManager::menu_select(int id) {
 			}
 		}
 		bool single = id == 3;
+		// DE_COMF2Manager::ProcessEvent (OMF 2.123 0x107157a0): the session info and session it
+		// makes are the chooser's created objects.
 		sel->on_complete = [single](AppManager &app, DescriptionSelector &s) {
-			if (app.launch_session) app.launch_session(s.chosen, single);
-			else app.not_ported("Sessions");
+			if (!app.launch_session) return app.not_ported("Sessions");
+			if (SessionState *ss = app.launch_session(s.chosen, single)) s.created = {ss->description->handle, ss->obj->handle};
 		};
 		set_next(sel, true);
 		return;
