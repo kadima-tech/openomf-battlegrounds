@@ -720,7 +720,7 @@ void register_script_natives(World &w) {
 		auto it = c.world.incident_recorders.find(c.self());
 		return it == c.world.incident_recorders.end() ? nullptr : &it->second;
 	};
-	auto now_ms = [](const NativeContext &c) { return uint32_t(c.world.scene_ms()); };
+	auto now_ms = [](const NativeContext &c) { return c.world.scene_ms_of(c.owner()); };
 	auto present = [](const World::IncidentRecorder &r, uint32_t now, uint32_t type) {
 		for (auto &[t, k] : r.incidents) {
 			uint32_t d = t < now ? now - t : t - now;
@@ -755,7 +755,6 @@ void register_script_natives(World &w) {
 	reg("CActor::class CScene TemporalMasterScene()", [](const NativeContext &c) { c.ret_object(c.world.scene_object(c.self())); });
 	// The scene stands for its temporal master, which shares its pause (Genesis passes it on).
 	reg("CScene::class CScene TemporalMaster()", [](const NativeContext &c) { c.ret_object(c.self()); });
-	reg("CScene::AssureTemporalMaster()", [](const NativeContext &) {});
 	reg("CScene::RegisterRenderTickHook(class CClassExecutorInstance,Method(float))", [](const NativeContext &c) {
 		c.world.render_tick_hooks.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 	});

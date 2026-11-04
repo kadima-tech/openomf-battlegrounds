@@ -195,7 +195,7 @@ ManagerFlags manager_flags(const GameObject &o) {
 // DE_CCreature::LocalTime (Creature 0x15008300): a tick-based creature's ticks, else the scene's.
 uint32_t local_time(World &w, const GameObject &o) {
 	if (o.is("Actor\\Creature") && w.creature_rate(const_cast<GameObject *>(&o))) return o.creature_ticks;
-	return uint32_t(w.scene_ms());
+	return w.scene_ms_of(&o);
 }
 
 // DE_CObject::GUID (Core 0x7003df30): its data object's, which copies share; none for others.
@@ -1392,8 +1392,9 @@ void replay_session_ended(World &w, SessionState &s) {
 		}
 		// +0x58: the session's class (its factory, a script class here).
 		if (s.obj && s.obj->file) r.factory = s.obj->file->objects()[s.obj->index].guid;
-		r.end_ms = uint32_t(w.scene_ms());
-		r.length = float(r.end_ms) / 1000.0f;
+		// +0x78, the length in real seconds: the scene's time over its scale (+0x178, 2.123 +0x188).
+		r.end_ms = w.scene_ms_of(s.obj);
+		r.length = float(r.end_ms) / (float(w.scene_clock(s.obj).scale) * 1000.0f);
 		// time(NULL) and new GUIDs, as the original stamps a record; runs without a wall clock
 		// (screenshot, headless) stamp it from their own clock so they repeat.
 		const bool repeatable = !w.system_clock;
@@ -1629,10 +1630,15 @@ void replay_set_time(World &w, GameObject &o, uint32_t ms) {
 }
 
 // DE_CScene::TemporalUpdate (Core 0x70070710): the deferred SetTime of restored creatures.
-void replay_temporal_update(World &w) {
+void replay_temporal_update(World &w, const GameObject *session) {
 	auto &R = rw(w);
-	auto list = std::move(R.deferred);
-	R.deferred.clear();
+	std::vector<uint32_t> list;
+	std::erase_if(R.deferred, [&](uint32_t h) {
+		const GameObject *o = w.object(h);
+		if (o && w.clock_key(o) != session) return false;
+		list.push_back(h);
+		return true;
+	});
 	w.temporal_updating = true;
 	for (uint32_t h : list) {
 		if (GameObject *o = w.object(h)) set_time(w, *o, uint32_t(w.scene_ms()));
@@ -1662,6 +1668,8 @@ bool replaying(World &w) {
 	auto &R = rw(w);
 	return R.record && !R.record->recording;
 }
+
+SessionState *replay_session(World &w) { return rw(w).record ? rw(w).session : nullptr; }
 
 uint32_t replay_end_ms(World &w) {
 	auto &R = rw(w);

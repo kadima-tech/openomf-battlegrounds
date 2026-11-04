@@ -342,7 +342,8 @@ int main(int argc, char **argv) {
 				rules_displayed();
 				world.tick_gui(0, game::World::kFrameMs);
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
-				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
+				world.autopaused = app.autopaused();
+				world.tick(game::World::kFrameMs);
 				offline->play_requests(world, view.player ? view.ear() : ear);
 				if (recording) {
 					offline->update_music(world);
@@ -527,7 +528,8 @@ int main(int argc, char **argv) {
 				world.tick_gui(1, picker->scene_paused ? 0 : frame_ms);
 				picker->scene_paused = false;
 			}
-			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
+			world.autopaused = app.autopaused();
+			world.tick(frame_ms);
 			++fr;
 			static const int state_every = getenv("OPENBG_DEBUG_STATE") ? std::max(1, atoi(getenv("OPENBG_DEBUG_STATE"))) : 0;
 			if (state_every && fr % state_every == 0) print_state(world, fr);

@@ -729,7 +729,7 @@ void register_combat_natives(World &w) {
 	});
 	reg("CCollisionTester::Activate()", [](const NativeContext &c) {
 		g_testers[c.self_handle()].active = true;
-		c.world.activate_tester(c.self_handle());
+		c.world.activate_tester(c.self_handle(), c.owner());
 	});
 	reg("CCollisionTester::SetAttachedForce(class CForce)", [](const NativeContext &c) { g_testers[c.self_handle()].force = c.arg_object(0); });
 	reg("CCollisionTester::NeedSurfaceNormal()", [](const NativeContext &) {});

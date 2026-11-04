@@ -514,19 +514,22 @@ void World::set_instance_image(GameObject *manager, GameObject *image) {
 // child; then, when one of the creature's children is an ImageFilter\OMF2Fighter, every image
 // under the model becomes a property too, RGBMain* and ReflectionMask* filtered by it and
 // RGBScaled* in its scaled list (RGBStatic* its static list, which no shipped image is).
-void World::setup_creature_model(GameObject *model, GameObject *creature) {
-	if (!model || !creature || !model->file) return;
-	auto lists = reference_lists(data_, {model->file, model->index});
-	static const std::vector<de::ObjectRef> none;
-	auto list = [&](size_t i) -> const std::vector<de::ObjectRef> & { return lists.size() > 1 && i < lists[1].size() ? lists[1][i] : none; };
-	for (auto &r : list(1)) {
-		if (GameObject *p = instance_near(model, r)) creature->components.push_back(p);
-	}
-	for (auto &r : list(0)) {
-		if (GameObject *tpl = global_object(r)) {
-			GameObject *n = copy_tree(*tpl);
-			n->parent = creature;
-			creature->children.push_back(n);
+void World::setup_creature_model(GameObject *model, GameObject *creature, const std::vector<GameObject *> &properties) {
+	if (!model || !creature) return;
+	for (GameObject *p : properties) creature->components.push_back(p);
+	if (model->file) {
+		auto lists = reference_lists(data_, {model->file, model->index});
+		static const std::vector<de::ObjectRef> none;
+		auto list = [&](size_t i) -> const std::vector<de::ObjectRef> & { return lists.size() > 1 && i < lists[1].size() ? lists[1][i] : none; };
+		for (auto &r : list(1)) {
+			if (GameObject *p = instance_near(model, r)) creature->components.push_back(p);
+		}
+		for (auto &r : list(0)) {
+			if (GameObject *tpl = global_object(r)) {
+				GameObject *n = copy_tree(*tpl);
+				n->parent = creature;
+				creature->children.push_back(n);
+			}
 		}
 	}
 	GameObject *filter = nullptr;
@@ -1303,14 +1306,16 @@ bool World::verify(const InputSequence &seq) const {
 
 // DE_CScene::TemporalElementSetForRate: the set of a rate, made on first use with its last tick at
 // (now / rate) x rate, so every element of a rate ticks together on multiples of it.
-World::TemporalSet &World::temporal_set(uint32_t rate, int scene) {
+World::TemporalSet &World::temporal_set(uint32_t rate, int scene, const GameObject *clock) {
+	if (scene) clock = nullptr;
 	for (auto &s : temporal_sets_) {
-		if (s.rate == rate && s.scene == scene) return s;
+		if (s.rate == rate && s.scene == scene && s.clock == clock) return s;
 	}
-	uint32_t now = scene ? gui_scene_ms[scene - 1] : scene_ms_;
+	uint32_t now = scene ? gui_scene_ms[scene - 1] : clock_ms(clock);
 	TemporalSet s;
 	s.rate = rate;
 	s.scene = scene;
+	s.clock = clock;
 	s.next = now / rate * rate + rate;
 	temporal_sets_.push_back(std::move(s));
 	return temporal_sets_.back();
@@ -1322,9 +1327,16 @@ int World::temporal_scene(const Temporal &t) {
 	return o && in_gui(*o) ? std::clamp(gui_view(*o), 0, 1) + 1 : 0;
 }
 
-void World::add_temporal(uint32_t rate, Temporal t) {
+const GameObject *World::temporal_clock(const Temporal &t) {
+	const GameObject *o = t.kind == Temporal::Brain ? (t.brain ? t.brain->owner : nullptr) : t.handle ? object(t.handle) : nullptr;
+	return o ? clock_key(o) : clock_;
+}
+
+void World::add_temporal(uint32_t rate, Temporal t) { add_temporal(rate, t, temporal_clock(t)); }
+
+void World::add_temporal(uint32_t rate, Temporal t, const GameObject *clock) {
 	if (rate == 0) return;
-	TemporalSet &s = temporal_set(rate, temporal_scene(t));
+	TemporalSet &s = temporal_set(rate, temporal_scene(t), clock);
 	for (auto &e : s.elements) {
 		if (e.kind == t.kind && e.handle == t.handle && e.brain == t.brain) return;
 	}
@@ -1332,7 +1344,8 @@ void World::add_temporal(uint32_t rate, Temporal t) {
 	if (debug) {
 		const char *kinds[] = {"creature", "executor", "tester", "input"};
 		std::string who = t.brain && t.brain->owner ? t.brain->owner->name : t.handle && object(t.handle) ? object(t.handle)->name : "-";
-		fprintf(stderr, "[temporal %u] %s %s every %u ms\n", scene_ms_, kinds[t.kind], who.c_str(), rate);
+		fprintf(stderr, "[temporal %u] %s %s every %u ms in %s\n", scene_ms_, kinds[t.kind], who.c_str(), rate,
+		        s.scene ? "the GUI" : s.clock ? s.clock->name.c_str() : "no session");
 	}
 	s.elements.push_back(t);
 }
@@ -1382,7 +1395,8 @@ void World::register_creature(GameObject *o) {
 		add_temporal(rate, {Temporal::Creature, o->handle, nullptr});
 		// DE_CCreature::ObjPrepare (Creature 0x15016050): one made earlier starts at the tick its
 		// creation time gives.
-		if (o->creation_time && o->creation_time < scene_ms_) o->creature_ticks = (scene_ms_ - o->creation_time) / rate;
+		uint32_t now = clock_ms(clock_key(o));
+		if (o->creation_time && o->creation_time < now) o->creature_ticks = (now - o->creation_time) / rate;
 		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's
 		// order, joins this one's list (+0x334), and this one joins theirs.
 		if (o->fighter && !o->fighter_prepared) {
@@ -1575,12 +1589,12 @@ void World::advance(TemporalSet &set) {
 	}
 }
 
-// DE_CScene::PassTime (Core 0x70070040) when the clock jumps: each set restarts at its last tick
-// before the new time and each element is set to it, newest first.
+// DE_CScene::PassTime (Core 0x70070040) when the clock jumps: each set of the scene restarts at its
+// last tick before the new time and each element is set to it, newest first.
 void World::reset_clock() {
 	std::vector<uint32_t> creatures;
 	for (auto &s : temporal_sets_) {
-		if (s.scene || !s.rate) continue;
+		if (s.scene || !s.rate || s.clock != clock_) continue;
 		s.next = scene_ms_ / s.rate * s.rate + s.rate;
 		for (auto it = s.elements.rbegin(); it != s.elements.rend(); ++it) {
 			if (it->kind == Temporal::Creature) creatures.push_back(it->handle);
@@ -1591,37 +1605,136 @@ void World::reset_clock() {
 	}
 }
 
-uint32_t World::scene_step(float real_ms) {
-	replay_temporal_update(*this);
-	scene_carry_ += double(real_ms) * time_scale * scene_time_scale + passed_ms;
-	passed_ms = 0;
-	if (scene_carry_ < 0) {
-		uint32_t back = uint32_t(std::min<double>(-scene_carry_, scene_ms_));
-		scene_ms_ -= back;
+World::SceneClock &World::scene_clock(const GameObject *session) {
+	auto [it, made] = clocks_.try_emplace(session);
+	if (made && !session) it->second.started = true;
+	return it->second;
+}
+
+uint32_t World::clock_ms(const GameObject *session) const {
+	if (session == clock_) return scene_ms_;
+	auto it = clocks_.find(session);
+	return it == clocks_.end() ? 0 : it->second.ms;
+}
+
+void World::use_clock(const GameObject *session) {
+	if (session == clock_) return;
+	scene_clock(clock_).ms = scene_ms_;
+	clock_ = session;
+	scene_ms_ = scene_clock(session).ms;
+}
+
+// SetInitialSceneTime(0) (Core 0x7006fa10): the time and every set restart at 0.
+void World::scene_genesis(const GameObject *session) {
+	SceneClock &c = scene_clock(session);
+	if (c.started) return;
+	c.started = true;
+	c.master_started = c.master;
+	const GameObject *was = clock_;
+	use_clock(session);
+	scene_ms_ = 0;
+	reset_clock();
+	use_clock(was);
+}
+
+void World::forget_clock(const GameObject *session) {
+	if (!session) return;
+	if (clock_ == session) use_clock(nullptr);
+	clocks_.erase(session);
+	std::erase_if(temporal_sets_, [&](const TemporalSet &s) { return !s.scene && s.clock == session; });
+}
+
+// TemporalUpdate: the global time the scene's temporal master gives it (DE_CTemporalMasterScene::
+// TemporalGlobalTime, Core 0x70078910: its real time at its scale, less pauses, plus passed time),
+// else real time, none while autopaused; PassTime multiplies it by the scene's scale. `global` is
+// what the scene was given.
+uint32_t World::scene_step(SceneClock &c, uint32_t real_ms, double &global) {
+	global = real_ms;
+	if (c.master) {
+		double dt = c.master_started ? double(real_ms) : 0;
+		if (c.master_target != c.master_scale) {
+			double step = dt * c.master_rate;
+			c.master_scale = c.master_scale < c.master_target ? std::min(c.master_scale + step, c.master_target)
+			                                                  : std::max(c.master_scale - step, c.master_target);
+		}
+		double x = dt * c.master_scale;
+		if (c.master_pause == -1) {
+			x = 0;
+		} else if (c.master_pause != 0) {
+			if (c.master_pause <= x) x -= c.master_pause, c.master_pause = 0;
+			else c.master_pause -= x, x = 0;
+		}
+		double total = x + c.master_passed;
+		global = std::trunc(total);
+		c.master_passed = total - global;
+	}
+	if (autopaused && c.autopauses) global = 0;
+	float x = float(global) * float(c.scale) + c.carry;
+	int32_t ms = int32_t(x);
+	c.carry = x - float(ms);
+	if (ms < 0) {
+		scene_ms_ = uint32_t(-ms) < scene_ms_ ? scene_ms_ - uint32_t(-ms) : 0;
 		reset_clock();
 		// What measures time since it last ran must not have run in the future.
-		simple_physics->clock_back(scene_ms_);
+		simple_physics->clock_back(scene_ms_, clock_);
 		for (auto &o : objects_) {
+			if (in_gui(o) || clock_key(&o) != clock_) continue;
 			o.interest_time = std::min(o.interest_time, scene_ms_);
 			o.target_checked = std::min(o.target_checked, scene_ms_);
 			o.target_chosen = std::min(o.target_chosen, scene_ms_);
 		}
-		scene_carry_ = 0;
 		return 0;
 	}
-	uint32_t ms = uint32_t(scene_carry_);
-	scene_carry_ -= ms;
-	// A replay passes at most 2000 ms: the clock jumps over the rest.
-	if (ms > 2000 && replaying(*this)) {
-		scene_ms_ += ms - 2000;
+	// A replayed session's scene passes at most 2000 ms: the clock jumps over the rest.
+	bool replayed = false;
+	for (auto &s : sessions) replayed |= s->obj == clock_ && s->replaying;
+	if (ms > 2000 && replayed) {
+		scene_ms_ += uint32_t(ms) - 2000;
 		reset_clock();
 		ms = 2000;
 	}
-	return ms;
+	return uint32_t(ms);
+}
+
+void World::pass_scene(const GameObject *session, uint32_t real_ms) {
+	use_clock(session);
+	SceneClock &c = scene_clock(session);
+	SessionState *s = nullptr;
+	for (auto &sp : sessions) {
+		if (sp->obj == session) s = sp.get();
+	}
+	if (s && s->replaying) {
+		if (c.master) c.master_target = time_scale, c.master_rate = 9999, c.master_passed += passed_ms;
+		passed_ms = 0;
+	}
+	if (!c.started) return;
+	replay_temporal_update(*this, session);
+	double global = 0;
+	uint32_t left = scene_step(c, real_ms, global);
+	// The set whose next tick comes first (the first made, on a tie) advances, the clock standing at
+	// that tick, until the next tick lies beyond what passes.
+	for (;;) {
+		register_temporals();
+		TemporalSet *first = nullptr;
+		for (auto &t : temporal_sets_) {
+			if (!t.scene && t.clock == session && (!first || t.next - scene_ms_ < first->next - scene_ms_)) first = &t;
+		}
+		if (!first || first->next - scene_ms_ > left) break;
+		left -= first->next - scene_ms_;
+		scene_ms_ = first->next;
+		first->next += first->rate;
+		advance(*first);
+		forces->tick();
+		start_pending_brains();
+	}
+	scene_ms_ += left;
+	scene_delta_tick(*this, session, float(global * c.scale));
 }
 
 uint32_t World::scene_ms_of(const GameObject *o) const {
-	return o && in_gui(*o) ? gui_scene_ms[std::clamp(gui_view(*o), 0, 1)] : scene_ms_;
+	if (!o) return scene_ms_;
+	if (in_gui(*o)) return gui_scene_ms[std::clamp(gui_view(*o), 0, 1)];
+	return clock_ms(clock_key(o));
 }
 
 GameObject *World::scene_object(const GameObject *o) {
@@ -1694,30 +1807,15 @@ void World::tick(uint32_t ms) {
 		}
 		if (window) fprintf(stderr, "[call] --- frame %u\n", frame_);
 	}
-	replay_temporal_update(*this);
-	// PassTime: the set whose next tick comes first (the first made, on a tie) advances, the
-	// clock standing at that tick, until the next tick lies beyond the frame.
-	uint32_t left = ms;
-	for (;;) {
-		register_temporals();
-		TemporalSet *first = nullptr;
-		for (auto &s : temporal_sets_) {
-			if (!s.scene && (!first || s.next - scene_ms_ < first->next - scene_ms_)) first = &s;
-		}
-		if (!first || first->next - scene_ms_ > left) break;
-		left -= first->next - scene_ms_;
-		scene_ms_ = first->next;
-		first->next += first->rate;
-		advance(*first);
-		forces->tick();
-		start_pending_brains();
-	}
-	scene_ms_ += left;
+	pass_scene(nullptr, ms);
+	// Each session's update passes its own scene first (DE_CSession::Update's TemporalUpdate).
 	update_session(*this);
+	use_clock(session ? session->obj : nullptr);
 	simple_physics->tick();
 	particles->step();
 	start_pending_brains();
 	housekeeping();
+	use_clock(session ? session->obj : nullptr);
 }
 
 // Affector references: [object][actor properties][affector v4: BOOL owner actor, BOOL

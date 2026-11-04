@@ -1938,7 +1938,12 @@ void ModelPicker::update_model(AppManager &app) {
 	}
 	GameObject *creature_model = w.create_child(robot, "CreatureModel", "CreatureModel");
 	auto res = m ? passive_references(w.data(), m) : std::vector<de::ObjectRef>{};
-	if (GameObject *fm = res.empty() ? nullptr : w.global_object(res[0])) adopt(w.copy_tree(*fm), creature_model);
+	if (GameObject *fm = res.empty() ? nullptr : w.global_object(res[0])) {
+		// The stripped model's one property is the FighterModel instance, whose own lists stay unset.
+		GameObject *instance = w.copy_tree(*fm);
+		adopt(instance, creature_model);
+		w.setup_creature_model(creature_model, robot, {instance});
+	}
 	adopt(robot, pedestal);
 	w.enter_scene(robot);
 }

@@ -32,6 +32,7 @@
 #include <tuple>
 
 #include "game/forces.h"
+#include "game/observer.h"
 #include "de/platform.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -307,12 +308,35 @@ int main(int argc, char **argv) {
 				if (p->pilot) printf("pilot %s: power %.0f agility %.0f endurance %.0f focus %.0f\n", who.c_str(), p->pilot->stats.power,
 				                     p->pilot->stats.agility, p->pilot->stats.endurance, p->pilot->stats.focus);
 			};
-			Fighter &f = setup_fighter(world, name, true);
+			// DE_CFighterDescription::NewResource, as BCreatureAndPilotPicker makes a slot's robot: the
+			// robot with its HUD and its default model, hooked up by the model's Setup.
+			auto make_fighter = [&](const std::string &who, bool user) -> Fighter & {
+				Fighter *made = nullptr;
+				world.make_fighter = [&](const de::ObjectRef &actor) -> game::GameObject * {
+					made = &setup_fighter(world, actor.info().name, user);
+					return made->actor;
+				};
+				de::ObjectRef fd;
+				if (auto *ff = world.data().file(who)) {
+					for (uint32_t i = 0; i < ff->objects().size() && !fd; ++i) {
+						if (ff->objects()[i].class_path == "Description\\Creature\\Fighter" && ff->objects()[i].name == who) fd = {ff, i};
+					}
+				}
+				if (!fd) fd = world.data().find("Description\\Creature\\Fighter", who);
+				if (game::GameObject *desc = fd ? world.global_object(fd) : nullptr) game::new_resource(world, desc, nullptr);
+				world.make_fighter = nullptr;
+				if (!made) {
+					fprintf(stderr, "no fighter description for %s; the robot has no model\n", who.c_str());
+					made = &setup_fighter(world, who, user);
+				}
+				return *made;
+			};
+			Fighter &f = make_fighter(name, true);
 			make_pilot(f, pilot);
 			player = &f;
 			fighters.push_back(&f);
 			if (opponent != "none") {
-				fighters.push_back(&setup_fighter(world, opponent, false));
+				fighters.push_back(&make_fighter(opponent, false));
 				make_pilot(*fighters.back(), opponent_pilot);
 			}
 			// The arena itself, as the session's environment picker creates it (the description's
@@ -362,6 +386,9 @@ int main(int argc, char **argv) {
 			for (size_t i = 0; i < fighters.size(); ++i) {
 				spawn(world, *fighters[i], points[i % points.size()]);
 			}
+			// BStandardOMFSession: the renderer looks through the user slot's creature's Camera(0),
+			// which RenderQuality (and so get-hit debris) measures from.
+			if (player) game::set_renderer_camera(world, game::creature_camera(world, player->actor, 0));
 		};
 		// Stand-in pilot (BStandardPilot::StateNormal -> FindAttackTarget(1) -> AttackBestEnemy):
 		// each computer fighter is kept on an attack command against its first enemy.

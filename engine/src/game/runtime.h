@@ -522,11 +522,11 @@ public:
 
 	// Load the compiled class `class_object` and start it on `owner` at `entry`.
 	Brain *attach_brain(GameObject *owner, const de::ObjectRef &class_object, const std::string &entry);
-	// One frame, DE_CScene::PassTime (Core 0x70070040): the scene clock (real milliseconds)
-	// advances by `ms`. On the way every temporal set (one per update rate) is advanced in time
-	// order, at its own tick times, each ticking its elements newest first: creatures, executors
-	// with an interval, collision testers, the input manager. Then, once, the delta-tick hooks
-	// with the frame's time, the session's update and the effects.
+	// One frame of `ms` real milliseconds. Every game scene passes its time (DE_CScene::PassTime, Core
+	// 0x70070040): the scene of no session, then each session's before its update. On the way each
+	// of the scene's temporal sets (one per update rate) is advanced in time order, at its own tick
+	// times, each ticking its elements newest first: creatures, executors with an interval,
+	// collision testers, the input manager; then the scene's delta-tick hooks. The effects follow.
 	void tick(uint32_t ms = kFrameMs);
 	uint32_t frame() const { return frame_; }
 	uint32_t frame_ms() const { return frame_ms_; }
@@ -534,16 +534,40 @@ public:
 	static constexpr uint32_t kFrameMs = 20;
 	// A fighter's update rate (SceneTicksPerUpdate, +0x1dc): 62.5 updates a second.
 	static constexpr float kTickMs = 16;
+	// The clock of the scene being passed or updated (outside a frame, the current session's).
 	float scene_ms() const { return float(scene_ms_); }
-	// DE_CTemporalMasterScene (TemporalMoveToScale / TemporalPassTime, Core 0x700788b0 / 0x70078bb0):
-	// real time runs the scene at `time_scale`; passed time is added on the next frame, and a
-	// negative amount moves the clock back.
+	// The VCR's TemporalMoveToScale target and TemporalPassTime (Core 0x700788b0 / 0x70078bb0) on the
+	// replayed session's scene, handed to its temporal master each frame; a negative pass goes back.
 	float time_scale = 1;
-	// The session scene's own scale (DE_CScene +0x188, 1 from ObjInitContents), under the master's.
-	float scene_time_scale = 1;
 	double passed_ms = 0;
-	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
-	uint32_t scene_step(float real_ms);
+	// IsUIManagerAutopaused this frame: session scenes pass no time (DE_CScene::TemporalUpdate).
+	bool autopaused = false;
+	// A game scene (DE_CScene): each standard session's own (DE_CStandardSession::Begin) and one for
+	// what is in no session's.
+	struct SceneClock {
+		uint32_t ms = 0;          // +0x160
+		double scale = 1;         // +0x188 (2.123): SetTimeScale
+		float carry = 0;          // +0x190: the fraction PassTime keeps
+		bool started = false;     // +0x164: Genesis
+		bool autopauses = false;  // +0x1c0 cleared by DE_CStandardSession::Begin
+		// Its DE_CTemporalMasterScene (+0x140, AssureTemporalMaster): real time at a scale moving to
+		// a target at a rate per ms, pauses and passed time (+0x1c8, +0x1e8, +0x1f0, +0x1d8, +0x1e0).
+		bool master = false, master_started = false;
+		double master_scale = 1, master_target = 1, master_rate = 0, master_pause = 0, master_passed = 0;
+	};
+	// The scene of a session (null: what is in no session's).
+	SceneClock &scene_clock(const GameObject *session);
+	// The session whose scene `o` is in (its root's, a session's own objects its), else null.
+	const GameObject *clock_key(const GameObject *o) const;
+	// Makes `session`'s scene the one scene_ms() and the temporal ticks use.
+	void use_clock(const GameObject *session);
+	// DE_CScene::Genesis (Core 0x70070900) for a session's scene: its time starts (at 0) and so
+	// does a temporal master made before.
+	void scene_genesis(const GameObject *session);
+	void forget_clock(const GameObject *session);
+	// DE_CScene::TemporalUpdate (Core 0x70070710) and PassTime (2.123 0x20073f30): `real_ms` of real
+	// time passes on `session`'s scene.
+	void pass_scene(const GameObject *session, uint32_t real_ms);
 	// The end of DE_CCreature::Tick / DeltaTick: a behaviour executor state other than the one last
 	// seen runs the creature-state-changed hooks.
 	void run_state_hooks(GameObject &o);
@@ -657,8 +681,10 @@ public:
 	// are re-pointed into the copy: `from`'s branch, then each ancestor's, then (from a copy's
 	// root) the branch it was copied from; null when none is instantiated there.
 	GameObject *instance_near(const GameObject *from, const de::ObjectRef &r) const;
-	// DE_CCreatureModel::Setup (OMF 0x35037470): hooks a FighterModel instance up to its creature.
-	void setup_creature_model(GameObject *model, GameObject *creature);
+	// DE_CCreatureModel::Setup (OMF 0x35037470): hooks a creature model up to its creature. A data
+	// FighterModel brings its own lists; one made at run time (NewStrippedFighterModel) only
+	// `properties`.
+	void setup_creature_model(GameObject *model, GameObject *creature, const std::vector<GameObject *> &properties = {});
 	// An actor's properties (DE_CActor +0x20 list): its executors, state manager, ...
 	std::vector<de::ObjectRef> actor_properties(const de::ObjectRef &r) const;
 	// The same for a live object: its data's list plus what a passive reference gave it.
@@ -930,7 +956,9 @@ private:
 	std::deque<de::AnimBank> banks_;
 	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
-	double scene_carry_ = 0;
+	std::map<const GameObject *, SceneClock> clocks_;
+	const GameObject *clock_ = nullptr;  // the scene scene_ms_ is the time of
+	uint32_t clock_ms(const GameObject *session) const;
 	bool input_registered_ = false;
 	uint64_t affector_seq_ = 0;
 	// DE_CScene's temporal sets (TemporalElementSetForRate 0x70072230), in creation order.
@@ -941,13 +969,16 @@ private:
 	};
 	struct TemporalSet {
 		uint32_t rate = 0, next = 0;  // next tick: last tick (+0x38) + rate
-		int scene = 0;                // 0 the game's, else GUI scene view + 1
+		int scene = 0;                // 0 a game scene, else GUI scene view + 1
+		const GameObject *clock = nullptr;  // the game scene's session
 		std::vector<Temporal> elements;
 	};
 	std::vector<TemporalSet> temporal_sets_;
-	TemporalSet &temporal_set(uint32_t rate, int scene);
+	TemporalSet &temporal_set(uint32_t rate, int scene, const GameObject *clock);
 	int temporal_scene(const Temporal &t);
+	const GameObject *temporal_clock(const Temporal &t);
 	void add_temporal(uint32_t rate, Temporal t);
+	void add_temporal(uint32_t rate, Temporal t, const GameObject *clock);
 	void register_temporals();
 	void register_creature(GameObject *o);
 	void register_branch(GameObject *o, std::vector<Brain *> *prepared = nullptr);
@@ -956,6 +987,7 @@ public:
 private:
 	void advance(TemporalSet &set);
 	void reset_clock();
+	uint32_t scene_step(SceneClock &c, uint32_t real_ms, double &global);
 	void creature_tick(GameObject &o);
 	void input_tick(uint32_t manager);
 
@@ -967,8 +999,11 @@ private:
 	void run_commands(GameObject &o);
 
 public:
-	// CCollisionTester::Activate (Core): the tester joins the 16 ms temporal set.
-	void activate_tester(uint32_t handle) { add_temporal(16, {Temporal::Tester, handle, nullptr}); }
+	// CCollisionTester::Activate (Core): the tester joins the 16 ms temporal set of the scene that
+	// made it (the caller's).
+	void activate_tester(uint32_t handle, const GameObject *caller) {
+		add_temporal(16, {Temporal::Tester, handle, nullptr}, caller ? clock_key(caller) : clock_);
+	}
 };
 
 void register_core_natives(World &w);
@@ -1012,7 +1047,9 @@ inline uint32_t scene_time(const NativeContext &c) {
 	const GameObject *s = c.self();
 	int v = World::gui_scene_view(s);
 	if (v >= 0) return c.world.gui_scene_ms[v];
-	return c.world.scene_ms_of(s && !s->file && s->name == "Scene" ? nullptr : c.owner());
+	const GameObject *o = c.owner();
+	if (o && in_gui(*o)) o = nullptr;  // a GUI script's game Scene(): the scene being updated
+	return c.world.scene_ms_of(o);
 }
 
 // CVector blocks in VM memory (3 floats); null reads as zero, null writes are ignored.
