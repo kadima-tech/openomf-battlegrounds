@@ -1,5 +1,6 @@
 #include "de/sound.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "de/contents.h"
@@ -62,6 +63,7 @@ Sound read_sound(const World &w, const ObjectRef &noise) {
 			s.channels = le16(body + 2);
 			s.rate = int(le32(body + 4));
 			avg_bytes = le32(body + 8);
+			s.block_align = std::max(1, int(le16(body + 12)));
 			bits = le16(body + 14);
 		} else if (!memcmp(&b[o], "data", 4)) {
 			if (bits == 16) {
@@ -75,6 +77,7 @@ Sound read_sound(const World &w, const ObjectRef &noise) {
 		o += 8 + len + (len & 1);
 	}
 	if (s.samples.empty()) throw FormatError("noise " + noise.info().name + ": no samples");
+	s.file_bytes = uint32_t(b.size());
 	if (avg_bytes) s.length_ms = uint32_t(uint64_t(b.size()) * 1000 / avg_bytes);
 	return s;
 }
