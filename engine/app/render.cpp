@@ -972,8 +972,90 @@ SplashTarget splash_target(const ProjectorTarget &t, const de::Transform &frame,
 	return s;
 }
 
+// A DE_CD3DLight's touched polygons and cone projection, kept until DE_CD3DLight::Update (2.123 0x1032d080) spends their budgets.
+struct LightTouches {
+	struct Found {
+		uint32_t search = 0;
+		GLuint vao = 0;
+		std::vector<uint32_t> faces;
+	};
+	uint32_t serial = 0;  // the Lighting it was last updated with
+	float budget = 0, uvw_budget = 0, last_reach = 0;           // +0x110, +0x114, +0x100
+	std::array<float, 3> last_pos{0, 0, 0}, last_dir{0, 0, 0};  // +0xb4, +0x104
+	bool cleared = false;  // +0xec = 0: nothing to draw until the next search
+	uint32_t search = 0;   // counts the searches
+	SceneLight searched_as, projected_as;
+	std::map<const ProjectorTarget *, Found> found;
+};
+std::map<std::pair<uint32_t, uint32_t>, LightTouches> g_touches;
+
+// DE_CStandardRenderAffector::Update (2.123 0x10306590) +0x138.
+float camera_weight(const SceneLight &l) {
+	const float z = g_vp[3] * l.pos[0] + g_vp[7] * l.pos[1] + g_vp[11] * l.pos[2] + g_vp[15];
+	if (!(-l.outer < z)) return 0;
+	return std::min(1.0f, 250.0f / std::max(z, 1.0f));
+}
+
+void update_touches(LightTouches &s, const SceneLight &l) {
+	auto search = [&] {
+		s.searched_as = l;
+		++s.search;
+		s.cleared = false;
+	};
+	if (l.intensity <= 0) {
+		s.cleared = true;
+		return;
+	}
+	const std::array<float, 3> old = s.last_pos;
+	s.last_pos = l.pos;
+	if (!l.reaches_all && l.reaches.empty()) {
+		s.budget = 0;
+		return;
+	}
+	const float a = camera_weight(l), reach = l.outer, reach_change = std::fabs(s.last_reach - reach);
+	const std::array<float, 3> d{old[0] - l.pos[0], old[1] - l.pos[1], old[2] - l.pos[2]};
+	const float moved = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+	bool searched = false;
+	s.budget -= moved * a;
+	s.budget -= reach_change * 5;
+	if (s.budget <= 0) {
+		search();
+		s.uvw_budget = 0;
+		searched = true;
+	}
+	if (l.shape == SceneLight::kCone) {
+		// The cone's axis in camera space (CalculateLocation), turned by the light's frame.
+		std::array<float, 3> cam{0, 0, 0};
+		for (int k = 0; k < 3; ++k) {
+			const int row = k == 2 ? 3 : k;
+			const float x = g_vp[row], y = g_vp[row + 4], z = g_vp[row + 8], len = std::sqrt(x * x + y * y + z * z);
+			if (len > 0) cam[size_t(k)] = (x * l.frame.r[6] + y * l.frame.r[7] + z * l.frame.r[8]) / len;
+		}
+		std::array<float, 3> dir;
+		for (size_t k = 0; k < 3; ++k) dir[k] = cam[0] * l.frame.r[k] + cam[1] * l.frame.r[3 + k] + cam[2] * l.frame.r[6 + k];
+		s.uvw_budget -= a * a * a;
+		const float turned = (dir[0] * s.last_dir[0] + dir[1] * s.last_dir[1] + dir[2] * s.last_dir[2] - 1) * a * -50.0f;
+		s.uvw_budget -= turned;
+		s.budget -= turned * 4;
+		s.uvw_budget -= moved * a * 5;
+		s.uvw_budget -= reach_change;
+		if (s.uvw_budget <= 0) {
+			if (!searched && s.budget < 0) {
+				search();
+				searched = true;
+			}
+			s.uvw_budget = 1;
+			s.projected_as = l;
+		}
+		s.last_dir = dir;
+	}
+	if (searched) s.budget = reach * 0.1f;
+	s.last_reach = reach;
+}
+
 void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 	static const bool off = getenv("OPENBG_NO_PROJECTORS") != nullptr;  // debugging: vertex lighting only
+	static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
 	if (!g_lightmap || off) return;
 	glUniform1i(glGetUniformLocation(prog, "lightmap"), 5);
 	glUniform1i(glGetUniformLocation(prog, "shadow_atten"), 6);
@@ -988,9 +1070,25 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 	std::vector<uint32_t> faces;
 	std::vector<GLint> first;
 	std::vector<GLsizei> count;
+	for (auto it = g_touches.begin(); it != g_touches.end();) {
+		if (g_lighting.serial - it->second.serial > 64) it = g_touches.erase(it);
+		else ++it;
+	}
 	for (const SceneLight &l : g_lighting.lights) {
+		LightTouches *state = nullptr;
+		if (l.id.first) {
+			state = &g_touches[l.id];
+			if (state->serial != g_lighting.serial) {
+				const uint32_t before = state->search;
+				update_touches(*state, l);
+				state->serial = g_lighting.serial;
+				if (debug && state->search != before) fprintf(stderr, "[touched %d] %s: polygons searched\n", g_arena_draws, l.name.c_str());
+			}
+			if (state->cleared || !state->search) continue;
+		}
 		if (!(l.mask & 0x1c) || l.intensity <= 0 || l.outer <= 0) continue;
 		if (l.has_image && l.shape == SceneLight::kSphere) continue;
+		const SceneLight &shape = state && l.shape == SceneLight::kCone ? state->projected_as : l;
 		const int blend = l.image ? l.blend : 0;
 		// DrawPatches' TFACTOR: the colour x intensity with alpha 1, except for the alpha-blended
 		// projectors (SetupConeProjector +0x68 clear), whose alpha is the intensity instead.
@@ -1007,26 +1105,32 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 		glActiveTexture(GL_TEXTURE5);
 		glBindTexture(GL_TEXTURE_2D, l.image ? l.image : g_lightmap);
 		glUniform1i(glGetUniformLocation(prog, "splash"), l.shape == SceneLight::kSphere ? 1 : 2);
-		glUniform3fv(glGetUniformLocation(prog, "splash_pos"), 1, l.pos.data());
+		glUniform3fv(glGetUniformLocation(prog, "splash_pos"), 1, shape.pos.data());
 		glUniform3fv(glGetUniformLocation(prog, "splash_colour"), 1, c.data());
-		glUniform1f(glGetUniformLocation(prog, "splash_radius"), l.outer);
-		glUniform1f(glGetUniformLocation(prog, "splash_far"), l.outer);
-		glUniform1f(glGetUniformLocation(prog, "splash_near"), l.near_begin);
-		glUniform1f(glGetUniformLocation(prog, "splash_tan"), std::tan(std::clamp(l.penumbra, 1.0f, 89.0f) * 0.017453292f));
+		glUniform1f(glGetUniformLocation(prog, "splash_radius"), shape.outer);
+		glUniform1f(glGetUniformLocation(prog, "splash_far"), shape.outer);
+		glUniform1f(glGetUniformLocation(prog, "splash_near"), shape.near_begin);
+		glUniform1f(glGetUniformLocation(prog, "splash_tan"), std::tan(std::clamp(shape.penumbra, 1.0f, 89.0f) * 0.017453292f));
 		// Row-major rotation rows are the local axes; GL takes columns, so pass it transposed.
-		glUniformMatrix3fv(glGetUniformLocation(prog, "splash_axes"), 1, GL_TRUE, l.frame.r.data());
+		glUniformMatrix3fv(glGetUniformLocation(prog, "splash_axes"), 1, GL_TRUE, shape.frame.r.data());
 		for (auto &st : targets) {
 			const ProjectorTarget &t = *st.target;
 			if ((l.reaches_all && l.position_static && st.position_static) || !l.lights(st.light_owner)) continue;
-			bool overlaps = true;
-			for (size_t k = 0; k < 3; ++k) overlaps = overlaps && l.pos[k] + l.outer >= st.bmin[k] && l.pos[k] - l.outer <= st.bmax[k];
-			if (!overlaps) continue;
-			faces.clear();
-			if (l.shape == SceneLight::kSphere) {
-				t.octree.sphere_faces(st.frame.inverse().apply(l.pos), l.outer, faces);
+			LightTouches::Found *found = state ? &state->found[&t] : nullptr;
+			if (found && found->search == state->search && found->vao == t.vao) {
+				faces = found->faces;
 			} else {
-				t.octree.affector_faces([&l](const std::array<float, 3> &p, float r) { return cone_touches_sphere(l, p, r); },
-				                        [&st](const std::array<float, 3> &p) { return st.frame.apply(p); }, faces);
+				const SceneLight &at = state ? state->searched_as : l;
+				faces.clear();
+				bool overlaps = true;
+				for (size_t k = 0; k < 3; ++k) overlaps = overlaps && at.pos[k] + at.outer >= st.bmin[k] && at.pos[k] - at.outer <= st.bmax[k];
+				if (overlaps && at.shape == SceneLight::kSphere) {
+					t.octree.sphere_faces(st.frame.inverse().apply(at.pos), at.outer, faces);
+				} else if (overlaps) {
+					t.octree.affector_faces([&at](const std::array<float, 3> &p, float r) { return cone_touches_sphere(at, p, r); },
+					                        [&st](const std::array<float, 3> &p) { return st.frame.apply(p); }, faces);
+				}
+				if (found) found->search = state->search, found->vao = t.vao, found->faces = faces;
 			}
 			first.clear(), count.clear();
 			for (uint32_t f : faces) {
@@ -1035,7 +1139,6 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 				else first.push_back(GLint(f * 3)), count.push_back(3);
 			}
 			if (first.empty()) continue;
-			static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
 			if (debug) {
 				size_t n = 0;
 				for (GLsizei k : count) n += size_t(k) / 3;

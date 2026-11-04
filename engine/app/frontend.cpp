@@ -46,8 +46,19 @@
 #include "particles_gl.h"
 #include "render.h"
 #include "scene_lights.h"
+#include "vm/disasm.h"
 
 namespace {
+
+// BFighter's m_LastDamageInflictor, a reference member VMC2 leaves unnamed: the one SendDeathEvent reads.
+int last_damage_inflictor_member(const vm::ScriptClass &cls) {
+	const vm::ScriptMethod *m = cls.find_by_name("SendDeathEvent(bool)");
+	if (!m) return -1;
+	for (const vm::Instruction &ins : vm::decode(m->cm->code)) {
+		if (ins.opcode == 64) return int(ins.args[0]);
+	}
+	return -1;
+}
 
 // The game's registry (HKCU\Software\Diversions Ent\One Must Fall Battlegrounds in the original),
 // kept as "name=value" lines in the user's settings folder (de::user_data_dir()).
@@ -362,6 +373,12 @@ int main(int argc, char **argv) {
 							float dmg = -100000, stun = 0;
 							memcpy(&args[0], &h, 4), memcpy(&args[4], &dmg, 4), memcpy(&args[8], &stun, 4);
 							ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
+						}
+						// BFighter::ReceiveDamage credits a hit owned by a fighter after the stats.
+						if (int k = user && o->brain ? last_damage_inflictor_member(o->brain->cls) : -1; k >= 0) {
+							auto &refs = o->brain->inst.ref_members;
+							if (refs.size() <= size_t(k)) refs.resize(size_t(k) + 1, 0);
+							refs[size_t(k)] = user->handle;
 						}
 					}
 				};
