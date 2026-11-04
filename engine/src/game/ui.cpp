@@ -1041,8 +1041,9 @@ public:
 		const float bw = 1 / (4 + 3 * 0.1f);
 		const char *faces[4] = {"VCRPause", "VCRAdvanceFrame", "VCRFastBackward", "VCRFastForward"};
 		int *flags[4] = {&paused_, &step_, &rewind_, &ff_};
+		// NewToggle and New (2.123 OMF DE_CVCRRobot 0x107665e0): push buttons with image faces.
 		for (int k = 0; k < 4; ++k) {
-			auto *b = row->add<Button>("");
+			auto *b = row->add<Button>("", Button::Push);
 			b->scale(float(k) * bw * 1.1f, 0, float(k) * bw * 1.1f + bw, 1);
 			b->face_up = g.image(faces[k]);
 			b->bound = flags[k];
@@ -1261,15 +1262,30 @@ public:
 			label->scale(0, 0.4f, 1, 0.45f);
 			auto *arenas = left->add<List>();
 			arenas->st = 0.45f;
-			std::vector<List::Row> names;
+			arenas->entry_h = std::max(arenas->entry_h, g.vx(18) + 2);
+			// DE_CLockedContentTokenList::InternalValidate (0x201f0000) and its control generator
+			// 0x201ede00: a check holding IsLocked(0xffff) per visible member, a locked one's name VPU 23 in.
+			arena_descs_.clear();
+			arena_checks_.clear();
 			de::ObjectRef mp = app.world.data().find("Description\\Cast", "EnvironmentMultiplayer");
 			for (const auto &[stem, f] : app.world.data().files()) {
 				for (uint32_t i = 0; i < f->objects().size(); ++i) {
-					if (f->objects()[i].class_path.rfind("Description\\Environment", 0) != 0) continue;
-					DescriptionInfo info = read_description(app.world.data(), {f.get(), i});
+					if (f->objects()[i].class_path.rfind("Description", 0) != 0) continue;
+					de::ObjectRef d{f.get(), i};
+					DescriptionInfo info = read_description(app.world.data(), d);
 					bool member = mp && std::any_of(info.casts.begin(), info.casts.end(), [&](auto &c) { return c.file == mp.file && c.index == mp.index; });
-					if (member && info.listed) names.push_back({{f->objects()[i].name}});
+					if (!member || (description_locked(app.world, d) && !info.visible_when_locked)) continue;
+					arena_descs_.push_back(d);
+					arena_checks_.push_back(description_locked(app.world, d, kUserLockId) ? 1 : 0);
 				}
+			}
+			arena_applied_ = arena_checks_;
+			std::vector<List::Row> names;
+			for (size_t k = 0; k < arena_descs_.size(); ++k) {
+				List::Row r{{arena_descs_[k].info().name}};
+				if (description_locked(app.world, arena_descs_[k])) r.text_x = g.vx(23);
+				else r.check = &arena_checks_[k];
+				names.push_back(r);
 			}
 			std::stable_sort(names.begin(), names.end(), [](auto &a, auto &b) { return a.cells[0] < b.cells[0]; });
 			arenas->set_rows(names);
@@ -1328,7 +1344,10 @@ public:
 		g.set_focus(list_);
 	}
 
+	void update(AppManager &app) override { apply_arena_toggles(app); }
+
 	void click(AppManager &app, Control &c) override {
+		apply_arena_toggles(app);
 		if (&c == next_) {
 			finish(app);
 		} else if (&c == back_) {
@@ -1348,7 +1367,10 @@ private:
 		std::vector<Canvas *> buttons;
 		Ctl *text_panel = nullptr;
 		TextDisplay *text = nullptr;
-		int selected = -1;
+		int selected = -1;     // DE_CSingleButtonGroupRobot +0x5c: cyan and deaf to the mouse (+0x210)
+		std::vector<char> down;  // each button's +0x1fc
+		int pressed = -1;
+		bool press_over = false;
 		// b = (width - 19) / 6: buttons b - 4 square, 6 to a row from 12 down and 12 across (2 rows at
 		// most), the text panel from 2b + 20.
 		void layout_children() override {
@@ -1447,31 +1469,51 @@ private:
 		panel->text_panel = text_panel;
 		panel->text = text_panel->add<TextDisplay>("", g.vy(13));
 		panel->text->line_align = 6;
-		for (size_t i = 0; i < panel->entries.entries.size() && i < 12; ++i) {
+		const size_t n = std::min<size_t>(panel->entries.entries.size(), 12);
+		panel->down.assign(n, 0);
+		// FillButtonControl: mini toggle push buttons (1-pixel bevel, the launcher's face), each holding
+		// the description's NewIcon (type 4 DE_CNewControlEvent): a control filled clear, cyan when
+		// chosen, over a white-filled child textured with the icon, both filling the button's holder.
+		for (size_t i = 0; i < n; ++i) {
 			auto *b = panel->add<Canvas>();
 			panel->buttons.push_back(b);
 			b->on_paint = [panel, b, i, this](Painter &p) {
-				bool sel = int(i) == panel->selected;
-				p.bevel(b->x0, b->y0, b->x1, b->y1, 1, 1, sel);
-				if (sel) p.rect(b->x0 + 1, b->y0 + 1, b->x1 - 1, b->y1 - 1, kButtonSelected);
+				bool dn = panel->down[i] || (panel->pressed == int(i) && panel->press_over);
+				p.bevel(b->x0, b->y0, b->x1, b->y1, 1, 1, dn);
+				float l = dn ? b->x0 + 1.5f : b->x0 + 1, t = dn ? b->y0 + 1.5f : b->y0 + 1;
+				float r = dn ? b->x1 - 1 : b->x1 - 1.5f, bt = dn ? b->y1 - 1 : b->y1 - 1.5f;
+				if (int(i) == panel->selected) p.rect(l, t, r, bt, kButtonSelected);
 				de::ObjectRef icon = read_description(app_->world.data(), panel->entries.entries[i]).icon;
-				p.image(icon, b->x0 + 1, b->y0 + 1, b->x1 - 1, b->y1 - 1, {1, 1, 1, 1});
+				p.image(icon, l, t, r, bt, {1, 1, 1, 1});
 			};
-			b->on_down = [](float, float, int) {};
+			b->on_down = [panel, i](float, float, int) {
+				if (int(i) != panel->selected) panel->pressed = int(i), panel->press_over = true;
+			};
+			b->on_drag = [panel, b](float x, float y) { panel->press_over = b->contains(x, y); };
 			b->on_up = [this, &app, panel, i, cast](float, float, bool over) {
-				if (over) choose_modifier(app, *panel, cast, int(i));
+				bool fire = over && panel->pressed == int(i);
+				panel->pressed = -1;
+				if (fire) click_modifier(app, *panel, cast, int(i));
 			};
 		}
-		// FillButtonControl and the constructor click the default: the choice is the list's
-		// default, and the registry remembers it.
-		if (!panel->entries.entries.empty()) choose_modifier(app, *panel, cast, panel->entries.chosen);
+		if (n) {
+			// The chosen button starts down; FillButtonControl clicks the registry's Last Modifiers
+			// entry (else the first) and SetCurrentModifier the chosen one, each click toggling.
+			if (size_t(panel->entries.chosen) < n) panel->down[size_t(panel->entries.chosen)] = 1;
+			int first = 0;
+			std::string last = app.registry_string("Session Options\\Last Modifiers\\" + unique_name(casts_[size_t(cast)]));
+			for (size_t i = 0; i < n; ++i) {
+				if (!last.empty() && unique_name(panel->entries.entries[i]) == last) first = int(i);
+			}
+			click_modifier(app, *panel, cast, first);
+			click_modifier(app, *panel, cast, panel->entries.chosen);
+		}
 		g.layout();
 	}
 
-	// DE_CSingleButtonGroupRobot::ProcessButtonClickEvent (0x201ed250) and SelectModifier: the
-	// cast's choice, its icon in Current Settings, its Description ("Description Unavailable"),
-	// and the registry's Session Options\Last Modifiers\<cast> = <modifier>.
-	void choose_modifier(AppManager &app, ModifierPanel &panel, int cast, int i);
+	// Click: the toggle flips the button (0x200c2460), then DE_CSingleButtonGroupRobot (0x201ed250)
+	// and SelectModifier take the choice, its Description and Last Modifiers, and raise the previous.
+	void click_modifier(AppManager &app, ModifierPanel &panel, int cast, int i);
 
 
 	void finish(AppManager &app);
@@ -1490,11 +1532,25 @@ private:
 	Control *next_ = nullptr, *back_ = nullptr;
 	List *list_ = nullptr;
 	Ctl *modifiers_ = nullptr;
+	std::vector<de::ObjectRef> arena_descs_;
+	std::vector<int> arena_checks_, arena_applied_;  // 0x2036aac0, and 0x2036aab0 as last applied
+
+	// DE_CChooseCastRobot::ProcessPreDraw (0x201f1040), and the token list's destructor: a changed
+	// toggle locks its arena under 0xffff when checked, else unlocks it (the registry's DLock).
+	void apply_arena_toggles(AppManager &app) {
+		for (size_t k = 0; k < arena_checks_.size(); ++k) {
+			if (arena_checks_[k] == arena_applied_[k]) continue;
+			lock_description(app.world, arena_descs_[k], kUserLockId, arena_checks_[k] == 0);
+			arena_applied_[k] = arena_checks_[k];
+		}
+	}
 };
 
-void SessionSettings::choose_modifier(AppManager &app, ModifierPanel &panel, int cast, int i) {
-	if (i < 0 || size_t(i) >= panel.entries.entries.size()) return;
+void SessionSettings::click_modifier(AppManager &app, ModifierPanel &panel, int cast, int i) {
+	if (i < 0 || size_t(i) >= panel.down.size()) return;
 	const de::ObjectRef &m = panel.entries.entries[size_t(i)];
+	panel.down[size_t(i)] = !panel.down[size_t(i)];
+	if (panel.selected >= 0 && panel.selected != i) panel.down[size_t(panel.selected)] = 0;
 	panel.selected = i;
 	chosen_[size_t(cast)] = m;
 	std::string text;

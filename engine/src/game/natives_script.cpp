@@ -197,6 +197,10 @@ void register_script_natives(World &w) {
 		GameObject *o = c.self();
 		c.ret_bool(o && o->file && description_locked(c.world, {o->file, o->index}));
 	});
+	reg("CDescription::bool IsUserLocked()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		c.ret_bool(o && o->file && !description_locked(c.world, {o->file, o->index}, kUserLockId));
+	});
 	auto stub = [&](const char *key) { w.register_native(key, [](const NativeContext &) {}); };
 
 	// --- Generic events ---------------------------------------------------------------------------

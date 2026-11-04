@@ -6,7 +6,8 @@
 // actors (frame, doors, backdrop, environment) and one F.<Screen> folder per page, its VE.*
 // actors the buttons, driven by the UI managers in game/ui.h.
 //
-// --launch <match> starts that match's session at once; --choose Elizabeth,Jaguar makes the UIs
+// --launch <match> starts that match's session at once (--host <match>: as a joinable session,
+// whose Choose Cast lists the Available Arenas); --choose Elizabeth,Jaguar makes the UIs
 // it launches pick those (testing), and Choose Cast take the modifiers and starting match named
 // there ("Turbo Speed", "Intensity") and the defaults for the rest; --headless N runs N frames
 // without a window and lists the natives still missing.
@@ -116,6 +117,7 @@ int main(int argc, char **argv) {
 	std::string data = argv[1];
 	const char *shot = nullptr;
 	std::string launch;
+	bool host = false;  // --host: --launch as a joinable session, as BMatchServer sets one up (testing)
 	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
 	bool headless = false;
@@ -124,6 +126,7 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
+		else if (!strcmp(argv[i], "--host") && i + 1 < argc) launch = argv[++i], host = true;
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
@@ -314,7 +317,7 @@ int main(int argc, char **argv) {
 				fprintf(stderr, "no match named %s\n", launch.c_str());
 				return 1;
 			}
-			app.launch_session(d, true);
+			app.launch_session(d, !host);
 		} else if (!replay_path.empty()) {
 			if (!game::start_replay(world, game::load_recording(replay_path))) {
 				fprintf(stderr, "cannot replay %s\n", replay_path.c_str());

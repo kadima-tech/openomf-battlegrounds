@@ -33,6 +33,8 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &des
 // unlocked since; any other id is locked until unlocked. Unlock (0x70010aa0) adds the id to the
 // description's registry value ObjectInfo\<guid>\DLock, the list of unlocked ids.
 bool description_locked(const World &w, const de::ObjectRef &description, uint32_t id = 0);
+// The host's arena toggles: checked is IsLocked(0xffff), IsUserLocked (Core 2.123 0x201f8b80) its negation.
+constexpr uint32_t kUserLockId = 0xffff;
 void unlock_description(World &w, const de::ObjectRef &description, uint32_t id = 0);
 void lock_description(World &w, const de::ObjectRef &description, uint32_t id, bool unlock);
 // Older registry files kept a "DLock <guid> [id]" value per unlocked id.

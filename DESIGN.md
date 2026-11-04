@@ -63,8 +63,12 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   Match:" combos, labels over the fields, locked matches blank. On the right a "Current Settings"
   strip (a grey header bar over a sunken panel) with each cast's chosen modifier icon in a small
   box, the selected cast's box framed white; under it the selected cast's modifiers as square icon
-  buttons, six to a row, the chosen one sunk and filled cyan, over a sunken panel with its
-  description centred. Back and Next on the 3D buttons.
+  buttons, six to a row: 1-pixel bevelled grey buttons (sunk while held or toggled down) with the
+  icon filling the face, the chosen one's face cyan behind its icon (on a first visit a default that
+  is not the first stays raised, as in the original), over a sunken panel with its description
+  centred. Back and Next on the 3D buttons. Hosting, "Available Arenas:" (14 virtual pixels) and
+  the multiplayer arenas under the casts, each a check box (the dark sunken box, a white X when
+  checked) and its name; all checked at first.
 - **Pilot panel.** The name centred at the top; the photo (to 0.58 across) in a pale frame; beside it
   four stat rows (icon tinted (0.5, 1, 1), name, a teal well filled cyan) and "Colors" over the
   pilot's three colour swatches; the biography centred below, then "RECON DATA" and the unlocked
@@ -81,8 +85,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   from 0.6 across; Play (disabled until a selection) and Back. Our own: the delete question and its
   Yes / No, and the rename field, drawn in the Window.
 - **VCR panel (replays, V).** `F.VCR` along the bottom; in its middle 60%: the Play/Pause, frame
-  advance, rewind and fast-forward images (a cyan underline marks the running fast mode), the speed
-  labels, a seek slider (pale blue track, cyan knob) and Observer / Snapshot labels.
+  advance, rewind and fast-forward buttons (2-pixel bevelled grey push buttons, the image filling
+  the face and shifting with it when sunk; Play/Pause stays sunk, showing Play, while paused), the
+  speed combos, a seek slider, the observer combo and Snapshot.
 - **Single-player loading screen** (the rules display). No main frame; the match name (19 px),
   commentary (14 px) and next match (16 px), all pale blue (0.8, 0.9, 1), and progress text in the
   page's markers; the match snapshot (a 256 × 256 capture from the observer's camera) fills the
