@@ -30,6 +30,9 @@ public:
 		bool queued = false;  // the last Play chained from an ending segment: start at its end
 		bool read = false;
 		GameObject *initial = nullptr;  // its noise in the data (DE_GLOBAL's default music)
+		float volume = 1;               // its Volume value (+0x9c), which SetVolume sets
+		uint32_t started = 0;           // scene ms of the last Play
+		uint32_t wave_ms = 0;           // a wave noise's playing time; 0 for none or a segment
 	};
 	explicit MusicSystem(World &w) : w_(w) {}
 	Speaker &speaker(GameObject *s);
@@ -45,9 +48,14 @@ public:
 	void segment_almost_over(GameObject *s);
 	// ...and that it ended with nothing queued.
 	void segment_ended(GameObject *s);
+	// Play, timing a wave noise's buffer.
+	void play(GameObject *s);
+	// DE_CSpeaker::Process's +0xd4: the wave's play position over its length, 0 when none plays.
+	float play_progress(GameObject *s);
 
 private:
 	World &w_;
+	std::map<const GameObject *, uint32_t> wave_ms_;
 	std::map<const GameObject *, Speaker> speakers_;
 };
 
