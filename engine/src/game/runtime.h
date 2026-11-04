@@ -528,6 +528,8 @@ public:
 	// real time runs the scene at `time_scale`; passed time is added on the next frame, and a
 	// negative amount moves the clock back.
 	float time_scale = 1;
+	// The session scene's own scale (DE_CScene +0x188, 1 from ObjInitContents), under the master's.
+	float scene_time_scale = 1;
 	double passed_ms = 0;
 	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
 	uint32_t scene_step(float real_ms);

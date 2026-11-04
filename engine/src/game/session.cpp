@@ -684,6 +684,23 @@ void destroy_all_sessions(World &w) {
 	for (auto &sp : std::vector<std::shared_ptr<SessionState>>(w.sessions)) end_session(w, *sp);
 }
 
+bool master_requirements_met(World &w, const SessionState &s) {
+	if (!s.master_description) return true;
+	std::vector<de::ObjectRef> members;
+	auto add = [&](const de::ObjectRef &modifier) {
+		for (auto &c : modifier_member_casts(w.data(), modifier)) members.push_back(c);
+	};
+	for (GameObject *m : s.modifiers) add(source_of(m));
+	for (const de::Guid &g : s.attached_guids) {
+		auto res = passive_references(w.data(), w.data().by_guid(g));
+		if (!res.empty()) add(res[0]);
+	}
+	for (const de::ObjectRef &c : required_casts(w.data(), source_of(s.master_description))) {
+		if (std::none_of(members.begin(), members.end(), [&](const de::ObjectRef &m) { return m.file == c.file && m.index == c.index; })) return false;
+	}
+	return true;
+}
+
 void add_session_modifier(World &w, GameObject *m) {
 	auto &s = *w.session;
 	m->parent = s.obj;
@@ -699,6 +716,7 @@ std::shared_ptr<SessionState> new_session(World &w, const char *name) {
 	s->obj = w.create_child(nullptr, name, "Session\\Standard");
 	s->description = w.create_child(nullptr, std::string(name) + "Info", "SessionInfo");
 	w.sessions.push_back(s);
+	w.scene_time_scale = 1;
 	return s;
 }
 
@@ -1165,7 +1183,19 @@ void register_session_natives(World &w) {
 	reg("CSession::bool IsLocal()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsReadyToLoad()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsFullySequenced()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CSession::bool AreMasterRequirementsSatisfied()", [](const NativeContext &c) { c.ret_bool(true); });
+	// AreMasterRequirementsSatisfiedCaller (Core 2.123 0x201ff790): false while the session's Choose
+	// Cast page is active and not auto-selecting.
+	reg("CSession::bool AreMasterRequirementsSatisfied()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		c.ret_bool(!s || (!s->settings_active && master_requirements_met(c.world, *s)));
+	});
+	// SetTimeScaleCaller / TimeScaleCaller (Core 2.123 0x20071af0 / 0x20071b20): the scene's +0x188,
+	// by which DE_CScene::PassTime (0x20073f30) multiplies the time it passes.
+	reg("CScene::SetTimeScale(float)", [](const NativeContext &c) {
+		c.world.scene_time_scale = c.arg<float>(0);
+		if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] time scale %g\n", c.world.frame(), c.world.scene_time_scale);
+	});
+	reg("CScene::float TimeScale()", [](const NativeContext &c) { c.ret_f32(c.world.scene_time_scale); });
 	reg("CSession::string StatusDescription()", [](const NativeContext &c) { c.ret_u32(c.world.string("")); });
 	stub("CSession::LoadingComplete()");
 	// EndAndDieCaller (Core 0x701f7d90): DeleteThisLater, then DE_CSession::End (0x701f9400):
@@ -1335,13 +1365,16 @@ void register_session_natives(World &w) {
 			if (GameObject *o = c.self()) c.world.relays[o].push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 		});
 	}
-	reg("CSession::RemoveEventRelays(class CClassExecutorInstance)", [](const NativeContext &c) {
-		Brain *b = c.world.brain_of(c.ex);
-		if (GameObject *o = c.self()) {
-			auto &v = c.world.relays[o];
-			v.erase(std::remove_if(v.begin(), v.end(), [b](auto &r) { return r.first == b; }), v.end());
-		}
-	});
+	// RemoveEventRelaysCaller (Core 2.123 0x200914a0 actor, 0x201fef30 session): the caller's relays go.
+	for (const char *k : {"CSession::RemoveEventRelays(class CClassExecutorInstance)", "CActor::RemoveEventRelays(class CClassExecutorInstance)"}) {
+		reg(k, [](const NativeContext &c) {
+			Brain *b = c.world.brain_of(c.ex);
+			if (GameObject *o = c.self()) {
+				auto &v = c.world.relays[o];
+				v.erase(std::remove_if(v.begin(), v.end(), [b](auto &r) { return r.first == b; }), v.end());
+			}
+		});
+	}
 
 	// --- Clients --------------------------------------------------------------------------------
 	auto client = [S](const NativeContext &c) -> SessionClient * {

@@ -18,7 +18,7 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) 
 		if (c.u8()) c.skip(c.u8());  // the resource's passive reference: BOOL, size, {file, object} GUIDs
 		if (ch.version >= 2 && c.pos() < ch.end) out.listed = c.boolean();
 		if (ch.version >= 3 && c.pos() + 6 <= ch.end) {
-			c.f32();
+			out.sort = c.f32();
 			out.locked_by_default = c.boolean();
 			out.visible_when_locked = c.boolean();
 			out.flag_d8 = c.boolean();
@@ -96,6 +96,30 @@ std::string guid_key(const std::string &dashed) {
 	}
 	return s;
 }
+
+}  // namespace
+
+std::string guid_string(const de::Guid &g) { return guid_key(g.str()); }
+
+std::string unique_name(const de::ObjectRef &o) { return o ? o.info().name + "_" + guid_string(o.info().guid) : std::string(); }
+
+std::vector<de::ObjectRef> required_casts(const de::World &data, const de::ObjectRef &master_description) {
+	std::vector<de::ObjectRef> out;
+	auto lists = reference_lists(data, master_description);
+	if (lists.size() < 3 || lists[2].empty()) return out;
+	for (const de::ObjectRef &c : lists[2][0]) {
+		bool seen = std::any_of(out.begin(), out.end(), [&](const de::ObjectRef &o) { return o.file == c.file && o.index == c.index; });
+		if (c && !seen) out.push_back(c);
+	}
+	return out;
+}
+
+std::vector<de::ObjectRef> modifier_member_casts(const de::World &data, const de::ObjectRef &modifier) {
+	auto lists = reference_lists(data, modifier);
+	return lists.size() > 1 && lists[1].size() > 1 ? lists[1][1] : std::vector<de::ObjectRef>{};
+}
+
+namespace {
 
 // GetResourceRegistryPrefix (Core 0x70041160) + "\DLock": the description's list of unlocked ids,
 // kept here as decimal ids separated by spaces in list order.

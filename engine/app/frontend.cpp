@@ -7,8 +7,9 @@
 // actors the buttons, driven by the UI managers in game/ui.h.
 //
 // --launch <match> starts that match's session at once; --choose Elizabeth,Jaguar makes the UIs
-// it launches pick those (testing); --headless N runs N frames without a window and lists the
-// natives still missing.
+// it launches pick those (testing), and Choose Cast take the modifiers and starting match named
+// there ("Turbo Speed", "Intensity") and the defaults for the rest; --headless N runs N frames
+// without a window and lists the natives still missing.
 //
 // MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
 // of the window, y down); SHOTS="40,80" also writes <out>-<frame>.png.
@@ -177,6 +178,7 @@ int main(int argc, char **argv) {
 			world.system_clock = [t0] { return uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()); };
 		}
 		game::ui::AppManager app(world);
+		app.cast_presets = choose;
 		game::ui::system_time = [&world] { return world.system_ms(); };
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);
@@ -232,9 +234,17 @@ int main(int argc, char **argv) {
 			// DE_CSession::SetAsServer (Core 0x701f8110): a joinable session takes Network\Max Clients, others 20.
 			int max_clients = atoi(app.registry_string("Network\\Max Clients").c_str());
 			ss.max_player_clients = !single_player && max_clients > 0 ? max_clients : 20;
-			game::add_client(world, true, "User");
-			game::begin_session(world);
-			app.set_registry_bool("SinglePlayerPlayed", true);
+			game::SessionState *sp = &ss;
+			auto begin = [&world, &app, sp] {
+				for (auto &s : world.sessions) {
+					if (s.get() == sp) world.session = s;
+				}
+				if (world.session.get() != sp) return;
+				game::add_client(world, true, "User");
+				game::begin_session(world);
+				app.set_registry_bool("SinglePlayerPlayed", true);
+			};
+			if (app.satisfy_master_requirements(ss, begin)) begin();
 		};
 		// A UI manager the session scripts launch (FINDINGS 127): a description selector over the
 		// script's pool; Next completes it for the script.

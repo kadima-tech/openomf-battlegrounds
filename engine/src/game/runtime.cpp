@@ -1508,7 +1508,7 @@ void World::reset_clock() {
 
 uint32_t World::scene_step(float real_ms) {
 	replay_temporal_update(*this);
-	scene_carry_ += double(real_ms) * time_scale + passed_ms;
+	scene_carry_ += double(real_ms) * time_scale * scene_time_scale + passed_ms;
 	passed_ms = 0;
 	if (scene_carry_ < 0) {
 		uint32_t back = uint32_t(std::min<double>(-scene_carry_, scene_ms_));

@@ -1090,7 +1090,419 @@ private:
 	Control *yes_ = nullptr, *no_ = nullptr;
 };
 
+// g_StartingMatch (Core 2.123 0x2036ab08), the Starting Match combo's value.
+int g_starting_match = 0;
+
+constexpr Rgba kButtonSelected{0, 1, 1, 1};  // BUTTON_SELECTED_COLOR (initialiser 0x201ed0d0)
+
+// DE_CSessionModifierList::FillList (Core 2.123 0x201ef510): the listed modifier descriptions
+// that are members of the cast, ordered by +0xd4 (DE_CSortCast); the default is the one the
+// registry's Session Options\Last Modifiers names for the cast, else the first flagged +0xd8.
+struct ModifierList {
+	std::vector<de::ObjectRef> entries;
+	int chosen = 0;  // +0x18
+};
+ModifierList fill_modifier_list(AppManager &app, const de::ObjectRef &cast) {
+	ModifierList l;
+	std::vector<std::pair<float, de::ObjectRef>> found;
+	const de::Guid &cg = cast.info().guid;
+	for (const auto &[stem, f] : app.world.data().files()) {
+		for (uint32_t i = 0; i < f->objects().size(); ++i) {
+			if (f->objects()[i].class_path != "Description\\SessionModifier") continue;
+			DescriptionInfo info = read_description(app.world.data(), {f.get(), i});
+			bool member = std::any_of(info.casts.begin(), info.casts.end(), [&](const de::ObjectRef &c) { return std::equal(cg.bytes, cg.bytes + 16, c.info().guid.bytes); });
+			if (info.listed && member) found.push_back({info.sort, {f.get(), i}});
+		}
+	}
+	std::stable_sort(found.begin(), found.end(), [](auto &a, auto &b) { return a.first < b.first; });
+	for (auto &[sort, d] : found) l.entries.push_back(d);
+	std::string last = app.registry_string("Session Options\\Last Modifiers\\" + unique_name(cast));
+	for (size_t i = 0; i < l.entries.size(); ++i) {
+		if (!last.empty() && unique_name(l.entries[i]) == last) return l.chosen = int(i), l;
+	}
+	for (size_t i = 0; i < l.entries.size(); ++i) {
+		if (read_description(app.world.data(), l.entries[i]).flag_d8) return l.chosen = int(i), l;
+	}
+	return l;
+}
+
+// DE_CSessionSettings (Core 2.123: ObjInitContents 0x201ed030, Begin 0x201ed660, Setup 0x201ed6d0,
+// SetupControls 0x201edd40, UIManagerComplete 0x201ed930) with DE_CChooseCastRobot (ctor 0x201ee5a0,
+// ProcessButtonClickEvent 0x201f0510, ProcessSelectedObjects 0x201f05b0, SetCurrentModifier
+// 0x201f0670), DE_CCurrentSettingsRobot (RefreshList 0x201ef8c0, ProcessPostDraw 0x201efba0) and
+// DE_CModifierControlRobot (FillButtonControl 0x201f0a50, SelectModifier 0x201f09f0): "Choose
+// Cast" on ChooserListNextBack. ListWindow lists the required and the optional casts by name;
+// Window shows Current Settings (each cast's chosen modifier's icon) over the selected cast's
+// modifiers as buttons and the highlighted one's Description. In single player the AI Difficulty
+// and 2.112's Starting Match combos sit under the list.
+class SessionSettings : public UIManager {
+public:
+	SessionSettings(SessionState *s, std::vector<de::ObjectRef> required, std::vector<de::ObjectRef> optional, std::function<void()> on_complete)
+	    : UIManager("SessionSettings", "ChooserListNextBack"), session_(s), required_(std::move(required)), optional_(std::move(optional)),
+	      on_complete_(std::move(on_complete)) {}
+
+	bool begin(AppManager &app) override {
+		UIManager::begin(app);
+		SessionState *s = session(app);
+		if (!s || done_) return false;
+		if (!app.cast_presets.empty()) {
+			preset(app);
+			finish(app);
+			return false;
+		}
+		if (auto_select) {
+			load_modifiers(app);
+			if (master_requirements_met(app.world, *s)) {
+				finish(app);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// LoadModifiers (0x201edb40): the registry's Session\Modifiers\<master description> become the
+	// session's attached modifier descriptions.
+	void load_modifiers(AppManager &app) {
+		SessionState *s = session(app);
+		if (!s || !s->master_description || !s->master_description->file) return;
+		std::string v = app.registry_string("Session\\Modifiers\\" + guid_string(s->master_description->file->objects()[s->master_description->index].guid));
+		if (v.empty()) return;
+		s->attached_guids.clear();
+		for (size_t p = 0; p < v.size();) {
+			size_t q = v.find(' ', p);
+			std::string g = v.substr(p, q == std::string::npos ? std::string::npos : q - p);
+			for (const auto &[stem, f] : app.world.data().files()) {
+				for (const auto &o : f->objects()) {
+					if (o.class_path.rfind("Description", 0) == 0 && guid_string(o.guid) == g) s->attached_guids.push_back(o.guid);
+				}
+			}
+			if (q == std::string::npos) break;
+			p = q + 1;
+		}
+	}
+
+	void setup_controls(AppManager &app) override {
+		Gui &g = *gui;
+		prepare(app);
+		SessionState *s = session(app);
+		next_ = button(app, "Next", "Next");
+		next_->keys = {kKeyReturn};
+		back_ = button(app, "Back", "Back");
+		back_->keys = {kKeyEscape};
+		Ctl *left = g.place(marker(app, "ListWindow"));
+		list_ = left->add<List>();
+		std::vector<List::Row> rows;
+		order_.clear();
+		for (size_t i = 0; i < casts_.size(); ++i) order_.push_back(int(i));
+		// UseSortByName.
+		std::stable_sort(order_.begin(), order_.end(), [this](int a, int b) { return casts_[size_t(a)].info().name < casts_[size_t(b)].info().name; });
+		for (int i : order_) rows.push_back({{casts_[size_t(i)].info().name}});
+		list_->set_rows(rows);
+		list_->on_select = [this, &app](int row) { set_current(app, row >= 0 && size_t(row) < order_.size() ? order_[size_t(row)] : -1); };
+		if (!s || !s->single_player) {
+			// IsContentControllable (info +0xe8, 1 unless single player): Available Arenas under the casts.
+			list_->sb = 0.4f;
+			auto *label = left->add<Text>("Available Arenas:", g.vy(14), theme::kText, 0);
+			label->scale(0, 0.4f, 1, 0.45f);
+			auto *arenas = left->add<List>();
+			arenas->st = 0.45f;
+			std::vector<List::Row> names;
+			de::ObjectRef mp = app.world.data().find("Description\\Cast", "EnvironmentMultiplayer");
+			for (const auto &[stem, f] : app.world.data().files()) {
+				for (uint32_t i = 0; i < f->objects().size(); ++i) {
+					if (f->objects()[i].class_path.rfind("Description\\Environment", 0) != 0) continue;
+					DescriptionInfo info = read_description(app.world.data(), {f.get(), i});
+					bool member = mp && std::any_of(info.casts.begin(), info.casts.end(), [&](auto &c) { return c.file == mp.file && c.index == mp.index; });
+					if (member && info.listed) names.push_back({{f->objects()[i].name}});
+				}
+			}
+			std::stable_sort(names.begin(), names.end(), [](auto &a, auto &b) { return a.cells[0] < b.cells[0]; });
+			arenas->set_rows(names);
+		} else {
+			list_->sb = 0.5f;
+			static const std::vector<std::string> difficulty = {"Rookie", "Amateur", "Veteran", "Champion", "World Champion", "Master"};
+			describe_top(g, left, "AI Difficulty", difficulty, &app.world.ai_difficulty)->st = 0.55f;
+			if (matches_unlocked_ > 1) describe_top(g, left, "Starting Match", matches_, &g_starting_match)->st = 0.75f;
+		}
+		Ctl *window = g.place(marker(app, "Window"));
+		// DE_CCurrentSettingsRobot on +0x68: a VPU 80 strip 4 pixels in, framed down VPU 2, its
+		// standard header over a row of VPU 32 boxes every VPU 40 from VPU 10, centred when it fits.
+		Ctl *panel = window->add<Ctl>();
+		panel->from_top = 4, panel->len_y = g.vy(80), panel->from_left = panel->from_right = 4;
+		panel->frame_x = g.vx(2), panel->frame_y = g.vy(2), panel->visual = true, panel->down = true;
+		// DE_CControl3d::NewStandardHeader (Core 2.123 0x200ec4d0): an up frame 3 pixels wide in the
+		// face colour, its title (SizeListControlEntryText) centred.
+		float header_h = g.vy(16) + 4 + g.vy(4);
+		Ctl *header = panel->add<Ctl>();
+		header->len_y = header_h;
+		header->set_frame(3, false);
+		header->set_fill(theme::kFace);
+		header->add<Text>("Current Settings", g.vy(16), theme::kText, 6);
+		auto *strip = panel->add<Canvas>();
+		strip->from_top = header_h;
+		strip->on_paint = [this, strip, &g](Painter &p) {
+			float step = g.vx(40), side = g.vx(32), total = step * float(casts_.size()) + g.vx(10);
+			float x = strip->x0 + std::max(0.0f, (strip->w() - total) / 2) + g.vx(10);
+			float y = (strip->y0 + strip->y1) / 2 - g.vy(32) / 2, b = g.vy(2);
+			for (size_t i = 0; i < casts_.size(); ++i, x += step) {
+				if (int(i) == current_) p.rect(x, y, x + side, y + g.vy(32), {1, 1, 1, 1});
+				if (!chosen_[i]) {
+					p.rect(x + b, y + b, x + side - b, y + g.vy(32) - b, {1, 0, 0, 1});
+				} else {
+					de::ObjectRef icon = read_description(app_->world.data(), chosen_[i]).icon;
+					p.image(icon, x + b, y + b, x + side - b, y + g.vy(32) - b, {1, 1, 1, 1});
+				}
+			}
+		};
+		// DE_CCurrentSettingsRobot::ProcessButtonClickEvent (0x201ed1e0): a box selects its cast.
+		strip->on_up = [this, strip, &g](float mx, float my, bool over) {
+			if (!over) return;
+			float step = g.vx(40), side = g.vx(32), total = step * float(casts_.size()) + g.vx(10);
+			float x = strip->x0 + std::max(0.0f, (strip->w() - total) / 2) + g.vx(10);
+			float y = (strip->y0 + strip->y1) / 2 - g.vy(32) / 2;
+			for (size_t i = 0; i < casts_.size(); ++i, x += step) {
+				if (mx < x || mx >= x + side || my < y || my >= y + g.vy(32) || int(i) == current_) continue;
+				auto row = std::find(order_.begin(), order_.end(), int(i));
+				if (row != order_.end()) list_->select(int(row - order_.begin()));
+			}
+		};
+		modifiers_ = window->add<Ctl>();
+		modifiers_->from_top = g.vy(80) + 8, modifiers_->from_left = modifiers_->from_right = 4;
+		current_ = -1;
+		g.layout();
+		g.set_focus(list_);
+	}
+
+	void click(AppManager &app, Control &c) override {
+		if (&c == next_) {
+			finish(app);
+		} else if (&c == back_) {
+			// The original leaves the session it made unbegun; ours ends it, as nothing else would.
+			if (SessionState *s = session(app)) {
+				s->settings_active = false;
+				end_session(app.world, *s);
+			}
+			app.set_last();
+		}
+	}
+
+private:
+	struct ModifierPanel : public Ctl {
+		explicit ModifierPanel(Gui &g) : Ctl(g) {}
+		ModifierList entries;
+		std::vector<Canvas *> buttons;
+		Ctl *text_panel = nullptr;
+		TextDisplay *text = nullptr;
+		int selected = -1;
+		// b = (width - 19) / 6: buttons b - 4 square, 6 to a row from 12 down and 12 across (2 rows at
+		// most), the text panel from 2b + 20.
+		void layout_children() override {
+			float b = std::floor((w() - 19) / 6);
+			for (size_t k = 0; k < buttons.size(); ++k) {
+				float bx = x0 + 10 + float(k % 6) * b + 2, by = y0 + 12 + float(k / 6) * b;
+				buttons[k]->place(bx, by, bx + b - 4, by + b - 4);
+			}
+			if (text_panel) text_panel->layout(x0, y0 + 2 * b + 20, x1, y1);
+		}
+	};
+
+	SessionState *session(AppManager &app) const {
+		for (auto &sp : app.world.sessions) {
+			if (sp.get() == session_ && !sp->ended) return session_;
+		}
+		return nullptr;
+	}
+
+	// gNewDescriptionTop (Core 2.123 0x2009b350): the label (":" added) 20 pixels high over the
+	// control, stacked 4 apart.
+	Ctl *describe_top(Gui &g, Ctl *parent, const std::string &label, const std::vector<std::string> &pool, int *value) {
+		auto *holder = parent->add<Stack>();
+		holder->spacing = 4;
+		auto *t = holder->add<Text>(label.back() == ':' ? label : label + ":", g.vy(16), theme::kText, 2);
+		t->len_y = 20;
+		holder->add<Combo>(pool, value);
+		return holder;
+	}
+
+	// The robot's constructor: each cast's modifier list and default choice (the settings' +0x13c,
+	// required casts first), and 2.112's Starting Match entries.
+	void prepare(AppManager &app) {
+		app_ = &app;
+		casts_ = required_;
+		casts_.insert(casts_.end(), optional_.begin(), optional_.end());
+		lists_.clear();
+		chosen_.clear();
+		for (const de::ObjectRef &c : casts_) {
+			lists_.push_back(fill_modifier_list(app, c));
+			const ModifierList &l = lists_.back();
+			chosen_.push_back(l.entries.empty() ? de::ObjectRef{} : l.entries[size_t(l.chosen)]);
+		}
+		g_starting_match = 0;
+		matches_.clear();
+		matches_unlocked_ = 0;
+		SessionState *s = session(app);
+		GameObject *md = s ? s->master_description : nullptr;
+		auto *v = md ? app.world.object_value(md, "Matches") : nullptr;
+		if (!v || !md->file) return;
+		for (size_t p = 0; p <= v->text.size();) {
+			size_t q = v->text.find('\n', p);
+			std::string line = v->text.substr(p, q == std::string::npos ? std::string::npos : q - p);
+			if (!line.empty() && line.back() == '\r') line.pop_back();
+			matches_.push_back(line);
+			if (q == std::string::npos) break;
+			p = q + 1;
+		}
+		// Entry i from 1 stays only while the description is not locked under 0x10063 + i
+		// (UnlockSinglePlayerMatch); unless debugging, a locked one is blanked.
+		matches_unlocked_ = 1;
+		for (size_t i = matches_.size(); i-- > 1;) {
+			if (description_locked(app.world, {md->file, md->index}, uint32_t(0x10063 + i))) matches_[i].clear();
+			else ++matches_unlocked_;
+		}
+	}
+
+	// --choose (testing): a named modifier is chosen for its cast, a named unlocked match starts.
+	void preset(AppManager &app) {
+		prepare(app);
+		for (size_t c = 0; c < casts_.size(); ++c) {
+			for (const de::ObjectRef &m : lists_[c].entries) {
+				if (std::find(app.cast_presets.begin(), app.cast_presets.end(), m.info().name) == app.cast_presets.end()) continue;
+				chosen_[c] = m;
+				app.set_registry_string("Session Options\\Last Modifiers\\" + unique_name(casts_[c]), unique_name(m));
+			}
+			printf("Choose Cast: %s: %s\n", casts_[c].info().name.c_str(), chosen_[c] ? chosen_[c].info().name.c_str() : "-");
+		}
+		for (size_t i = 0; i < matches_.size(); ++i) {
+			if (!matches_[i].empty() && std::find(app.cast_presets.begin(), app.cast_presets.end(), matches_[i]) != app.cast_presets.end()) g_starting_match = int(i);
+		}
+		if (matches_unlocked_ > 1) printf("Choose Cast: Starting Match %d (%s)\n", g_starting_match, matches_[size_t(g_starting_match)].c_str());
+	}
+
+	// SetCurrentModifier (0x201f0670): the cast's DE_CModifierControlRobot in +0x64.
+	void set_current(AppManager &app, int cast) {
+		if (cast == current_) return;
+		current_ = cast;
+		while (!modifiers_->children.empty()) modifiers_->children.back()->destroy();
+		if (cast < 0) return;
+		Gui &g = *gui;
+		auto *panel = modifiers_->add<ModifierPanel>();
+		panel->entries = fill_modifier_list(app, casts_[size_t(cast)]);
+		auto *text_panel = panel->add<Ctl>();
+		text_panel->frame_x = g.vx(2), text_panel->frame_y = g.vy(2), text_panel->visual = true, text_panel->down = true;
+		panel->text_panel = text_panel;
+		panel->text = text_panel->add<TextDisplay>("", g.vy(13));
+		panel->text->line_align = 6;
+		for (size_t i = 0; i < panel->entries.entries.size() && i < 12; ++i) {
+			auto *b = panel->add<Canvas>();
+			panel->buttons.push_back(b);
+			b->on_paint = [panel, b, i, this](Painter &p) {
+				bool sel = int(i) == panel->selected;
+				p.bevel(b->x0, b->y0, b->x1, b->y1, 1, 1, sel);
+				if (sel) p.rect(b->x0 + 1, b->y0 + 1, b->x1 - 1, b->y1 - 1, kButtonSelected);
+				de::ObjectRef icon = read_description(app_->world.data(), panel->entries.entries[i]).icon;
+				p.image(icon, b->x0 + 1, b->y0 + 1, b->x1 - 1, b->y1 - 1, {1, 1, 1, 1});
+			};
+			b->on_down = [](float, float, int) {};
+			b->on_up = [this, &app, panel, i, cast](float, float, bool over) {
+				if (over) choose_modifier(app, *panel, cast, int(i));
+			};
+		}
+		// FillButtonControl and the constructor click the default: the choice is the list's
+		// default, and the registry remembers it.
+		if (!panel->entries.entries.empty()) choose_modifier(app, *panel, cast, panel->entries.chosen);
+		g.layout();
+	}
+
+	// DE_CSingleButtonGroupRobot::ProcessButtonClickEvent (0x201ed250) and SelectModifier: the
+	// cast's choice, its icon in Current Settings, its Description ("Description Unavailable"),
+	// and the registry's Session Options\Last Modifiers\<cast> = <modifier>.
+	void choose_modifier(AppManager &app, ModifierPanel &panel, int cast, int i);
+
+
+	void finish(AppManager &app);
+
+	SessionState *session_;
+	AppManager *app_ = nullptr;
+	std::vector<de::ObjectRef> required_, optional_, casts_;
+	std::vector<ModifierList> lists_;
+	std::vector<de::ObjectRef> chosen_;  // the settings' +0x13c
+	std::vector<std::string> matches_;
+	int matches_unlocked_ = 0;
+	std::vector<int> order_;  // list rows to casts
+	int current_ = -1;        // +0x84
+	bool done_ = false;       // +0x148
+	std::function<void()> on_complete_;
+	Control *next_ = nullptr, *back_ = nullptr;
+	List *list_ = nullptr;
+	Ctl *modifiers_ = nullptr;
+};
+
+void SessionSettings::choose_modifier(AppManager &app, ModifierPanel &panel, int cast, int i) {
+	if (i < 0 || size_t(i) >= panel.entries.entries.size()) return;
+	const de::ObjectRef &m = panel.entries.entries[size_t(i)];
+	panel.selected = i;
+	chosen_[size_t(cast)] = m;
+	std::string text;
+	if (GameObject *d = app.world.global_object(m)) {
+		if (auto *v = app.world.object_value(d, "Description")) text = v->text;
+	}
+	panel.text->set_text(text.empty() ? "Description Unavailable" : text);
+	app.set_registry_string("Session Options\\Last Modifiers\\" + unique_name(casts_[size_t(cast)]), unique_name(m));
+}
+
+// UIManagerComplete (0x201ed930): AddChosenSettingsToSession (0x201ed7e0) makes the chosen
+// modifier descriptions the session's attached ones, SaveModifiers (0x201ed970) keeps them under
+// Session\Modifiers\<master description>, and the session info takes INT StartingMatch.
+void SessionSettings::finish(AppManager &app) {
+	SessionState *s = session(app);
+	if (!s || done_) return;
+	done_ = true;
+	if (chosen_.empty() && casts_.empty()) prepare(app);
+	s->attached_guids.clear();
+	std::string saved;
+	for (const de::ObjectRef &m : chosen_) {
+		if (!m) continue;
+		const de::Guid &g = m.info().guid;
+		if (std::any_of(s->attached_guids.begin(), s->attached_guids.end(), [&](const de::Guid &a) { return std::equal(g.bytes, g.bytes + 16, a.bytes); })) continue;
+		s->attached_guids.push_back(g);
+		saved += (saved.empty() ? "" : " ") + guid_string(g);
+	}
+	if (s->master_description && s->master_description->file)
+		app.set_registry_string("Session\\Modifiers\\" + guid_string(s->master_description->file->objects()[s->master_description->index].guid), saved);
+	app.world.values[s->description]["StartingMatch"].bits = uint32_t(g_starting_match);
+	s->settings_active = false;
+	complete(app);
+	// DE_COMF2Manager::ProcessEvent hears the Complete: the session gets its user and begins.
+	if (on_complete_) on_complete_();
+}
+
 }  // namespace
+
+// DE_CSession::SatisfyMasterRequirements (Core 2.123 0x20201790): when a cast the master
+// description requires is met by none of the session's modifiers, a DE_CSessionSettings page over
+// the required casts and the casts under COREMeshes\OptionalSessionModifier is queued (stacked);
+// the session begins when it completes.
+bool AppManager::satisfy_master_requirements(SessionState &s, std::function<void()> begin) {
+	if (master_requirements_met(world, s)) return true;
+	if (s.settings_active) return false;
+	std::vector<de::ObjectRef> required;
+	if (s.master_description && s.master_description->file) required = required_casts(world.data(), {s.master_description->file, s.master_description->index});
+	std::vector<de::ObjectRef> optional;
+	if (de::ObjectRef root = world.data().find("Description\\Cast", "OptionalSessionModifier")) {
+		for (const auto &[stem, f] : world.data().files()) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				if (f->objects()[i].class_path != "Description\\Cast") continue;
+				DescriptionInfo info = read_description(world.data(), {f.get(), i});
+				if (std::any_of(info.casts.begin(), info.casts.end(), [&](auto &c) { return c.file == root.file && c.index == root.index; })) optional.push_back({f.get(), i});
+			}
+		}
+	}
+	auto page = std::make_shared<SessionSettings>(&s, required, optional, std::move(begin));
+	page->load_modifiers(*this);
+	s.settings_active = true;
+	set_next(page, true);
+	return false;
+}
 
 bool DescriptionSelector::begin(AppManager &app) {
 	UIManager::begin(app);

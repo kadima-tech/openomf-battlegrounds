@@ -22,6 +22,7 @@ struct DescriptionInfo {
 	std::vector<de::ObjectRef> casts;
 	de::ObjectRef icon, large, medium;
 	bool listed = true;
+	float sort = 0;  // +0xd4: DE_CSortCast orders a cast's modifiers by it
 	bool locked_by_default = false;
 	bool visible_when_locked = false;
 	bool flag_d8 = false;  // +0xd8: a fighter model description's default model
@@ -36,6 +37,18 @@ void unlock_description(World &w, const de::ObjectRef &description, uint32_t id 
 void lock_description(World &w, const de::ObjectRef &description, uint32_t id, bool unlock);
 // Older registry files kept a "DLock <guid> [id]" value per unlocked id.
 void migrate_lock_records(std::map<std::string, std::string> &registry);
+
+// DE_CGUID::Get (Core 0x7001eee0): lower-case hex, 8-4-4-16.
+std::string guid_string(const de::Guid &g);
+// CreateUniqueName (Core 2.123 0x201ed4a0): "<name>_<guid>", the session settings' registry names.
+std::string unique_name(const de::ObjectRef &o);
+
+// DE_CSessionMasterDescription::ObjProcessReferences (Core 2.123 0x20206fe0): after the
+// description's chunk, v1 [BOOL-terminated required casts +0xf0]; each once, in order.
+std::vector<de::ObjectRef> required_casts(const de::World &data, const de::ObjectRef &master_description);
+// DE_CSessionModifier::ObjProcessReferences (Core 2.123 0x20209450): v2/v3 [required casts +0x34]
+// [member casts +0x48], the casts a modifier meets.
+std::vector<de::ObjectRef> modifier_member_casts(const de::World &data, const de::ObjectRef &modifier);
 
 // DE_CEnvironmentDescription::ObjProcessContents (Creature 0x1500aa20): after the description's
 // chunk, v1 [i32 minimum recommended players +0xdc][i32 maximum +0xe0].
