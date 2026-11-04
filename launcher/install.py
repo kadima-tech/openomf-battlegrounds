@@ -215,7 +215,7 @@ def extract_setup(source: Path, work: Path, log) -> Path:
     disc.mkdir()
     # macOS has bsdtar at a fixed path; Linux distributions may not install it.
     bsdtar = Path("/usr/bin/bsdtar")
-    if sys.platform == "darwin" and bsdtar.is_file():
+    if not WINDOWS and sys.platform == "darwin" and bsdtar.is_file():
         listing = subprocess.check_output([str(bsdtar), "-tf", str(source)], text=True)
         entry = next((x for x in listing.splitlines() if x.strip("./").lower() == "setup"), None)
         if not entry:
