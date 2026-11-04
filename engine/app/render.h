@@ -242,7 +242,6 @@ public:
 private:
 	GLuint prog_ = 0;
 	uint32_t built_version_ = 0;
-	bool built_reflections_ = true;
 	// Batches by actor and the images its stages draw.
 	std::map<std::string, std::vector<MeshBatch>> meshes_;
 	struct Stage {

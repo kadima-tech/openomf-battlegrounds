@@ -675,9 +675,10 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		bool previous_drawn = false, dropping = false;
 		for (auto &l : m.layers) {
 			bool usable = !l.disabled && (l.environment || (l.image && !l.uvs.empty()));
-			// DE_CMultiStageTextureProcess::Process (Core 2.123 0x2011f790): a stacked reflection stage
-			// CStage::ShouldProcess turns down drops the stage it stacks on and the stacked ones after it.
-			if (l.stacked && &l != &m.layers.front() && (dropping || (l.environment && !g_reflections_enabled && !l.never_disable))) {
+			// DE_CMultiStageTextureProcess::Process (Core 2.123 0x2011f790): a stacked stage CStage::ShouldProcess turns
+			// down (disabled, or a reflection with Reflections off) drops the stage it stacks on and the stacked ones after it.
+			const bool turned_down = l.manager && (l.disabled || (l.environment && !g_reflections_enabled && !l.never_disable));
+			if (l.stacked && &l != &m.layers.front() && (dropping || turned_down)) {
 				if (!dropping && previous_drawn && !passes.empty()) {
 					passes.back().pop_back();
 					if (passes.back().empty()) passes.pop_back();
@@ -1551,8 +1552,7 @@ de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint,
 void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye) {
 	g_world = &data;
 	if (!prog_) prog_ = glu::program(kArenaVS, kArenaFS);
-	if (texture_version != built_version_ || built_reflections_ != g_reflections_enabled) {
-		built_reflections_ = g_reflections_enabled;
+	if (texture_version != built_version_) {
 		for (auto &[k, list] : meshes_) {
 			for (auto &b : list) {
 				glDeleteBuffers(1, &b.vbo);
@@ -1595,7 +1595,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		}
 		// The instance's own images, and the key of the batches drawn with them.
 		std::map<std::pair<const de::ObjectsFile *, uint32_t>, LayerImage> chosen;
-		std::string key;
+		std::string key = g_reflections_enabled ? "R" : "-";  // the GUI and the picker each keep their build
 		ref_key(key, a.actor);
 		if (a.image_of) {
 			for (auto &[mesh, manager, image] : st->second) {
