@@ -431,7 +431,7 @@ static int cmd_refs(const char *dir, const char *stem, const char *spec) {
 					auto r = de::Reference::read(c);
 					auto t = w.resolve(*f, r);
 					if (t) {
-						printf(" %s [%s]", t.info().name.c_str(), t.info().class_path.c_str());
+						printf(" %s [%s] #%u", t.info().name.c_str(), t.info().class_path.c_str(), t.index);
 					} else {
 						printf(" <%s %u>", r.kind == de::Reference::kNull ? "null" : "unresolved", r.index);
 					}

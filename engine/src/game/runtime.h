@@ -286,6 +286,7 @@ struct GameObject {
 	// The copies one NewCopy made, by the instance each copies, and when (World::referent).
 	std::shared_ptr<std::unordered_map<const GameObject *, GameObject *>> copies;
 	uint64_t copy_seq = 0;
+	bool constructed = false;  // made from its file entry (CPassiveReference::New), not by NewCopy
 	GameObject *replaced_by = nullptr;  // ReplaceWithThenDie re-pointed the references to it
 	uint64_t replaced_seq = 0;
 	// A texture manager's or mesh's image property as scripts set it (AddProperty,
@@ -512,7 +513,7 @@ public:
 	// DE_COMF2Fighter::CurrentTarget (OMF 0x3502a8b0): the fighter it is facing up to.
 	GameObject *current_target_of(GameObject &f);
 	// CObject::NewCopy: a deep copy of `o` and its children (no brains), unparented.
-	GameObject *copy_tree(const GameObject &o);
+	GameObject *copy_tree(const GameObject &o, bool construct = false);
 	// DE_CObject::ReplaceWithThenDie's re-pointing: what referred to `o` refers to `by` from now on.
 	void replace_references(GameObject *o, GameObject *by);
 	// What a reference to `o` reaches now, after the replacements since; null once destroyed.
@@ -979,6 +980,7 @@ private:
 	std::vector<Brain *> dead_brains_;  // of destroyed objects, until their stacks are released
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;
+	std::unordered_map<const GameObject *, std::vector<GameObject *>> constructed_;  // by loaded object, oldest first
 	struct Interface {
 		Brain *brain;
 		uint32_t behavior;  // index into the brain's attached behaviors

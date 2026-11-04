@@ -378,7 +378,7 @@ GameObject *World::create_object_reference(GameObject *o) {
 		if (!create) return nullptr;
 		GameObject *tpl = global_object(data_.by_guid(target));
 		if (!tpl) return nullptr;
-		GameObject *n = copy_tree(*tpl);
+		GameObject *n = copy_tree(*tpl, true);
 		if (under_parent && o->parent) {
 			n->parent = o->parent;
 			o->parent->children.push_back(n);
@@ -393,7 +393,7 @@ GameObject *World::create_object_reference(GameObject *o) {
 static GameObject *reference_target(World &w, GameObject *o, const ReferenceFlags &flags, const de::Guid &target, bool rename) {
 	GameObject *tpl = w.global_object(w.data().by_guid(target));
 	if (!tpl) return nullptr;
-	GameObject *n = w.copy_tree(*tpl);
+	GameObject *n = w.copy_tree(*tpl, true);
 	if (rename) n->name = o->name;
 	n->local = (flags.place == 0 ? o->local : o->world()).then(tpl->local);
 	for (auto &p : w.actor_properties({o->file, o->index})) {
@@ -579,7 +579,7 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	if (refs[0].info().class_path == "Actor\\Creature\\OMF2Fighter" && w.make_fighter) {
 		res = w.make_fighter(refs[0]);
 	} else if (GameObject *tpl = w.global_object(refs[0])) {
-		res = w.copy_tree(*tpl);
+		res = w.copy_tree(*tpl, true);
 		if (res->is("Actor\\Creature\\Pilot")) {
 			if (auto p = read_pilot(*refs[0].file, refs[0].info(), w.ai_difficulty)) {
 				static std::deque<Pilot> pilots;
@@ -1329,6 +1329,8 @@ void register_session_natives(World &w) {
 		c.ret_object(s ? s->obj : nullptr);
 	});
 	stub("CSession::SetJoinable(bool)");
+	// IsJoinableCaller (Core 2.123 0x201ff360): single player's sessions are local, never joinable.
+	reg("CSession::bool IsJoinable()", [](const NativeContext &c) { c.ret_bool(false); });
 	reg("CSession::class CClient NewClient()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		if (!s) {

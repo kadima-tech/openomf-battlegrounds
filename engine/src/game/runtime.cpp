@@ -450,13 +450,17 @@ GameObject *World::create_child(GameObject *parent, const std::string &name, con
 	return &g;
 }
 
-GameObject *World::copy_tree(const GameObject &o) {
+GameObject *World::copy_tree(const GameObject &o, bool construct) {
 	auto copies = std::make_shared<std::unordered_map<const GameObject *, GameObject *>>();
 	const uint64_t seq = ++reference_seq_;
 	std::function<GameObject *(const GameObject &)> copy = [&](const GameObject &from) {
 		GameObject *c = copy_node(from);
 		c->copies = copies;
 		c->copy_seq = seq;
+		if (construct && !from.copied) {
+			c->constructed = true;
+			constructed_[&from].push_back(c);
+		}
 		(*copies)[&from] = c;
 		for (const GameObject *ch : from.children) {
 			GameObject *cc = copy(*ch);
@@ -472,6 +476,7 @@ GameObject *World::copy_node(const GameObject &o) {
 	GameObject &g = objects_.emplace_back(o);
 	g.copied = true;
 	g.copied_from = &o;
+	g.constructed = false;
 	g.replaced_by = nullptr;
 	g.handle = mem_.alloc(kObjectBlock);
 	memcpy(mem_.ptr(g.handle, kObjectBlock), mem_.ptr(o.handle, kObjectBlock), kObjectBlock);
@@ -503,7 +508,19 @@ GameObject *World::referent(const GameObject *from, const de::ObjectRef &r) cons
 		const GameObject *o = sources[i];
 		if (!o->copies) continue;
 		replaced(o->copy_seq);
-		if (auto it = t ? o->copies->find(t) : o->copies->end(); it != o->copies->end()) t = it->second;
+		if (auto it = t ? o->copies->find(t) : o->copies->end(); it != o->copies->end()) {
+			t = it->second;
+		} else if (o->constructed && t && !t->copied) {
+			// ExtractReference: a constructed object's reference names the target's newest instance.
+			if (auto in = constructed_.find(t); in != constructed_.end()) {
+				for (auto c = in->second.rbegin(); c != in->second.rend(); ++c) {
+					if ((*c)->copy_seq < o->copy_seq && object((*c)->handle) == *c) {
+						t = *c;
+						break;
+					}
+				}
+			}
+		}
 	}
 	replaced(UINT64_MAX);
 	return t && object(t->handle) == t ? t : nullptr;
