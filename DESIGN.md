@@ -58,6 +58,13 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Lists (description selectors, Replays).** Rows 20 screen pixels at 768 high, names 19 high, white;
   the selection a solid navy bar (0, 0, 0.5), Windows' classic highlight as the original shows it;
   locked entries grey. No title above the list.
+- **Choose Cast** (between Choose Match and Choose Pilot). The casts listed by name in the left
+  window's top half; below, "AI Difficulty:" and (with more than one match unlocked) "Starting
+  Match:" combos, labels over the fields, locked matches blank. On the right a "Current Settings"
+  strip (a grey header bar over a sunken panel) with each cast's chosen modifier icon in a small
+  box, the selected cast's box framed white; under it the selected cast's modifiers as square icon
+  buttons, six to a row, the chosen one sunk and filled cyan, over a sunken panel with its
+  description centred. Back and Next on the 3D buttons.
 - **Pilot panel.** The name centred at the top; the photo (to 0.58 across) in a pale frame; beside it
   four stat rows (icon tinted (0.5, 1, 1), name, a teal well filled cyan) and "Colors" over the
   pilot's three colour swatches; the biography centred below, then "RECON DATA" and the unlocked
