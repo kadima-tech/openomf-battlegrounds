@@ -43,9 +43,29 @@ void Executor::call(ScriptMethod &m, std::span<uint8_t> args) {
 	}
 	memcpy(mem_.ptr(sp() + off, n), args.data(), n);
 	uint32_t saved_base = base_;
+	struct Floor {
+		size_t &floor;
+		size_t outer;
+		Floor(size_t &f, size_t now) : floor(f), outer(f) { f = now; }
+		~Floor() { floor = outer; }
+	} floor(call_floor_, frames_.size());
+	const uint64_t gen = generation_;
 	internal_execute(m, off, true);
+	if (generation_ == gen && frames_.size() == floor.floor && !frames_.empty()) {
+		resume_frame(frames_.back());
+	}
 	memcpy(args.data(), mem_.ptr(stack_ + saved_base + off, m.return_size() ? m.return_size() : 1),
 	       m.return_size());
+}
+
+void Executor::resume_frame(const Frame &f) {
+	base_ = f.base;
+	method_ = f.method;
+	if (method_->is_state()) state_ = method_;
+	cls_ = method_->cls;
+	frame_size_ = method_->frame_size();
+	pc_ = f.pc;
+	end_ = method_->code_addr + method_->code_size;
 }
 
 void Executor::close_frame(const Frame &f) {
@@ -68,6 +88,7 @@ void Executor::start(ScriptMethod &m) {
 	++generation_;
 	if (!m.is_instant() || m.is_state()) state_ = &m;
 	close_frames(0);
+	call_floor_ = 0;
 	inst_.sleep = 0;  // a new state runs: exSleep() only holds the state that called it
 	base_ = 0;
 	method_ = &m;
@@ -399,10 +420,10 @@ int Executor::continue_execution() {
 				}
 				break;
 			}
-			case 315: {  // KillCallers: keep only the running frame
-				if (frames_.size() > 1) {
+			case 315: {  // KillCallers: keep only the running frame of this call chain
+				if (frames_.size() > call_floor_ + 1) {
 					Frame top = std::move(frames_.back());
-					frames_.clear();
+					frames_.resize(call_floor_);
 					frames_.push_back(std::move(top));
 				}
 				break;
@@ -636,12 +657,11 @@ int Executor::continue_execution() {
 			return result;
 		}
 
-		// The current frame ran off its end.
-		if (frames_.size() < 2) {
-			if (!default_state_ || method_->is_instant()) {
-				close_frames(0);
-				base_ = 0;
-				pc_ = 0;
+		// The current frame ran off its end; the pc stays there, so loops of killed callers stop too.
+		if (frames_.size() < call_floor_ + 2) {
+			if (call_floor_ || !default_state_ || method_->is_instant()) {
+				close_frames(call_floor_);
+				if (!call_floor_) base_ = 0;
 				return 1;
 			}
 			start(*default_state_);
@@ -649,14 +669,7 @@ int Executor::continue_execution() {
 		}
 		bool sync = frames_.back().sync;
 		close_frames(frames_.size() - 1);
-		Frame &prev = frames_.back();
-		base_ = prev.base;
-		method_ = prev.method;
-		if (method_->is_state()) state_ = method_;
-		cls_ = method_->cls;
-		frame_size_ = method_->frame_size();
-		pc_ = prev.pc;
-		end_ = method_->code_addr + method_->code_size;
+		resume_frame(frames_.back());
 		if (sync) {
 			return 0;
 		}
