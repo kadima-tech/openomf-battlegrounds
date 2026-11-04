@@ -2,8 +2,9 @@
 
 ## First-run launcher
 
-The native setup app (`launcher/Launcher.swift` on macOS, `launcher/linux-launcher.c`
-with GTK 3 on Linux) uses a service-bay theme:
+The native setup app (`launcher/Launcher.swift` on macOS, `launcher/windows/Launcher.cpp`
+on Windows 10/11 and `launcher/linux-launcher.c` with GTK 3 on Linux, the latter two drawn to the
+same layout) uses a service-bay theme:
 graphite panels, warm ivory type, amber actions and a robot engineering schematic.
 The artwork is original and available before the player's disc is unpacked. Its
 left rail carries the brand and schematic; the main panel has ISO/drop and CD
@@ -59,6 +60,18 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Lists (description selectors, Replays).** Rows 20 screen pixels at 768 high, names 19 high, white;
   the selection a solid navy bar (0, 0, 0.5), Windows' classic highlight as the original shows it;
   locked entries grey. No title above the list.
+- **Choose Cast** (between Choose Match and Choose Pilot). The casts listed by name in the left
+  window's top half; below, "AI Difficulty:" and (with more than one match unlocked) "Starting
+  Match:" combos, labels over the fields, locked matches blank. On the right a "Current Settings"
+  strip (a grey header bar over a sunken panel) with each cast's chosen modifier icon in a small
+  box, the selected cast's box framed white; under it the selected cast's modifiers as square icon
+  buttons, six to a row: 1-pixel bevelled grey buttons (sunk while held or toggled down) with the
+  icon filling the face, the chosen one's face cyan behind its icon (on a first visit a default that
+  is not the first stays raised, as in the original), over a sunken panel with its description
+  centred. Back and Next on the 3D buttons. Hosting, "Available Arenas:" (14 virtual pixels) and
+  the multiplayer arenas under the casts, each a check box (the dark sunken box, a white X when
+  checked) and its name, in the list's ordinary 20-pixel rows (the box, 23 pixels at 768, overlaps
+  its neighbours slightly); all checked at first.
 - **Pilot panel.** The name centred at the top; the photo (to 0.58 across) in a pale frame; beside it
   four stat rows (icon tinted (0.5, 1, 1), name, a teal well filled cyan) and "Colors" over the
   pilot's three colour swatches; the biography centred below, then "RECON DATA" and the unlocked
@@ -75,8 +88,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   from 0.6 across; Play (disabled until a selection) and Back. Our own: the delete question and its
   Yes / No, and the rename field, drawn in the Window.
 - **VCR panel (replays, V).** `F.VCR` along the bottom; in its middle 60%: the Play/Pause, frame
-  advance, rewind and fast-forward images (a cyan underline marks the running fast mode), the speed
-  labels, a seek slider (pale blue track, cyan knob) and Observer / Snapshot labels.
+  advance, rewind and fast-forward buttons (2-pixel bevelled grey push buttons, the image filling
+  the face and shifting with it when sunk; Play/Pause stays sunk, showing Play, while paused), the
+  speed combos, a seek slider, the observer combo and Snapshot.
 - **Single-player loading screen** (the rules display). No main frame; the match name (19 px),
   commentary (14 px) and next match (16 px), all pale blue (0.8, 0.9, 1), and progress text in the
   page's markers; the match snapshot (a 256 × 256 capture from the observer's camera) fills the
@@ -97,7 +111,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **HUD and messages.** Drawn from the scripts' screen-space primitives (text in `Font_Ariel` or the
   in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them. One font
   unit is the text size; HUD letters stretch with the screen's shape (x by its width, y by its height).
-  Every text primitive is on screen (crowd responses and pilot quotes too). Stat bars fill along
+  Every text primitive is on screen (crowd responses and pilot quotes too). A text's lines are
+  justified one by one, 1.2 font units apart; quotes sit on a dark blue underlay band (0, 0, 0.15 at
+  0.75 alpha) as tall as the text, with soft bands above and below. Stat bars fill along
   their length with a glowing cap at the value's end; the upright bars use the texture turned.
 - **Help.** A tree list: Plus / Minus icons 10 px wide at depth × 20 + 5, text at (depth + 1) × 20,
   branches collapsed at first, no tree lines. The topic's page fills the Window: its text blocks

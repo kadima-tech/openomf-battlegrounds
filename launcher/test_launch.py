@@ -14,6 +14,7 @@ BUILDER = "launcher/build-app.sh" if MAC else "launcher/build-linux.sh"
 EXECUTABLE = "dist/Battlegrounds.app/Contents/MacOS/Battlegrounds" if MAC else "dist/Battlegrounds/Battlegrounds"
 
 
+@unittest.skipIf(os.name == "nt", "launch.command is the macOS entry point; Windows uses launch.cmd")
 class LaunchTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="launcher test ")

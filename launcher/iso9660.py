@@ -1,42 +1,52 @@
-"""Read-only ISO 9660 extraction for disc images, without bsdtar or mounting.
+"""Read one directory out of an ISO 9660 disc image, without mounting it or external tools.
 
-Linux desktops do not ship bsdtar by default, and loop-mounting an image needs
-privileges. The Battlegrounds CD is a plain 2048-byte-sector ISO 9660 image with
-Joliet names, so the installer copies the one directory it needs (Setup) with
-this small reader. Only regular single-extent files are accepted; names are
-checked so nothing can be written outside the destination.
+Windows and many Linux desktops have no bsdtar, so setup reads the image itself. Only what a 2003
+retail CD uses is supported: the primary volume descriptor, or a Joliet supplementary one
+for its original file names, with single-extent, non-interleaved files. Anything else is
+rejected rather than guessed at. Names are compared case-insensitively.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import struct
 
 SECTOR = 2048
 JOLIET_ESCAPES = (b"%/@", b"%/C", b"%/E")
-MAX_DEPTH = 16
-MAX_ENTRIES = 100_000
+MAX_ENTRIES = 10_000
+MAX_DEPTH = 8
 
 
-class ImageError(ValueError):
-    pass
-
-
+@dataclass
 class Entry:
-    __slots__ = ("name", "extent", "size", "directory")
+    name: str
+    extent: int
+    size: int
+    directory: bool
 
-    def __init__(self, name: str, extent: int, size: int, directory: bool):
-        self.name, self.extent, self.size, self.directory = name, extent, size, directory
 
-
-class Image:
-    def __init__(self, stream):
+class ImageReader:
+    def __init__(self, stream, image_size: int):
         self.stream = stream
-        stream.seek(0, 2)
-        self.length = stream.tell()
+        self.image_size = image_size
+        self.block = SECTOR
+        self.joliet = False
+        self.root = self._volume_root()
+
+    def _read(self, offset: int, size: int) -> bytes:
+        if offset < 0 or size < 0 or offset + size > self.image_size:
+            raise ValueError("The disc image is truncated or damaged.")
+        self.stream.seek(offset)
+        data = self.stream.read(size)
+        if len(data) != size:
+            raise ValueError("The disc image is truncated or damaged.")
+        return data
+
+    def _volume_root(self) -> Entry:
         primary = joliet = None
-        for index in range(16, 16 + 64):
-            descriptor = self.read(index * SECTOR, SECTOR)
-            if len(descriptor) < SECTOR or descriptor[1:6] != b"CD001":
+        for sector in range(16, 16 + 64):
+            descriptor = self._read(sector * SECTOR, SECTOR)
+            if descriptor[1:6] != b"CD001":
                 break
             kind = descriptor[0]
             if kind == 255:
@@ -45,99 +55,90 @@ class Image:
                 primary = descriptor
             elif kind == 2 and descriptor[88:91] in JOLIET_ESCAPES and joliet is None:
                 joliet = descriptor
-        if primary is None:
-            raise ImageError("This file is not an ISO 9660 disc image.")
         descriptor = joliet or primary
-        self.joliet = joliet is not None
-        if struct.unpack_from("<H", descriptor, 128)[0] != SECTOR:
-            raise ImageError("This disc image uses an unsupported block size.")
-        self.root = self.record(descriptor[156:190], root=True)
-        self.entries = 0
+        if descriptor is None:
+            raise ValueError("This file is not an ISO 9660 disc image.")
+        self.joliet = descriptor is joliet
+        self.block = struct.unpack_from("<H", descriptor, 128)[0]
+        if self.block not in (512, 1024, 2048):
+            raise ValueError("The disc image uses an unsupported block size.")
+        root = self._record(descriptor[156:190], root=True)
+        if not root.directory:
+            raise ValueError("The disc image has no root directory.")
+        return root
 
-    def read(self, offset: int, size: int) -> bytes:
-        if offset < 0 or size < 0 or offset + size > self.length:
-            raise ImageError("The disc image is truncated or damaged.")
-        self.stream.seek(offset)
-        return self.stream.read(size)
-
-    def record(self, data: bytes, root: bool = False) -> Entry | None:
-        if len(data) < 34 or data[0] < 34 or data[0] > len(data):
-            raise ImageError("The disc image has a damaged directory.")
-        extent, size = struct.unpack_from("<I", data, 2)[0], struct.unpack_from("<I", data, 10)[0]
-        flags, unit, gap, length = data[25], data[26], data[27], data[32]
-        raw = data[33:33 + length]
-        if len(raw) != length:
-            raise ImageError("The disc image has a damaged directory.")
-        if root:
-            if not flags & 0x02:
-                raise ImageError("The disc image has a damaged directory.")
-            return Entry("", extent, size, True)
-        if raw in (b"\x00", b"\x01"):
-            return None  # "." and ".."
+    def _record(self, data: bytes, root: bool = False) -> Entry | None:
+        if len(data) < 34 or data[0] < 34 or 33 + data[32] > min(data[0], len(data)):
+            raise ValueError("The disc image has a damaged directory.")
+        extent, size = struct.unpack_from("<I4xI", data, 2)
+        flags, unit, gap, name_length = data[25], data[26], data[27], data[32]
         if flags & 0x80 or unit or gap:
-            raise ImageError("The disc image uses multi-extent or interleaved files, which are not supported.")
-        name = raw.decode("utf-16-be", "replace") if self.joliet else raw.decode("ascii", "replace")
+            raise ValueError("The disc image uses multi-extent or interleaved files, which are not supported.")
+        raw = data[33:33 + name_length]
+        if root:
+            return Entry("", extent, size, bool(flags & 0x02))
+        if raw in (b"\x00", b"\x01"):
+            return None
+        name = raw.decode("utf-16-be" if self.joliet else "latin-1", errors="replace")
+        name = name.split(";", 1)[0]
         if not flags & 0x02:
-            name = name.split(";", 1)[0]
-            if not self.joliet:
-                name = name.rstrip(".")
-        if (not name or name in (".", "..") or "/" in name or "\\" in name or "\0" in name):
-            raise ImageError("The disc image contains an invalid file name.")
+            name = name.rstrip(".")
         return Entry(name, extent, size, bool(flags & 0x02))
 
-    def children(self, directory: Entry) -> list[Entry]:
-        data = self.read(directory.extent * SECTOR, directory.size)
+    def entries(self, directory: Entry) -> list[Entry]:
+        data = self._read(directory.extent * self.block, directory.size)
         result, offset = [], 0
         while offset < len(data):
             length = data[offset]
             if length == 0:
-                # Records never span sectors; padding fills the rest of one.
+                # Records never cross a sector; the rest of this one is padding.
                 offset = (offset // SECTOR + 1) * SECTOR
                 continue
-            entry = self.record(data[offset:offset + length])
+            if offset + length > len(data):
+                raise ValueError("The disc image has a damaged directory.")
+            entry = self._record(data[offset:offset + length])
+            if entry is not None:
+                result.append(entry)
+                if len(result) > MAX_ENTRIES:
+                    raise ValueError("The disc image has too many files.")
             offset += length
-            if entry is None:
-                continue
-            self.entries += 1
-            if self.entries > MAX_ENTRIES:
-                raise ImageError("The disc image has too many files.")
-            result.append(entry)
-        names = [entry.name.casefold() for entry in result]
-        if len(names) != len(set(names)):
-            raise ImageError("The disc image contains conflicting file names.")
         return result
 
-    def copy(self, entry: Entry, destination: Path, depth: int = 0) -> None:
+    def child(self, directory: Entry, name: str) -> Entry | None:
+        return next((e for e in self.entries(directory) if e.name.casefold() == name.casefold()), None)
+
+    def extract(self, directory: Entry, destination: Path, depth: int = 0) -> None:
         if depth > MAX_DEPTH:
-            raise ImageError("The disc image's folders are nested too deeply.")
-        if entry.directory:
-            destination.mkdir()
-            for child in self.children(entry):
-                self.copy(child, destination / child.name, depth + 1)
-            return
-        start = entry.extent * SECTOR
-        if start + entry.size > self.length:
-            raise ImageError("The disc image is truncated or damaged.")
-        self.stream.seek(start)
-        remaining = entry.size
-        with destination.open("xb") as output:
-            while remaining:
-                block = self.stream.read(min(remaining, 1024 * 1024))
-                if not block:
-                    raise ImageError("The disc image is truncated or damaged.")
-                output.write(block)
-                remaining -= len(block)
+            raise ValueError("The disc image's folders are nested too deeply.")
+        destination.mkdir(parents=True, exist_ok=True)
+        for entry in self.entries(directory):
+            if (not entry.name or entry.name in (".", "..") or any(c in entry.name for c in '/\\:*?"<>|\0')):
+                raise ValueError(f"The disc image contains an invalid file name: {entry.name!r}")
+            target = destination / entry.name
+            if entry.directory:
+                self.extract(entry, target, depth + 1)
+                continue
+            start = entry.extent * self.block
+            if start + entry.size > self.image_size:
+                raise ValueError("The disc image is truncated or damaged.")
+            with target.open("wb") as out:
+                remaining = entry.size
+                self.stream.seek(start)
+                while remaining:
+                    chunk = self.stream.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        raise ValueError("The disc image is truncated or damaged.")
+                    out.write(chunk)
+                    remaining -= len(chunk)
 
 
-def extract_directory(image: Path, name: str, destination: Path) -> Path | None:
-    """Copy the top-level directory `name` (matched case-insensitively) into
-    `destination`. Returns its new path, or None if the image has no such folder."""
+def extract_directory(image: Path, name: str, destination: Path) -> Path:
+    """Copy the top-level folder `name` (any case) and its contents to destination/<its name>."""
     with image.open("rb") as stream:
-        reader = Image(stream)
-        match = next((entry for entry in reader.children(reader.root)
-                      if entry.directory and entry.name.casefold() == name.casefold()), None)
-        if match is None:
-            return None
-        target = destination / match.name
-        reader.copy(match, target)
+        reader = ImageReader(stream, image.stat().st_size)
+        folder = reader.child(reader.root, name)
+        if folder is None or not folder.directory:
+            raise ValueError("This image does not contain the Battlegrounds installer.")
+        target = destination / folder.name
+        reader.extract(folder, target)
         return target

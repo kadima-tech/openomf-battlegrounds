@@ -204,10 +204,7 @@ void register_creature_natives(World &w) {
 		// A class executor property runs its class on the actor (Jaguar's lasers get theirs this way).
 		if (o && p && p->file && p->class_path == "ClassExecutor") c.world.add_executor_property(o, de::ObjectRef{p->file, p->index});
 		// A texture manager's or mesh's image property: what it draws from now on.
-		if (o && p && o->file && p->file && p->is("Image") && (o->is("TextureManager") || o->is("Mesh"))) {
-			c.world.texture_overrides[{o->file, o->index}] = de::ObjectRef{p->file, p->index};
-			++c.world.texture_override_version;
-		}
+		if (o && p && p->file && p->is("Image") && (o->is("TextureManager") || o->is("Mesh"))) c.world.set_instance_image(o, p);
 	});
 	// RemoveAllPropertyCaller (Core 0x70127230 / Session): the object's properties are cleared.
 	for (const char *k : {"CTextureManager::RemoveAllProperty()", "CMesh::RemoveAllProperty()"}) {
@@ -215,10 +212,7 @@ void register_creature_natives(World &w) {
 			GameObject *o = c.self();
 			if (!o) return;
 			o->components.clear();
-			if (o->file) {
-				c.world.texture_overrides[{o->file, o->index}] = de::ObjectRef{};
-				++c.world.texture_override_version;
-			}
+			c.world.set_instance_image(o, nullptr);
 		});
 	}
 	reg("CActor::int NumProperties()", [](const NativeContext &c) {

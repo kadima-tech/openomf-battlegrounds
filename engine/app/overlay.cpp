@@ -159,23 +159,35 @@ std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::W
 	const de::Font &font = f.font;
 	if (font.height <= 0 || t.text.empty()) return v;
 	const float spacing = 0;  // DE_CFlatText3 +0x9c letter spacing (default 0): letters advance by their width
-	float total = 0;
-	for (unsigned char ch : t.text) {
-		auto &g = font.glyphs[ch];
-		total += (g.present ? g.x1 - g.x0 : 0.5f) + spacing;
-	}
-	float x = t.x - (t.centered ? total * sx * 0.5f : t.snap_right ? total * sx : 0) + dx;
-	for (unsigned char ch : t.text) {
-		auto &g = font.glyphs[ch];
-		float w = g.present ? g.x1 - g.x0 : 0.5f;
-		if (g.present && ch != ' ') {
-			float x0 = x, x1 = x + w * sx, y0 = t.y + (g.y0 + font.base) * sy + dy, y1 = t.y + (g.y1 + font.base) * sy + dy;
-			// Image rows run top to bottom: the glyph's top gets the smaller v.
-			float q[6][4] = {{x0, y1, g.u0, g.v0}, {x1, y1, g.u1, g.v0}, {x1, y0, g.u1, g.v1},
-			                 {x0, y1, g.u0, g.v0}, {x1, y0, g.u1, g.v1}, {x0, y0, g.u0, g.v1}};
-			for (auto &p : q) v.insert(v.end(), p, p + 4);
+	// CFontInfo::Update (0x701caf70): each line justified on its own, the next one line spacing lower.
+	float line_y = 0;
+	for (size_t p = 0; p <= t.text.size();) {
+		size_t q = t.text.find('\n', p);
+		if (q == std::string::npos) q = t.text.size();
+		float total = 0;
+		for (size_t i = p; i < q; ++i) {
+			unsigned char ch = (unsigned char)t.text[i];
+			if (ch == '\r') continue;
+			auto &g = font.glyphs[ch];
+			total += (g.present ? g.x1 - g.x0 : 0.5f) + spacing;
 		}
-		x += (w + spacing) * sx;
+		float x = t.x - (t.centered ? total * sx * 0.5f : t.snap_right ? total * sx : 0) + dx;
+		for (size_t i = p; i < q; ++i) {
+			unsigned char ch = (unsigned char)t.text[i];
+			if (ch == '\r') continue;
+			auto &g = font.glyphs[ch];
+			float w = g.present ? g.x1 - g.x0 : 0.5f;
+			if (g.present && ch != ' ') {
+				float x0 = x, x1 = x + w * sx, y0 = t.y + (g.y0 + font.base + line_y) * sy + dy, y1 = t.y + (g.y1 + font.base + line_y) * sy + dy;
+				// Image rows run top to bottom: the glyph's top gets the smaller v.
+				float quad[6][4] = {{x0, y1, g.u0, g.v0}, {x1, y1, g.u1, g.v0}, {x1, y0, g.u1, g.v1},
+				                    {x0, y1, g.u0, g.v0}, {x1, y0, g.u1, g.v1}, {x0, y0, g.u0, g.v1}};
+				for (auto &pt : quad) v.insert(v.end(), pt, pt + 4);
+			}
+			x += (w + spacing) * sx;
+		}
+		line_y -= game::World::kTextLineSpacing;
+		p = q + 1;
 	}
 	return v;
 }

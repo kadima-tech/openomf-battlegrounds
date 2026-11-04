@@ -22,7 +22,7 @@ inline SDL_Window *create_gl_window(const char *title, int x, int y, int w, int 
 		if ((*ctx = SDL_GL_CreateContext(win))) return win;
 		SDL_DestroyWindow(win);
 	}
-	throw std::runtime_error(std::string("could not open an OpenGL 4.1 core window: ") + SDL_GetError());
+	throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
 }
 
 }  // namespace glu

@@ -1,6 +1,7 @@
 #include "game/runtime.h"
 #include "game/impulses.h"
 
+#include "de/platform.h"
 #include "de/value.h"
 
 #include "game/forces.h"
@@ -19,7 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
-#include <sys/mman.h>
+#include <cstdlib>
 
 #include "vm/compiler.h"
 #include "vm/disasm.h"
@@ -114,7 +115,7 @@ void settle(World &w, Brain &b, uint64_t before) {
 }
 
 bool Brain::call(World &w, const std::string &name, std::vector<uint8_t> &args) {
-	vm::ScriptMethod *m = cls.find_by_name(name);
+	vm::ScriptMethod *m = exec && !exec->released() ? cls.find_by_name(name) : nullptr;
 	if (!m) {
 		return false;
 	}
@@ -132,6 +133,7 @@ bool Brain::call(World &w, const std::string &name, std::vector<uint8_t> &args) 
 
 bool Brain::call_handle(World &w, uint32_t handle, std::vector<uint8_t> &args) {
 	vm::ScriptMethod *m = nullptr;
+	if (!exec || exec->released()) return false;
 	for (auto &cand : cls.methods) {
 		if (cand.handle == handle) {
 			m = &cand;
@@ -201,13 +203,13 @@ void NativeContext::ret_f32(float v) const { mem().set<float>(args, v); }
 
 ObjectArena::ObjectArena() {
 	const size_t size = size_t(16) << 30;
-	void *p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-	if (p == MAP_FAILED) throw std::bad_alloc();
+	void *p = de::reserve_pages(size);
+	if (!p) throw std::bad_alloc();
 	base_ = next_ = committed_ = static_cast<char *>(p);
 	end_ = base_ + size;
 }
 
-ObjectArena::~ObjectArena() { munmap(base_, size_t(end_ - base_)); }
+ObjectArena::~ObjectArena() { de::release_pages(base_, size_t(end_ - base_)); }
 
 void *ObjectArena::take(size_t bytes) {
 	bytes = (bytes + 63) & ~size_t(63);
@@ -218,7 +220,7 @@ void *ObjectArena::take(size_t bytes) {
 		const size_t step = size_t(64) << 20;
 		size_t grow = (size_t(next_ - committed_) + step - 1) / step * step;
 		grow = std::min(grow, size_t(end_ - committed_));
-		if (mprotect(committed_, grow, PROT_READ | PROT_WRITE) != 0) throw std::bad_alloc();
+		if (!de::commit_pages(committed_, grow)) throw std::bad_alloc();
 		committed_ += grow;
 	}
 	return p;
@@ -328,13 +330,15 @@ void World::destroy(GameObject *o) {
 		branch.insert(branch.end(), branch[i]->children.begin(), branch[i]->children.end());
 	}
 	std::set<uint32_t> gone;
+	const uint64_t destroyed = ++reference_seq_;
 	for (GameObject *b : branch) {
+		if (!b->destroyed_seq) b->destroyed_seq = destroyed;
 		by_handle_.erase(b->handle);
 		relays.erase(b);
 		root_session.erase(b);
 		b->spawned = false;
 		b->active = false;
-		if (b->brain) b->brain->inst.shut_down = true;
+		if (b->brain) b->brain->inst.shut_down = true, dead_brains_.push_back(b->brain);
 		gone.insert(b->handle);
 	}
 	// Its primitives (text, quads, bars) go with it.
@@ -448,9 +452,35 @@ GameObject *World::create_child(GameObject *parent, const std::string &name, con
 	return &g;
 }
 
-GameObject *World::copy_tree(const GameObject &o) {
+GameObject *World::copy_tree(const GameObject &o, bool construct) {
+	auto copies = std::make_shared<std::unordered_map<const GameObject *, GameObject *>>();
+	const uint64_t seq = ++reference_seq_;
+	std::function<GameObject *(const GameObject &)> copy = [&](const GameObject &from) {
+		GameObject *c = copy_node(from);
+		c->copies = copies;
+		c->copy_seq = seq;
+		c->constructed = construct && !from.copied;
+		// ObjNewCopy and the transfer agent's New add each object to its file entry's instance list.
+		c->entry = from.copied ? from.entry : from.file ? &from : nullptr;
+		if (c->entry && !c->system) constructed_[c->entry].push_back(c);
+		(*copies)[&from] = c;
+		for (const GameObject *ch : from.children) {
+			GameObject *cc = copy(*ch);
+			cc->parent = c;
+			c->children.push_back(cc);
+		}
+		return c;
+	};
+	return copy(o);
+}
+
+GameObject *World::copy_node(const GameObject &o) {
 	GameObject &g = objects_.emplace_back(o);
 	g.copied = true;
+	g.copied_from = &o;
+	g.constructed = false;
+	g.destroyed_seq = 0;
+	g.replaced_by = nullptr;
 	g.handle = mem_.alloc(kObjectBlock);
 	memcpy(mem_.ptr(g.handle, kObjectBlock), mem_.ptr(o.handle, kObjectBlock), kObjectBlock);
 	g.vec_world_pos = g.handle + kWorldPosOffset;
@@ -466,12 +496,113 @@ GameObject *World::copy_tree(const GameObject &o) {
 	g.data_encompasser = nullptr;
 	g.data_encompasser_read = false;
 	by_handle_[g.handle] = &g;
-	for (const GameObject *ch : o.children) {
-		GameObject *cc = copy_tree(*ch);
-		cc->parent = &g;
-		g.children.push_back(cc);
-	}
 	return &g;
+}
+
+GameObject *World::referent(const GameObject *from, const de::ObjectRef &r) const {
+	if (!r) return nullptr;
+	std::vector<const GameObject *> sources;
+	for (const GameObject *o = from; o && sources.size() < 256; o = o->copied_from) sources.push_back(o);
+	GameObject *t = object_for(r.file, r.index);
+	auto replaced = [&t](uint64_t before) {
+		while (t && t->replaced_by && t->replaced_seq < before) t = t->replaced_by;
+	};
+	for (size_t i = sources.size(); i-- > 0;) {
+		const GameObject *o = sources[i];
+		if (!o->copies) continue;
+		replaced(o->copy_seq);
+		if (auto it = t ? o->copies->find(t) : o->copies->end(); it != o->copies->end()) {
+			t = it->second;
+		} else if (o->constructed && t && !t->copied) {
+			// ExtractReference: a constructed object's reference names the target's newest instance.
+			if (auto in = constructed_.find(t); in != constructed_.end()) {
+				for (auto c = in->second.rbegin(); c != in->second.rend(); ++c) {
+					const GameObject *k = *c;
+					if (k->copy_seq < o->copy_seq && !k->system && (!k->destroyed_seq || k->destroyed_seq > o->copy_seq)) {
+						t = *c;
+						break;
+					}
+				}
+			}
+		}
+	}
+	replaced(UINT64_MAX);
+	return t && object(t->handle) == t ? t : nullptr;
+}
+
+void World::replace_references(GameObject *o, GameObject *by) {
+	if (!o || !by || o == by) return;
+	o->replaced_by = by;
+	o->replaced_seq = ++reference_seq_;
+	if (o->file && o->is("Image")) instance_images.insert({o->file, o->index});
+	++texture_override_version;
+}
+
+GameObject *World::replacement(GameObject *o) const {
+	while (o && o->replaced_by) o = o->replaced_by;
+	return o && object(o->handle) == o ? o : nullptr;
+}
+
+void World::set_instance_image(GameObject *manager, GameObject *image) {
+	if (!manager) return;
+	manager->image = image;
+	manager->image_set = true;
+	if (manager->file) instance_images.insert({manager->file, manager->index});
+	++texture_override_version;
+}
+
+// The model's references (chunk v2-v3 after DE_CObject's): [instanced objects (+0x48)][properties
+// (+0x34)], v3 [BOOL + creature description (+0x54)] (DE_CCreatureModel::ObjProcessReferences
+// 0x35037240). Setup gives the creature the properties, and a copy of each instanced object as a
+// child; then, when one of the creature's children is an ImageFilter\OMF2Fighter, every image
+// under the model becomes a property too, RGBMain* and ReflectionMask* filtered by it and
+// RGBScaled* in its scaled list (RGBStatic* its static list, which no shipped image is).
+void World::setup_creature_model(GameObject *model, GameObject *creature, const std::vector<GameObject *> &properties) {
+	if (!model || !creature) return;
+	for (GameObject *p : properties) creature->components.push_back(p);
+	if (model->file) {
+		auto lists = reference_lists(data_, {model->file, model->index});
+		static const std::vector<de::ObjectRef> none;
+		auto list = [&](size_t i) -> const std::vector<de::ObjectRef> & { return lists.size() > 1 && i < lists[1].size() ? lists[1][i] : none; };
+		for (auto &r : list(1)) {
+			if (GameObject *p = referent(model, r)) creature->components.push_back(p);
+		}
+		for (auto &r : list(0)) {
+			if (GameObject *tpl = global_object(r)) {
+				GameObject *n = copy_tree(*tpl);
+				n->parent = creature;
+				creature->children.push_back(n);
+			}
+		}
+	}
+	GameObject *filter = nullptr;
+	for (GameObject *ch : creature->children) {
+		if (ch->is("ImageFilter\\OMF2Fighter")) {
+			filter = ch;
+			break;
+		}
+	}
+	if (!filter) return;
+	std::vector<GameObject *> branch;  // ObjDescendant's order
+	std::function<void(GameObject *)> gather = [&](GameObject *o) {
+		branch.insert(branch.end(), o->children.begin(), o->children.end());
+		for (GameObject *ch : o->children) gather(ch);
+	};
+	gather(model);
+	for (GameObject *img : branch) {
+		if (!img->is("Image")) continue;
+		const std::string &n = img->name;
+		if (n.rfind("RGBMain", 0) == 0 || n.rfind("ReflectionMask", 0) == 0) {
+			img->image_filter = filter;
+			if (img->file) {
+				instance_images.insert({img->file, img->index});
+				image_filters[{img->file, img->index}] = filter;
+			}
+		} else if (n.rfind("RGBScaled", 0) == 0 && img->file) {
+			filter->scaled_images.push_back({img->file, img->index});
+		}
+		creature->components.push_back(img);
+	}
 }
 
 void World::pose_skeleton(GameObject &f) {
@@ -671,6 +802,7 @@ GameObject &World::make_object(const de::ObjectsFile *f, uint32_t i) {
 			g.local = a.local;
 			g.position_mode = a.position_mode;
 			g.actor_flags = a.flags;
+			g.visible = a.rendered;
 			g.active = (a.flags & 8) != 0;  // +0x110 bit 8: active (else parked under its parent)
 		} catch (const std::exception &) {
 		}
@@ -973,6 +1105,10 @@ std::optional<Pilot> read_pilot(const de::ObjectsFile &f, const de::ObjectInfo &
 			v.variation = c.squeezed();
 			v.wave = c.squeezed();
 		}
+		if (c.pos() + 8 <= end) {
+			c.u32();
+			p.sex = c.u32();
+		}
 	} catch (const std::exception &) {
 		return std::nullopt;
 	}
@@ -1070,7 +1206,7 @@ void read_affector(GameObject &g, const de::World &data, const de::ObjectsFile &
 		c.seek(chunks[1].first);
 		g.groups = c.u32();
 		if (versions[1] == 3) {
-			c.boolean();
+			g.swept = c.boolean();
 			g.encompasser = c.boolean();
 			g.auto_encompass = c.boolean();
 		}
@@ -1218,14 +1354,16 @@ bool World::verify(const InputSequence &seq) const {
 
 // DE_CScene::TemporalElementSetForRate: the set of a rate, made on first use with its last tick at
 // (now / rate) x rate, so every element of a rate ticks together on multiples of it.
-World::TemporalSet &World::temporal_set(uint32_t rate, int scene) {
+World::TemporalSet &World::temporal_set(uint32_t rate, int scene, const GameObject *clock) {
+	if (scene) clock = nullptr;
 	for (auto &s : temporal_sets_) {
-		if (s.rate == rate && s.scene == scene) return s;
+		if (s.rate == rate && s.scene == scene && s.clock == clock) return s;
 	}
-	uint32_t now = scene ? gui_scene_ms[scene - 1] : scene_ms_;
+	uint32_t now = scene ? gui_scene_ms[scene - 1] : clock_ms(clock);
 	TemporalSet s;
 	s.rate = rate;
 	s.scene = scene;
+	s.clock = clock;
 	s.next = now / rate * rate + rate;
 	temporal_sets_.push_back(std::move(s));
 	return temporal_sets_.back();
@@ -1237,9 +1375,16 @@ int World::temporal_scene(const Temporal &t) {
 	return o && in_gui(*o) ? std::clamp(gui_view(*o), 0, 1) + 1 : 0;
 }
 
-void World::add_temporal(uint32_t rate, Temporal t) {
+const GameObject *World::temporal_clock(const Temporal &t) {
+	const GameObject *o = t.kind == Temporal::Brain ? (t.brain ? t.brain->owner : nullptr) : t.handle ? object(t.handle) : nullptr;
+	return o ? clock_key(o) : clock_;
+}
+
+void World::add_temporal(uint32_t rate, Temporal t) { add_temporal(rate, t, temporal_clock(t)); }
+
+void World::add_temporal(uint32_t rate, Temporal t, const GameObject *clock) {
 	if (rate == 0) return;
-	TemporalSet &s = temporal_set(rate, temporal_scene(t));
+	TemporalSet &s = temporal_set(rate, temporal_scene(t), clock);
 	for (auto &e : s.elements) {
 		if (e.kind == t.kind && e.handle == t.handle && e.brain == t.brain) return;
 	}
@@ -1247,7 +1392,8 @@ void World::add_temporal(uint32_t rate, Temporal t) {
 	if (debug) {
 		const char *kinds[] = {"creature", "executor", "tester", "input"};
 		std::string who = t.brain && t.brain->owner ? t.brain->owner->name : t.handle && object(t.handle) ? object(t.handle)->name : "-";
-		fprintf(stderr, "[temporal %u] %s %s every %u ms\n", scene_ms_, kinds[t.kind], who.c_str(), rate);
+		fprintf(stderr, "[temporal %u] %s %s every %u ms in %s\n", scene_ms_, kinds[t.kind], who.c_str(), rate,
+		        s.scene ? "the GUI" : s.clock ? s.clock->name.c_str() : "no session");
 	}
 	s.elements.push_back(t);
 }
@@ -1297,7 +1443,8 @@ void World::register_creature(GameObject *o) {
 		add_temporal(rate, {Temporal::Creature, o->handle, nullptr});
 		// DE_CCreature::ObjPrepare (Creature 0x15016050): one made earlier starts at the tick its
 		// creation time gives.
-		if (o->creation_time && o->creation_time < scene_ms_) o->creature_ticks = (scene_ms_ - o->creation_time) / rate;
+		uint32_t now = clock_ms(clock_key(o));
+		if (o->creation_time && o->creation_time < now) o->creature_ticks = (now - o->creation_time) / rate;
 		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's
 		// order, joins this one's list (+0x334), and this one joins theirs.
 		if (o->fighter && !o->fighter_prepared) {
@@ -1421,9 +1568,12 @@ void World::retick(GameObject &o, uint32_t at_ms) {
 
 void World::at_scene_ms(uint32_t at_ms, const std::function<void()> &f) {
 	uint32_t now = scene_ms_;
+	bool was = scene_ms_set_;
 	scene_ms_ = at_ms;
+	scene_ms_set_ = true;
 	f();
 	scene_ms_ = now;
+	scene_ms_set_ = was;
 }
 
 // DE_CJoystickInputManager::Tick (Creature 0x150020c0): a record per input change; older records
@@ -1478,6 +1628,12 @@ void World::input_tick(uint32_t manager) {
 // DE_CTemporalElementSet::AdvanceTime (Core 0x70072090): every element, newest first.
 void World::advance(TemporalSet &set) {
 	auto elements = set.elements;  // a tick may add elements
+	const uint32_t outer_rate = advancing_rate;
+	advancing_rate = set.rate;
+	struct Restore {
+		uint32_t &r, v;
+		~Restore() { r = v; }
+	} restore{advancing_rate, outer_rate};
 	for (auto it = elements.rbegin(); it != elements.rend(); ++it) {
 		switch (it->kind) {
 		case Temporal::Creature:
@@ -1490,12 +1646,12 @@ void World::advance(TemporalSet &set) {
 	}
 }
 
-// DE_CScene::PassTime (Core 0x70070040) when the clock jumps: each set restarts at its last tick
-// before the new time and each element is set to it, newest first.
+// DE_CScene::PassTime (Core 0x70070040) when the clock jumps: each set of the scene restarts at its
+// last tick before the new time and each element is set to it, newest first.
 void World::reset_clock() {
 	std::vector<uint32_t> creatures;
 	for (auto &s : temporal_sets_) {
-		if (s.scene || !s.rate) continue;
+		if (s.scene || !s.rate || s.clock != clock_) continue;
 		s.next = scene_ms_ / s.rate * s.rate + s.rate;
 		for (auto it = s.elements.rbegin(); it != s.elements.rend(); ++it) {
 			if (it->kind == Temporal::Creature) creatures.push_back(it->handle);
@@ -1506,37 +1662,161 @@ void World::reset_clock() {
 	}
 }
 
-uint32_t World::scene_step(float real_ms) {
-	replay_temporal_update(*this);
-	scene_carry_ += double(real_ms) * time_scale + passed_ms;
-	passed_ms = 0;
-	if (scene_carry_ < 0) {
-		uint32_t back = uint32_t(std::min<double>(-scene_carry_, scene_ms_));
-		scene_ms_ -= back;
+World::SceneClock &World::scene_clock(const GameObject *session) {
+	auto [it, made] = clocks_.try_emplace(session);
+	if (made && !session) it->second.started = true;
+	return it->second;
+}
+
+uint32_t World::clock_ms(const GameObject *session) const {
+	if (session == clock_) return scene_ms_;
+	auto it = clocks_.find(session);
+	return it == clocks_.end() ? 0 : it->second.ms;
+}
+
+void World::use_clock(const GameObject *session) {
+	if (session == clock_) return;
+	scene_clock(clock_).ms = scene_ms_;
+	clock_ = session;
+	scene_ms_ = scene_clock(session).ms;
+}
+
+// SetInitialSceneTime(0) (Core 0x7006fa10): the time and every set restart at 0.
+void World::scene_genesis(const GameObject *session) {
+	SceneClock &c = scene_clock(session);
+	if (c.started) return;
+	c.started = true;
+	c.master_started = c.master;
+	c.last_global = global_ms();
+	const GameObject *was = clock_;
+	use_clock(session);
+	scene_ms_ = 0;
+	reset_clock();
+	use_clock(was);
+}
+
+void World::forget_clock(const GameObject *session) {
+	if (!session) return;
+	if (clock_ == session) use_clock(nullptr);
+	clocks_.erase(session);
+	std::erase_if(temporal_sets_, [&](const TemporalSet &s) { return !s.scene && s.clock == session; });
+}
+
+// TemporalUpdate: the global time the scene's temporal master gives it (DE_CTemporalMasterScene::
+// TemporalGlobalTime, Core 0x70078910: its real time at its scale, less pauses, plus passed time),
+// else real time, none while autopaused; PassTime multiplies it by the scene's scale. `global` is
+// what the scene was given.
+uint32_t World::scene_step(SceneClock &c, uint32_t real_ms, double &global) {
+	global = real_ms;
+	if (c.master) {
+		double dt = c.master_started ? double(real_ms) : 0;
+		if (c.master_target != c.master_scale) {
+			double step = dt * c.master_rate;
+			c.master_scale = c.master_scale < c.master_target ? std::min(c.master_scale + step, c.master_target)
+			                                                  : std::max(c.master_scale - step, c.master_target);
+		}
+		double x = dt * c.master_scale;
+		if (c.master_pause == -1) {
+			x = 0;
+		} else if (c.master_pause != 0) {
+			if (c.master_pause <= x) x -= c.master_pause, c.master_pause = 0;
+			else c.master_pause -= x, x = 0;
+		}
+		double total = x + c.master_passed;
+		global = std::trunc(total);
+		c.master_passed = total - global;
+		global += c.master_given;
+		c.master_given = 0;
+	}
+	if (autopaused && c.autopauses) global = 0;
+	float x = float(global) * float(c.scale) + c.carry;
+	int32_t ms = int32_t(x);
+	c.carry = x - float(ms);
+	if (ms < 0) {
+		scene_ms_ = uint32_t(-ms) < scene_ms_ ? scene_ms_ - uint32_t(-ms) : 0;
 		reset_clock();
 		// What measures time since it last ran must not have run in the future.
-		simple_physics->clock_back(scene_ms_);
+		simple_physics->clock_back(scene_ms_, clock_);
 		for (auto &o : objects_) {
+			if (in_gui(o) || clock_key(&o) != clock_) continue;
 			o.interest_time = std::min(o.interest_time, scene_ms_);
 			o.target_checked = std::min(o.target_checked, scene_ms_);
 			o.target_chosen = std::min(o.target_chosen, scene_ms_);
 		}
-		scene_carry_ = 0;
 		return 0;
 	}
-	uint32_t ms = uint32_t(scene_carry_);
-	scene_carry_ -= ms;
-	// A replay passes at most 2000 ms: the clock jumps over the rest.
-	if (ms > 2000 && replaying(*this)) {
-		scene_ms_ += ms - 2000;
+	// A replayed session's scene passes at most 2000 ms: the clock jumps over the rest.
+	bool replayed = false;
+	for (auto &s : sessions) replayed |= s->obj == clock_ && s->replaying;
+	if (ms > 2000 && replayed) {
+		scene_ms_ += uint32_t(ms) - 2000;
 		reset_clock();
 		ms = 2000;
 	}
-	return ms;
+	return uint32_t(ms);
+}
+
+void World::pass_scene(const GameObject *session, uint32_t real_ms) {
+	use_clock(session);
+	SceneClock &c = scene_clock(session);
+	SessionState *s = nullptr;
+	for (auto &sp : sessions) {
+		if (sp->obj == session) s = sp.get();
+	}
+	if (s && s->replaying) {
+		if (c.master) c.master_target = time_scale, c.master_rate = 9999, c.master_passed += passed_ms;
+		passed_ms = 0;
+	}
+	if (!c.started) return;
+	replay_temporal_update(*this, session);
+	double global = 0;
+	uint32_t left = scene_step(c, real_ms, global);
+	const uint32_t now_global = global_ms();
+	// The set whose next tick comes first (the first made, on a tie) advances, the clock standing at
+	// that tick, until the next tick lies beyond what passes.
+	for (;;) {
+		register_temporals();
+		TemporalSet *first = nullptr;
+		for (auto &t : temporal_sets_) {
+			if (!t.scene && t.clock == session && (!first || t.next - scene_ms_ < first->next - scene_ms_)) first = &t;
+		}
+		if (!first || first->next - scene_ms_ > left) break;
+		left -= first->next - scene_ms_;
+		scene_ms_ = first->next;
+		first->next += first->rate;
+		advance(*first);
+		forces->tick();
+		start_pending_brains();
+	}
+	scene_ms_ += left;
+	c.last_global = now_global;
+	scene_delta_tick(*this, session, float(global * c.scale));
+}
+
+// A scene with a temporal master is given what the master passed since (TemporalPassTime), which
+// its next pass then takes as already given; any other the wall clock since its last pass.
+uint32_t World::precise_ms_of(const GameObject *o, int view) {
+	if (view < 0 && o && in_gui(*o)) view = std::clamp(gui_view(*o), 0, 1);
+	if (view >= 0) return gui_scene_ms[view] + uint32_t(global_ms() - gui_scene_global[view]);
+	const GameObject *key = o ? clock_key(o) : clock_;
+	if (key == clock_ && scene_ms_set_) return scene_ms_;
+	SceneClock &c = scene_clock(key);
+	uint32_t since;
+	if (c.master) {
+		double given = std::trunc(c.master_passed);
+		c.master_passed -= given;
+		c.master_given += given;
+		since = uint32_t(int64_t(c.master_given));
+	} else {
+		since = global_ms() - c.last_global;
+	}
+	return clock_ms(key) + uint32_t(int64_t(double(since) * c.scale));
 }
 
 uint32_t World::scene_ms_of(const GameObject *o) const {
-	return o && in_gui(*o) ? gui_scene_ms[std::clamp(gui_view(*o), 0, 1)] : scene_ms_;
+	if (!o) return scene_ms_;
+	if (in_gui(*o)) return gui_scene_ms[std::clamp(gui_view(*o), 0, 1)];
+	return clock_ms(clock_key(o));
 }
 
 GameObject *World::scene_object(const GameObject *o) {
@@ -1552,6 +1832,7 @@ int World::gui_scene_view(const GameObject *scene) {
 void World::tick_gui(int view, uint32_t ms) {
 	uint32_t &now = gui_scene_ms[view];
 	uint32_t left = ms;
+	gui_passing_ = true;
 	for (;;) {
 		register_temporals();
 		TemporalSet *first = nullptr;
@@ -1571,6 +1852,8 @@ void World::tick_gui(int view, uint32_t ms) {
 		}
 	}
 	now += left;
+	gui_scene_global[view] = global_ms();
+	gui_passing_ = false;
 }
 
 void World::close_instance(vm::Executor &, uint32_t instance) { instances_closed_.push_back(instance); }
@@ -1586,6 +1869,16 @@ void World::tick(uint32_t ms) {
 	frame_ms_ = ms;
 	destroy_closed_instances();
 	housekeeping();
+	// A destroyed object's brain never runs again: its 256 KB stack is reused.
+	std::erase_if(dead_brains_, [](Brain *b) { return !b->exec || b->exec->release_stack(); });
+	for (auto it = swept_affectors.begin(); it != swept_affectors.end();) {
+		if (object((*it)->handle) != *it || !in_scene(**it)) {
+			it = swept_affectors.erase(it);
+		} else {
+			(*it)->swept_from = (*it)->world().t;
+			++it;
+		}
+	}
 	impulses->flush();
 	// OPENBG_CALLS="Katana@400-402" (or "*@..."): log the methods brains of that owner enter.
 	static const char *calls = getenv("OPENBG_CALLS");
@@ -1601,50 +1894,19 @@ void World::tick(uint32_t ms) {
 		}
 		if (window) fprintf(stderr, "[call] --- frame %u\n", frame_);
 	}
-	replay_temporal_update(*this);
-	// PassTime: the set whose next tick comes first (the first made, on a tie) advances, the
-	// clock standing at that tick, until the next tick lies beyond the frame.
-	uint32_t left = ms;
-	for (;;) {
-		register_temporals();
-		TemporalSet *first = nullptr;
-		for (auto &s : temporal_sets_) {
-			if (!s.scene && (!first || s.next - scene_ms_ < first->next - scene_ms_)) first = &s;
-		}
-		if (!first || first->next - scene_ms_ > left) break;
-		left -= first->next - scene_ms_;
-		scene_ms_ = first->next;
-		first->next += first->rate;
-		advance(*first);
-		forces->tick();
-		start_pending_brains();
-	}
-	scene_ms_ += left;
+	pass_scene(nullptr, ms);
+	// Each session's update passes its own scene first (DE_CSession::Update's TemporalUpdate).
 	update_session(*this);
+	use_clock(session ? session->obj : nullptr);
 	simple_physics->tick();
 	particles->step();
 	start_pending_brains();
 	housekeeping();
+	use_clock(session ? session->obj : nullptr);
 }
 
 // Affector references: [object][actor properties][affector v4: BOOL owner actor, BOOL
 // encompassing affector]...
-GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r) {
-	std::function<GameObject *(GameObject *, GameObject *)> find = [&](GameObject *o, GameObject *skip) -> GameObject * {
-		if (o->file == r.file && o->index == r.index) return o;
-		for (GameObject *c : o->children) {
-			if (c == skip) continue;
-			if (GameObject *h = find(c, nullptr)) return h;
-		}
-		return nullptr;
-	};
-	GameObject *skip = nullptr;
-	for (GameObject *p = from; p; skip = p, p = p->parent) {
-		if (GameObject *h = find(p, skip)) return h;
-	}
-	return nullptr;
-}
-
 GameObject *World::affector_owner(GameObject *a) {
 	if (!a) return nullptr;
 	if (a->owner_actor) return a->owner_actor;
@@ -1655,7 +1917,7 @@ GameObject *World::affector_owner(GameObject *a) {
 			if (lists.size() > 2 && !lists[2].empty() && !lists[2][0].empty() && lists[2][0][0]) {
 				// The nearest copy: several copies of one template (a pickup on each spawner)
 				// share the data object, so search outwards from the affector.
-				a->data_owner = nearest_copy(a, lists[2][0][0]);
+				a->data_owner = referent(a, lists[2][0][0]);
 			}
 		}
 	}
@@ -1677,7 +1939,7 @@ GameObject *World::encompasser_of(GameObject *a) {
 				if (c.remaining() > 1 && de::begin_chunk(c).version == 4) {
 					if (c.boolean()) de::Reference::read(c);
 					if (c.boolean()) {
-						if (de::ObjectRef r = data_.resolve(*a->file, de::Reference::read(c))) a->data_encompasser = nearest_copy(a, r);
+						if (de::ObjectRef r = data_.resolve(*a->file, de::Reference::read(c))) a->data_encompasser = referent(a, r);
 					}
 				}
 			} catch (const std::exception &) {

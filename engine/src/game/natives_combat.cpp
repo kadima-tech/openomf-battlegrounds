@@ -729,7 +729,7 @@ void register_combat_natives(World &w) {
 	});
 	reg("CCollisionTester::Activate()", [](const NativeContext &c) {
 		g_testers[c.self_handle()].active = true;
-		c.world.activate_tester(c.self_handle());
+		c.world.activate_tester(c.self_handle(), c.owner());
 	});
 	reg("CCollisionTester::SetAttachedForce(class CForce)", [](const NativeContext &c) { g_testers[c.self_handle()].force = c.arg_object(0); });
 	reg("CCollisionTester::NeedSurfaceNormal()", [](const NativeContext &) {});
@@ -1306,6 +1306,7 @@ void register_combat_natives(World &w) {
 			st.color = std::array<float, 3>{1, 0.7f, 0.3f};
 			st.intensity = b.light_intensity;
 		}
+		w.root_session[copy] = w.scene_session_of(f);  // the fighter's own scene (+0x10), its AddTemporal's too
 		w.enter_scene(copy);
 		w.particles->add_sparks(std::move(b));
 		return copy;

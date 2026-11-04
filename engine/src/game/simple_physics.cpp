@@ -78,12 +78,12 @@ SimplePhysics &SimplePhysicsSystem::state(GameObject &p) {
 		if (lists.size() > 2 && !lists[2].empty() && actor) {
 			for (auto &r : lists[2][0]) {
 				if (!r) continue;
-				if (GameObject *a = nearest_copy(actor, r)) {
+				if (GameObject *a = w_.referent(actor, r)) {
 					if (a->is("Actor\\Affector")) s.affectors.push_back(a);
 				}
 			}
 			if (lists[2].size() > 1 && !lists[2][1].empty() && lists[2][1][0]) {
-				if (GameObject *f = nearest_copy(actor, lists[2][1][0]); f && f->is("UniqueActorProperty\\Force")) s.force = f;
+				if (GameObject *f = w_.referent(actor, lists[2][1][0]); f && f->is("UniqueActorProperty\\Force")) s.force = f;
 			}
 		}
 	} catch (const std::exception &) {
@@ -104,7 +104,7 @@ SimplePhysics &SimplePhysicsSystem::state(GameObject &p) {
 		s.momentum = t.rotate(s.momentum);
 		s.accel = t.rotate(s.accel);
 	}
-	s.last_ms = uint32_t(scene_time_ms(w_));
+	s.last_ms = w_.scene_ms_of(&p);
 	return s;
 }
 
@@ -211,9 +211,9 @@ void SimplePhysicsSystem::bounce(GameObject &, SimplePhysics &s, const std::vect
 }
 
 void SimplePhysicsSystem::tick() {
-	uint32_t now = uint32_t(scene_time_ms(w_));
 	for (GameObject *actor : w_.scene_objects()) {
 		if (!actor->is_actor || actor->fighter || !in_scene(*actor)) continue;
+		const uint32_t now = w_.scene_ms_of(actor);
 		for (GameObject *p : physics_of(*actor)) {
 			if (p->class_path != "Physics\\Simple") continue;
 			SimplePhysics &s = state(*p);
@@ -238,7 +238,7 @@ void SimplePhysicsSystem::tick() {
 void SimplePhysicsSystem::delta_tick(GameObject &p) {
 	GameObject *actor = actor_of(p);
 	SimplePhysics &s = state(p);
-	uint32_t now = uint32_t(scene_time_ms(w_));
+	uint32_t now = w_.scene_ms_of(&p);
 	if (now <= s.last_ms) {
 		s.last_ms = now;
 		return;

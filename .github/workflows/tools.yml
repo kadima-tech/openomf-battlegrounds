@@ -1,0 +1,79 @@
+name: Tools
+
+on:
+  # Any branch: the job is cheap, and the tools are worth checking before a pull request.
+  push:
+    paths:
+      - 'tools/**'
+      - 'engine/src/de/contents.*'
+      - 'engine/src/de/lzrw3a.*'
+      - 'engine/src/de/md5.*'
+      - '.github/workflows/tools.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/**'
+      - 'engine/src/de/contents.*'
+      - 'engine/src/de/lzrw3a.*'
+      - 'engine/src/de/md5.*'
+      - '.github/workflows/tools.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deobjects-editor:
+    name: deobjects-edit (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-2025
+            exe: build/Release/deobjects-edit.exe
+          - name: macos-arm64
+            runner: macos-15
+            exe: build/deobjects-edit
+          - name: macos-x86_64
+            runner: macos-15-intel
+            exe: build/deobjects-edit
+          - name: linux-x64
+            runner: ubuntu-latest
+            exe: build/deobjects-edit
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/deobjects-editor
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Windows uses the runner's Visual Studio (MSVC) through CMake's default generator.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+          "${{ matrix.exe }}" schemas > /dev/null
+
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: deobjects-edit-${{ matrix.name }}
+          path: |
+            tools/deobjects-editor/${{ matrix.exe }}
+            tools/deobjects-editor/README.md
+          if-no-files-found: error
+          retention-days: 14

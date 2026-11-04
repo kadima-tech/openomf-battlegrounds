@@ -295,8 +295,11 @@ ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o) {
 	for (auto &v : a.local.r) {
 		v = c.f32();
 	}
+	for (int k = 0; k < 4; ++k) {
+		bool b = c.boolean();
+		if (k == 3) a.rendered = b;
+	}
 	if (ch.version >= 4) {
-		for (int k = 0; k < 4; ++k) c.boolean();
 		a.position_mode = c.i32();
 		if (ch.version >= 5) a.flags = c.u32();
 	}
@@ -379,6 +382,7 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 		layer.corner_colours = read_corner_colours(*tm.file, tm.index);
 		if (layer.corner_colours.size() != layer.uvs.size() * 3) layer.corner_colours.clear();
 		layer.specular = child_float(w, tm, "SpecularFactor").value_or(1);
+		layer.never_disable = child_bool(tm, "NeverDisable");
 		for (auto &ref : texture_images(tm.file->object_data(tm.info()))) {
 			ObjectRef img = w.resolve(*tm.file, ref);
 			if (img && img.info().class_path == "ScaleModifier") {

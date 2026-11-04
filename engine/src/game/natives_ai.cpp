@@ -17,6 +17,7 @@
 #include "game/navigation.h"
 #include "game/observer.h"
 #include "game/runtime.h"
+#include "game/simple_physics.h"
 
 namespace game {
 
@@ -680,6 +681,24 @@ void register_ai_natives(World &w) {
 		if (a && a->is("Actor\\Creature\\Pilot")) a = fighter_of(a->parent);
 		c.ret_bool(fighter_is_enemy(a, b));
 	});
+	// DE_COMF2Fighter::NumEnemies / Enemy (OMF 2.123 0x1072a990 / 0x1072a9d0, creature vtable
+	// +0x174 / +0x178; a plain creature has none): the fighters of its scene list (+0x338) that
+	// take it as an enemy.
+	auto enemies = [](const NativeContext &c) {
+		std::vector<GameObject *> out;
+		GameObject *a = c.self();
+		if (!a || !a->fighter || !in_scene(*a)) return out;
+		for (GameObject *o : c.world.scene_objects()) {
+			if (o != a && o->fighter && World::enemy_fighter(*o, *a)) out.push_back(o);
+		}
+		return out;
+	};
+	reg("CCreature::int NumEnemy()", [enemies](const NativeContext &c) { c.ret_u32(uint32_t(enemies(c).size())); });
+	reg("CCreature::class CCreature Enemy(int)", [enemies](const NativeContext &c) {
+		auto e = enemies(c);
+		int i = c.arg<int32_t>(0);
+		c.ret_object(i >= 0 && size_t(i) < e.size() ? e[size_t(i)] : nullptr);
+	});
 	reg("CPilot::bool IsEnemy(class CActor)", [fighter_is_enemy](const NativeContext &c) {
 		GameObject *a = c.self(), *b = c.arg_object(0);
 		c.ret_bool(fighter_is_enemy(a ? fighter_of(a->parent) : nullptr, b));
@@ -757,7 +776,19 @@ void register_ai_natives(World &w) {
 		// MomentumCaller (Core): each physics component's momentum x its TimeScale; a fighter's
 		// physics runs at 1/16 (1 / ms per frame), so this is units per millisecond.
 		float k = o->fighter ? 1.0f / 16 : 1.0f;
-		write_vec(c.mem(), o->momentum_vec, {o->momentum[0] * k, o->momentum[1] * k, o->momentum[2] * k});
+		std::array<float, 3> m{o->momentum[0] * k, o->momentum[1] * k, o->momentum[2] * k};
+		// A simple physics' (DE_CSimplePhysics::GetMomentum while enabled) at TimeScale 1 / rate,
+		// or 1 when stepped by the scene's time.
+		if (!o->fighter) {
+			for (GameObject *p : c.world.simple_physics->physics_of(*o)) {
+				if (p->class_path != "Physics\\Simple") continue;
+				const SimplePhysics &s = c.world.simple_physics->state(*p);
+				if (!s.enabled) continue;
+				float t = s.rate > 0 ? 1.0f / float(s.rate) : 1.0f;
+				for (int i = 0; i < 3; ++i) m[size_t(i)] += s.momentum[size_t(i)] * t;
+			}
+		}
+		write_vec(c.mem(), o->momentum_vec, m);
 		c.ret_u32(o->momentum_vec);
 	});
 
@@ -925,6 +956,11 @@ void register_ai_natives(World &w) {
 			}
 		}
 		c.ret_object(img);
+	});
+	// SexCaller (OMF 0x35048260): +0x3d4, the last u32 of the pilot's contents.
+	reg("CPilot::dword Sex()", [](const NativeContext &c) {
+		const Pilot *p = c.self() ? pilot_of(c.self()) : nullptr;
+		c.ret_u32(p ? p->sex : 0);
 	});
 	// FactionCaller / SetFactionCaller (OMF 0x350482e0): the pilot's faction reference (+0x328,
 	// pointer +0x32c). Only BCreatureAndPilotPicker sets it, and only in team games; otherwise

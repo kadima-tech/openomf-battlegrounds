@@ -7,6 +7,8 @@
 // actor whenever a coordinate-system native changes it.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <map>
@@ -485,7 +487,11 @@ void register_transform_natives(World &w) {
 		if (!v) return;
 		write_vec(c.mem(), v, c.world.world_to_screen ? c.world.world_to_screen(read_vec(c.mem(), v)) : std::array<float, 3>{0, 0, 0});
 	});
-	reg("CScene::dword PreciseTime()", [](const NativeContext &c) { c.ret_u32(scene_time(c)); });
+	reg("CScene::dword PreciseTime()", [](const NativeContext &c) {
+		const GameObject *o = c.owner();
+		if (o && in_gui(*o)) o = nullptr;
+		c.ret_u32(c.world.precise_ms_of(o, World::gui_scene_view(c.self())));
+	});
 	reg("CActor::class CVector FocalPoint()", [](const NativeContext &c) {
 		GameObject *o = c.self();
 		if (!o) {

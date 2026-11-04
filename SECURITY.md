@@ -14,7 +14,7 @@ to report a vulnerability privately. You can also use GitHub's private
 form if it is available. Do not publish exploit details, credentials or private
 game data in a public issue or pull request.
 
-Include the affected version or commit, operating system version and architecture, impact,
+Include the affected version or commit, operating system (macOS, Windows or Linux distribution) version and architecture, impact,
 reproduction steps and any suggested fix. Prefer a minimal synthetic input over
 copyrighted game files. Let maintainers know if you plan to disclose the issue
 publicly so a fix and disclosure can be coordinated. Response times depend on

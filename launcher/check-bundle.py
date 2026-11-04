@@ -4,6 +4,11 @@
 CI needs no game disc. The installer must start its bundled interpreter/decoder,
 validate its real update archive, and return the expected missing-disc-file error.
 Real-disc end-to-end installation is a separate local check.
+
+Pass the app's Resources folder on macOS, or the resources folder of the Linux or
+Windows build (dist/Battlegrounds/resources). macOS denies network access with its
+sandbox and Linux with an empty network namespace; Windows has no per-process
+equivalent, so proxies point nowhere instead.
 """
 import argparse
 import json
@@ -44,12 +49,17 @@ def network_denied() -> list[str]:
     return command
 
 
+WINDOWS = os.name == "nt"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("resources", type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="OpenBG offline setup ") as temporary:
         root = Path(temporary)
+        if WINDOWS:
+            return check_windows(args.resources, root)
         resources = root / "Moved app with spaces/Resources"
         shutil.copytree(args.resources, resources, symlinks=True)
         for path in resources.rglob('*'):
@@ -95,8 +105,38 @@ def main():
 def build_iso(path: Path) -> None:
     """A minimal ISO 9660 image holding a Battlegrounds-shaped Setup folder (no game data)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from test_iso9660 import DISC, Builder
-    Builder(DISC).write(path)
+    from test_iso9660 import ImageBuilder, disc_tree
+    path.write_bytes(ImageBuilder(joliet=True).build(disc_tree()))
+
+
+def check_windows(original: Path, root: Path):
+    # A non-ASCII folder with spaces: the launcher passes paths like this to setup.
+    resources = root / "Moved app with spaces \u00e9/resources"
+    shutil.copytree(original, resources)
+    home = root / "Fresh game folder"
+    home.mkdir()
+    empty = root / "No game data"
+    empty.mkdir()
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("PYTHON")}
+    env.update(PYTHONHOME="C:\\invalid\\python", PYTHONPATH="C:\\invalid\\packages", PYTHONUTF8="0",
+               HTTP_PROXY="http://127.0.0.1:1", HTTPS_PROXY="http://127.0.0.1:1", ALL_PROXY="http://127.0.0.1:1",
+               PATH=os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32"))
+    python = resources / "python/python.exe"
+    subprocess.run([str(python), "-I", "-B", "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import bsdiff4; "
+        "assert bsdiff4.patch(b'old', bsdiff4.diff(b'old', b'new')) == b'new'",
+        str(resources / "python-packages")], env=env, check=True)
+    subprocess.run([str(python), "-I", "-B", str(resources / "patching.py"), str(resources)], env=env, check=True)
+    # Exactly how Battlegrounds.exe starts setup (launcher/windows/core.cpp).
+    result = subprocess.run([str(python), "-I", "-B", "-X", "utf8", str(resources / "install.py"), "--home", str(home),
+                             "--resources", str(resources), "--verify", str(empty)],
+                            env=env, capture_output=True, text=True)
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    if result.returncode != 1 or not events or not events[-1].get("detail", "").startswith("Game file missing or incomplete:"):
+        raise RuntimeError(f"Packaged setup did not start correctly: {result.stdout} {result.stderr}")
+    if (home / "runtime").exists() or (home / "patches").exists():
+        raise RuntimeError("Setup unexpectedly created a download/tool cache")
+    print("Relocated packaged Windows runtime, decoder, patch and installer passed without user Python settings")
 
 
 if __name__ == "__main__":

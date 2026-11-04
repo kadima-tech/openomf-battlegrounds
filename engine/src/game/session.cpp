@@ -5,6 +5,7 @@
 #include "game/replay.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -289,6 +290,16 @@ GameObject *World::scene_session_of(const GameObject *o) const {
 	return it == root_session.end() ? nullptr : it->second;
 }
 
+const GameObject *World::clock_key(const GameObject *o) const {
+	while (o && o->parent) o = o->parent;
+	if (!o) return nullptr;
+	if (auto it = root_session.find(o); it != root_session.end()) return it->second;
+	for (auto &s : sessions) {
+		if (s->obj == o) return o;
+	}
+	return nullptr;
+}
+
 void World::prepare_branch(GameObject *o) {
 	if (!o) return;
 	parented(o, false);
@@ -368,7 +379,8 @@ GameObject *World::create_object_reference(GameObject *o) {
 		if (!create) return nullptr;
 		GameObject *tpl = global_object(data_.by_guid(target));
 		if (!tpl) return nullptr;
-		GameObject *n = copy_tree(*tpl);
+		GameObject *n = copy_tree(*tpl, true);
+		n->system = true;  // DE_CPassiveObjectReference::Create (Core 0x7004dbd0)
 		if (under_parent && o->parent) {
 			n->parent = o->parent;
 			o->parent->children.push_back(n);
@@ -383,7 +395,7 @@ GameObject *World::create_object_reference(GameObject *o) {
 static GameObject *reference_target(World &w, GameObject *o, const ReferenceFlags &flags, const de::Guid &target, bool rename) {
 	GameObject *tpl = w.global_object(w.data().by_guid(target));
 	if (!tpl) return nullptr;
-	GameObject *n = w.copy_tree(*tpl);
+	GameObject *n = w.copy_tree(*tpl, true);
 	if (rename) n->name = o->name;
 	n->local = (flags.place == 0 ? o->local : o->world()).then(tpl->local);
 	for (auto &p : w.actor_properties({o->file, o->index})) {
@@ -569,7 +581,7 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	if (refs[0].info().class_path == "Actor\\Creature\\OMF2Fighter" && w.make_fighter) {
 		res = w.make_fighter(refs[0]);
 	} else if (GameObject *tpl = w.global_object(refs[0])) {
-		res = w.copy_tree(*tpl);
+		res = w.copy_tree(*tpl, true);
 		if (res->is("Actor\\Creature\\Pilot")) {
 			if (auto p = read_pilot(*refs[0].file, refs[0].info(), w.ai_difficulty)) {
 				static std::deque<Pilot> pilots;
@@ -580,12 +592,13 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	if (res && src.info().class_path == "Description\\Creature\\Fighter") {
 		// [resource][default model][extra actor (the HUD)]: the extra and the model (the
 		// chosen one, else the default) become children of the fighter.
-		auto add = [&](const de::ObjectRef &r) {
-			if (GameObject *tpl = w.global_object(r)) {
-				GameObject *ch = w.copy_tree(*tpl);
-				ch->parent = res;
-				res->children.push_back(ch);
-			}
+		auto add = [&](const de::ObjectRef &r) -> GameObject * {
+			GameObject *tpl = w.global_object(r);
+			if (!tpl) return nullptr;
+			GameObject *ch = w.copy_tree(*tpl);
+			ch->parent = res;
+			res->children.push_back(ch);
+			return ch;
 		};
 		if (refs.size() > 2) add(refs[2]);
 		// DE_CFighterDescription::NewResource(GUID) (OMF 0x10733930): a FighterModelDescription's
@@ -596,7 +609,8 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 			m = res.empty() ? de::ObjectRef{} : res[0];
 		}
 		if (!m && refs.size() > 1) m = refs[1];
-		if (m) add(m);
+		GameObject *model = m ? add(m) : nullptr;
+		if (model && model->is("FighterModel")) w.setup_creature_model(model, res);
 	}
 	// DE_CDescription::NewResource: each of the description's replacement objects (+0x80) takes
 	// the place of the resource's descendant of its name, and a copy of each resource component
@@ -684,6 +698,23 @@ void destroy_all_sessions(World &w) {
 	for (auto &sp : std::vector<std::shared_ptr<SessionState>>(w.sessions)) end_session(w, *sp);
 }
 
+bool master_requirements_met(World &w, const SessionState &s) {
+	if (!s.master_description) return true;
+	std::vector<de::ObjectRef> members;
+	auto add = [&](const de::ObjectRef &modifier) {
+		for (auto &c : modifier_member_casts(w.data(), modifier)) members.push_back(c);
+	};
+	for (GameObject *m : s.modifiers) add(source_of(m));
+	for (const de::Guid &g : s.attached_guids) {
+		auto res = passive_references(w.data(), w.data().by_guid(g));
+		if (!res.empty()) add(res[0]);
+	}
+	for (const de::ObjectRef &c : required_casts(w.data(), source_of(s.master_description))) {
+		if (std::none_of(members.begin(), members.end(), [&](const de::ObjectRef &m) { return m.file == c.file && m.index == c.index; })) return false;
+	}
+	return true;
+}
+
 void add_session_modifier(World &w, GameObject *m) {
 	auto &s = *w.session;
 	m->parent = s.obj;
@@ -715,6 +746,11 @@ void add_modifier_copy(World &w, SessionState &s, const de::ObjectRef &r) {
 // DE_CSession::Begin for `s`: its attached modifier descriptions' resources join it, then every
 // modifier is initialised and begun (DE_CStandardSession::Begin).
 void begin(World &w, SessionState &s) {
+	// DE_CStandardSession::Begin (Session 0x4500ecf0): its new scene may autopause (+0x1c0 cleared),
+	// and a replayed session's gets a temporal master for the VCR.
+	World::SceneClock &clock = w.scene_clock(s.obj);
+	clock.autopauses = true;
+	if (s.replaying) clock.master = true;
 	for (const de::Guid &g : s.attached_guids) {
 		GameObject *tpl = w.global_object(w.data().by_guid(g));
 		GameObject *m = tpl ? new_resource(w, w.copy_tree(*tpl), nullptr) : nullptr;
@@ -843,26 +879,31 @@ static void update_one(World &w, SessionState &s) {
 	}
 }
 
-void update_session(World &w) {
-	{
-		auto hooks = w.delta_tick_hooks;
-		float ms = float(w.frame_ms());
-		for (auto &[b, m] : hooks) {
-			if (b->inst.shut_down) continue;
-			std::vector<uint8_t> args(4);
-			memcpy(args.data(), &ms, 4);
-			b->call_handle(w, m, args);
-		}
+// DE_CScene::PassTime (2.123 0x20073f30) after the temporal sets: the scene's delta-tick hooks
+// (+0xd8) with the time it was given at its scale, then its delta-tick list (+0x70).
+void scene_delta_tick(World &w, const GameObject *session, float ms) {
+	auto hooks = w.delta_tick_hooks;
+	for (auto &[b, m] : hooks) {
+		if (b->inst.shut_down || w.clock_key(b->owner) != session) continue;
+		std::vector<uint8_t> args(4);
+		memcpy(args.data(), &ms, 4);
+		b->call_handle(w, m, args);
 	}
-	// DE_CScene::PassTime (Core 0x70070040): the delta-tick list after the hooks.
 	auto &dc = w.delta_creatures;
 	dc.erase(std::remove_if(dc.begin(), dc.end(), [&](uint32_t h) { return !w.object(h); }), dc.end());
 	for (uint32_t h : std::vector<uint32_t>(dc)) {
-		if (GameObject *o = w.object(h); o && in_scene(*o)) creature_delta_tick(w, *o);
+		if (GameObject *o = w.object(h); o && in_scene(*o) && w.clock_key(o) == session) creature_delta_tick(w, *o);
 	}
-	if (w.render_ticks_per_frame) render_tick(w, float(w.frame_ms()));
-	// Sessions whose object has been deleted (EndAndDie) are gone; the current one falls back to
-	// the session that made it.
+}
+
+void update_session(World &w) {
+	if (w.render_ticks_per_frame) {
+		w.render_lag = true;
+		render_tick(w, float(w.frame_ms()));
+		w.render_lag = false;
+	}
+	// Sessions whose object has been deleted (EndAndDie) are gone, with their scenes; the current
+	// one falls back to the session that made it.
 	for (size_t i = 0; i < w.sessions.size();) {
 		auto sp = w.sessions[i];
 		if (w.object(sp->obj->handle)) {
@@ -870,6 +911,7 @@ void update_session(World &w) {
 			continue;
 		}
 		w.sessions.erase(w.sessions.begin() + long(i));
+		w.forget_clock(sp->obj);
 		if (w.session == sp) {
 			w.session = nullptr;
 			for (auto &o : w.sessions) {
@@ -881,14 +923,29 @@ void update_session(World &w) {
 			if (o->owner == sp.get()) o->owner = nullptr;
 		}
 	}
-	replay_update(w);
 	auto current = w.session;
 	auto all = w.sessions;
+	bool replay_seen = false;
+	// DE_CAppManager::InternalUpdateSessions (Core 0x7019a540): each local session in turn, whose
+	// DE_CSession::Update (0x701f8ab0) first has its scene pass time (TemporalUpdate).
 	for (auto &sp : all) {
-		if (!sp->begun || sp->ended) continue;
+		if (sp->ended) continue;
 		w.session = sp;
+		const bool recorded = replay_session(w) == sp.get();
+		if (recorded) {
+			// It checks its record and fetches the replayed states before its scene passes.
+			w.use_clock(sp->obj);
+			replay_seen = true;
+			replay_update(w);
+			if (sp->ended) continue;
+		}
+		w.pass_scene(sp->obj, w.frame_ms());
+		w.use_clock(sp->obj);
+		if (recorded) replay_after_pass(w);
+		if (!sp->begun || sp->ended) continue;
 		update_one(w, *sp);
 	}
+	if (!replay_seen) replay_update(w);
 	if (std::find(w.sessions.begin(), w.sessions.end(), current) != w.sessions.end() || !current) w.session = current;
 	if (auto b = g_begun.lock()) {
 		if (std::find(w.sessions.begin(), w.sessions.end(), b) != w.sessions.end()) w.session = b;
@@ -896,6 +953,7 @@ void update_session(World &w) {
 	}
 	if (w.session && std::find(w.sessions.begin(), w.sessions.end(), w.session) == w.sessions.end()) w.session = w.sessions.empty() ? nullptr : w.sessions.back();
 }
+
 
 void register_session_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
@@ -962,8 +1020,10 @@ void register_session_natives(World &w) {
 		reg(std::string(cls) + "bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
 		reg(std::string(cls) + "bool IsSimulating()", [](const NativeContext &c) { c.ret_bool(true); });
 		// AddPropertyCaller (Session 0x45014ba0 / 0x45019e60): appended to the property list.
-		reg(std::string(cls) + "AddProperty(class CObject)", [node](const NativeContext &c) {
-			if (auto *n = node(c); n && c.arg_object(0)) n->properties.push_back(c.arg_object(0));
+		reg(std::string(cls) + "AddProperty(class CObject)", [S](const NativeContext &c) {
+			SessionState *s = S(c);
+			if (!s || !c.self() || !c.arg_object(0)) return;
+			make_node(c.world, *s, c.self()).properties.push_back(c.arg_object(0));
 		});
 		reg(std::string(cls) + "int NumProperty()", [node](const NativeContext &c) {
 			auto *n = node(c);
@@ -998,7 +1058,10 @@ void register_session_natives(World &w) {
 			if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] %s owns environment %s\n", c.world.frame(), s->obj->name.c_str(), s->environment ? s->environment->name.c_str() : "-");
 			if (s->environment) c.world.root_session[s->environment] = s->obj;
 			c.world.enter_scene(s->environment);
-			if (s->environment) s->scene_started = true;
+			if (s->environment) {
+				s->scene_started = true;
+				c.world.scene_genesis(s->obj);
+			}
 		}
 	});
 	// SetEnvironmentGUIDCaller / EnvironmentGUIDCaller (Session 0x4500e680): the chosen
@@ -1046,7 +1109,7 @@ void register_session_natives(World &w) {
 		auto *sl = s && o ? s->slot_of(o->parent) : nullptr;
 		c.ret_object(sl && sl->client ? sl->client->obj : nullptr);
 	});
-	reg("CStandardSessionSlotModifier::dword LocalTime()", [](const NativeContext &c) { c.ret_u32(uint32_t(c.world.scene_ms())); });
+	reg("CStandardSessionSlotModifier::dword LocalTime()", [](const NativeContext &c) { c.ret_u32(c.world.scene_ms_of(c.self())); });
 	// AttachComponents: copies of the modifier's creature components (e.g. FighterStats) under
 	// the creature, their executors started.
 	reg("CStandardSessionSlotModifier::AttachComponents(class CCreature)", [node](const NativeContext &c) {
@@ -1153,6 +1216,26 @@ void register_session_natives(World &w) {
 
 	// --- The session (CSession / CStandardSession) ----------------------------------------------
 	// DE_CSession::MaxPlayerClients (Core 0x70010f80): the top-level session's session info's.
+	// DE_CSession::AddModifier (Core 0x701f8f90): appended once to the modifier list; a begun
+	// session (+0xa4) initialises it (SymbiotSessionModifierInvalid 0x70200640), without Begin.
+	reg("CSession::AddModifier(class CSessionModifier)", [](const NativeContext &c) {
+		SessionState *s = session_of(c.world, c.self());
+		GameObject *m = c.arg_object(0);
+		if (!s || !m) return;
+		if (std::find(s->modifiers.begin(), s->modifiers.end(), m) == s->modifiers.end()) {
+			if (m->parent != s->obj) {
+				if (m->parent) {
+					auto &ch = m->parent->children;
+					ch.erase(std::remove(ch.begin(), ch.end(), m), ch.end());
+				}
+				m->parent = s->obj;
+				s->obj->children.push_back(m);
+			}
+			s->modifiers.push_back(m);
+		}
+		SessionNode &n = make_node(c.world, *s, m);
+		if (s->begun) initialize_node(c.world, *s, n);
+	});
 	reg("CSession::int MaxPlayerClients()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		while (s && s->owner) s = s->owner;
@@ -1165,7 +1248,12 @@ void register_session_natives(World &w) {
 	reg("CSession::bool IsLocal()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsReadyToLoad()", [](const NativeContext &c) { c.ret_bool(true); });
 	reg("CSession::bool IsFullySequenced()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CSession::bool AreMasterRequirementsSatisfied()", [](const NativeContext &c) { c.ret_bool(true); });
+	// AreMasterRequirementsSatisfiedCaller (Core 2.123 0x201ff790): false while the session's Choose
+	// Cast page is active and not auto-selecting.
+	reg("CSession::bool AreMasterRequirementsSatisfied()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		c.ret_bool(!s || (!s->settings_active && master_requirements_met(c.world, *s)));
+	});
 	reg("CSession::string StatusDescription()", [](const NativeContext &c) { c.ret_u32(c.world.string("")); });
 	stub("CSession::LoadingComplete()");
 	// EndAndDieCaller (Core 0x701f7d90): DeleteThisLater, then DE_CSession::End (0x701f9400):
@@ -1243,6 +1331,8 @@ void register_session_natives(World &w) {
 		c.ret_object(s ? s->obj : nullptr);
 	});
 	stub("CSession::SetJoinable(bool)");
+	// IsJoinableCaller (Core 2.123 0x201ff360): single player's sessions are local, never joinable.
+	reg("CSession::bool IsJoinable()", [](const NativeContext &c) { c.ret_bool(false); });
 	reg("CSession::class CClient NewClient()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		if (!s) {
@@ -1335,13 +1425,16 @@ void register_session_natives(World &w) {
 			if (GameObject *o = c.self()) c.world.relays[o].push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 		});
 	}
-	reg("CSession::RemoveEventRelays(class CClassExecutorInstance)", [](const NativeContext &c) {
-		Brain *b = c.world.brain_of(c.ex);
-		if (GameObject *o = c.self()) {
-			auto &v = c.world.relays[o];
-			v.erase(std::remove_if(v.begin(), v.end(), [b](auto &r) { return r.first == b; }), v.end());
-		}
-	});
+	// RemoveEventRelaysCaller (Core 2.123 0x200914a0 actor, 0x201fef30 session): the caller's relays go.
+	for (const char *k : {"CSession::RemoveEventRelays(class CClassExecutorInstance)", "CActor::RemoveEventRelays(class CClassExecutorInstance)"}) {
+		reg(k, [](const NativeContext &c) {
+			Brain *b = c.world.brain_of(c.ex);
+			if (GameObject *o = c.self()) {
+				auto &v = c.world.relays[o];
+				v.erase(std::remove_if(v.begin(), v.end(), [b](auto &r) { return r.first == b; }), v.end());
+			}
+		});
+	}
 
 	// --- Clients --------------------------------------------------------------------------------
 	auto client = [S](const NativeContext &c) -> SessionClient * {
@@ -1602,6 +1695,15 @@ void register_session_natives(World &w) {
 		if (World::gui_scene_view(c.self()) >= 0) return;
 		if (SessionState *s = session_of(c.world, caller_scene(c))) s->watchers_active = true;
 	});
+	// IsLoadingCompleteCaller (Core 2.123 0x20071b80): the scene's +0x1c8, which ActivateSceneWatchers sets.
+	reg("CScene::bool IsLoadingComplete()", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) >= 0) {
+			c.ret_bool(true);
+			return;
+		}
+		SessionState *s = session_of(c.world, caller_scene(c));
+		c.ret_bool(s && s->watchers_active);
+	});
 	// IsPausedCaller (Core 0x7006de90): the scene's +0xf0, set by ObjInitContents and Pause, cleared by
 	// Genesis and Continue. A session's scene starts when a modifier owns the environment.
 	reg("CScene::bool IsPaused()", [caller_scene](const NativeContext &c) {
@@ -1611,6 +1713,38 @@ void register_session_natives(World &w) {
 		}
 		SessionState *s = session_of(c.world, caller_scene(c));
 		c.ret_bool(!s || !s->scene_started);
+	});
+	// SetTimeScaleCaller / TimeScaleCaller (Core 2.123 0x20071af0 / 0x20071b20): the scene's +0x188,
+	// by which DE_CScene::PassTime (0x20073f30) multiplies the time it passes.
+	reg("CScene::SetTimeScale(float)", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) >= 0) return;
+		c.world.scene_clock(caller_scene(c)).scale = c.arg<float>(0);
+		if (getenv("OPENBG_DEBUG_SESSION")) fprintf(stderr, "[session %u] time scale %g\n", c.world.frame(), c.arg<float>(0));
+	});
+	reg("CScene::float TimeScale()", [caller_scene](const NativeContext &c) {
+		c.ret_f32(World::gui_scene_view(c.self()) >= 0 ? 1.0f : float(c.world.scene_clock(caller_scene(c)).scale));
+	});
+	// AssureTemporalMaster (Core 0x70072a00): the scene's own DE_CTemporalMasterScene. One made after
+	// the scene's Genesis is never started, so only passed time reaches the scene.
+	reg("CScene::AssureTemporalMaster()", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) < 0) c.world.scene_clock(caller_scene(c)).master = true;
+	});
+	// DE_CScene::TemporalPassTime / TemporalMoveToScale / TemporalPause (Core 0x700728e0 / 0x70072960 /
+	// 0x700728c0) go to the temporal master, and do nothing without one.
+	auto master = [caller_scene](const NativeContext &c) -> World::SceneClock * {
+		if (World::gui_scene_view(c.self()) >= 0) return nullptr;
+		World::SceneClock &k = c.world.scene_clock(caller_scene(c));
+		return k.master ? &k : nullptr;
+	};
+	reg("CScene::TemporalPassTime(float)", [master](const NativeContext &c) {
+		if (auto *k = master(c)) k->master_passed += c.arg<float>(0);
+	});
+	reg("CScene::TemporalMoveToScale(float,float)", [master](const NativeContext &c) {
+		if (auto *k = master(c)) k->master_target = c.arg<float>(0), k->master_rate = std::fabs(c.arg<float>(1));
+	});
+	// DE_CTemporalMasterScene::TemporalPause (0x70078850): -1 pauses until continued.
+	reg("CScene::TemporalPause(float)", [master](const NativeContext &c) {
+		if (auto *k = master(c)) k->master_pause = c.arg<float>(0) == -1 ? -1 : k->master_pause + c.arg<float>(0);
 	});
 	// DE_CScene::OwnTree (Core): the scene keeps a reference to every object of the branch, so it
 	// lives as long as the scene; ours live until deleted anyway.

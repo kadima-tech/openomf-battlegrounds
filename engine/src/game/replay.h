@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ struct StateRecord {
 	std::string id;
 	std::vector<std::pair<uint32_t, std::vector<uint8_t>>> states;
 	size_t cursor = 0;
+	bool rebased = false;  // an earlier port build's scene-time stamps, moved to the session's clock
 };
 
 // DE_CSessionRecord.
@@ -33,6 +35,9 @@ struct SessionRecord {
 	std::vector<de::Guid> modifiers;  // +0x3c
 	de::Guid factory{};        // +0x58: the session's class
 	uint32_t end_ms = 0;       // +0x6c: scene ms at the end
+	// Port builds before the per-session scene clocks stamped scene times on one shared clock: the
+	// recorded session's Begin on it, found at playback (0 for every other recording).
+	uint32_t shared_clock_begin = 0;
 	int64_t date = 0;          // +0x70: time(NULL) when saved
 	int32_t auto_delete = 1;   // +0x74
 	float length = 0;          // +0x78: seconds
@@ -52,7 +57,7 @@ std::vector<std::shared_ptr<SessionRecord>> list_recordings(const de::World *dat
 std::shared_ptr<SessionRecord> load_recording(const std::string &path);
 bool delete_recording(const SessionRecord &r);
 bool rename_recording(SessionRecord &r, const std::string &name);
-std::string recordings_dir();
+std::filesystem::path recordings_dir();
 
 // DE_CSessionMasterDescription +0xfc (contents v1): the game type is recorded.
 bool recordable(const de::ObjectRef &master_description);
@@ -65,9 +70,14 @@ void replay_session_ended(World &w, SessionState &s);
 // DE_CSessionRecord::Replay (Core 0x70203e30): a server session from the record's master
 // description and modifiers, replaying it. Returns false when the description is missing.
 bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec);
-// Once per session update (DE_CSession::Update): managers join, the recorder's end time follows the
-// scene, a replay's managers take their newest recorded state, and a replay past its end ends.
+// DE_CSession::Update before its scene passes: managers join, the recorder's end time follows the
+// scene, a replay past its end ends, and a replay's managers fetch their newest recorded state.
 void replay_update(World &w);
+// After the scene's pass: a rewind's run-time actors go, and each manager whose fetch added a
+// state restores its newest (NeedFixup, SetupOwnerForState).
+void replay_after_pass(World &w);
+// The session being recorded or replayed, if any.
+SessionState *replay_session(World &w);
 // Register*State (CreateCurrentState): the owner's current state joins its manager's history,
 // to be recorded as it ages out; RegisterGetHitState also marks the fighter hit.
 void register_state(World &w, GameObject *owner, bool got_hit = false);
@@ -95,8 +105,9 @@ void creature_delta_tick(World &w, GameObject &o);
 bool replay_held(World &w, const GameObject &o);
 // DE_CCreature::SetTime after the replay's clock jumped: re-ticks up to it or rewinds.
 void replay_set_time(World &w, GameObject &o, uint32_t ms);
-// DE_CScene::TemporalUpdate (Core 0x70070710): restored creatures whose SetTime was deferred.
-void replay_temporal_update(World &w);
+// DE_CScene::TemporalUpdate (Core 0x70070710): restored creatures of `session`'s scene whose SetTime was
+// deferred.
+void replay_temporal_update(World &w, const GameObject *session);
 bool replaying(World &w);
 // The replay's recorded end (scene ms), 0 when not replaying.
 uint32_t replay_end_ms(World &w);

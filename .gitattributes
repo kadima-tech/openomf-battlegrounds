@@ -1,0 +1,7 @@
+# Shell scripts must keep LF line endings, also in Windows checkouts (MSYS2 bash, Git Bash and
+# GitHub's Windows runners would otherwise see CRLF). cmd scripts need CRLF.
+*.sh text eol=lf
+*.command text eol=lf
+*.cmd text eol=crlf
+*.obgpatch binary
+*.png binary

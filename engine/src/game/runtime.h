@@ -78,6 +78,7 @@ struct Pilot {
 	float quality = 0.43f;              // +0x7cc: AI quality degradation (higher = clumsier)
 	int difficulty = 2;                 // DE_COMF2Manager::AIDifficulty: 0 Rookie .. 4 World Champion
 	float difficulty_offset = 0;        // +0x3e4 (CPilot::SetAIDifficultyOffset)
+	uint32_t sex = 0;                   // +0x3d4, after the AI stats: CPilot::sexMale, sexFemale, sexUndefined
 	float stat(uint32_t offset, float time_ms) const;
 	// The difficulty-dependent part of CalculateAIValues: quality degradation
 	// clamp(1 - (difficulty + offset) / 3.5, 0.01, 0.99) and the perception stats built on it.
@@ -267,6 +268,10 @@ struct GameObject {
 	GameObject *data_owner = nullptr;                     // +0x118 from the data (references chunk 2)
 	bool data_owner_read = false;
 	bool encompasser = false;                             // +0x16c: AutoEncompase may choose it
+	// +0x138: against a mesh it tests the line from where it stood when the frame began (+0x13c,
+	// DE_CScene::PassTime) to where it is.
+	bool swept = false;
+	std::array<float, 3> swept_from{0, 0, 0};
 	bool auto_encompass = false;                          // +0x170: finds its encompasser when prepared
 	GameObject *data_encompasser = nullptr;               // +0x124 from the data (references chunk 2 v4)
 	bool data_encompasser_read = false;
@@ -277,6 +282,22 @@ struct GameObject {
 	bool physics_enabled = true;  // CActor::Enable/DisablePhysics
 	bool path_moved = false;      // placed by an AnimationStreamPlayer path (drawn live)
 	bool copied = false;          // made at run time (NewCopy, passive references): drawn live
+	const GameObject *copied_from = nullptr;  // the instance copy_tree copied (its references' context)
+	// The copies one NewCopy made, by the instance each copies, and when (World::referent).
+	std::shared_ptr<std::unordered_map<const GameObject *, GameObject *>> copies;
+	uint64_t copy_seq = 0;
+	bool constructed = false;  // made from its file entry (CPassiveReference::New), not by NewCopy
+	bool system = false;       // DE_CObject +4 bits 1-2 clear (ObjIsSystem): never a reference's newest instance
+	const GameObject *entry = nullptr;  // a copy's loaded object, whose instance list it joined
+	uint64_t destroyed_seq = 0;
+	GameObject *replaced_by = nullptr;  // ReplaceWithThenDie re-pointed the references to it
+	uint64_t replaced_seq = 0;
+	// A texture manager's or mesh's image property as scripts set it (AddProperty,
+	// RemoveAllProperty, ReplaceWithThenDie of its image): this instance's, null for none.
+	GameObject *image = nullptr;
+	bool image_set = false;
+	GameObject *image_filter = nullptr;  // an image's fighter paint filter (CCreatureModel::Setup, AddFilter)
+	std::vector<de::ObjectRef> scaled_images;  // a paint filter's scaled list (+0x40)
 	// DE_CPassiveActorReference::Create appends the reference's own properties to the actor's.
 	std::vector<de::ObjectRef> extra_properties;
 	bool executorless = false;  // COMF2Projectile::NewExecutorlessCopy: its data's executors are dropped
@@ -495,7 +516,11 @@ public:
 	// DE_COMF2Fighter::CurrentTarget (OMF 0x3502a8b0): the fighter it is facing up to.
 	GameObject *current_target_of(GameObject &f);
 	// CObject::NewCopy: a deep copy of `o` and its children (no brains), unparented.
-	GameObject *copy_tree(const GameObject &o);
+	GameObject *copy_tree(const GameObject &o, bool construct = false);
+	// DE_CObject::ReplaceWithThenDie's re-pointing: what referred to `o` refers to `by` from now on.
+	void replace_references(GameObject *o, GameObject *by);
+	// What a reference to `o` reaches now, after the replacements since; null once destroyed.
+	GameObject *replacement(GameObject *o) const;
 	// Set every bone actor under a fighter from its current animation pose.
 	void pose_skeleton(GameObject &fighter);
 	// DE_COMF2Fighter::ValidateAnimationTime: when the pose is stale, pose the skeleton and turn
@@ -511,11 +536,11 @@ public:
 
 	// Load the compiled class `class_object` and start it on `owner` at `entry`.
 	Brain *attach_brain(GameObject *owner, const de::ObjectRef &class_object, const std::string &entry);
-	// One frame, DE_CScene::PassTime (Core 0x70070040): the scene clock (real milliseconds)
-	// advances by `ms`. On the way every temporal set (one per update rate) is advanced in time
-	// order, at its own tick times, each ticking its elements newest first: creatures, executors
-	// with an interval, collision testers, the input manager. Then, once, the delta-tick hooks
-	// with the frame's time, the session's update and the effects.
+	// One frame of `ms` real milliseconds. Every game scene passes its time (DE_CScene::PassTime, Core
+	// 0x70070040): the scene of no session, then each session's before its update. On the way each
+	// of the scene's temporal sets (one per update rate) is advanced in time order, at its own tick
+	// times, each ticking its elements newest first: creatures, executors with an interval,
+	// collision testers, the input manager; then the scene's delta-tick hooks. The effects follow.
 	void tick(uint32_t ms = kFrameMs);
 	uint32_t frame() const { return frame_; }
 	uint32_t frame_ms() const { return frame_ms_; }
@@ -523,14 +548,44 @@ public:
 	static constexpr uint32_t kFrameMs = 20;
 	// A fighter's update rate (SceneTicksPerUpdate, +0x1dc): 62.5 updates a second.
 	static constexpr float kTickMs = 16;
+	// The clock of the scene being passed or updated (outside a frame, the current session's).
 	float scene_ms() const { return float(scene_ms_); }
-	// DE_CTemporalMasterScene (TemporalMoveToScale / TemporalPassTime, Core 0x700788b0 / 0x70078bb0):
-	// real time runs the scene at `time_scale`; passed time is added on the next frame, and a
-	// negative amount moves the clock back.
+	bool scene_ms_held() const { return scene_ms_set_; }
+	// The VCR's TemporalMoveToScale target and TemporalPassTime (Core 0x700788b0 / 0x70078bb0) on the
+	// replayed session's scene, handed to its temporal master each frame; a negative pass goes back.
 	float time_scale = 1;
 	double passed_ms = 0;
-	// The scene ms this frame passes for `real_ms` of real time (taking back time first).
-	uint32_t scene_step(float real_ms);
+	// IsUIManagerAutopaused this frame: session scenes pass no time (DE_CScene::TemporalUpdate).
+	bool autopaused = false;
+	// A game scene (DE_CScene): each standard session's own (DE_CStandardSession::Begin) and one for
+	// what is in no session's.
+	struct SceneClock {
+		uint32_t ms = 0;          // +0x160
+		double scale = 1;         // +0x188 (2.123): SetTimeScale
+		float carry = 0;          // +0x190: the fraction PassTime keeps
+		bool started = false;     // +0x164: Genesis
+		bool autopauses = false;  // +0x1c0 cleared by DE_CStandardSession::Begin
+		// Its DE_CTemporalMasterScene (+0x140, AssureTemporalMaster): real time at a scale moving to
+		// a target at a rate per ms, pauses and passed time (+0x1c8, +0x1e8, +0x1f0, +0x1d8, +0x1e0).
+		bool master = false, master_started = false;
+		double master_scale = 1, master_target = 1, master_rate = 0, master_pause = 0, master_passed = 0;
+		// The master's global time (+0x1f8) PreciseTime took since the scene last passed.
+		double master_given = 0;
+		uint32_t last_global = 0;  // +0x15c: the global time the scene last passed at
+	};
+	// The scene of a session (null: what is in no session's).
+	SceneClock &scene_clock(const GameObject *session);
+	// The session whose scene `o` is in (its root's, a session's own objects its), else null.
+	const GameObject *clock_key(const GameObject *o) const;
+	// Makes `session`'s scene the one scene_ms() and the temporal ticks use.
+	void use_clock(const GameObject *session);
+	// DE_CScene::Genesis (Core 0x70070900) for a session's scene: its time starts (at 0) and so
+	// does a temporal master made before.
+	void scene_genesis(const GameObject *session);
+	void forget_clock(const GameObject *session);
+	// DE_CScene::TemporalUpdate (Core 0x70070710) and PassTime (2.123 0x20073f30): `real_ms` of real
+	// time passes on `session`'s scene.
+	void pass_scene(const GameObject *session, uint32_t real_ms);
 	// The end of DE_CCreature::Tick / DeltaTick: a behaviour executor state other than the one last
 	// seen runs the creature-state-changed hooks.
 	void run_state_hooks(GameObject &o);
@@ -541,16 +596,29 @@ public:
 	// DE_CScene +0x158: re-simulating (TemporalUpdate's deferred SetTimes), so creature ticks leave
 	// their command managers alone.
 	bool temporal_updating = false;
+	// The rate of the set advancing now (0 between advances): its ticks see DE_CScene::Time() one rate back.
+	uint32_t advancing_rate = 0;
 	// The scene's delta-tick list (+0x70): creatures with no tick rate whose +0x1e0 is set.
 	std::vector<uint32_t> delta_creatures;
 	// The GUI's own scenes: the top control's (GameObject::view 0) and a GUI scene viewer's (view 1,
 	// the model picker's). Neither autopauses (DE_CScene +0x1c0 / +0x1bc), so the app passes them
 	// real time: the first every frame, the second while its page is up (the robot's idle event).
 	uint32_t gui_scene_ms[2] = {0, 0};
+	uint32_t gui_scene_global[2] = {0, 0};  // their +0x15c
 	// Passes `ms` on GUI scene `view`'s clock, ticking its temporal sets on the way.
 	void tick_gui(int view, uint32_t ms);
 	// The clock of the scene `o` is in.
 	uint32_t scene_ms_of(const GameObject *o) const;
+	// DE_CScene::PreciseTime (Core 0x7006f990; 2.123 0x20073880) of the scene `o` is in, or of GUI
+	// scene `view`: its time plus the global time since it last passed, at its scale.
+	uint32_t precise_ms_of(const GameObject *o, int view = -1);
+	// gTime as the scenes' TemporalGlobalTime sees it: the wall clock, else the frame's 20 ms steps,
+	// the GUI's passes (made before World::tick counts the frame) counting as the frame's and the
+	// render ticks a frame begins with (render_ticks_per_frame) as the last frame's render.
+	uint32_t global_ms() const {
+		return system_clock ? system_clock() : (frame_ + (gui_passing_ ? 1 : 0) - (render_lag ? 1 : 0)) * kFrameMs;
+	}
+	bool render_lag = false;
 	// What Scene() returns for `o` (its actor's +0x10, else the game's): one object per GUI scene,
 	// one for the game's (sessions' scenes are told apart by the caller).
 	GameObject *scene_object(const GameObject *o);
@@ -579,7 +647,8 @@ public:
 	// and Audio\SFX Volume, 1.0; the options' Audio panel sets them).
 	float music_volume = 0.6f, sfx_volume = 1.0f;
 	// Preferences\Renderer\Glow Enabled / Lighting Enabled (the options' Video panel).
-	bool glow_enabled = true, lighting_enabled = true;
+	bool glow_enabled = true, lighting_enabled = true, reflections_enabled = true;
+	uint32_t render_options_applied = 0;  // counts DE_CRenderer::ApplyOptions: each renderer then refreshes its actors
 	int shadow_type = 0;  // the applied Preferences\Renderer\Shadow Type
 	// The applied Bump Mapping Enabled (options +8) and Texture Mip Map, the panel's Texture Detail
 	// (options +0x1c: 0 High, 1 Medium, 2 Low), as the renderer holds them (DE_CRenderer::ApplyOptions).
@@ -640,6 +709,15 @@ public:
 	// DE_COMF2Fighter::Tick's attack-range step (natives_ai.cpp).
 	void jitter_attack_range(GameObject &fighter);
 	GameObject *resolve_passive_reference(GameObject *reference);
+	// The instance a reference from `from` to data object `r` points at (FINDINGS 262): a loaded
+	// object's at r's loaded instance; a copy's where its source's pointed when it was copied, or
+	// to that instance's copy when the same NewCopy made one (DE_CTransferAgent::CPassiveReference::
+	// New); then wherever ReplaceWithThenDie re-pointed it since. Null when that one is gone.
+	GameObject *referent(const GameObject *from, const de::ObjectRef &r) const;
+	// DE_CCreatureModel::Setup (OMF 0x35037470): hooks a creature model up to its creature. A data
+	// FighterModel brings its own lists; one made at run time (NewStrippedFighterModel) only
+	// `properties`.
+	void setup_creature_model(GameObject *model, GameObject *creature, const std::vector<GameObject *> &properties = {});
 	// An actor's properties (DE_CActor +0x20 list): its executors, state manager, ...
 	std::vector<de::ObjectRef> actor_properties(const de::ObjectRef &r) const;
 	// The same for a live object: its data's list plus what a passive reference gave it.
@@ -702,6 +780,7 @@ public:
 	// CPrimitiveGeneratorMesh primitives (text, quads, status bars), by primitive object: what
 	// the HUD and on-screen messages are made of. Positions are mesh space; in a screen-space
 	// mesh, fractions of the screen with y down.
+	static constexpr float kTextLineSpacing = 1.2f;  // DE_CFlatText3 +0xa0, in font units
 	struct Primitive {
 		enum Kind { Text, Quad, StatusBar } kind = Text;
 		GameObject *mesh = nullptr;
@@ -788,14 +867,16 @@ public:
 	// CImage::SetPhase (DE_CImage +0x54) by image data object: an AVI image shows the frame for
 	// it (the renderer's animated textures follow this map).
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, float> image_phases;
-	// CImage::AddFilter: images given a filter at run time (Mantis's bug images get the fighter's
-	// paint filter), by image object.
+	// CImage::AddFilter / CCreatureModel::Setup: images given a fighter's paint filter, by image
+	// data object, for drawing an image no instance is found for (the instance's image_filter
+	// otherwise).
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GameObject *> image_filters;
-	// Texture managers (and meshes) whose image properties scripts replaced (RemoveAllProperty +
-	// AddProperty: Canyon's gun shows its shooter's pilot photo, pilots their mood icon): the image
-	// now shown, none after a RemoveAllProperty. `texture_override_version` counts the changes.
-	std::map<std::pair<const de::ObjectsFile *, uint32_t>, de::ObjectRef> texture_overrides;
+	// Data objects of which some instance carries an image_set / image_filter: only those are
+	// looked up per instance when drawing. `texture_override_version` counts the changes.
+	std::set<std::pair<const de::ObjectsFile *, uint32_t>> instance_images;
 	uint32_t texture_override_version = 0;
+	void set_instance_image(GameObject *manager, GameObject *image);
+	std::set<GameObject *> swept_affectors;  // DE_CScene +0x190: affectors with +0x138 in the scene
 	// Scene().RegisterRenderTickHook: called every rendered frame with the time passed (ms).
 	std::vector<std::pair<Brain *, uint32_t>> render_tick_hooks;
 	// Scene().RegisterDeltaTickHook: called every scene tick with the time it covers (ms).
@@ -813,6 +894,12 @@ public:
 	// 20 ms a frame, so screenshot and headless runs repeat.
 	std::function<uint32_t()> system_clock;
 	uint32_t system_ms() const { return system_clock ? system_clock() : frame_ * kFrameMs; }
+	// DE_GLOBAL::LastKeyPressTime: gTime at the last key or button press (Input2's controller update).
+	uint32_t last_key_press_ms = 0;
+	// Set by the app: DE_CUIManager::ActiveManager is not null (a UI manager is up), and
+	// DE_CNotification::NewUserInformation (the modal "User Information" dialog).
+	std::function<bool()> ui_manager_active;
+	std::function<void(const std::string &title, const std::string &text)> notify_user;
 	// CObject::DeleteThis: unlinks the object (and its branch); handles to it go inactive.
 	void destroy(GameObject *o);
 	// DE_GLOBAL::AddObjectToClean (DeleteThisLater, Die): destroyed by the next housekeeping,
@@ -897,8 +984,10 @@ private:
 	std::set<const GameObject *> activated_;  // objects whose executors were started
 	std::vector<Brain *> pending_starts_;      // attached by a deferred enter_scene, not yet started
 	std::deque<std::unique_ptr<Brain>> brains_;
+	std::vector<Brain *> dead_brains_;  // of destroyed objects, until their stacks are released
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;
+	std::unordered_map<const GameObject *, std::vector<GameObject *>> constructed_;  // instances by loaded object, oldest first
 	struct Interface {
 		Brain *brain;
 		uint32_t behavior;  // index into the brain's attached behaviors
@@ -909,7 +998,13 @@ private:
 	std::deque<de::AnimBank> banks_;
 	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
-	double scene_carry_ = 0;
+	uint64_t reference_seq_ = 0;  // orders copies and replacements
+	GameObject *copy_node(const GameObject &o);
+	std::map<const GameObject *, SceneClock> clocks_;
+	const GameObject *clock_ = nullptr;  // the scene scene_ms_ is the time of
+	bool scene_ms_set_ = false;          // at_scene_ms: the time is +0x1b0 (+0x1ac set)
+	bool gui_passing_ = false;
+	uint32_t clock_ms(const GameObject *session) const;
 	bool input_registered_ = false;
 	uint64_t affector_seq_ = 0;
 	// DE_CScene's temporal sets (TemporalElementSetForRate 0x70072230), in creation order.
@@ -920,13 +1015,16 @@ private:
 	};
 	struct TemporalSet {
 		uint32_t rate = 0, next = 0;  // next tick: last tick (+0x38) + rate
-		int scene = 0;                // 0 the game's, else GUI scene view + 1
+		int scene = 0;                // 0 a game scene, else GUI scene view + 1
+		const GameObject *clock = nullptr;  // the game scene's session
 		std::vector<Temporal> elements;
 	};
 	std::vector<TemporalSet> temporal_sets_;
-	TemporalSet &temporal_set(uint32_t rate, int scene);
+	TemporalSet &temporal_set(uint32_t rate, int scene, const GameObject *clock);
 	int temporal_scene(const Temporal &t);
+	const GameObject *temporal_clock(const Temporal &t);
 	void add_temporal(uint32_t rate, Temporal t);
+	void add_temporal(uint32_t rate, Temporal t, const GameObject *clock);
 	void register_temporals();
 	void register_creature(GameObject *o);
 	void register_branch(GameObject *o, std::vector<Brain *> *prepared = nullptr);
@@ -935,6 +1033,7 @@ public:
 private:
 	void advance(TemporalSet &set);
 	void reset_clock();
+	uint32_t scene_step(SceneClock &c, uint32_t real_ms, double &global);
 	void creature_tick(GameObject &o);
 	void input_tick(uint32_t manager);
 
@@ -946,8 +1045,11 @@ private:
 	void run_commands(GameObject &o);
 
 public:
-	// CCollisionTester::Activate (Core): the tester joins the 16 ms temporal set.
-	void activate_tester(uint32_t handle) { add_temporal(16, {Temporal::Tester, handle, nullptr}); }
+	// CCollisionTester::Activate (Core): the tester joins the 16 ms temporal set of the scene that
+	// made it (the caller's).
+	void activate_tester(uint32_t handle, const GameObject *caller) {
+		add_temporal(16, {Temporal::Tester, handle, nullptr}, caller ? clock_key(caller) : clock_);
+	}
 };
 
 void register_core_natives(World &w);
@@ -964,8 +1066,6 @@ void register_need_natives(World &w);
 void register_music_natives(World &w);
 // The pilot behind a pilot object or a fighter (the fighter's own, else a child pilot's).
 const Pilot *pilot_of(GameObject *o);
-// The copy of data object `r` nearest `from` (its own subtree, then each ancestor's).
-GameObject *nearest_copy(GameObject *from, const de::ObjectRef &r);
 void register_simple_physics_natives(World &w);
 // A CData's bytes (DE_CDataBlock), by its block in script memory.
 std::vector<uint8_t> &cdata_bytes(uint32_t block);
@@ -991,7 +1091,9 @@ inline uint32_t scene_time(const NativeContext &c) {
 	const GameObject *s = c.self();
 	int v = World::gui_scene_view(s);
 	if (v >= 0) return c.world.gui_scene_ms[v];
-	return c.world.scene_ms_of(s && !s->file && s->name == "Scene" ? nullptr : c.owner());
+	const GameObject *o = c.owner();
+	if (o && in_gui(*o)) o = nullptr;  // a GUI script's game Scene(): the scene being updated
+	return c.world.scene_ms_of(o);
 }
 
 // CVector blocks in VM memory (3 floats); null reads as zero, null writes are ignored.

@@ -6,21 +6,26 @@
 // actors (frame, doors, backdrop, environment) and one F.<Screen> folder per page, its VE.*
 // actors the buttons, driven by the UI managers in game/ui.h.
 //
-// --launch <match> starts that match's session at once; --choose Elizabeth,Jaguar makes the UIs
-// it launches pick those (testing); --headless N runs N frames without a window and lists the
-// natives still missing.
+// --launch <match> starts that match's session at once (--host <match>: as a joinable session,
+// whose Choose Cast lists the Available Arenas); --choose Elizabeth,Jaguar makes the UIs
+// it launches pick those (testing), and Choose Cast take the modifiers and starting match named
+// there ("Turbo Speed", "Intensity") and the defaults for the rest; --headless N runs N frames
+// without a window and lists the natives still missing.
 //
 // MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
 // of the window, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
+#include <cstdlib>
 
 #include <algorithm>
 #include <chrono>
 #include <iterator>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
@@ -28,7 +33,7 @@
 
 #include "de/contents.h"
 #include "de/lighting.h"
-#include "de/user_dirs.h"
+#include "de/platform.h"
 #include "game/replay.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -42,33 +47,41 @@
 #include "particles_gl.h"
 #include "render.h"
 #include "scene_lights.h"
+#include "vm/disasm.h"
 
 namespace {
 
+// BFighter's m_LastDamageInflictor, a reference member VMC2 leaves unnamed: the one SendDeathEvent reads.
+int last_damage_inflictor_member(const vm::ScriptClass &cls) {
+	const vm::ScriptMethod *m = cls.find_by_name("SendDeathEvent(bool)");
+	if (!m) return -1;
+	for (const vm::Instruction &ins : vm::decode(m->cm->code)) {
+		if (ins.opcode == 64) return int(ins.args[0]);
+	}
+	return -1;
+}
+
 // The game's registry (HKCU\Software\Diversions Ent\One Must Fall Battlegrounds in the original),
-// kept as "name=value" lines in the user's data folder (de::user_data_dir()).
-std::string registry_path() { return de::user_data_dir() + "/registry.txt"; }
+// kept as "name=value" lines in the user's settings folder (de::user_data_dir()).
+std::filesystem::path registry_path() { return de::user_data_dir() / "registry.txt"; }
 bool load_registry(std::map<std::string, std::string> &reg) {
-	FILE *f = fopen(registry_path().c_str(), "r");
+	std::ifstream f(registry_path(), std::ios::binary);
 	if (!f) return false;
-	char line[1024];
-	while (fgets(line, sizeof line, f)) {
-		std::string l = line;
+	std::string l;
+	while (std::getline(f, l)) {
 		while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
 		size_t eq = l.find('=');
 		if (eq != std::string::npos) reg[l.substr(0, eq)] = l.substr(eq + 1);
 	}
-	fclose(f);
 	return true;
 }
 void save_registry(const std::map<std::string, std::string> &reg) {
 	std::error_code ec;
-	std::filesystem::create_directories(de::user_data_dir(), ec);
+	std::filesystem::create_directories(registry_path().parent_path(), ec);
 	if (ec) return;
-	FILE *f = fopen(registry_path().c_str(), "w");
+	std::ofstream f(registry_path(), std::ios::binary | std::ios::trunc);
 	if (!f) return;
-	for (auto &[k, v] : reg) fprintf(f, "%s=%s\n", k.c_str(), v.c_str());
-	fclose(f);
+	for (auto &[k, v] : reg) f << k << '=' << v << '\n';
 }
 
 // The GUI's viewport: the whole window. InitGUI (2004 build 0x408b20) hangs the UI parent actor,
@@ -109,6 +122,7 @@ void print_state(game::World &world, int fr) {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	if (argc < 2) {
 		fprintf(stderr, "usage: %s <Data dir> [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
@@ -116,6 +130,7 @@ int main(int argc, char **argv) {
 	std::string data = argv[1];
 	const char *shot = nullptr;
 	std::string launch;
+	bool host = false;  // --host: --launch as a joinable session, as BMatchServer sets one up (testing)
 	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
 	bool headless = false;
@@ -124,6 +139,7 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
+		else if (!strcmp(argv[i], "--host") && i + 1 < argc) launch = argv[++i], host = true;
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
@@ -177,7 +193,10 @@ int main(int argc, char **argv) {
 			world.system_clock = [t0] { return uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()); };
 		}
 		game::ui::AppManager app(world);
+		app.cast_presets = choose;
 		game::ui::system_time = [&world] { return world.system_ms(); };
+		world.ui_manager_active = [&app] { return app.current && app.current->activated; };
+		world.notify_user = [&app](const std::string &title, const std::string &text) { app.notify(title, text); };
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);
 		// OPENBG_SET="name=value;..." sets registry values for this run (testing).
@@ -191,7 +210,7 @@ int main(int argc, char **argv) {
 			}
 		}
 		app.apply_settings();
-		auto saved_registry = world.registry;
+		auto saved_registry = world.registry, traced_registry = world.registry;
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
 		auto persistent = [&](const char *name) {
@@ -219,11 +238,11 @@ int main(int argc, char **argv) {
 		// DE_COMF2Manager::ProcessEvent on the session chooser's Complete (FINDINGS 125): a session
 		// from the chosen master description's resource (its master modifier), a local
 		// user-controlled client named "User", then Begin.
-		app.launch_session = [&](const de::ObjectRef &desc, bool single_player) {
+		app.launch_session = [&](const de::ObjectRef &desc, bool single_player) -> game::SessionState * {
 			auto res = game::passive_references(world.data(), desc);
 			if (res.empty()) {
 				app.notify(desc.info().name, "This match has no session to start.");
-				return;
+				return nullptr;
 			}
 			printf("launching %s (%s)%s\n", desc.info().name.c_str(), res[0].info().name.c_str(), single_player ? ", single player" : "");
 			auto &ss = game::start_session(world, {res[0]});
@@ -232,9 +251,18 @@ int main(int argc, char **argv) {
 			// DE_CSession::SetAsServer (Core 0x701f8110): a joinable session takes Network\Max Clients, others 20.
 			int max_clients = atoi(app.registry_string("Network\\Max Clients").c_str());
 			ss.max_player_clients = !single_player && max_clients > 0 ? max_clients : 20;
-			game::add_client(world, true, "User");
-			game::begin_session(world);
-			app.set_registry_bool("SinglePlayerPlayed", true);
+			game::SessionState *sp = &ss;
+			auto begin = [&world, &app, sp] {
+				for (auto &s : world.sessions) {
+					if (s.get() == sp) world.session = s;
+				}
+				if (world.session.get() != sp) return;
+				game::add_client(world, true, "User");
+				game::begin_session(world);
+				app.set_registry_bool("SinglePlayerPlayed", true);
+			};
+			if (app.satisfy_master_requirements(ss, begin)) begin();
+			return sp;
 		};
 		// A UI manager the session scripts launch (FINDINGS 127): a description selector over the
 		// script's pool; Next completes it for the script.
@@ -296,7 +324,8 @@ int main(int argc, char **argv) {
 		};
 		world.show_vcr = [&](game::GameObject *) { app.set_next(app.vcr_controls(), true); };
 		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
-		app.has_local_session = [&] { return world.session != nullptr; };
+		// AddIfAbsentLocalSession comes with the session's Begin: one Choose Cast made is not local.
+		app.has_local_session = [&] { return world.session != nullptr && world.session->begun; };
 		app.session_fully_sequenced = [] { return true; };
 		app.session_scene_rendering = [&] { return world.session != nullptr && view.has_arena(); };
 		if (!launch.empty()) {
@@ -305,7 +334,7 @@ int main(int argc, char **argv) {
 				fprintf(stderr, "no match named %s\n", launch.c_str());
 				return 1;
 			}
-			app.launch_session(d, true);
+			app.launch_session(d, !host);
 		} else if (!replay_path.empty()) {
 			if (!game::start_replay(world, game::load_recording(replay_path))) {
 				fprintf(stderr, "cannot replay %s\n", replay_path.c_str());
@@ -315,6 +344,123 @@ int main(int argc, char **argv) {
 			// DE_CGameLauncherWindow::ObjInitContents: the main menu is the first UI manager.
 			app.set_next(app.main_menu(), true);
 		}
+		// The testing switches that act on the world at a frame (screenshot and headless runs).
+		auto test_switches = [&](int fr) {
+			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
+			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
+				for (game::GameObject *o : world.scene_objects()) {
+					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1), o->autoplayed = true;
+				}
+			}
+			// OPENBG_KO=<frame>[,<frame>...]: every computer fighter loses all its health then, the player
+			// named as the attacker (testing the end of a match). OPENBG_KO=auto[:N] does it N frames
+			// (default 150) after each start of the action (the session master's
+			// StandardSessionIsActionStarted).
+			if (const char *ko = getenv("OPENBG_KO")) {
+				auto knock_out = [&] {
+					game::GameObject *user = nullptr;
+					for (game::GameObject *o : world.scene_objects()) {
+						if (o->fighter && (o->user_controlled || o->autoplayed)) user = o;
+					}
+					for (game::GameObject *o : world.scene_objects()) {
+						if (o->fighter) fprintf(stderr, "[ko %d] %s %s at %.0f %.0f %.0f\n", fr, o->name.c_str(), o == user ? "player" : "computer", o->world().t[0], o->world().t[1], o->world().t[2]);
+					}
+					for (game::GameObject *o : world.scene_objects()) {
+						if (!o->fighter || o == user) continue;
+						for (game::GameObject *ch : o->children) {
+							if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
+							std::vector<uint8_t> args(16, 0);
+							uint32_t h = user ? user->handle : 0;
+							float dmg = -100000, stun = 0;
+							memcpy(&args[0], &h, 4), memcpy(&args[4], &dmg, 4), memcpy(&args[8], &stun, 4);
+							ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
+						}
+						// BFighter::ReceiveDamage credits a hit owned by a fighter after the stats.
+						if (int k = user && o->brain ? last_damage_inflictor_member(o->brain->cls) : -1; k >= 0) {
+							auto &refs = o->brain->inst.ref_members;
+							if (refs.size() <= size_t(k)) refs.resize(size_t(k) + 1, 0);
+							refs[size_t(k)] = user->handle;
+						}
+					}
+				};
+				if (!strncmp(ko, "auto", 4)) {
+					static int started = -1;
+					const int delay = ko[4] == ':' ? atoi(ko + 5) : 150;
+					bool action = false;
+					for (auto &s : world.sessions) {
+						if (s->ended || s->modifiers.empty() || !s->modifiers[0]->brain) continue;
+						std::vector<uint8_t> ret(4, 0);
+						if (s->modifiers[0]->brain->call(world, "bool StandardSessionIsActionStarted()", ret) && ret[0]) action = true;
+					}
+					if (!action) started = -1;
+					else if (started < 0) started = fr;
+					else if (fr - started == delay) knock_out();
+				}
+				for (const char *p = ko; *p && isdigit((unsigned char)*p);) {
+					if (atoi(p) == fr) knock_out();
+					const char *c = strchr(p, ',');
+					if (!c) break;
+					p = c + 1;
+				}
+			}
+			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
+			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
+			if (fr == quit_session) game::destroy_all_sessions(world);
+			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
+			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
+			if (fr == test_snapshot) {
+				for (game::Brain *b : world.brains()) {
+					std::vector<uint8_t> args(8);
+					if (b->call(world, "SubSessionCaptureSnapshot(class CCreature,class CCreature)", args)) {
+						fprintf(stderr, "test snapshot on %s\n", b->owner->name.c_str());
+						break;
+					}
+				}
+			}
+			// OPENBG_PLACE="Jaguar:0,90,1035@900;...": puts a fighter somewhere at a frame, as openbg-fight does.
+			if (const char *pl = getenv("OPENBG_PLACE")) {
+				std::string spec = pl;
+				for (size_t p = 0; p < spec.size();) {
+					size_t q = spec.find(';', p);
+					std::string item = spec.substr(p, q == std::string::npos ? std::string::npos : q - p);
+					char who[32] = {};
+					float x = 0, y = 0, z = 0;
+					int at = 0;
+					if (sscanf(item.c_str(), "%31[^:]:%f,%f,%f@%d", who, &x, &y, &z, &at) == 5 && at == fr) {
+						for (game::GameObject *o : world.scene_objects()) {
+							if (o->fighter && o->name == who) o->local.t = {x, y, z}, o->momentum = {0, 0, 0};
+						}
+					}
+					if (q == std::string::npos) break;
+					p = q + 1;
+				}
+			}
+			static const int memory_every = getenv("OPENBG_DEBUG_MEMORY") ? std::max(1, atoi(getenv("OPENBG_DEBUG_MEMORY"))) : 0;
+			if (memory_every && fr % memory_every == 0) fprintf(stderr, "[memory %d] script arena %u MB, %zu objects\n", fr, world.memory().used() >> 20, world.scene_objects().size());
+			// OPENBG_DEBUG_TREE=<name>@<frame> prints the scene branches under objects of that name then.
+			if (const char *dt = getenv("OPENBG_DEBUG_TREE"); dt && strchr(dt, '@') && atoi(strchr(dt, '@') + 1) == fr) {
+				std::string name(dt, strchr(dt, '@'));
+				std::function<void(game::GameObject *, int)> dump = [&](game::GameObject *o, int depth) {
+					auto t = o->world().t;
+					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2]);
+					if (depth < 6) for (game::GameObject *ch : o->children) dump(ch, depth + 1);
+				};
+				std::function<void(game::GameObject *)> find = [&](game::GameObject *o) {
+					if (o->name == name) dump(o, 0);
+					else for (game::GameObject *ch : o->children) find(ch);
+				};
+				for (game::GameObject *r : world.scene_roots) find(r);
+			}
+			// OPENBG_DEBUG_REGISTRY=1 prints each registry value as it changes (testing unlocks).
+			static const bool debug_registry = getenv("OPENBG_DEBUG_REGISTRY") != nullptr;
+			if (debug_registry && world.registry != traced_registry) {
+				for (auto &[k, v] : world.registry) {
+					auto it = traced_registry.find(k);
+					if (it == traced_registry.end() || it->second != v) fprintf(stderr, "[registry %u] %s=%s\n", world.frame(), k.c_str(), v.c_str());
+				}
+				traced_registry = world.registry;
+			}
+		};
 		if (headless) {
 			// OPENBG_RECORD_AUDIO=<file>: what is heard, mixed offline (raw f32 stereo, 44100 Hz).
 			auto offline = std::make_unique<audio::Mixer>();
@@ -333,7 +479,9 @@ int main(int argc, char **argv) {
 				rules_displayed();
 				world.tick_gui(0, game::World::kFrameMs);
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
-				world.tick(app.autopaused() && world.session ? 0 : game::World::kFrameMs);
+				world.autopaused = app.autopaused();
+				world.tick(game::World::kFrameMs);
+				test_switches(fr);
 				offline->play_requests(world, view.player ? view.ear() : ear);
 				if (recording) {
 					offline->update_music(world);
@@ -382,6 +530,7 @@ int main(int argc, char **argv) {
 		                                        SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE |
 		                                            (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN),
 		                                        &ctx);
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		app.key_name = [](int sc) { return std::string(SDL_GetScancodeName(SDL_Scancode(sc))); };
 		SDL_StartTextInput();
 		SDL_GL_SetSwapInterval(1);
@@ -517,7 +666,8 @@ int main(int argc, char **argv) {
 				world.tick_gui(1, picker->scene_paused ? 0 : frame_ms);
 				picker->scene_paused = false;
 			}
-			world.tick(app.autopaused() && world.session ? 0 : world.scene_step(float(frame_ms)));
+			world.autopaused = app.autopaused();
+			world.tick(frame_ms);
 			++fr;
 			static const int state_every = getenv("OPENBG_DEBUG_STATE") ? std::max(1, atoi(getenv("OPENBG_DEBUG_STATE"))) : 0;
 			if (state_every && fr % state_every == 0) print_state(world, fr);
@@ -548,55 +698,7 @@ int main(int argc, char **argv) {
 				view.draw(dw, dh, fr, shot != nullptr);
 				game_shown = view.has_arena();
 			}
-			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
-			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
-				for (game::GameObject *o : world.scene_objects()) {
-					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1), o->autoplayed = true;
-				}
-			}
-			// OPENBG_KO=<frame>[,<frame>...]: every computer fighter loses all its health then (testing
-			// the end of a match).
-			if (const char *ko = getenv("OPENBG_KO")) {
-				for (const char *p = ko; *p;) {
-					if (atoi(p) == fr) {
-						game::GameObject *user = nullptr;
-						for (game::GameObject *o : world.scene_objects()) {
-							if (o->fighter && o->user_controlled) user = o;
-						}
-						for (game::GameObject *o : world.scene_objects()) {
-							if (o->fighter) fprintf(stderr, "[ko %d] %s %s at %.0f %.0f %.0f\n", fr, o->name.c_str(), o->user_controlled ? "player" : "computer", o->world().t[0], o->world().t[1], o->world().t[2]);
-						}
-						for (game::GameObject *o : world.scene_objects()) {
-							if (!o->fighter || o->user_controlled) continue;
-							for (game::GameObject *ch : o->children) {
-								if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
-								std::vector<uint8_t> args(16, 0);
-								uint32_t h = user ? user->handle : 0;
-								float dmg = -100000, stun = 0;
-								memcpy(&args[0], &h, 4), memcpy(&args[4], &dmg, 4), memcpy(&args[8], &stun, 4);
-								ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
-							}
-						}
-					}
-					const char *c = strchr(p, ',');
-					if (!c) break;
-					p = c + 1;
-				}
-			}
-			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
-			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
-			if (fr == quit_session) game::destroy_all_sessions(world);
-			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
-			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
-			if (fr == test_snapshot) {
-				for (game::Brain *b : world.brains()) {
-					std::vector<uint8_t> args(8);
-					if (b->call(world, "SubSessionCaptureSnapshot(class CCreature,class CCreature)", args)) {
-						fprintf(stderr, "test snapshot on %s\n", b->owner->name.c_str());
-						break;
-					}
-				}
-			}
+			test_switches(fr);
 			// The frame's captures (CRenderTargetImage::Capture): the scene from each camera into
 			// its image's 256 x 256 target.
 			for (auto &[img, cam_handle] : world.capture_requests) {
@@ -654,7 +756,8 @@ int main(int argc, char **argv) {
 			glu::mul(vp, proj, view);
 			render::Lighting game_lighting = render::g_lighting;
 			if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
-			render::FrameLights lights = render::collect_lights(world, fr, gui_only);
+			render::FrameLights lights = render::collect_lights(world, fr, gui_only, 1);
+			render::g_reflections_enabled = true;  // the GUI's scene never autopauses: ApplyOptions forces it
 			std::vector<render::ActorMeshRenderer::Item> items, doors;
 			for (game::GameObject *o : world.scene_objects()) {
 				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !gui_only(o)) continue;
@@ -672,7 +775,7 @@ int main(int argc, char **argv) {
 				}
 				bool door = false;
 				for (const game::GameObject *p = o; p && !door; p = p->parent) door = p == app.transition;
-				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}});
+				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}, {}, o});
 			}
 			auto draw_picker = [&] {
 				render::Lighting gui_lighting = render::g_lighting;
@@ -690,13 +793,16 @@ int main(int argc, char **argv) {
 				glu::look_view(pview, ceye, f.data(), up.data());
 				glu::mul(pvp, pproj, pview);
 				if (auto *lf = world.data().file("LoadScene")) render::g_lighting.ambient = de::read_ambient(world.data(), *lf);
-				render::FrameLights plights = render::collect_lights(world, fr, picker_only);
+				render::FrameLights plights = render::collect_lights(world, fr, picker_only, 2);
+				// Its scene autopauses (+0x1c0 cleared), so unlike the GUI's it is not lit whatever the option.
+				if (!world.lighting_enabled) render::g_lighting.lights.clear();
+				render::g_reflections_enabled = world.reflections_enabled;
 				std::vector<render::ActorMeshRenderer::Item> pitems;
 				for (game::GameObject *o : world.scene_objects()) {
 					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;
 					bool live = true;
 					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
-					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}});
+					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}, {}, o});
 				}
 				actors_r.draw(world.data(), pitems, pvp, ceye);
 				// The robot creature: its stripped model, undeformed, painted by its pilot through the
@@ -784,9 +890,10 @@ int main(int argc, char **argv) {
 				char name[96];
 				time_t now = time(nullptr);
 				strftime(name, sizeof name, "OMFBG Snapshot %Y-%m-%d %H-%M-%S.png", localtime(&now));
+				// Minimal Linux desktops may have no Pictures folder yet.
 				std::error_code ec;
 				std::filesystem::create_directories(de::pictures_dir(), ec);
-				std::string out = de::pictures_dir() + "/" + name;
+				std::string out = (de::pictures_dir() / name).string();
 				glu::write_png(out.c_str(), dw, dh, px);
 				printf("snapshot %s\n", out.c_str());
 			}
@@ -812,6 +919,10 @@ int main(int argc, char **argv) {
 		SDL_GL_DeleteContext(ctx);
 		SDL_DestroyWindow(win);
 		SDL_Quit();
+		if (shot) {
+			for (auto &l : world.log) printf("log: %s\n", l.c_str());
+			for (auto &[k, n] : world.missing()) printf("missing native: %s (%llu calls)\n", k.c_str(), (unsigned long long)n);
+		}
 	} catch (const std::exception &e) {
 		fprintf(stderr, "error: %s\n", e.what());
 		return 1;

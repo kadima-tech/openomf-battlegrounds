@@ -1,8 +1,11 @@
 #include "game/music.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 
+#include "de/sound.h"
 #include "game/session.h"
 
 namespace game {
@@ -86,6 +89,39 @@ void MusicSystem::segment_ended(GameObject *s) {
 	sp.playing = false;
 }
 
+void MusicSystem::play(GameObject *s) {
+	Speaker &sp = speaker(s);
+	sp.playing = sp.active != nullptr;
+	sp.queued = false;
+	++sp.serial;
+	sp.started = w_.scene_ms_of(s);
+	sp.wave_ms = 0;
+	if (GameObject *n = sp.active; n && n->file && n->is("Noise2\\Stream")) {
+		auto it = wave_ms_.find(n);
+		if (it == wave_ms_.end()) {
+			uint32_t ms = 0;
+			try {
+				de::Sound snd = de::read_sound(w_.data(), {n->file, n->index});
+				ms = uint32_t(float(snd.length_ms) / std::max(0.05f, snd.frequency));
+			} catch (const std::exception &) {
+			}
+			it = wave_ms_.emplace(n, ms).first;
+		}
+		sp.wave_ms = it->second;
+	}
+}
+
+float MusicSystem::play_progress(GameObject *s) {
+	Speaker &sp = speaker(s);
+	if (!sp.playing || !sp.wave_ms) return 0;
+	uint32_t t = w_.scene_ms_of(s) - sp.started;
+	if (t >= sp.wave_ms) {
+		sp.playing = false;  // a one-shot buffer stops at its end
+		return 0;
+	}
+	return float(t) / float(sp.wave_ms);
+}
+
 void register_music_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
 	reg("CObject::class CSpeaker MusicPlayerSpeaker()", [](const NativeContext &c) { c.ret_object(c.world.music->music_speaker()); });
@@ -98,15 +134,23 @@ void register_music_natives(World &w) {
 	});
 	reg("CSpeaker::bool IsPlaying()", [](const NativeContext &c) {
 		GameObject *s = c.self();
+		if (s) c.world.music->play_progress(s);
 		c.ret_bool(s && c.world.music->speaker(s).playing);
+	});
+	// PlayProgressCaller (Core 2.123 0x20221830): +0xd4.
+	reg("CSpeaker::float PlayProgress()", [](const NativeContext &c) {
+		GameObject *s = c.self();
+		c.ret_f32(s ? c.world.music->play_progress(s) : 0.0f);
+	});
+	// SetVolumeCaller (Core 2.123 0x20221770): the Volume value (+0x9c) takes it.
+	reg("CSpeaker::SetVolume(float)", [](const NativeContext &c) {
+		if (GameObject *s = c.self()) c.world.music->speaker(s).volume = c.arg<float>(0);
 	});
 	reg("CSpeaker::Play()", [](const NativeContext &c) {
 		GameObject *s = c.self();
 		if (!s) return;
+		c.world.music->play(s);
 		auto &sp = c.world.music->speaker(s);
-		sp.playing = sp.active != nullptr;
-		sp.queued = false;
-		++sp.serial;
 		if (kDebug) fprintf(stderr, "[music %u] play %s/%s (mood %d)\n", c.world.frame(), sp.active && sp.active->file ? sp.active->file->master().name.c_str() : "-", sp.active ? sp.active->name.c_str() : "-", sp.mood);
 	});
 	reg("CSpeaker::Stop()", [](const NativeContext &c) {

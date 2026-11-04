@@ -8,8 +8,10 @@
 
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace vm {
 
@@ -19,13 +21,15 @@ struct MemoryError : std::runtime_error {
 
 class Memory {
 public:
-	explicit Memory(uint32_t reserve = 1u << 30);  // reserved lazily; committed on touch
+	explicit Memory(uint32_t reserve = 0xf0000000u);  // reserved lazily; committed on touch
 	~Memory();
 	Memory(const Memory &) = delete;
 	Memory &operator=(const Memory &) = delete;
 
 	uint32_t alloc(uint32_t size, uint32_t align = 8);
 	uint32_t alloc_copy(const void *data, uint32_t size);
+	// A block nothing refers to any more; the next alloc of that size reuses it.
+	void release(uint32_t addr, uint32_t size);
 	uint32_t used() const { return top_; }
 
 	uint8_t *ptr(uint32_t addr, uint32_t size = 1) {
@@ -48,6 +52,8 @@ public:
 private:
 	uint8_t *base_ = nullptr;
 	uint32_t reserved_;
+	uint32_t committed_ = 0;
+	std::map<uint32_t, std::vector<uint32_t>> released_;  // by size
 	uint32_t top_ = 16;  // keep low addresses unused so small offsets never look valid
 };
 

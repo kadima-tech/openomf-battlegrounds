@@ -18,7 +18,7 @@ body:
     attributes:
       label: Operating system and CPU architecture
       description: For Linux, include the distribution, desktop (X11 or Wayland) and GPU driver.
-      placeholder: macOS 15 on Apple silicon (arm64), or Ubuntu 24.04 GNOME Wayland, Mesa, x86_64
+      placeholder: macOS 15 on Apple silicon (arm64); Windows 11 24H2 (x64); Fedora 43 GNOME Wayland, Mesa, x86_64
     validations:
       required: true
   - type: textarea

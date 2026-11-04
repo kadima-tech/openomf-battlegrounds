@@ -14,12 +14,12 @@ scope and approach. Small fixes can go straight to a pull request.
 The engine targets the original game's final official patch, **2.123**. Read
 [DEVELOPING.md](DEVELOPING.md) for the code layout, reverse-engineering notes
 and debugging tools. [README.md](README.md#building) covers building the engine;
-[launcher/README.md](launcher/README.md) covers the macOS and Linux apps and offline setup.
+[launcher/README.md](launcher/README.md) covers the macOS, Windows and Linux apps and offline setup.
 
 ## Reporting bugs and requesting features
 
-For bugs, include the app version or commit, operating system and version
-(for Linux, the distribution and desktop, X11 or Wayland, and GPU driver), CPU architecture,
+For bugs, include the app version or commit, operating system version (macOS or Windows; for Linux,
+the distribution and desktop, X11 or Wayland, and GPU driver), CPU architecture,
 steps to reproduce, expected and actual results, and relevant logs. A screenshot
 or short recording can help with rendering or gameplay problems. Explain whether
 you used the launcher or a source build and whether the problem reproduces with
@@ -54,8 +54,9 @@ ctest --test-dir engine/build --output-on-failure
 CTest needs your own original game data; see [README.md](README.md) for setup.
 Launcher checks, including Python installer tests, native readiness tests and
 bundle validation, are in [launcher/README.md#validation](launcher/README.md#validation).
-Pull requests run the macOS and Linux packaging checks for both supported
-architectures of each in CI; data-dependent engine tests are not run there.
+Pull requests run the macOS packaging checks for both supported architectures, the
+Windows x64 packaging checks, the Linux packaging checks for x86_64 and aarch64, and a
+Fedora source build in CI; data-dependent engine tests are not run there.
 
 ## Rights and licensing
 

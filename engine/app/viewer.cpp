@@ -8,6 +8,7 @@
 // from <Name>.DEObjects. Drag to orbit, scroll to zoom, Left/Right to change move, Space to
 // pause, Esc to quit.
 #include <SDL.h>
+#include <cstdlib>
 
 #include <array>
 #include <cmath>
@@ -21,6 +22,7 @@
 #include <vector>
 
 #include "de/anim.h"
+#include "de/platform.h"
 #include "de/image.h"
 #include "de/mesh.h"
 #include "de/objects_file.h"
@@ -267,6 +269,7 @@ void main() {
 }  // namespace
 
 int main(int argc, char **argv) {
+	de::init_platform();
 	const char *model_path = nullptr, *spec = nullptr, *shot = nullptr, *data = nullptr, *fighter = nullptr;
 	std::string anim = "Standing";
 	float fixed_time = -1;
@@ -343,6 +346,7 @@ int main(int argc, char **argv) {
 		SDL_Window *win = glu::create_gl_window("One Must Fall: Battlegrounds — model viewer", SDL_WINDOWPOS_CENTERED,
 		                                        SDL_WINDOWPOS_CENTERED, W, H,
 		                                        SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN), &ctx);
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		GLuint prog = glu::program(kVertexShader, kFragmentShader);
 

@@ -14,12 +14,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <strings.h>
+#include <cctype>
 
 #include "game/session.h"
 #include "game/impulses.h"
 #include "game/descriptions.h"
 
 #include "de/value.h"
+#include "de/font.h"
 
 namespace game {
 
@@ -111,7 +113,8 @@ World::ObjectValue *World::object_value(GameObject *o, const std::string &name) 
 				for (auto &lists : reference_lists(data(), de::ObjectRef{v->file, v->index})) {
 					for (auto &l : lists) {
 						for (auto &r : l) {
-							if (GameObject *t = global_object(r)) val.objects.push_back(t->handle);
+							global_object(r);
+							if (GameObject *t = referent(v, r)) val.objects.push_back(t->handle);
 						}
 					}
 				}
@@ -165,6 +168,25 @@ void register_script_natives(World &w) {
 	reg("CObject::float MouseScreenPositionX()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_x); });
 	reg("CObject::float MouseScreenPositionY()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_y); });
 	reg("CObject::float ScreenAspectRatio()", [](const NativeContext &c) { c.ret_f32(c.world.screen_aspect); });
+	// UnlockCaller (Core 2.123 0x201f8aa0): Unlock (vtable +0x13c) with id 0; 0x201f8ac0 passes the id.
+	reg("CDescription::Unlock()", [](const NativeContext &c) {
+		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, 0);
+	});
+	// UnlockAndNotifyCaller (Core 2.123 0x201f8b00): UnlockAndNotify(0, text) (0x201f9c20): a locked
+	// description is unlocked and says so in a "Feature Unlocked" notification, the text or else
+	// "<name> will now be available.", and the registry is saved.
+	reg("CDescription::UnlockAndNotify(string)", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || !o->file || !description_locked(c.world, {o->file, o->index}, 0)) return;
+		unlock_description(c.world, {o->file, o->index}, 0);
+		std::string text = c.arg_string(0);
+		if (text.empty()) text = o->name + " will now be available.";
+		if (c.world.notify_user) c.world.notify_user("Feature Unlocked", text);
+	});
+	// NotifyUserCaller (Core 2.123 0x200495e0): DE_CNotification::NewUserInformation(title, text).
+	reg("CObject::NotifyUser(string,string)", [](const NativeContext &c) {
+		if (c.world.notify_user) c.world.notify_user(c.arg_string(0), c.arg_string(1));
+	});
 	reg("CDescription::Unlock(dword)", [](const NativeContext &c) {
 		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, c.arg<uint32_t>(0));
 	});
@@ -195,6 +217,10 @@ void register_script_natives(World &w) {
 	reg("CDescription::bool IsLocked()", [](const NativeContext &c) {
 		GameObject *o = c.self();
 		c.ret_bool(o && o->file && description_locked(c.world, {o->file, o->index}));
+	});
+	reg("CDescription::bool IsUserLocked()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		c.ret_bool(o && o->file && !description_locked(c.world, {o->file, o->index}, kUserLockId));
 	});
 	auto stub = [&](const char *key) { w.register_native(key, [](const NativeContext &) {}); };
 
@@ -256,7 +282,14 @@ void register_script_natives(World &w) {
 		c.world.send_event(t, e);
 		if (dbg) {
 			std::string h = c.world.read_string(c.mem().get<uint32_t>(e + kHandle));
-			if (h.find(dbg) != std::string::npos) fprintf(stderr, "[send %u] %s -> %s/%s INT1 %d -> %d\n", c.world.frame(), h.c_str(), t->parent ? t->parent->name.c_str() : "-", t->name.c_str(), before, c.mem().get<int32_t>(e + kInt1));
+			auto name = [&](uint32_t off) {
+				GameObject *o = c.world.object(c.mem().get<uint32_t>(e + off));
+				return o ? o->name : std::string("-");
+			};
+			if (h.find(dbg) != std::string::npos) {
+				fprintf(stderr, "[send %u] %s -> %s/%s INT1 %d -> %d INT3 %d objects %s %s\n", c.world.frame(), h.c_str(), t->parent ? t->parent->name.c_str() : "-", t->name.c_str(), before,
+				        c.mem().get<int32_t>(e + kInt1), c.mem().get<int32_t>(e + kInt3), name(kObject1).c_str(), name(kObject1 + 4).c_str());
+			}
 		}
 	});
 	// ProcessEventCaller (Core 0x70046230): the object's own ProcessEvent (vtable +0x70). For an
@@ -610,6 +643,21 @@ void register_script_natives(World &w) {
 		uint32_t t = c.arg<uint32_t>(1);
 		if (v && t) c.mem().set<uint32_t>(t, c.world.string(v->text));
 	});
+	// GetStringValueCaller (Core 2.123 0x20119500) → DE_CValueString::GetValue (0x2003dea0): the value's own text.
+	reg("CValueString::GetValue(class CText)", [](const NativeContext &c) {
+		GameObject *v = c.self();
+		uint32_t t = c.arg<uint32_t>(0);
+		if (!v || !t) return;
+		if (v->parent && value_child(v->parent, v->name) == v) {
+			if (auto *val = c.world.object_value(v->parent, v->name)) c.mem().set<uint32_t>(t, c.world.string(val->text));
+		} else if (auto p = value_payload(v); p && v->is("Value\\String") && p->size() >= 4) {
+			de::Contents cc(*p);
+			auto b = cc.bytes(cc.u32());
+			std::string s(b.begin(), b.end());
+			while (!s.empty() && s.back() == 0) s.pop_back();
+			c.mem().set<uint32_t>(t, c.world.string(s));
+		}
+	});
 	reg("CObject::CText::(opp =)(int)", [set_text](const NativeContext &c) { set_text(c, std::to_string(c.arg<int32_t>(0))); });
 	reg("CObject::CText::(opp +=)(int)", [text_of, set_text](const NativeContext &c) { set_text(c, text_of(c) + std::to_string(c.arg<int32_t>(0))); });
 	reg("CObject::CText::bool (opp ==)(string)", [text_of](const NativeContext &c) { c.ret_bool(text_of(c) == c.arg_string(0)); });
@@ -640,6 +688,10 @@ void register_script_natives(World &w) {
 		c.ret_object(top);
 	});
 	reg("CObject::dword SystemTime()", [](const NativeContext &c) { c.ret_u32(c.world.system_ms()); });
+	// IsUIManagerActiveCaller (Core 2.123 0x2004a4f0): DE_CUIManager::ActiveManager() != 0.
+	reg("CObject::bool IsUIManagerActive()", [](const NativeContext &c) { c.ret_bool(c.world.ui_manager_active && c.world.ui_manager_active()); });
+	// LastKeyPressedSystemTimeCaller (Core 2.123 0x2004a240): DE_GLOBAL::LastKeyPressTime.
+	reg("CObject::dword LastKeyPressedSystemTime()", [](const NativeContext &c) { c.ret_u32(c.world.last_key_press_ms); });
 	// DeleteThis: detach from the tree; references to it read as inactive.
 	auto remove = [](const NativeContext &c) {
 		if (GameObject *o = c.self()) c.world.destroy(o);
@@ -719,7 +771,7 @@ void register_script_natives(World &w) {
 		auto it = c.world.incident_recorders.find(c.self());
 		return it == c.world.incident_recorders.end() ? nullptr : &it->second;
 	};
-	auto now_ms = [](const NativeContext &c) { return uint32_t(c.world.scene_ms()); };
+	auto now_ms = [](const NativeContext &c) { return c.world.scene_ms_of(c.owner()); };
 	auto present = [](const World::IncidentRecorder &r, uint32_t now, uint32_t type) {
 		for (auto &[t, k] : r.incidents) {
 			uint32_t d = t < now ? now - t : t - now;
@@ -754,7 +806,6 @@ void register_script_natives(World &w) {
 	reg("CActor::class CScene TemporalMasterScene()", [](const NativeContext &c) { c.ret_object(c.world.scene_object(c.self())); });
 	// The scene stands for its temporal master, which shares its pause (Genesis passes it on).
 	reg("CScene::class CScene TemporalMaster()", [](const NativeContext &c) { c.ret_object(c.self()); });
-	reg("CScene::AssureTemporalMaster()", [](const NativeContext &) {});
 	reg("CScene::RegisterRenderTickHook(class CClassExecutorInstance,Method(float))", [](const NativeContext &c) {
 		c.world.render_tick_hooks.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 	});
@@ -876,12 +927,47 @@ void register_script_natives(World &w) {
 		}
 	});
 	reg(tp + "SnapToRight()", [text](const NativeContext &c) { if (auto *t = text(c)) t->snap_right = true; });
+	// TextGetSizeCaller (Core 2.123 0x20130ca0): DE_CFlatText3::GetActualSize, the widest line by
+	// (lines - 1) x the line spacing + the font's height, in font units times the size.
+	reg(tp + "GetSize(class CVector)", [text](const NativeContext &c) {
+		auto *t = text(c);
+		uint32_t out = c.arg<uint32_t>(0);
+		if (!out) return;
+		float size[2] = {0, 0};
+		if (t) {
+			static std::map<std::pair<const de::World *, bool>, std::optional<de::Font>> fonts;
+			auto &f = fonts[{&c.world.data(), t->in_game_font}];
+			if (!f) {
+				try {
+					f = de::read_font(c.world.data(), t->in_game_font ? "Font_Metalic" : "Font_Ariel");
+				} catch (const std::exception &) {
+					f = de::Font{};
+				}
+			}
+			int lines = 1;
+			float line = 0;
+			for (unsigned char ch : t->text) {
+				if (ch == '\n') ++lines, line = 0;
+				if (ch == '\n' || ch == '\r') continue;
+				auto &g = f->glyphs[ch];
+				line += g.present ? g.x1 - g.x0 : 0.5f;
+				size[0] = std::max(size[0], line);
+			}
+			size[1] = float(lines - 1) * World::kTextLineSpacing + f->height;
+			size[0] *= t->height, size[1] *= t->height;
+		}
+		c.mem().set<float>(out, size[0]);
+		c.mem().set<float>(out + 4, size[1]);
+		c.mem().set<float>(out + 8, 0);
+	});
 	// CPrimitive (all kinds).
 	const std::string pr = "CPrimitiveGeneratorMesh::CPrimitive::";
 	reg(pr + "SetSortValue(int)", [text](const NativeContext &c) { if (auto *t = text(c)) t->sort = c.arg<int32_t>(0); });
 	reg(pr + "SetTexture(class CImage)", [text](const NativeContext &c) { if (auto *t = text(c)) t->texture = c.arg_object(0); });
 	reg(pr + "SetAsOverlay()", [text](const NativeContext &c) { if (auto *t = text(c)) t->overlay = true; });
 	reg(pr + "SetBlendUnsortedTranslucentAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = false; });
+	// PrimitiveSetBlendTranslucentAlphaCaller (Core 2.123 0x20130860): blend mode 3.
+	reg(pr + "SetBlendTranslucentAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = false, t->modulate = false; });
 	reg(pr + "SetBlendAddAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = true, t->modulate = false; });
 	reg(pr + "SetBlendModulate()", [text](const NativeContext &c) { if (auto *t = text(c)) t->modulate = true, t->additive = false; });
 	auto set_color = [text](const NativeContext &c) {

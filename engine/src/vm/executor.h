@@ -95,6 +95,9 @@ public:
 	// brain restarts in `m` with `args`; if it is mid-execution it stops at the current call.
 	void set_state(ScriptMethod &m, std::span<const uint8_t> args);
 	bool executing() const { return executing_ > 0; }
+	// The brain is gone for good: its stack goes back to the arena (calls then fail as overflows).
+	bool release_stack();
+	bool released() const { return stack_size_ == 0; }
 	// One pulse. Returns true when execution has finished (nothing left to run).
 	bool pulse();
 	bool running() const { return !frames_.empty(); }
@@ -152,6 +155,7 @@ private:
 	};
 
 	void internal_execute(ScriptMethod &m, uint32_t args_offset, bool sync);
+	void resume_frame(const Frame &f);
 	// DE_CClassCompiledMethod::CloseStack (Core 0x201423c0): the frame's instances go to the host.
 	void close_frame(const Frame &f);
 	void close_frames(size_t keep);
@@ -178,6 +182,7 @@ private:
 	ScriptMethod *default_state_ = nullptr;  // +0x28
 	ScriptMethod *state_ = nullptr;
 	std::vector<Frame> frames_;       // +0x40 DE_CExecuteInfo array
+	size_t call_floor_ = 0;  // frames below belong to the state; a native call's are the instant executer's (+0x8c)
 	std::vector<int32_t> vp_frames_;
 	std::pair<size_t, size_t> vp_last_{0, 0};  // the most recently closed varparam frame  // +0x10 variable-parameter frame starts
 	std::vector<VarParam> varparams_;

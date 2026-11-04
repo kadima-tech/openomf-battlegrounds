@@ -66,6 +66,7 @@ struct SessionState {
 	GameObject *description = nullptr;
 	std::vector<de::Guid> attached_guids;   // AttachedSessionModifierDescriptionGUIDs
 	bool single_player = false;             // the session info's +0xdc
+	bool settings_active = false;           // +0xbc: its Choose Cast page is queued or up, not auto-selecting
 	bool ended = false;                     // End has run (EndAndDie)
 	std::vector<GameObject *> modifiers;  // master first
 	std::vector<std::unique_ptr<SessionSlot>> slots;
@@ -129,12 +130,19 @@ SessionState *session_of(World &w, const GameObject *o);
 // DE_CDescription::NewResource: the description's resource (fighter, pilot, environment,
 // session modifier...), with a fighter's model/extra actors and the description's values.
 GameObject *new_resource(World &w, GameObject *description, const de::Guid *model);
+// DE_CSession::AreMasterRequirementsSatisfied's test (Core 2.123 0x20201ba0): every cast the
+// master description requires is a member cast of one of the session's modifiers, those its
+// attached modifier descriptions make included (AssureSessionModifiersCreated).
+bool master_requirements_met(World &w, const SessionState &s);
 // Add a session modifier (e.g. a description's resource: LMSScoreLimitModifier) before Begin.
 void add_session_modifier(World &w, GameObject *modifier);
 // DE_CStandardSession::Begin: initialise every modifier (their executors start), then Begin.
 void begin_session(World &w);
-// Once per frame: every modifier's and slot modifier's Update hook, client/slot connection.
+// Once per frame: each session's scene passes its time, then every modifier's and slot modifier's
+// Update hook runs and clients connect to slots.
 void update_session(World &w);
+// The end of a scene's PassTime: its delta-tick hooks and delta-ticked creatures.
+void scene_delta_tick(World &w, const GameObject *session, float ms);
 // Scene render-tick hooks (text fades, HUD, camera): once per rendered frame with the time that
 // passed (ms). Headless runs set World::render_ticks_per_frame to tick them with each game frame.
 void render_tick(World &w, float ms);

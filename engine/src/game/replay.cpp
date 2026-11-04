@@ -1,8 +1,10 @@
 #include "game/replay.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -12,7 +14,7 @@
 #include <random>
 
 #include "de/contents.h"
-#include "de/user_dirs.h"
+#include "de/platform.h"
 #include "game/runtime.h"
 #include "game/session.h"
 #include "game/simple_physics.h"
@@ -100,6 +102,7 @@ struct StateManager {
 	StateRecord *record = nullptr;
 	bool replay = false;       // +0x78
 	uint32_t applied = ~0u;    // +0x80
+	bool need_fixup = false;   // +0x48: AddLaggedState added a state
 	uint64_t joined = 0;       // the session's managers are searched newest first
 	bool got_hit = false;      // fighter +0x4a0: RegisterGetHitState since its last state
 	uint32_t window = 1000;    // CleanOldStates: 1000 / +0xb8 (a tick-based creature's rate)
@@ -113,9 +116,7 @@ struct StateManager {
 
 // A tick-based creature's clock in a replay (DE_CCreature +0x1d4 is GameObject::creature_ticks).
 struct Clock {
-	// +0x1d8: tick k runs at base + (k + 1) x rate; ours follows the ticks the creature ran (none
-	// while out of the scene), which its recorded times count.
-	uint32_t base = 0;
+	uint32_t base = 0;       // +0x1d8, the creation time, set once: tick k runs at base + (k + 1) x rate
 	int mode = 0;            // +0x2fc: 2 held since the clock went back
 	uint32_t until = 0;      // +0x1e4
 	uint32_t saved = 0;      // +0x1e8: the tick it was at when the hold began
@@ -194,7 +195,7 @@ ManagerFlags manager_flags(const GameObject &o) {
 // DE_CCreature::LocalTime (Creature 0x15008300): a tick-based creature's ticks, else the scene's.
 uint32_t local_time(World &w, const GameObject &o) {
 	if (o.is("Actor\\Creature") && w.creature_rate(const_cast<GameObject *>(&o))) return o.creature_ticks;
-	return uint32_t(w.scene_ms());
+	return w.scene_ms_of(&o);
 }
 
 // DE_CObject::GUID (Core 0x7003df30): its data object's, which copies share; none for others.
@@ -338,6 +339,10 @@ StateManager &join(World &w, GameObject &o) {
 		}
 		sm.replay = sm.record && !rec->recording;
 		if (sm.record) R.joined[sm.record].push_back(o.handle);
+		if (sm.replay && rec->shared_clock_begin && !sm.record->rebased && !o.is("Actor\\Creature")) {
+			for (auto &st : sm.record->states) st.first = st.first > rec->shared_clock_begin ? st.first - rec->shared_clock_begin : 0;
+			sm.record->rebased = true;
+		}
 	}
 	if (getenv("OPENBG_DEBUG_REPLAY")) {
 		std::string shown;
@@ -851,7 +856,7 @@ void unpack_state(World &w, Packer &p, GameObject &o, uint32_t t) {
 		}
 	};
 	for (Brain *b : run) {
-		if (creature) w.at_scene_ms(clock ? clock->base + t * rate : t, [&] { pulse(b); });
+		if (creature) w.at_scene_ms(clock ? clock->base + (t + 1) * rate : t, [&] { pulse(b); });
 		else pulse(b);
 	}
 	if (!creature) return;
@@ -1085,8 +1090,9 @@ Clock &clock_of(World &w, GameObject &o, uint32_t rate, int64_t tick_ms = -1) {
 	auto [it, made] = rw(w).clocks.try_emplace(o.handle);
 	if (made) {
 		uint32_t now = uint32_t(w.scene_ms());
-		uint32_t at = tick_ms >= 0 ? uint32_t(tick_ms) : now - now % rate;
-		it->second.base = at - (o.creature_ticks + (tick_ms >= 0 ? 1 : 0)) * rate;
+		int64_t at = tick_ms >= 0 ? tick_ms : now - now % rate;
+		// DE_CCreature::ObjPrepare: the creation time is never 0.
+		it->second.base = uint32_t(std::max<int64_t>(1, at - int64_t(o.creature_ticks + (tick_ms >= 0 ? 1 : 0)) * rate));
 	}
 	return it->second;
 }
@@ -1169,10 +1175,10 @@ std::optional<std::pair<uint32_t, std::vector<uint8_t>>> newest_state(StateManag
 }
 std::optional<std::pair<uint32_t, std::vector<uint8_t>>> state_at(StateManager &sm, uint32_t t) { return newest_state(sm, t, t); }
 
-// UpdateForReplay (Core 0x701af350): the newest recorded state at or before `t` (the owner's
-// local time), when not the last one taken, joins the history; the session's fixup then restores
-// it (SetupOwnerForState, 0x701af020).
-void update_for_replay(World &w, StateManager &sm, uint32_t t) {
+// UpdateForReplay (Core 0x701af350, 2.123 0x201b5eb0): the newest recorded state at or before `t`
+// (the owner's local time), when not the last one taken, joins the history (AddLaggedState,
+// 2.123 0x201b5770, which flags the manager's fixup); the session update's fixup restores it.
+void update_for_replay(World &, StateManager &sm, uint32_t t) {
 	if (!sm.record || sm.record->states.empty()) return;
 	auto &st = sm.record->states;
 	size_t &c = sm.record->cursor;
@@ -1181,7 +1187,7 @@ void update_for_replay(World &w, StateManager &sm, uint32_t t) {
 	while (c + 1 < st.size() && st[c + 1].first <= t) ++c;
 	if (st[c].first > t || st[c].first == sm.applied) return;
 	sm.applied = st[c].first;
-	if (add_lagged_state(sm, st[c].first, st[c].second)) restore(w, sm, sm.lagged.back());
+	if (add_lagged_state(sm, st[c].first, st[c].second)) sm.need_fixup = true;
 }
 
 void retick(World &w, GameObject &o, uint32_t at_ms) {
@@ -1241,6 +1247,9 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 	uint32_t rate = w.creature_rate(&o);
 	if (!rate) return;
 	Clock &c = clock_of(w, o, rate);
+	// Within a tick the original's Time() is the set's last tick (+0x38), one rate behind ours.
+	const uint32_t lag = w.scene_ms_held() ? rate : w.advancing_rate;
+	ms = ms > lag ? ms - lag : 0;
 	if (ms < c.base) {
 		o.creature_ticks = 0;
 		return;
@@ -1255,7 +1264,7 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 		n = 100;
 		o.creature_ticks = tick - 100;
 	}
-	for (; n; --n) retick(w, o, c.base + o.creature_ticks * rate);
+	for (; n; --n) retick(w, o, c.base + (o.creature_ticks + 1) * rate);
 	o.creature_ticks = tick;
 	c.until = tick;
 }
@@ -1299,7 +1308,7 @@ StateRecord *SessionRecord::find(const std::string &id) const {
 	return nullptr;
 }
 
-std::string recordings_dir() { return de::user_data_dir() + "/Recordings"; }
+std::filesystem::path recordings_dir() { return de::user_data_dir() / "Recordings"; }
 
 // DE_CRecordingListUIManager::Begin (OMF 0x35062040) finds every SessionRecord in the loaded
 // files: ours are the data folder's and the Recordings folder's.
@@ -1391,8 +1400,9 @@ void replay_session_ended(World &w, SessionState &s) {
 		}
 		// +0x58: the session's class (its factory, a script class here).
 		if (s.obj && s.obj->file) r.factory = s.obj->file->objects()[s.obj->index].guid;
-		r.end_ms = uint32_t(w.scene_ms());
-		r.length = float(r.end_ms) / 1000.0f;
+		// +0x78, the length in real seconds: the scene's time over its scale (+0x178, 2.123 +0x188).
+		r.end_ms = w.scene_ms_of(s.obj);
+		r.length = float(r.end_ms) / (float(w.scene_clock(s.obj).scale) * 1000.0f);
 		// time(NULL) and new GUIDs, as the original stamps a record; runs without a wall clock
 		// (screenshot, headless) stamp it from their own clock so they repeat.
 		const bool repeatable = !w.system_clock;
@@ -1409,7 +1419,7 @@ void replay_session_ended(World &w, SessionState &s) {
 		r.guid = record_guid(repeatable);
 		std::error_code ec;
 		std::filesystem::create_directories(recordings_dir(), ec);
-		r.path = recordings_dir() + "/" + stamp + ".DEObjects";
+		r.path = (recordings_dir() / (std::string(stamp) + ".DEObjects")).string();
 		size_t states = 0;
 		for (auto &m : r.managers) {
 			states += m->states.size();
@@ -1426,6 +1436,42 @@ void replay_session_ended(World &w, SessionState &s) {
 	forget(w);
 }
 
+namespace {
+
+bool has_guid_text(const std::string &id) {
+	static const int groups[4] = {8, 4, 4, 16};
+	for (size_t at = 0; at + 35 <= id.size(); ++at) {
+		size_t p = at;
+		bool ok = true;
+		for (int g = 0; g < 4 && ok; ++g) {
+			for (int k = 0; k < groups[g] && ok; ++k) ok = std::isxdigit(static_cast<unsigned char>(id[p++])) != 0;
+			if (ok && g < 3) ok = id[p++] == '-';
+		}
+		if (ok) return true;
+	}
+	return false;
+}
+
+// Their length is the end over 1000 whatever the session's speed, and their session nodes' (the
+// session and slot modifiers', IDs with GUID text) states from the session's Begin to its Genesis,
+// which a session's own clock stamps 0, run on from the shared clock's time at Begin. The last of
+// that run (states under 2 s apart) stands for Genesis; the load's last moments are not recorded.
+uint32_t shared_clock_begin(const SessionRecord &r) {
+	if (std::fabs(double(r.length) * 1000.0 - double(r.end_ms)) > 1.0) return 0;
+	std::vector<uint32_t> stamps;
+	for (auto &m : r.managers) {
+		if (!has_guid_text(m->id)) continue;
+		for (auto &st : m->states) stamps.push_back(st.first);
+	}
+	std::sort(stamps.begin(), stamps.end());
+	if (stamps.empty() || stamps[0] == 0) return 0;
+	size_t i = 0;
+	while (i + 1 < stamps.size() && stamps[i + 1] - stamps[i] < 2000) ++i;
+	return stamps[i] < r.end_ms ? stamps[i] : 0;
+}
+
+}  // namespace
+
 bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec) {
 	if (!rec) return false;
 	de::ObjectRef desc = w.data().by_guid(rec->master);
@@ -1436,6 +1482,18 @@ bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec) {
 	auto &R = rw(w);
 	rec->recording = false;
 	for (auto &m : rec->managers) m->cursor = 0;
+	if (!rec->shared_clock_begin && (rec->shared_clock_begin = shared_clock_begin(*rec))) {
+		rec->end_ms -= rec->shared_clock_begin;
+		printf("an earlier build's recording: its session began at %u ms on the shared clock\n", rec->shared_clock_begin);
+	}
+	if (getenv("OPENBG_DEBUG_REPLAY")) {
+		fprintf(stderr, "[replay] end %u ms, length %.3f s\n", rec->end_ms, rec->length);
+		for (auto &m : rec->managers) {
+			std::string shown;
+			for (char ch : m->id) shown += ch >= 32 && ch < 127 ? ch : '.';
+			if (!m->states.empty()) fprintf(stderr, "[replay] %s: %zu states %u..%u\n", shown.c_str(), m->states.size(), m->states.front().first, m->states.back().first);
+		}
+	}
 	R.record = rec;
 	auto &ss = start_session(w, {res[0]});
 	ss.master_description = w.global_object(desc);
@@ -1504,6 +1562,15 @@ void replay_update(World &w) {
 	for (Brain *b : w.brains()) {
 		if (b->owner && b->owner->is("Actor\\Creature")) b->inst.controlled = false;
 	}
+	for (auto &[h, sm] : R.managers) {
+		if (sm.replay) update_for_replay(w, sm, local_time(w, *sm.owner));
+	}
+}
+
+void replay_after_pass(World &w) {
+	auto &R = rw(w);
+	if (!R.record || R.record->recording || !R.session) return;
+	uint32_t now = uint32_t(w.scene_ms());
 	// DE_CScene::PassTime back (Core 0x70070040): its TimeRewound event deletes the run-time actors
 	// prepared after the new time (DE_CActor::ProcessEvent 0x70090ed0, "ScenePrepareTime").
 	if (now < R.last_ms) {
@@ -1514,8 +1581,11 @@ void replay_update(World &w) {
 	}
 	R.last_ms = now;
 	for (GameObject *o : w.scene_objects()) R.prepared.emplace(o->handle, now);
+	// DE_CSession::Update's fixups (NeedFixup, then SetupOwnerForState of the newest held state).
 	for (auto &[h, sm] : R.managers) {
-		if (sm.replay) update_for_replay(w, sm, local_time(w, *sm.owner));
+		if (!sm.replay || !sm.need_fixup) continue;
+		sm.need_fixup = false;
+		if (!sm.lagged.empty() && w.object(h) == sm.owner) restore(w, sm, std::pair(sm.lagged.back()));
 	}
 }
 
@@ -1570,10 +1640,11 @@ bool creature_state_tick(World &w, GameObject &o) {
 	if (!rate) return false;
 	Clock &c = clock_of(w, o, rate, int64_t(w.scene_ms()));
 	if (o.creation_time) c.base = o.creation_time;
-	else if (!rw(w).reticking) c.base = uint32_t(w.scene_ms()) - (o.creature_ticks + 1) * rate;
 	bool skip = c.mode == 2;
 	if (!skip && c.mode == 0 && c.ticked && c.unpacking != o.creature_ticks) {
 		if (StateManager *sm = manager_of(w, &o)) {
+			// DE_CStateManager::GetState (Core 2.123 0x201b8a50): a replay-driven manager first fetches.
+			if (sm->replay) update_for_replay(w, *sm, o.creature_ticks);
 			if (auto st = state_at(*sm, o.creature_ticks)) {
 				restore(w, *sm, *st);
 				skip = true;
@@ -1628,10 +1699,15 @@ void replay_set_time(World &w, GameObject &o, uint32_t ms) {
 }
 
 // DE_CScene::TemporalUpdate (Core 0x70070710): the deferred SetTime of restored creatures.
-void replay_temporal_update(World &w) {
+void replay_temporal_update(World &w, const GameObject *session) {
 	auto &R = rw(w);
-	auto list = std::move(R.deferred);
-	R.deferred.clear();
+	std::vector<uint32_t> list;
+	std::erase_if(R.deferred, [&](uint32_t h) {
+		const GameObject *o = w.object(h);
+		if (o && w.clock_key(o) != session) return false;
+		list.push_back(h);
+		return true;
+	});
 	w.temporal_updating = true;
 	for (uint32_t h : list) {
 		if (GameObject *o = w.object(h)) set_time(w, *o, uint32_t(w.scene_ms()));
@@ -1661,6 +1737,8 @@ bool replaying(World &w) {
 	auto &R = rw(w);
 	return R.record && !R.record->recording;
 }
+
+SessionState *replay_session(World &w) { return rw(w).record ? rw(w).session : nullptr; }
 
 uint32_t replay_end_ms(World &w) {
 	auto &R = rw(w);

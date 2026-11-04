@@ -51,6 +51,7 @@ public:
 	void wire_session();
 	// The arena whose static scene is drawn (its file stem); found from the scene when not set.
 	void load_arena(const std::string &stem);
+	int reflections_built_ = -1;  // the Reflections the arena and fighters were built with
 	bool has_arena() const { return !arena.empty(); }
 	// Draws into the bound viewport (dw x dh pixels). `fixed_step` (screenshot runs) snaps the
 	// camera instead of trailing.
@@ -84,6 +85,8 @@ private:
 	void load_renderers();
 	std::string find_arena() const;
 	bool shown(const game::GameObject *o) const;
+	std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &, const de::ObjectRef &)>
+	images_of(const game::GameObject *o);
 
 	std::string arena;
 	std::array<float, 16> screen_vp{};
@@ -92,6 +95,8 @@ private:
 	bool owners_set = false;
 	// Each drawn actor's inherited lighting owner (AssureLightable).
 	std::map<const game::GameObject *, const game::GameObject *> inherited_owner_;
+	const de::ObjectsFile *environment_tree_file_ = nullptr;
+	std::vector<bool> environment_tree_;  // the arena file's objects under its environment
 	bool gl_ready_ = false;
 };
 

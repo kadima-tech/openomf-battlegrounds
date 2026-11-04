@@ -43,14 +43,18 @@ void set_transparent_sink(std::vector<DeferredDraw> *sink);
 // A projector-lit mesh as the light projector passes see it (DE_CD3DRenderMeshElement::
 // AssureProjectedTargetOctree, Direct3D 0x2002e1f0): every face once, in mesh order, and the
 // octree that picks the faces a light touches (DE_CD3DLight::UpdateTouchedPolygons 0x2002cd00).
+// Its vertices are placed in the world as its actor stood when its meshes were set up when the
+// actor is position-static, else left in mesh space; the passes draw them as world positions.
 struct ProjectorTarget {
 	GLuint vao = 0, vbo = 0;
 	de::Octree octree;     // in mesh space
-	de::Transform place;   // mesh space to world
+	de::Transform place;   // mesh space to where the vertices are
+	de::Transform frame;   // its actor's, where the lights look for its faces
 	std::vector<bool> drawn;  // the face is in a drawn material
 	bool position_static = false;
 	const void *light_owner = nullptr;
 	float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
+	std::string name;  // debugging: its mesh
 };
 
 struct MeshBatch {
@@ -130,10 +134,16 @@ struct SceneLight {
 	int blend = 0;
 	bool has_image = false;  // a sphere light with one gets no projector pass
 	std::string name;        // debugging: its affector / light
+	std::pair<uint32_t, uint32_t> id{0, 0};  // the light from frame to frame (object handle, Light index; 0 none)
+	bool rendered = true;  // its affector's own rendered flag (DE_CActor +0x108)
 };
 struct Lighting {
 	std::array<float, 3> ambient{0.3f, 0.3f, 0.3f};  // the environment's ambient (de::read_ambient)
 	std::vector<SceneLight> lights;
+	uint32_t serial = 0;  // a new one each time the lights are gathered (a renderer's frame)
+	int renderer = 0;     // which view gathered them: each renderer keeps its own lights
+	uint32_t options = 0;          // the options apply it was gathered after (World::render_options_applied)
+	const void *scene = nullptr;   // the scene its renderer shows
 };
 // The frame's lights; the app fills it before drawing.
 extern Lighting g_lighting;
@@ -142,6 +152,8 @@ extern de::LiveFloat g_live_values;
 // The applied Bump Mapping Enabled (options +8): off, DE_CGenericShader::AddStage inserts no
 // D3DTOP_BUMPENVMAP stage, so reflections are not bent.
 extern const bool *g_bump_enabled;
+// The renderer's applied Reflections (options +4, or forced): off, the meshes built drop their reflection passes.
+extern bool g_reflections_enabled;
 // The applied Texture Detail (options +0x1c: 0 High, 1 Medium, 2 Low); none: High.
 extern const int *g_texture_detail;
 // DE_CD3DTexture::CreateTextureFromImage (Direct3D 0x2001bce0): an image whose AdjustMipMapLevel
@@ -195,29 +207,54 @@ private:
 // Meshes of actors made at run time, drawn where they are each frame.
 class ActorMeshRenderer {
 public:
+	using Paint = std::array<std::array<float, 3>, 3>;
+	// What one instance's texture stage draws: its image and, for an image a fighter's paint
+	// filter holds, the pilot's colours and the filter's scaled images.
+	struct LayerImage {
+		de::ObjectRef image;
+		std::optional<Paint> paint;
+		std::vector<de::ObjectRef> scaled;
+	};
 	struct Item {
 		de::ObjectRef actor;
 		de::Transform world;
 		const void *light_owner = nullptr;  // see SceneLight::reaches
 		// This actor's values as its scripts set them (each instance has its own); else g_live_values.
 		de::LiveFloat live;
+		// This instance's image for a stage (its mesh, texture manager and the data's image); none:
+		// the data's.
+		std::function<std::optional<LayerImage>(const de::ObjectRef &mesh, const de::ObjectRef &manager, const de::ObjectRef &image)> image_of;
+		// The instance (its projector targets are its own) and DE_CActor::IsPositionStatic.
+		const void *instance = nullptr;
+		bool position_static = false;
+		// Its projector-lit meshes are light projector targets (false: the arena keeps them).
+		bool projected = true;
 	};
 	void draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye);
 	// Their glow and specular-glow passes, for the meshes `draw` built.
 	void draw_glow(const std::vector<Item> &actors, const float *vp, const float *eye);
 	// The pilot colours an image is painted with when a script gave it a fighter's paint filter
-	// (CImage::AddFilter); none for an unfiltered image. Asked once per image.
-	std::function<std::optional<std::array<std::array<float, 3>, 3>>(const de::ObjectRef &image)> paint_of;
-	// A texture manager's image as scripts set it (World::texture_overrides), when they did; the
-	// meshes are rebuilt whenever `texture_version` changes.
-	std::function<std::optional<de::ObjectRef>(const de::ObjectRef &manager)> image_of;
+	// (CImage::AddFilter) and the item's image_of did not say; none for an unfiltered image.
+	std::function<std::optional<Paint>(const de::ObjectRef &image)> paint_of;
+	// The meshes are rebuilt whenever `texture_version` changes.
 	uint32_t texture_version = 0;
 
 private:
 	GLuint prog_ = 0;
 	uint32_t built_version_ = 0;
-	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<MeshBatch>> meshes_;
+	// Batches by actor and the images its stages draw.
+	std::map<std::string, std::vector<MeshBatch>> meshes_;
+	struct Stage {
+		de::ObjectRef mesh, manager, image;
+	};
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<Stage>> stages_;
+	std::vector<const std::vector<MeshBatch> *> drawn_;  // per item of the last draw
+	// Each projector-lit mesh's target in mesh space, and a position-static instance's placed ones.
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, ProjectorTarget> mesh_targets_;
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<de::ObjectRef>> actor_meshes_;
+	std::map<const void *, std::map<std::pair<const de::ObjectsFile *, uint32_t>, ProjectorTarget>> placed_targets_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures_;
+	std::map<std::string, GLuint> painted_;
 };
 
 // A fighter's mesh, skin and rig (from <Name>Model1.DEObjects and <Name>.DEObjects), drawn with

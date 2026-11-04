@@ -214,8 +214,7 @@ void register_core_natives(World &w) {
 		if (std::find(c.world.scene_roots.begin(), c.world.scene_roots.end(), o) == c.world.scene_roots.end()) c.world.scene_roots.push_back(o);
 	});
 	// DE_CObject::ReplaceWithThenDie (Core 0x20043800): its children move to the replacement, what
-	// referred to it refers to the replacement (here: texture managers drawing it as an image),
-	// and it is cleaned up.
+	// referred to it refers to the replacement, and it is cleaned up.
 	reg("CObject::ReplaceWithThenDie(class CObject)", [](const NativeContext &c) {
 		GameObject *o = c.self(), *r = c.arg_object(0);
 		if (!o) return;
@@ -228,19 +227,7 @@ void register_core_natives(World &w) {
 				r->children.push_back(ch);
 				c.world.parented(ch, was);
 			}
-			if (o->file && r->file && o->is("Image")) {
-				for (uint32_t i = 0; i < o->file->objects().size(); ++i) {
-					if (o->file->objects()[i].class_path.rfind("TextureManager", 0) != 0) continue;
-					for (auto &l : reference_lists(c.world.data(), {o->file, i})) {
-						for (auto &refs : l) {
-							for (auto &ref : refs) {
-								if (ref.file == o->file && ref.index == o->index) c.world.texture_overrides[{o->file, i}] = de::ObjectRef{r->file, r->index};
-							}
-						}
-					}
-				}
-				++c.world.texture_override_version;
-			}
+			c.world.replace_references(o, r);
 		}
 		c.world.clean_later(o);
 	});
@@ -257,6 +244,7 @@ void register_core_natives(World &w) {
 	});
 	reg("CObject::class CObject NewCopy()", [](const NativeContext &c) {
 		auto *o = c.self();
+		if (o && getenv("OPENBG_DEBUG_DEBRIS")) fprintf(stderr, "[debris %u] copy %s under %s of %s\n", c.world.frame(), o->name.c_str(), o->parent ? o->parent->name.c_str() : "-", o->parent && o->parent->parent ? o->parent->parent->name.c_str() : "-");
 		c.ret_object(o ? c.world.copy_tree(*o) : nullptr);
 	});
 
@@ -405,8 +393,25 @@ void register_core_natives(World &w) {
 	reg("CScene::class CSession Session()", [](const NativeContext &c) {
 		c.ret_object(c.world.session ? c.world.session->obj : singleton(c.world, "Session", "Session"));
 	});
-	reg("CCreature::class CCreature Environment()",
-	    [](const NativeContext &c) { c.ret_object(singleton(c.world, "Environment", "Actor\\Creature\\Environment")); });
+	// DE_CCreature::Environment (Creature 0x15018f80): the last of its root scene's actors that is an
+	// environment.
+	reg("CCreature::class CCreature Environment()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || !in_scene(*o)) {
+			c.ret_object(nullptr);
+			return;
+		}
+		const GameObject *top = o;
+		while (top->parent) top = top->parent;
+		GameObject *session = c.world.scene_session_of(o);
+		GameObject *found = nullptr;
+		for (auto it = c.world.scene_roots.rbegin(); it != c.world.scene_roots.rend() && !found; ++it) {
+			GameObject *r = *it;
+			if (r->gui != top->gui || (!top->gui && c.world.scene_session_of(r) != session) || !in_scene(*r)) continue;
+			if (r->is("Actor\\Creature\\Environment")) found = r;
+		}
+		c.ret_object(found);
+	});
 	// Scene time is in milliseconds (scripts wait e.g. 200 between navigation commands); 60 frames/s.
 	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(scene_time(c)); });
 	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(true); });
@@ -518,7 +523,13 @@ void register_core_natives(World &w) {
 	// AddFilterCaller (0x7018d300): the filter joins the image's list (+0x34).
 	reg("CImage::AddFilter(class CImageFilter)", [](const NativeContext &c) {
 		GameObject *img = c.self(), *f = c.arg_object(0);
-		if (img && f && img->file) c.world.image_filters[{img->file, img->index}] = f;
+		if (!img || !f) return;
+		img->image_filter = f;
+		if (img->file) {
+			c.world.image_filters[{img->file, img->index}] = f;
+			c.world.instance_images.insert({img->file, img->index});
+		}
+		++c.world.texture_override_version;
 	});
 	// UpdateCaller (0x701d5120): the generator's instances step to the scene time; every live
 	// effect steps each frame here anyway (ParticleSystem::step).

@@ -1,152 +1,171 @@
-"""ISO 9660 extraction used by Linux setup; synthetic images, no game disc needed."""
-from pathlib import Path
+"""ISO 9660 reading used by Linux and Windows setup; synthetic images, no game disc needed."""
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import struct
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import install
-import iso9660
-
-SECTOR = iso9660.SECTOR
+from iso9660 import SECTOR, extract_directory
 
 
-def both(value, size):
-    """ISO 9660 stores numbers in both byte orders."""
-    return value.to_bytes(size, "little") + value.to_bytes(size, "big")
+def both16(value):
+    return struct.pack("<H", value) + struct.pack(">H", value)
 
 
-def record(name: bytes, extent: int, size: int, directory: bool, flags: int = 0) -> bytes:
-    body = bytes([0]) + both(extent, 4) + both(size, 4) + bytes(7)
-    body += bytes([flags | (0x02 if directory else 0), 0, 0]) + both(1, 2) + bytes([len(name)]) + name
-    body += b"\0" if len(body) % 2 == 0 else b""  # The length byte counts the padding.
-    return bytes([len(body) + 1]) + body
+def both32(value):
+    return struct.pack("<I", value) + struct.pack(">I", value)
 
 
-class Builder:
-    """Lay out a tiny image: descriptors, then each directory and file in its own sectors.
+def record(name: bytes, extent: int, size: int, directory: bool) -> bytes:
+    length = 33 + len(name) + (len(name) + 1) % 2
+    body = bytes([length, 0]) + both32(extent) + both32(size) + bytes(7) + bytes([2 if directory else 0, 0, 0])
+    body += both16(1) + bytes([len(name)]) + name
+    return body.ljust(length, b"\0")
 
-    `tree` maps names to bytes (files) or nested dicts (directories). Joliet
-    images keep the given case; primary-only images use upper case and ";1".
-    """
 
-    def __init__(self, tree, joliet=True, file_flags=0):
-        self.joliet, self.file_flags = joliet, file_flags
-        self.sectors: dict[int, bytes] = {}
+class ImageBuilder:
+    """Lays out a tiny image: descriptors, then one extent per directory and file."""
+
+    def __init__(self, joliet=False):
+        self.joliet = joliet
+        self.sectors = {}
         self.next = 20
-        root_extent, root_size = self.directory(tree, None)
-        root = record(b"\0", root_extent, root_size, True)
-        pvd = bytearray(SECTOR)
-        pvd[0:7] = b"\x01CD001\x01"
-        pvd[128:132] = both(SECTOR, 2)
-        pvd[156:156 + len(root)] = root
-        self.sectors[16] = bytes(pvd)
-        terminator = 17
-        if joliet:
-            svd = bytearray(pvd)
-            svd[0] = 2
-            svd[88:91] = b"%/E"
-            self.sectors[17] = bytes(svd)
-            terminator = 18
-        self.sectors[terminator] = b"\xffCD001\x01" + bytes(SECTOR - 7)
 
-    def name(self, name: str, directory: bool) -> bytes:
+    def name(self, text, directory):
         if self.joliet:
-            return (name if directory else name + ";1").encode("utf-16-be")
-        return (name.upper() if directory else name.upper() + ";1").encode()
+            return text.encode("utf-16-be")
+        return text.upper().encode() + (b"" if directory else b";1")
 
-    def allocate(self, data: bytes) -> int:
+    def file(self, data: bytes):
         extent = self.next
+        self.sectors[extent] = data
         self.next += max(1, -(-len(data) // SECTOR))
-        self.sectors[extent] = data
-        return extent
+        return extent, len(data)
 
-    def directory(self, tree, parent):
+    def directory(self, children, parent=None):
+        """children: {name: bytes | dict}. Returns (extent, size) of the directory."""
         records = []
-        for name, value in tree.items():
+        for name, value in children.items():
             if isinstance(value, dict):
-                records.append((name, *self.directory(value, None), True))
+                extent, size = self.directory(value)
+                records.append(record(self.name(name, True), extent, size, True))
             else:
-                records.append((name, self.allocate(value), len(value), False))
-        size = SECTOR
+                extent, size = self.file(value)
+                records.append(record(self.name(name, False), extent, size, False))
+        # Self/parent records first; records never cross a sector boundary.
         extent = self.next
-        self.next += 1
-        data = record(b"\0", extent, size, True) + record(b"\1", extent, size, True)
-        for name, child_extent, child_size, directory in records:
-            data += record(self.name(name, directory), child_extent, child_size, directory,
-                           0 if directory else self.file_flags)
-        assert len(data) <= SECTOR
+        blocks, current = [], record(b"\0", extent, 0, True) + record(b"\1", extent, 0, True)
+        for item in records:
+            if len(current) + len(item) > SECTOR:
+                blocks.append(current.ljust(SECTOR, b"\0"))
+                current = b""
+            current += item
+        blocks.append(current.ljust(SECTOR, b"\0"))
+        data = b"".join(blocks)
+        size = len(data)
+        # Patch the self record's extent and size now that both are known.
+        data = record(b"\0", extent, size, True) + data[34:]
         self.sectors[extent] = data
+        self.next += len(blocks)
         return extent, size
 
-    def write(self, path: Path) -> Path:
+    def build(self, tree, truncate=0) -> bytes:
+        root_extent, root_size = self.directory(tree)
+        descriptor = bytearray(SECTOR)
+        descriptor[0] = 2 if self.joliet else 1
+        descriptor[1:7] = b"CD001\x01"
+        if self.joliet:
+            descriptor[88:91] = b"%/E"
+        descriptor[128:132] = both16(SECTOR)
+        descriptor[156:190] = record(b"\0", root_extent, root_size, True)
+        terminator = bytearray(SECTOR)
+        terminator[0] = 255
+        terminator[1:7] = b"CD001\x01"
         image = bytearray(self.next * SECTOR)
-        for index, data in self.sectors.items():
-            image[index * SECTOR:index * SECTOR + len(data)] = data
-        path.write_bytes(bytes(image))
-        return path
+        image[16 * SECTOR:17 * SECTOR] = descriptor
+        image[17 * SECTOR:18 * SECTOR] = terminator
+        for extent, data in self.sectors.items():
+            image[extent * SECTOR:extent * SECTOR + len(data)] = data
+        return bytes(image[:len(image) - truncate])
 
 
-DISC = {
-    "Setup": {"setup.ini": b"ProductGUID=" + install.PRODUCT_GUID.encode(), "data1.cab": b"cab" * 1000,
-              "data1.hdr": b"hdr", "data2.cab": b"x" * (SECTOR + 7), "Sub": {"nested.txt": b"nested"}},
-    "Autorun.inf": b"[autorun]",
-}
+def disc_tree(**extra):
+    setup = {"setup.ini": b"ProductGUID=" + install.PRODUCT_GUID.encode(),
+             "data1.cab": b"cab one", "data1.hdr": b"header", "data2.cab": b"x" * 5000}
+    setup.update(extra)
+    return {"Setup": setup, "Autorun.inf": b"[autorun]"}
 
 
 class ISO9660Tests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="iso test ")
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.out = self.root / "out"
-        self.out.mkdir()
+        temp = tempfile.TemporaryDirectory(prefix="iso test ")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
 
-    def test_joliet_names_and_contents_are_extracted(self):
-        image = Builder(DISC).write(self.root / "disc.iso")
-        setup = iso9660.extract_directory(image, "setup", self.out)
-        self.assertEqual(setup, self.out / "Setup")
-        self.assertEqual((setup / "data2.cab").read_bytes(), DISC["Setup"]["data2.cab"])
-        self.assertEqual((setup / "Sub/nested.txt").read_bytes(), b"nested")
-        self.assertFalse((self.out / "Autorun.inf").exists())
-        self.assertEqual(install.disc_setup(self.out), setup)
+    def image(self, data: bytes) -> Path:
+        path = self.root / "Battlegrounds.iso"
+        path.write_bytes(data)
+        return path
 
-    def test_primary_volume_names_without_joliet(self):
-        image = Builder(DISC, joliet=False).write(self.root / "plain.iso")
-        setup = iso9660.extract_directory(image, "Setup", self.out)
-        self.assertEqual(setup.name, "SETUP")
-        self.assertEqual((setup / "DATA1.HDR").read_bytes(), b"hdr")
-        self.assertEqual(install.disc_setup(self.out), setup)
+    def test_primary_volume_extracts_setup_folder(self):
+        image = self.image(ImageBuilder().build(disc_tree()))
+        folder = extract_directory(image, "Setup", self.root / "out")
+        self.assertEqual(folder.name, "SETUP")
+        self.assertEqual((folder / "DATA2.CAB").read_bytes(), b"x" * 5000)
+        self.assertEqual(install.disc_setup(self.root / "out"), folder)
 
-    def test_missing_directory_returns_none(self):
-        image = Builder({"Other": {"file": b"x"}}).write(self.root / "other.iso")
-        self.assertIsNone(iso9660.extract_directory(image, "Setup", self.out))
+    def test_joliet_names_are_preferred(self):
+        image = self.image(ImageBuilder(joliet=True).build(disc_tree()))
+        folder = extract_directory(image, "SETUP", self.root / "out")
+        self.assertEqual(folder.name, "Setup")
+        self.assertEqual((folder / "data1.hdr").read_bytes(), b"header")
 
-    def test_non_iso_and_truncated_images_are_rejected(self):
-        junk = self.root / "junk.iso"
-        junk.write_bytes(b"not a disc" * 10000)
+    def test_directories_spanning_sectors_and_subfolders(self):
+        many = {f"file{index:03}.bin": bytes([index]) for index in range(120)}
+        image = self.image(ImageBuilder().build(disc_tree(Extras={"nested.txt": b"nested"}, **many)))
+        folder = extract_directory(image, "setup", self.root / "out")
+        self.assertEqual((folder / "FILE119.BIN").read_bytes(), bytes([119]))
+        self.assertEqual((folder / "EXTRAS/NESTED.TXT").read_bytes(), b"nested")
+
+    def test_missing_installer_and_non_iso_files_are_rejected(self):
+        image = self.image(ImageBuilder().build({"Other": {"a.txt": b"a"}}))
+        with self.assertRaisesRegex(ValueError, "does not contain the Battlegrounds installer"):
+            extract_directory(image, "Setup", self.root / "out")
         with self.assertRaisesRegex(ValueError, "not an ISO 9660"):
-            iso9660.extract_directory(junk, "Setup", self.out)
-        image = Builder(DISC).write(self.root / "cut.iso")
-        image.write_bytes(image.read_bytes()[:-SECTOR])
+            extract_directory(self.image(bytes(40 * SECTOR)), "Setup", self.root / "out")
+
+    def test_truncated_image_is_rejected(self):
+        image = self.image(ImageBuilder().build(disc_tree(), truncate=SECTOR))
         with self.assertRaisesRegex(ValueError, "truncated"):
-            iso9660.extract_directory(image, "Setup", self.out)
+            extract_directory(image, "Setup", self.root / "out")
 
-    def test_unsafe_names_cannot_escape_destination(self):
-        for name in ("..", "a/b", "a\\b"):
-            with self.subTest(name=name):
-                image = Builder({"Setup": {name: b"evil"}}).write(self.root / "evil.iso")
-                with self.assertRaisesRegex(ValueError, "invalid file name"):
-                    iso9660.extract_directory(image, "Setup", self.out)
-                self.assertFalse((self.root / "b").exists())
-                shutil.rmtree(self.out)
-                self.out.mkdir()
+    def test_unsafe_names_are_rejected(self):
+        image = self.image(ImageBuilder(joliet=True).build({"Setup": {"..\\evil.dll": b"x"}}))
+        with self.assertRaisesRegex(ValueError, "invalid file name"):
+            extract_directory(image, "Setup", self.root / "out")
+        self.assertFalse((self.root / "evil.dll").exists())
 
-    def test_multi_extent_files_are_rejected(self):
-        image = Builder(DISC, file_flags=0x80).write(self.root / "multi.iso")
-        with self.assertRaisesRegex(ValueError, "multi-extent"):
-            iso9660.extract_directory(image, "Setup", self.out)
+    def test_windows_setup_reads_the_image_without_bsdtar(self):
+        image = self.image(ImageBuilder().build(disc_tree()))
+        work = self.root / "work"
+        work.mkdir()
+        with open(self.root / "install.log", "w") as log, patch.object(install, "WINDOWS", True), \
+                patch.object(install.subprocess, "check_output", side_effect=AssertionError("bsdtar used")):
+            disc = install.extract_setup(image, work, log)
+        self.assertEqual(install.disc_setup(disc).name, "SETUP")
+
+
+    def test_linux_setup_reads_the_image_without_bsdtar(self):
+        image = self.image(ImageBuilder(joliet=True).build(disc_tree()))
+        work = self.root / "work"
+        work.mkdir()
+        with open(self.root / "install.log", "w") as log, patch.object(install.sys, "platform", "linux"), \
+                patch.object(install.subprocess, "check_output", side_effect=AssertionError("bsdtar used")):
+            disc = install.extract_setup(image, work, log)
+        self.assertEqual(install.disc_setup(disc).name, "Setup")
 
     @unittest.skipUnless(shutil.which("xorriso"), "xorriso is not installed")
     def test_image_written_by_xorriso(self):
@@ -157,9 +176,9 @@ class ISO9660Tests(unittest.TestCase):
             (tree / name).write_bytes(name.encode() * 5000)
         image = self.root / "xorriso.iso"
         subprocess.run(["xorriso", "-as", "mkisofs", "-J", "-quiet", "-o", str(image), str(tree.parent)], check=True)
-        setup = iso9660.extract_directory(image, "Setup", self.out)
+        setup = extract_directory(image, "Setup", self.root / "out")
         self.assertEqual((setup / "data2.cab").read_bytes(), b"data2.cab" * 5000)
-        self.assertEqual(install.disc_setup(self.out), setup)
+        self.assertEqual(install.disc_setup(self.root / "out"), setup)
 
 
 def case_sensitive(folder: Path) -> bool:
@@ -174,7 +193,7 @@ class ManifestCaseTests(unittest.TestCase):
             root = Path(temporary) / "game"
             root.mkdir()
             if not case_sensitive(Path(temporary)):
-                self.skipTest("names that differ only by case are the same file here (macOS)")
+                self.skipTest("names that differ only by case are the same file here (macOS, Windows)")
             (root / "DATA").mkdir()
             (root / "DATA/omfbggui.deobjects").write_bytes(b"menu")
             (root / "Engine").mkdir()
@@ -185,6 +204,46 @@ class ManifestCaseTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in root.iterdir()), ["Data", "Engine"])
             self.assertEqual([p.name for p in (root / "Data").iterdir()], ["OMFBGGUI.DEObjects"])
             self.assertEqual((root / "Data/OMFBGGUI.DEObjects").read_bytes(), b"menu")
+
+class LockTests(unittest.TestCase):
+    def test_second_installer_is_refused_until_the_first_finishes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "install.lock"
+            with install.SetupLock(path):
+                with self.assertRaisesRegex(ValueError, "already running"):
+                    with install.SetupLock(path):
+                        pass
+            with install.SetupLock(path):
+                pass
+
+    def test_unshield_gets_forward_slashes_on_windows(self):
+        # unshield finds data1.hdr and data2.cab by splitting the cabinet path at the last "/".
+        cabinet = PureWindowsPath(r"C:\Users\player\Battlegrounds Files\.install-1a\disc\Setup\data1.cab")
+        with patch.object(install, "WINDOWS", True):
+            self.assertEqual(install.unshield_path(cabinet),
+                             "C:/Users/player/Battlegrounds Files/.install-1a/disc/Setup/data1.cab")
+        with patch.object(install, "WINDOWS", False):
+            self.assertEqual(install.unshield_path(PurePosixPath("/tmp/disc/Setup/data1.cab")), "/tmp/disc/Setup/data1.cab")
+
+    def test_unshield_creates_relative_folders_on_windows(self):
+        # unshield creates folders from the start of the path; a bare "C:" cannot be created.
+        work = PureWindowsPath(r"C:\Users\player\Battlegrounds Files\.install-1a")
+        cabinet = PureWindowsPath(r"D:\Setup\data1.cab")  # a real CD
+        with patch.object(install, "WINDOWS", True):
+            command, folder = install.unshield_command(PureWindowsPath("res"), work, work / "unpacked", cabinet)
+        self.assertEqual(command[1:], ["-d", "unpacked", "x", "D:/Setup/data1.cab"])
+        self.assertEqual(folder, work)
+        with patch.object(install, "WINDOWS", False):
+            command, folder = install.unshield_command(PurePosixPath("res"), PurePosixPath("/w"), PurePosixPath("/w/unpacked"),
+                                                      PurePosixPath("/cd/Setup/data1.cab"))
+        self.assertEqual(command[1:], ["-d", "/w/unpacked", "x", "/cd/Setup/data1.cab"])
+        self.assertIsNone(folder)
+
+    def test_windows_tools_have_exe_names(self):
+        with patch.object(install, "WINDOWS", True):
+            self.assertEqual(install.tool(Path("res"), "unshield"), Path("res/bin/unshield.exe"))
+        with patch.object(install, "WINDOWS", False):
+            self.assertEqual(install.tool(Path("res"), "unshield"), Path("res/bin/unshield"))
 
 
 if __name__ == "__main__":

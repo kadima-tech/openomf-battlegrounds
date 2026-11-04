@@ -52,7 +52,7 @@ void Navigation::build() {
 		l.from = o->parent;
 		auto lists = reference_lists(w_.data(), {o->file, o->index});
 		if (lists.size() > 2 && !lists[2].empty() && !lists[2][0].empty() && lists[2][0][0]) {
-			l.to = nearest_copy(o, lists[2][0][0]);
+			l.to = w_.referent(o, lists[2][0][0]);
 		}
 		if (!l.to) continue;
 		if (dump) {

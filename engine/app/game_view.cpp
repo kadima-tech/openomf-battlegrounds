@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -63,7 +64,41 @@ std::optional<std::array<std::array<float, 3>, 3>> paint_colours(game::World &wo
 	return colours;
 }
 
+// The fighter whose paint filter `filter` is: its pilot's colours and the filter's scaled images.
+std::optional<render::ActorMeshRenderer::LayerImage> filtered(game::World &world, const game::GameObject *filter, const de::ObjectRef &image) {
+	for (game::GameObject *p = filter ? filter->parent : nullptr; p; p = p->parent) {
+		if (!p->fighter) continue;
+		auto paint = paint_colours(world, p);
+		if (!paint) return std::nullopt;
+		return render::ActorMeshRenderer::LayerImage{image, paint, filter->scaled_images};
+	}
+	return std::nullopt;
+}
+
 }  // namespace
+
+// What an instance's texture stages draw: the image its mesh's texture manager reaches (one a
+// script set with AddProperty, else its reference as copies and replacements re-pointed it), with
+// that image's fighter paint filter. Only data objects some instance has changed are looked up.
+std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &, const de::ObjectRef &)>
+GameView::images_of(const game::GameObject *o) {
+	if (world.instance_images.empty()) return nullptr;
+	return [this, o](const de::ObjectRef &mesh, const de::ObjectRef &manager, const de::ObjectRef &image) -> std::optional<render::ActorMeshRenderer::LayerImage> {
+		auto changed = [this](const de::ObjectRef &r) { return r && world.instance_images.count({r.file, r.index}); };
+		if (!changed(manager) && !changed(image)) return std::nullopt;
+		const game::GameObject *from = world.referent(o, mesh);
+		if (!from) from = o;
+		const game::GameObject *t = world.referent(from, manager);
+		const bool set = t && t->image_set;
+		const game::GameObject *i = set ? world.replacement(t->image) : world.referent(t ? t : from, image);
+		de::ObjectRef img = i && i->file ? de::ObjectRef{i->file, i->index} : set ? de::ObjectRef{} : image;
+		if (i && i->image_filter) {
+			if (auto f = filtered(world, i->image_filter, img)) return f;
+		}
+		if (!set && img.file == image.file && img.index == image.index) return std::nullopt;
+		return render::ActorMeshRenderer::LayerImage{img, std::nullopt, {}};
+	};
+}
 
 Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats) {
 	const de::ObjectsFile *ff = world.data().file(name);
@@ -222,12 +257,7 @@ void GameView::init_gl() {
 		}
 		return std::nullopt;
 	};
-	actors_r.image_of = [this](const de::ObjectRef &tm) -> std::optional<de::ObjectRef> {
-		auto it = world.texture_overrides.find({tm.file, tm.index});
-		if (it == world.texture_overrides.end()) return std::nullopt;
-		return it->second;
-	};
-	// A Mantis bug's images carry the fighter's paint filter: the filter's fighter's pilot colours.
+	// An image no instance of is found near the drawn actor: the filter last given its data object.
 	actors_r.paint_of = [this](const de::ObjectRef &img) -> std::optional<std::array<std::array<float, 3>, 3>> {
 		auto it = world.image_filters.find({img.file, img.index});
 		if (it == world.image_filters.end()) return std::nullopt;
@@ -309,6 +339,14 @@ de::Transform GameView::ear() const {
 
 void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (!gl_ready_) return;
+	// DE_CRenderer::ApplyOptions (Core 2.123 0x2018ae90): ForceReflections on the session's master description reflects whatever the option.
+	game::World::ObjectValue *force_reflections = world.session && world.session->master_description ? world.object_value(world.session->master_description, "ForceReflections") : nullptr;
+	render::g_reflections_enabled = world.reflections_enabled || (force_reflections && force_reflections->bits);
+	if (reflections_built_ != int(render::g_reflections_enabled)) {
+		reflections_built_ = int(render::g_reflections_enabled);
+		if (!arena.empty()) load_arena(arena);
+		for (auto *fi : fighters) fi->renderer_loaded = false;
+	}
 	if (arena.empty() || follow_scene) {
 		// The session's environment came or went (a match began or ended).
 		std::string a = find_arena();
@@ -401,9 +439,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	// The frame's lights and their lighting owners (scene_lights.h).
 	render::FrameLights frame_lights = render::collect_lights(world, fr, [this](const game::GameObject *o) { return shown(o); });
-	if (!world.lighting_enabled) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
+	render::g_lighting.scene = world.session ? world.session->obj : nullptr;
+	// DE_CRenderer::ApplyOptions (Core 2.123 0x2018ae90): a session whose master description has ForceLighting set is lit whatever the option.
+	game::World::ObjectValue *force = world.session && world.session->master_description ? world.object_value(world.session->master_description, "ForceLighting") : nullptr;
+	const bool lighting = world.lighting_enabled || (force && force->bits);
+	if (!lighting) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
 	// The applied Shadow Type (default 0), only with the lights on.
-	const int shadow_type = world.lighting_enabled ? world.shadow_type : 0;
+	const int shadow_type = lighting ? world.shadow_type : 0;
 	shadows_r.append(render::g_lighting);
 	const auto &light_owners = frame_lights.owners;
 	// An inherited lighting owner is found once, when the actor's meshes are set up in the scene
@@ -437,13 +479,34 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		};
 	};
 	const de::ObjectsFile *arena_file = world.data().file(arena);
+	if (arena_file != environment_tree_file_) {
+		environment_tree_file_ = arena_file;
+		environment_tree_.clear();
+		if (arena_file) {
+			auto parents = arena_file->parents();
+			const auto &objs = arena_file->objects();
+			environment_tree_.assign(objs.size(), false);
+			for (size_t i = 0; i < objs.size(); ++i) {
+				for (int p = int(i); p >= 0; p = parents[size_t(p)]) {
+					if (objs[size_t(p)].class_path == "Actor\\Creature\\Environment") {
+						environment_tree_[i] = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+	auto in_environment = [this](uint32_t i) { return i < environment_tree_.size() && environment_tree_[i]; };
 	// The arena's actors that paths move (trains, cars, ...): drawn live, not baked.
 	std::vector<render::ActorMeshRenderer::Item> moving_items;
 	{
 		std::set<uint32_t> moving;
 		std::function<void(game::GameObject *)> add = [&](game::GameObject *o) {
 			if (!o->file || o->file != arena_file) return;
-			if (o->is_actor) moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o)});
+			if (o->is_actor) {
+				const bool fixed = game::position_static(*o);
+				moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o), o, fixed, !fixed});
+			}
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
@@ -484,14 +547,20 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	{
 		for (game::GameObject *o : world.scene_objects()) {
 			if (!o->copied || !o->is_actor || o->fighter || !o->file || o->meshes_disabled || !shown(o)) continue;
-			// The arena's own actors are the static scene ArenaRenderer draws.
-			if (o->file == arena_file) continue;
+			// The arena's own actors are the static scene ArenaRenderer draws; a copy of one of its
+			// file's objects outside the environment (the Trophy Room's trophies) is drawn live.
+			if (o->file == arena_file && in_environment(o->index)) continue;
 			bool live = game::in_scene(*o);
 			live = live && o->visible;  // its own Renderable flag (not inherited)
 			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 			}
-			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o)});
+			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o), o, game::position_static(*o)});
+			static const bool dbg_debris = getenv("OPENBG_DEBUG_DEBRIS") != nullptr;
+			if (dbg_debris && live && o->name.rfind("Piece", 0) == 0 && world.world_to_screen) {
+				auto sp = world.world_to_screen(o->world().t);
+				fprintf(stderr, "[debris %d] draw %s at screen %.0f %.0f (depth %.0f)\n", fr, o->name.c_str(), sp[0] * dw, (1 - sp[1]) * dh, sp[2]);
+			}
 			static const bool dbg = getenv("OPENBG_DEBUG_ACTOR_MESHES") != nullptr;
 			if (dbg && live && fr == 900) fprintf(stderr, "[actor mesh] %s (%s) under %s\n", o->name.c_str(), o->class_path.c_str(), o->parent ? o->parent->name.c_str() : "-");
 		}
