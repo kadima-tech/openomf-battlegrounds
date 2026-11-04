@@ -1,9 +1,10 @@
 // Sound output: an SDL audio device mixing the sounds the scripts play (World::sound_requests)
 // as AudioPlayer's DirectSound speakers do: each sound is a speaker sphere whose volume and
 // head-relative position follow the listener every frame (DE_CDirectXSpeakerElement::Update),
-// with the noise's own volume and (randomised) frequency. A script's own speakers (CSpeaker::Play)
-// play through speaker elements that trade their state with the speaker every frame
-// (DE_CSpeaker::Process), so their IsPlaying and PlayProgress come from the playing voice.
+// with the noise's own volume and (randomised) frequency. The speakers of the affectors in the scene
+// (the arenas' ambience, the crowd's cheers) play through speaker elements that trade their state
+// with the speaker every frame (DE_CSpeaker::Process), so their IsPlaying and PlayProgress come
+// from the playing voice.
 #pragma once
 
 #include <SDL.h>
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <random>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "de/sound.h"
@@ -34,7 +36,7 @@ public:
 	// Take the frame's sound requests and start them, heard from `listener` (position and axes);
 	// then update_speakers.
 	void play_requests(game::World &world, const de::Transform &listener);
-	// The scripts' own speakers' audio update. Without a device or pump, their voices advance by
+	// The speakers' audio update. Without a device or pump, their voices advance by
 	// the frame's time at 44100 Hz, as a pumped run's do.
 	void update_speakers(game::World &world, const de::Transform &listener);
 	// Follow the music speaker (MusicPlayer::update).
@@ -47,6 +49,7 @@ private:
 	struct Voice {
 		const de::Sound *sound;
 		uint64_t pos = 0, step = uint64_t(1) << kFracBits;  // source frames, 32.32 fixed point
+		uint32_t hz = 0;                                     // IDirectSoundBuffer::SetFrequency
 		bool playing = true, loop = false, silent = false;
 		float left = 1, right = 1;
 		// The speaker: its sphere (centre, hotspot, falloff), volume (+0x50) and update rate
@@ -56,15 +59,21 @@ private:
 		float hotspot = 0, falloff = 0, volume = 1;
 		float rate = 1, due = 99999.0f;
 	};
-	// DE_CDirectXSpeakerElement for a script's own speaker under an affector.
+	// DE_CDirectXSpeakerElement: a speaker property of an affector in the scene.
 	struct Element {
 		game::GameObject *speaker = nullptr;
+		game::GameObject *affector = nullptr;  // +0xc: null once it left the scene
+		std::string name;
 		game::GameObject *noise_object = nullptr;  // its noise element (+0x78)
 		const de::Sound *noise = nullptr;
 		float hotspot = 0, falloff = 0;  // +0x5c, +0x60: its sphere affector's when made
 		float volume = -1;               // +0x50
 		float rate = 1, due = 99999.0f;  // +0xb0, +0xac
 		bool loop = false;               // flag 0x800
+		bool finish = false;             // flag 0x400: plays on after its affector goes
+		bool doomed = false;             // flag 0x1000: the player drops it
+		bool head_relative = false;      // +0xa8
+		float last_volume = 0;           // +0x54
 		bool by_volume = false;          // flag 0x4000000: started and stopped by its volume
 		bool active = false;             // flag 0x2000000
 		bool stopping = false;           // flag 0x4000
@@ -78,12 +87,14 @@ private:
 	// last update.
 	void update(Voice &v, const de::Transform &listener, float ms);
 	// The gains for a buffer volume (mB) at `at` (dsound's software 3D, or centred).
-	void set_gains(Voice &v, float buffer_mb, const std::array<float, 3> &at, const de::Transform &listener) const;
+	void set_gains(Voice &v, float buffer_mb, const std::array<float, 3> &at, const de::Transform &listener,
+	               const std::array<float, 3> *relative = nullptr) const;
 	// DE_CSpeaker::Process (Core 2.123 0x20222500) and the element's Update for one speaker.
 	void process(game::World &world, Element &e, const de::Transform &listener, float ms);
 	void element_play(game::World &world, Element &e, const de::Transform &listener);
 	void element_update(Element &e, const de::Transform &listener, float ms);
 	void activate(Element &e, bool on);
+	void begin_stop(Element &e);
 	float element_progress(const Element &e) const;
 	bool element_playing(const Element &e) const;
 	static void callback(void *self, Uint8 *stream, int len);
@@ -101,7 +112,8 @@ private:
 	int rate_ = 44100;
 	std::mutex lock_;
 	std::vector<Voice> voices_;
-	std::vector<Element> elements_;  // in the speakers' first-use order
+	std::vector<Element> elements_;  // in the order their affectors joined the scene
+	std::set<std::pair<game::GameObject *, game::GameObject *>> watched_;  // (affector, speaker) in the scene
 	std::set<const de::Sound *> loopable_;  // noise elements made loopable (+0x30)
 	double carry_ = 0;  // update_speakers' own advance
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::unique_ptr<de::Sound>> cache_;

@@ -533,7 +533,7 @@ int main(int argc, char **argv) {
 				offline = std::make_unique<audio::Mixer>();
 				offline->open_offline(44100);
 			}
-			audio::Mixer speakers;  // without a recording: the scripts' own speakers only
+			audio::Mixer speakers;  // without a recording: the speakers only
 			double audio_carry = 0;
 			for (int fr = 0; fr < frames; ++fr) {
 				if (fr == spawn_frame) {

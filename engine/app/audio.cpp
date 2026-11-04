@@ -155,7 +155,8 @@ void Mixer::update(Voice &v, const de::Transform &listener, float ms) {
 	set_gains(v, 10000.0f * std::log10(shaped), v.at, listener);
 }
 
-void Mixer::set_gains(Voice &v, float buffer_mb, const std::array<float, 3> &at, const de::Transform &listener) const {
+void Mixer::set_gains(Voice &v, float buffer_mb, const std::array<float, 3> &at, const de::Transform &listener,
+                      const std::array<float, 3> *relative) const {
 	if (buffer_mb < -10000) return;  // DSERR_INVALIDPARAM: the buffer keeps its volume
 	auto gain = [](float mb) { return std::pow(10.0f, std::max(mb, -10000.0f) / 2000.0f); };
 	if (!software_3d) {
@@ -165,9 +166,10 @@ void Mixer::set_gains(Voice &v, float buffer_mb, const std::array<float, 3> &at,
 		return;
 	}
 	// The head-relative position DirectSound3D is given: the offset in the listener's frame,
-	// x negated (DirectSound is left-handed: +x right, +z ahead).
+	// x negated (DirectSound is left-handed: +x right, +z ahead); a head-relative buffer's is
+	// given as it stands.
 	auto local = listener.inverse_rotate({at[0] - listener.t[0], at[1] - listener.t[1], at[2] - listener.t[2]});
-	std::array<float, 3> ds{-local[0], local[1], local[2]};
+	std::array<float, 3> ds = relative ? *relative : std::array<float, 3>{-local[0], local[1], local[2]};
 	// dsound.dll's WDM software 3D (no virtualisation, FINDINGS 149): a fixed -500 mB (the distance
 	// gain is 1 with min = max = 9999999), then the tangent law between speakers at -90 / +90
 	// degrees on x (right) and z (ahead), with a blend toward the far side within 2.5 units;
@@ -187,9 +189,36 @@ void Mixer::set_gains(Voice &v, float buffer_mb, const std::array<float, 3> &at,
 }
 
 // IDirectSoundBuffer::SetFrequency takes whole hertz (the original's __ftol truncates).
+static uint32_t hz_for(const de::Sound &s, float frequency) { return uint32_t(std::max(0.0f, float(s.rate) * frequency)); }
 static uint64_t step_for(const de::Sound &s, float frequency, int device_rate) {
-	uint64_t hz = uint64_t(std::max(0.0f, float(s.rate) * frequency));
-	return (hz << 32) / uint64_t(device_rate);
+	return (uint64_t(hz_for(s, frequency)) << 32) / uint64_t(device_rate);
+}
+
+// The affector's IsTouching intensity at `p`: DE_CSphereAffector (Core 0x7008a1b0) and
+// DE_CConeAffector (0x70080940); no shipped speaker sits on a box or mesh affector.
+static float touching(const game::GameObject &a, const std::array<float, 3> &p) {
+	const de::Transform t = a.world();
+	std::array<float, 3> d{p[0] - t.t[0], p[1] - t.t[1], p[2] - t.t[2]};
+	const float dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2], dist = std::sqrt(dist2);
+	if (a.shape == game::GameObject::Shape::Sphere) {
+		if (dist2 > a.falloff * a.falloff) return 0;
+		if (dist2 < a.hotspot * a.hotspot || a.falloff <= a.hotspot) return 1;
+		return 1 - (dist - a.hotspot) / (a.falloff - a.hotspot);
+	}
+	if (a.shape != game::GameObject::Shape::Cone) return 1;
+	// Along its z axis: 1 to the far attenuation's begin, falling to 0 at its end; across, 1
+	// within the umbra, falling to 0 at the penumbra (by the angles' cosines).
+	const float begin = a.far_begin, end = a.far_end;
+	if (dist > end) return 0;
+	float out = dist < begin ? 1 : end == begin ? 1 : 1 - (dist - begin) / (end - begin);
+	auto l = t.inverse_rotate(d);
+	if (!(l[2] < end && l[2] > 0)) return 0;
+	const float zn = l[2] / dist;
+	const float cp = std::cos(a.penumbra * 0.017453292f), cu = std::cos(a.umbra * 0.017453292f);
+	if (!(cp < zn)) return 0;
+	if (zn < cu) out *= cp == cu ? 0.0f : (zn - cp) / (cu - cp);
+	if (begin < l[2]) out *= end == begin ? 0.0f : (l[2] - end) / (begin - end);
+	return out;
 }
 
 void Mixer::activate(Element &e, bool on) {
@@ -206,18 +235,23 @@ void Mixer::activate(Element &e, bool on) {
 }
 
 bool Mixer::element_playing(const Element &e) const {
-	// DE_CDirectXSpeakerElement::IsAudible: a looping noise element counts as playing.
+	// DE_CDirectXSpeakerElement::IsAudible: a looping noise element counts as playing while the
+	// element has its affector.
 	if (!e.noise) return false;
-	if (loopable_.count(e.noise)) return true;
+	if (loopable_.count(e.noise)) return e.affector != nullptr;
 	return e.buffer && e.voice.playing;
 }
 
 float Mixer::element_progress(const Element &e) const {
-	// The buffer's write cursor (our mixed position) over the file's bytes - 44; a stopped
-	// buffer's cursor is back at 0.
+	// The buffer's write cursor over the file's bytes - 44. dsound's software mixer
+	// (CGrace::GetBytePosition, CMixSource::GetBytePosition1; FINDINGS 316) puts it (hz x 10) >> 10
+	// samples and one more past the sample at the device's write cursor (our mixed position),
+	// wrapping round the buffer; a buffer that played to its end stopped with its cursors at 0.
 	if (!e.buffer || !e.voice.playing || !e.noise || e.noise->file_bytes <= 44) return 0;
-	uint64_t bytes = (e.voice.pos >> kFracBits) * uint64_t(e.noise->block_align);
-	return float(bytes) / float(e.noise->file_bytes - 44);
+	const uint64_t n = e.noise->samples.size() / size_t(std::max(1, e.noise->channels));
+	if (!n) return 0;
+	const uint64_t w = ((e.voice.pos >> kFracBits) + ((uint64_t(e.voice.hz) * 10) >> 10) + 1) % n;
+	return float(w * uint64_t(e.noise->block_align)) / float(e.noise->file_bytes - 44);
 }
 
 void Mixer::element_play(game::World &world, Element &e, const de::Transform &listener) {
@@ -236,13 +270,16 @@ void Mixer::element_play(game::World &world, Element &e, const de::Transform &li
 	e.voice.silent = muted;
 	e.voice.left = e.voice.right = 0;
 	e.voice.step = step_for(*e.noise, sp.active ? sp.play_frequency : 1.0f, rate_);
+	e.voice.hz = hz_for(*e.noise, sp.active ? sp.play_frequency : 1.0f);
 	if (loopable) e.by_volume = true;
+	if (sp.mode == 1) e.head_relative = true;  // SetMode(DS3DMODE_HEADRELATIVE), +0xa8
 	if (!e.by_volume) {
 		// Not started at or beyond the element's falloff (the player then drops it), nor with
 		// no SpeakerVolume.
 		std::array<float, 3> d{e.at[0] - listener.t[0], e.at[1] - listener.t[1], e.at[2] - listener.t[2]};
 		if (std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) >= e.falloff) {
 			e.buffer = false;
+			e.doomed = true;
 			return;
 		}
 		if (sfx_volume_ * e.volume != 0 && !e.active) activate(e, true);
@@ -251,20 +288,20 @@ void Mixer::element_play(game::World &world, Element &e, const de::Transform &li
 }
 
 void Mixer::element_update(Element &e, const de::Transform &listener, float ms) {
-	const game::GameObject &affector = *e.speaker->parent;
 	std::array<float, 3> d{listener.t[0] - e.at[0], listener.t[1] - e.at[1], listener.t[2] - e.at[2]};
-	const float dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2], dist = std::sqrt(dist2);
-	// DE_CSpeakerElement::GetNoiseVolume: the affector's DE_CSphereAffector::IsTouching intensity
-	// at the listener times the global SFX volume and the element's volume, at most 1.
-	float intensity = 1;
-	if (affector.shape == game::GameObject::Shape::Sphere) {
-		if (dist2 > affector.falloff * affector.falloff) {
-			intensity = 0;
-		} else if (dist2 >= affector.hotspot * affector.hotspot && affector.falloff > affector.hotspot) {
-			intensity = 1 - (dist - affector.hotspot) / (affector.falloff - affector.hotspot);
-		}
+	const float dist = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+	// DE_CSpeakerElement::GetNoiseVolume: with its affector, the affector's intensity at the
+	// listener times the global SFX volume and the element's volume, at most 1; without, its own
+	// sphere (+0x5c, +0x60) round where it was, else the last volume.
+	float v = e.last_volume, near = 1;
+	if (e.affector) {
+		v = std::min(1.0f, sfx_volume_ * e.volume * touching(*e.affector, listener.t));
+	} else if (e.falloff != 0) {
+		if (dist > e.falloff) v = 0;
+		else if (dist < e.hotspot) v = sfx_volume_ * e.volume, near = dist / e.hotspot;
+		else v = (e.falloff - dist) / (e.falloff - e.hotspot) * sfx_volume_ * e.volume;
 	}
-	const float v = std::min(1.0f, sfx_volume_ * e.volume * intensity);
+	e.last_volume = v;
 	if (!e.stopping) {
 		e.due += e.falloff == 0 ? 10000.0f : e.falloff / (dist + 1) * e.rate * ms;
 		if (e.due <= 200) return;
@@ -274,7 +311,7 @@ void Mixer::element_update(Element &e, const de::Transform &listener, float ms) 
 	shaped = 1 - shaped * shaped;
 	if (e.by_volume) {
 		// Looping noises start once their volume passes 0.09 and stop below 0.03.
-		if (!e.active && shaped > 0.09f) {
+		if (!e.active && shaped > 0.09f && e.affector) {
 			e.buffer = true;
 			e.voice.pos = 0;
 			activate(e, true);
@@ -283,8 +320,20 @@ void Mixer::element_update(Element &e, const de::Transform &listener, float ms) 
 		}
 	}
 	if (!e.active || !e.buffer) return;
+	// A head-relative buffer is given the offset turned by the listener's axes (Rotate, not
+	// InverseRotate), its z made positive at full volume.
+	std::array<float, 3> rel{}, *relative = nullptr;
+	if (e.head_relative) {
+		rel = listener.rotate({e.at[0] - listener.t[0], e.at[1] - listener.t[1], e.at[2] - listener.t[2]});
+		if (v == 1.0f) {
+			rel[0] *= near * near;
+			rel[2] = std::fabs(rel[2]) + (1 - near) * 200;
+		}
+		rel[0] = -rel[0];
+		relative = &rel;
+	}
 	if (!e.stopping) {
-		if (shaped > 0) set_gains(e.voice, 10000.0f * std::log10(shaped), e.at, listener);
+		if (shaped > 0) set_gains(e.voice, 10000.0f * std::log10(shaped), e.at, listener, relative);
 		return;
 	}
 	// BeginStopTransition: a wave fades out over 1500 ms of audio updates, then stops.
@@ -293,35 +342,35 @@ void Mixer::element_update(Element &e, const de::Transform &listener, float ms) 
 		return;
 	}
 	float f = float(e.stop_ms) / 1500.0f * shaped;
-	if (f > 0) set_gains(e.voice, 10000.0f * std::log10(f), e.at, listener);
+	if (f > 0) set_gains(e.voice, 10000.0f * std::log10(f), e.at, listener, relative);
 	e.stop_ms -= int(ms);
+}
+
+void Mixer::begin_stop(Element &e) {
+	if (!e.stopping) e.stopping = true, e.stop_ms = 1500;
 }
 
 void Mixer::process(game::World &world, Element &e, const de::Transform &listener, float ms) {
 	auto &sp = world.music->speaker(e.speaker);
-	e.at = e.speaker->parent->world().t;  // DE_CStandardSpeakerElement::Update: the affector's
-	auto begin_stop = [&] {
-		if (!e.stopping) e.stopping = true, e.stop_ms = 1500;
-	};
 	if (e.noise_object != sp.to_play) {
 		e.noise_object = sp.to_play;
 		e.noise = sp.to_play && sp.to_play->file ? sound(world.data(), {sp.to_play->file, sp.to_play->index}) : nullptr;
-		if (!e.noise) begin_stop();
+		if (!e.noise) begin_stop(e);
 		else if (!e.loop) e.rate = std::min(1.0f, float(e.noise->length_ms) / 7000.0f + 0.1f);
 	}
 	const de::Sound *active = sp.active && sp.active->file ? sound(world.data(), {sp.active->file, sp.active->index}) : nullptr;
 	e.volume = active ? std::min(1.0f, sp.volume * active->volume) : 1.0f;
 	if (sp.loop) e.loop = true;
+	if (sp.finish && !sp.loop) e.finish = true;
 	if (!sp.active) {
-		begin_stop();
-		element_update(e, listener, ms);
+		begin_stop(e);
 		return;
 	}
 	if (sp.track) {
 		sp.playing = element_playing(e);
 		sp.progress = element_progress(e);
 		if (sp.stop_pending) {
-			begin_stop();
+			begin_stop(e);
 			sp.stop_pending = false;
 		}
 	}
@@ -329,42 +378,67 @@ void Mixer::process(game::World &world, Element &e, const de::Transform &listene
 		sp.play_pending = false;
 		element_play(world, e, listener);
 		sp.playing = true;
-		element_update(e, listener, ms);  // Play's own Update
+		if (!e.doomed) element_update(e, listener, ms);  // Play's own Update
 	}
-	element_update(e, listener, ms);
 }
 
 void Mixer::update_speakers(game::World &world, const de::Transform &listener) {
 	sfx_volume_ = world.sfx_volume;
 	software_3d = world.registry_string("Preferences\\Audio\\3D Mode") != "0";
 	const float ms = float(world.frame_ms());
+	// DE_CStandardAudioPlayer watches the scene: an affector entering it gets an element per
+	// speaker property (AddActor 0x100061d0), one leaving takes its affector from them
+	// (RemoveActor 0x100062c0). The music player's speaker plays through the music player.
 	game::GameObject *music = world.music->music_speaker();
-	// Load the waves before the mixing thread waits on the lock.
-	for (game::GameObject *s : world.music->own_speakers()) {
-		if (s == music) continue;
-		auto &sp = world.music->speaker(s);
+	std::vector<std::pair<game::GameObject *, game::GameObject *>> present;
+	for (game::GameObject *o : world.scene_objects()) {
+		if (o == music || !o->is("UniqueActorProperty\\Speaker") || !o->parent) continue;
+		if (o->parent->shape == game::GameObject::Shape::None || !game::scene_audible(world, o)) continue;
+		present.emplace_back(o->parent, o);
+		// Load the waves before the mixing thread waits on the lock.
+		auto &sp = world.music->speaker(o);
 		for (game::GameObject *n : {sp.active, sp.to_play}) {
 			if (n && n->file) sound(world.data(), {n->file, n->index});
 		}
 	}
 	std::lock_guard<std::mutex> g(lock_);
-	for (game::GameObject *s : world.music->own_speakers()) {
-		if (s == music) continue;
-		auto it = std::find_if(elements_.begin(), elements_.end(), [&](const Element &e) { return e.speaker == s; });
-		// An element lives while its speaker's affector is in an audible scene.
-		game::GameObject *a = s->parent;
-		if (s->destroyed_seq || !a || !a->active || !game::in_scene(*a) || !game::scene_audible(world, s)) {
-			if (it != elements_.end()) elements_.erase(it);
+	// PlayAudio (0x10006350): dropped elements go once they are not fading or no longer heard.
+	std::erase_if(elements_, [&](const Element &e) { return e.doomed && (!e.stopping || !element_playing(e)); });
+	for (auto it = watched_.begin(); it != watched_.end();) {
+		if (std::find(present.begin(), present.end(), *it) != present.end()) {
+			++it;
 			continue;
 		}
-		if (it == elements_.end()) {
-			Element e;
-			e.speaker = s;
-			if (a->shape == game::GameObject::Shape::Sphere) e.hotspot = a->hotspot, e.falloff = a->falloff;
-			elements_.push_back(e);
-			it = elements_.end() - 1;
+		for (auto &e : elements_) {
+			if (e.affector == it->first && e.speaker == it->second) e.affector = nullptr;
 		}
-		process(world, *it, listener, ms);
+		it = watched_.erase(it);
+	}
+	for (auto &[a, s] : present) {
+		if (!watched_.insert({a, s}).second) continue;
+		Element e;
+		e.speaker = s;
+		e.affector = a;
+		e.name = a->name;
+		if (a->shape == game::GameObject::Shape::Sphere) e.hotspot = a->hotspot, e.falloff = a->falloff;
+		e.at = a->world().t;
+		elements_.push_back(e);
+		process(world, elements_.back(), listener, ms);  // NewSpeakerElement runs Process
+	}
+	for (auto &e : elements_) {
+		if (e.affector) e.at = e.affector->world().t;  // DE_CStandardSpeakerElement::Update
+		if (!e.speaker->destroyed_seq) process(world, e, listener, ms);
+		element_update(e, listener, ms);
+	}
+	// An element without its affector fades out, or plays on to its end with the finish flag.
+	for (auto &e : elements_) {
+		if (e.affector) continue;
+		if (!element_playing(e)) {
+			e.doomed = true;
+		} else if (!e.stopping && !e.finish) {
+			begin_stop(e);
+			e.doomed = true;
+		}
 	}
 	if (!dev_ && !offline_) {
 		carry_ += double(rate_) * world.frame_ms() / 1000.0;
@@ -378,12 +452,12 @@ void Mixer::update_speakers(game::World &world, const de::Transform &listener) {
 	for (auto &e : elements_) {
 		auto &sp = world.music->speaker(e.speaker);
 		const bool heard = e.buffer && e.voice.playing;
-		auto db = [](float g) { return g > 0 ? 20 * std::log10(g) : -999.0f; };
+		auto db = [](float gain) { return gain > 0 ? 20 * std::log10(gain) : -999.0f; };
 		if (heard != e.heard || (heard && world.frame() % 50 == 0)) {
-			fprintf(stderr, "[speaker %u] %s %s %s: volume %.2f, frequency %.3f, progress %.3f, gains %.1f / %.1f dB%s\n", world.frame(),
-			        e.speaker->parent->name.c_str(), heard == e.heard ? "plays" : heard ? "starts" : "ends",
-			        e.noise_object ? e.noise_object->name.c_str() : "-", e.volume, sp.play_frequency, sp.progress, db(e.voice.left),
-			        db(e.voice.right), e.stopping ? " (stopping)" : "");
+			fprintf(stderr, "[speaker %u] %s %s %s: volume %.2f, frequency %.3f, progress %.3f, gains %.1f / %.1f dB%s%s\n", world.frame(),
+			        e.name.c_str(), heard == e.heard ? "plays" : heard ? "starts" : "ends", e.noise_object ? e.noise_object->name.c_str() : "-",
+			        e.volume, sp.play_frequency, sp.progress, db(e.voice.left), db(e.voice.right), e.stopping ? " (stopping)" : "",
+			        e.voice.loop ? " (loop)" : "");
 		}
 		e.heard = heard;
 	}

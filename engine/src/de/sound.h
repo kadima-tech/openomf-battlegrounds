@@ -24,6 +24,8 @@ struct Sound {
 	std::vector<ObjectRef> alternates;
 };
 
+// Its contents and alternates only (any noise, a DirectMusic segment too).
+Sound read_noise(const World &w, const ObjectRef &noise);
 // Throws FormatError when the object has no decodable samples.
 Sound read_sound(const World &w, const ObjectRef &noise);
 

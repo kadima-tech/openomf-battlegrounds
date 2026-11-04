@@ -14,7 +14,7 @@ uint16_t le16(const uint8_t *p) { return uint16_t(p[0] | p[1] << 8); }
 
 }  // namespace
 
-Sound read_sound(const World &w, const ObjectRef &noise) {
+Sound read_noise(const World &w, const ObjectRef &noise) {
 	Sound s;
 	auto d = noise.file->object_data(noise.info());
 	{
@@ -46,6 +46,12 @@ Sound read_sound(const World &w, const ObjectRef &noise) {
 		}
 	} catch (const std::exception &) {
 	}
+	return s;
+}
+
+Sound read_sound(const World &w, const ObjectRef &noise) {
+	Sound s = read_noise(w, noise);
+	auto d = noise.file->object_data(noise.info());
 	auto p = noise.file->ex_payload(d, "DeNoiseSampleExDataId");
 	if (!p) throw FormatError("noise " + noise.info().name + " has no samples");
 	const auto &b = p->data;
