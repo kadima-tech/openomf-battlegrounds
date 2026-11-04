@@ -77,6 +77,7 @@ struct ExecutorClass {
 	std::string entry;
 	uint32_t interval = 0;  // +0x44: v2 16, v3+ stored
 	bool initial_tick = true;  // +0x48 (v4+): ticked when the scene is done adding it
+	bool states_at_once = true;  // +0x4c (v4+): IsExecuteStatesFromAllInstant
 };
 ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 	de::ObjectRef cls;
@@ -89,7 +90,7 @@ ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 	}
 	std::string entry = "Entry";
 	uint32_t interval = 0;
-	bool initial_tick = true;
+	bool initial_tick = true, states_at_once = true;
 	try {
 		de::Contents c(exec.file->object_data(exec.info()).contents);
 		de::Chunk ch = de::begin_chunk(c);
@@ -105,10 +106,10 @@ ExecutorClass executor_class(const de::World &data, const de::ObjectRef &exec) {
 		}
 		if (ch.version == 2) interval = 16;
 		else if (ch.version >= 3) interval = uint32_t(c.i32());
-		if (ch.version >= 4) initial_tick = c.boolean();
+		if (ch.version >= 4) initial_tick = c.boolean(), states_at_once = c.boolean();
 	} catch (const std::exception &) {
 	}
-	return {cls, entry, interval, initial_tick};
+	return {cls, entry, interval, initial_tick, states_at_once};
 }
 
 }  // namespace
@@ -118,12 +119,13 @@ std::vector<Brain *> World::activate_executors(GameObject *o, const std::vector<
 	if (!o || !activated_.insert(o).second) return out;
 	for (auto &p : properties) {
 		if (!p || p.info().class_path != "ClassExecutor") continue;
-		auto [cls, entry, interval, initial_tick] = executor_class(data_, p);
+		auto [cls, entry, interval, initial_tick, states_at_once] = executor_class(data_, p);
 		if (!cls) continue;
 		try {
 			Brain *b = attach_brain(o, cls, entry);
 			b->interval = interval;
 			b->initial_tick = initial_tick;
+			b->states_at_once = states_at_once;
 			b->started = true;
 			if (run) start_brain(b);
 			out.push_back(b);
@@ -143,12 +145,13 @@ void World::add_executor_property(GameObject *o, const de::ObjectRef &executor) 
 	static const bool debug = getenv("OPENBG_DEBUG_REFS") != nullptr;
 	if (debug) fprintf(stderr, "[executor %u] %s gets %s%s\n", frame_, o->name.c_str(), executor.info().name.c_str(), activated_.count(o) ? " (running)" : "");
 	if (!activated_.count(o)) return;  // enter_scene attaches it
-	auto [cls, entry, interval, initial_tick] = executor_class(data_, executor);
+	auto [cls, entry, interval, initial_tick, states_at_once] = executor_class(data_, executor);
 	if (!cls) return;
 	try {
 		Brain *b = attach_brain(o, cls, entry);
 		b->interval = interval;
 		b->initial_tick = initial_tick;
+		b->states_at_once = states_at_once;
 		b->started = true;
 		start_brain(b);
 	} catch (const std::exception &e) {

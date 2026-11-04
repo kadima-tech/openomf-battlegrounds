@@ -595,6 +595,7 @@ std::vector<Brain *> brains_of(World &w, const GameObject &o) {
 // DE_CClassExecutor +0x4c (contents v4/v5, default 1; IsExecuteStatesFromAllInstant 0x70146440):
 // the brain runs a restored state at once.
 bool executes_states_instantly(World &w, const Brain &b) {
+	if (b.states_at_once >= 0) return b.states_at_once != 0;
 	if (!b.owner) return true;
 	std::vector<GameObject *> around(b.owner->children);
 	around.insert(around.end(), b.owner->components.begin(), b.owner->components.end());
