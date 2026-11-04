@@ -28,6 +28,6 @@ struct FrameLights {
 
 // Fills g_lighting.lights from the scene objects `in_scene_layer` accepts (all when empty) and
 // returns the render affectors they light.
-FrameLights collect_lights(game::World &world, int frame, const std::function<bool(const game::GameObject *)> &in_scene_layer = {});
+FrameLights collect_lights(game::World &world, int frame, const std::function<bool(const game::GameObject *)> &in_scene_layer = {}, int renderer = 0);
 
 }  // namespace render
