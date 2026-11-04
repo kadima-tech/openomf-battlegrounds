@@ -21,6 +21,11 @@ if ! pkg-config --exists gtk+-3.0 gio-unix-2.0; then
     echo "GTK 3 development files are missing (Debian/Ubuntu: libgtk-3-dev; Fedora: gtk3-devel)." >&2
     exit 1
 fi
+# The engine links libstdc++ statically so players need no particular GCC.
+if [ "${1:-}" != "--ui-only" ] && [ "$(c++ -print-file-name=libstdc++.a)" = "libstdc++.a" ]; then
+    echo "The static C++ runtime is missing (Fedora: libstdc++-static; Debian/Ubuntu ship it with g++)." >&2
+    exit 1
+fi
 mkdir -p "$build" "$resources/bin" "$resources/assets" "$resources/licenses"
 # Failed and UI-only builds must not mark a partially updated app as current.
 state="$repo/dist/.launcher-build-state"

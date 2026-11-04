@@ -261,7 +261,8 @@ sudo apt install build-essential cmake pkg-config python3 curl zlib1g-dev libgtk
   libasound2-dev libpulse-dev libdbus-1-dev libudev-dev
 ```
 
-On Fedora, install `gcc-c++ cmake python3 gtk3-devel zlib-devel mesa-libGL-devel
+On Fedora, install `gcc-c++ libstdc++-static cmake pkgconf-pkg-config python3 curl
+gtk3-devel zlib-devel mesa-libGL-devel
 mesa-libEGL-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel
 libXi-devel libXScrnSaver-devel libXinerama-devel libxkbcommon-devel
 wayland-devel wayland-protocols-devel alsa-lib-devel pulseaudio-libs-devel

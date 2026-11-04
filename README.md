@@ -70,7 +70,7 @@ command-line tools and Homebrew:
 brew install cmake sdl2 unshield
 ```
 
-On Debian or Ubuntu (Fedora: `cmake gcc-c++ SDL2-devel mesa-libGL-devel zlib-devel unshield python3`):
+On Debian or Ubuntu (Fedora: `cmake gcc-c++ SDL2-devel mesa-libGL-devel zlib-devel unshield bsdtar python3`):
 
 ```sh
 sudo apt install cmake g++ libsdl2-dev libgl-dev zlib1g-dev unshield libarchive-tools python3

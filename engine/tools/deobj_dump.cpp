@@ -10,6 +10,7 @@
 //   deobj-dump tree <file>             print the object hierarchy
 //   deobj-dump scene <Data dir> <stem>   list an environment's draw items
 //   deobj-dump blocks <file> [outdir]   find every MD5-verified compressed block, optionally write them out
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

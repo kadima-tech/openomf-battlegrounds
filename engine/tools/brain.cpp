@@ -5,6 +5,7 @@
 // Every intrinsic call is logged by signature and answered with a zero result, and the run
 // stops at the first opcode the VM cannot execute yet. The report drives which parts of the
 // native API to implement next.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>

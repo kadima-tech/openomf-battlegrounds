@@ -1,5 +1,6 @@
 #include "vm/pcode_parser.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>

@@ -1,4 +1,5 @@
 // Data-layer tests against the original game files. Usage: de-tests <Data dir>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
