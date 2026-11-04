@@ -2285,6 +2285,7 @@ void AppManager::apply_render(const RenderOptions &o) {
 	render_global = g;
 	world.glow_enabled = g.glow != 0;
 	world.lighting_enabled = g.lights != 0;
+	++world.render_options_applied;
 	de::g_high_detail = g.high_detail != 0;
 	world.shadow_type = g.shadows;
 	world.bump_enabled = g.bump != 0;

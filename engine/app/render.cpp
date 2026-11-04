@@ -1066,8 +1066,15 @@ void update_touches(LightTouches &s, const SceneLight &l) {
 void update_light_touches() {
 	static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
 	static uint32_t updated = 0;
-	if (updated == g_lighting.serial || !g_lighting.enabled) return;
+	if (updated == g_lighting.serial) return;
 	updated = g_lighting.serial;
+	// ApplyOptions and SetScene refresh every actor (DE_CSceneWatcher::RefreshAllActors): the render lights are made anew.
+	static std::map<int, std::pair<uint32_t, const void *>> refreshed;
+	auto [r, fresh] = refreshed.try_emplace(g_lighting.renderer, g_lighting.options, g_lighting.scene);
+	if (!fresh && r->second != std::make_pair(g_lighting.options, g_lighting.scene)) {
+		r->second = {g_lighting.options, g_lighting.scene};
+		std::erase_if(g_touches, [](const auto &e) { return std::get<0>(e.first) == g_lighting.renderer; });
+	}
 	for (const SceneLight &l : g_lighting.lights) {
 		if (!l.id.first) continue;
 		LightTouches &s = g_touches[{g_lighting.renderer, l.id.first, l.id.second}];

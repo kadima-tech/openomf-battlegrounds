@@ -792,6 +792,8 @@ int main(int argc, char **argv) {
 				glu::mul(pvp, pproj, pview);
 				if (auto *lf = world.data().file("LoadScene")) render::g_lighting.ambient = de::read_ambient(world.data(), *lf);
 				render::FrameLights plights = render::collect_lights(world, fr, picker_only, 2);
+				// Its scene autopauses (+0x1c0 cleared), so unlike the GUI's it is not lit whatever the option.
+				if (!world.lighting_enabled) render::g_lighting.lights.clear();
 				std::vector<render::ActorMeshRenderer::Item> pitems;
 				for (game::GameObject *o : world.scene_objects()) {
 					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;

@@ -31,7 +31,8 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 		static uint32_t gatherings = 0;  // callers save and restore g_lighting around other views
 		g_lighting.serial = ++gatherings;
 		g_lighting.renderer = renderer;
-		g_lighting.enabled = true;
+		g_lighting.options = world.render_options_applied;
+		g_lighting.scene = nullptr;
 		// An affector's lights: its Light children (the arenas) and the Lights among its
 		// properties (the GUI's MainLight, whose Light is a component reference).
 		std::vector<std::tuple<de::ObjectRef, game::GameObject *, game::GameObject *>> placed;  // light, its object, affector
