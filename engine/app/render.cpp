@@ -273,6 +273,7 @@ void apply_texture_detail() {
 	for (auto &d : g_detail_textures) set_detail_level(d, detail);
 }
 const bool *g_bump_enabled = nullptr;
+bool g_reflections_enabled = true;
 
 bool SceneLight::lights(const void *owner) const {
 	return reaches_all || (owner && std::find(reaches.begin(), reaches.end(), owner) != reaches.end());
@@ -671,9 +672,21 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		if (only && m.name != only) continue;
 		material_glow = m.glow;
 		std::vector<std::vector<const de::Layer *>> passes;
-		bool previous_drawn = false;
+		bool previous_drawn = false, dropping = false;
 		for (auto &l : m.layers) {
 			bool usable = !l.disabled && (l.environment || (l.image && !l.uvs.empty()));
+			// DE_CMultiStageTextureProcess::Process (Core 2.123 0x2011f790): a stacked stage CStage::ShouldProcess turns
+			// down (disabled, or a reflection with Reflections off) drops the stage it stacks on and the stacked ones after it.
+			const bool turned_down = l.manager && (l.disabled || (l.environment && !g_reflections_enabled && !l.never_disable));
+			if (l.stacked && &l != &m.layers.front() && (dropping || turned_down)) {
+				if (!dropping && previous_drawn && !passes.empty()) {
+					passes.back().pop_back();
+					if (passes.back().empty()) passes.pop_back();
+				}
+				dropping = true, previous_drawn = false;
+				continue;
+			}
+			dropping = false;
 			// The first stage starts a pass whatever its stacked flag (Process pairs a stacked
 			// stage with the one before it).
 			if (l.stacked && &l != &m.layers.front()) {
@@ -959,10 +972,11 @@ struct SplashTarget {
 	std::array<float, 3> bmin, bmax;
 	const void *light_owner;
 	bool position_static;
+	const void *instance;  // with the target, which copy of its mesh this is
 };
 
-SplashTarget splash_target(const ProjectorTarget &t, const de::Transform &frame, bool baked) {
-	SplashTarget s{&t, frame, {t.bmin[0], t.bmin[1], t.bmin[2]}, {t.bmax[0], t.bmax[1], t.bmax[2]}, t.light_owner, t.position_static};
+SplashTarget splash_target(const ProjectorTarget &t, const de::Transform &frame, bool baked, const void *instance = nullptr) {
+	SplashTarget s{&t, frame, {t.bmin[0], t.bmin[1], t.bmin[2]}, {t.bmax[0], t.bmax[1], t.bmax[2]}, t.light_owner, t.position_static, instance};
 	if (baked) return s;
 	s.bmin = {1e30f, 1e30f, 1e30f}, s.bmax = {-1e30f, -1e30f, -1e30f};
 	for (int c = 0; c < 8; ++c) {
@@ -973,36 +987,43 @@ SplashTarget splash_target(const ProjectorTarget &t, const de::Transform &frame,
 }
 
 // A DE_CD3DLight's touched polygons and cone projection, kept until DE_CD3DLight::Update (2.123 0x1032d080) spends their budgets.
+using TargetKey = std::pair<const ProjectorTarget *, const void *>;
 struct LightTouches {
 	struct Found {
 		uint32_t search = 0;
 		GLuint vao = 0;
 		std::vector<uint32_t> faces;
 	};
-	uint32_t serial = 0;  // the Lighting it was last updated with
+	uint32_t serial = 0;         // the Lighting it was last updated with
+	uint32_t search_serial = 0;  // and last searched in
 	float budget = 0, uvw_budget = 0, last_reach = 0;           // +0x110, +0x114, +0x100
 	std::array<float, 3> last_pos{0, 0, 0}, last_dir{0, 0, 0};  // +0xb4, +0x104
 	bool cleared = false;  // +0xec = 0: nothing to draw until the next search
 	uint32_t search = 0;   // counts the searches
 	SceneLight searched_as, projected_as;
-	std::map<const ProjectorTarget *, Found> found;
+	std::map<TargetKey, Found> found;
 };
-std::map<std::pair<uint32_t, uint32_t>, LightTouches> g_touches;
+// By renderer, then light: a renderer's light goes with its render actor (DE_CStandardRenderer::DestroyRenderLight).
+std::map<std::tuple<int, uint32_t, uint32_t>, LightTouches> g_touches;
+// The Lighting serial each target was first drawn in (and its buffer): a search finds only the targets there then.
+std::map<TargetKey, std::pair<uint32_t, GLuint>> g_target_since;
 
 // DE_CStandardRenderAffector::Update (2.123 0x10306590) +0x138.
 float camera_weight(const SceneLight &l) {
 	const float z = g_vp[3] * l.pos[0] + g_vp[7] * l.pos[1] + g_vp[11] * l.pos[2] + g_vp[15];
-	if (!(-l.outer < z)) return 0;
+	if (!l.rendered || !(-l.outer < z)) return 0;
 	return std::min(1.0f, 250.0f / std::max(z, 1.0f));
 }
 
 void update_touches(LightTouches &s, const SceneLight &l) {
 	auto search = [&] {
 		s.searched_as = l;
+		s.search_serial = g_lighting.serial;
 		++s.search;
 		s.cleared = false;
 	};
-	if (l.intensity <= 0) {
+	// IsVisible (vtable +0x80): its render actor's +0xa8, the light's actor's rendered flag.
+	if (!l.rendered || l.intensity <= 0) {
 		s.cleared = true;
 		return;
 	}
@@ -1053,10 +1074,43 @@ void update_touches(LightTouches &s, const SceneLight &l) {
 	s.last_reach = reach;
 }
 
+// Once per gathering, every light of it, as the renderer updates each of its lights (DE_CRendererDirect3D::
+// Render 0x20026e10); a light the gathering lacks has left the scene and its render light is gone.
+void update_light_touches() {
+	static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
+	static uint32_t updated = 0;
+	if (updated == g_lighting.serial) return;
+	updated = g_lighting.serial;
+	// ApplyOptions and SetScene refresh every actor (DE_CSceneWatcher::RefreshAllActors): the render lights are made anew.
+	static std::map<int, std::pair<uint32_t, const void *>> refreshed;
+	auto [r, fresh] = refreshed.try_emplace(g_lighting.renderer, g_lighting.options, g_lighting.scene);
+	if (!fresh && r->second != std::make_pair(g_lighting.options, g_lighting.scene)) {
+		r->second = {g_lighting.options, g_lighting.scene};
+		std::erase_if(g_touches, [](const auto &e) { return std::get<0>(e.first) == g_lighting.renderer; });
+	}
+	for (const SceneLight &l : g_lighting.lights) {
+		if (!l.id.first) continue;
+		LightTouches &s = g_touches[{g_lighting.renderer, l.id.first, l.id.second}];
+		const uint32_t before = s.search;
+		update_touches(s, l);
+		s.serial = g_lighting.serial;
+		if (debug && s.search != before) fprintf(stderr, "[touched %d] %s: polygons searched\n", g_arena_draws, l.name.c_str());
+	}
+	for (auto it = g_touches.begin(); it != g_touches.end();) {
+		if (std::get<0>(it->first) == g_lighting.renderer && it->second.serial != g_lighting.serial) it = g_touches.erase(it);
+		else ++it;
+	}
+}
+
 void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 	static const bool off = getenv("OPENBG_NO_PROJECTORS") != nullptr;  // debugging: vertex lighting only
 	static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
-	if (!g_lightmap || off) return;
+	update_light_touches();
+	for (const SplashTarget &st : targets) {
+		auto &since = g_target_since[{st.target, st.instance}];
+		if (!since.first || since.second != st.target->vao) since = {g_lighting.serial, st.target->vao};
+	}
+	if (!g_lightmap || off || targets.empty()) return;
 	glUniform1i(glGetUniformLocation(prog, "lightmap"), 5);
 	glUniform1i(glGetUniformLocation(prog, "shadow_atten"), 6);
 	const float one[3] = {1, 1, 1};
@@ -1070,20 +1124,12 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 	std::vector<uint32_t> faces;
 	std::vector<GLint> first;
 	std::vector<GLsizei> count;
-	for (auto it = g_touches.begin(); it != g_touches.end();) {
-		if (g_lighting.serial - it->second.serial > 64) it = g_touches.erase(it);
-		else ++it;
-	}
 	for (const SceneLight &l : g_lighting.lights) {
 		LightTouches *state = nullptr;
 		if (l.id.first) {
-			state = &g_touches[l.id];
-			if (state->serial != g_lighting.serial) {
-				const uint32_t before = state->search;
-				update_touches(*state, l);
-				state->serial = g_lighting.serial;
-				if (debug && state->search != before) fprintf(stderr, "[touched %d] %s: polygons searched\n", g_arena_draws, l.name.c_str());
-			}
+			auto it = g_touches.find({g_lighting.renderer, l.id.first, l.id.second});
+			if (it == g_touches.end()) continue;
+			state = &it->second;
 			if (state->cleared || !state->search) continue;
 		}
 		if (!(l.mask & 0x1c) || l.intensity <= 0 || l.outer <= 0) continue;
@@ -1116,9 +1162,12 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 		for (auto &st : targets) {
 			const ProjectorTarget &t = *st.target;
 			if ((l.reaches_all && l.position_static && st.position_static) || !l.lights(st.light_owner)) continue;
-			LightTouches::Found *found = state ? &state->found[&t] : nullptr;
+			LightTouches::Found *found = state ? &state->found[{&t, st.instance}] : nullptr;
 			if (found && found->search == state->search && found->vao == t.vao) {
 				faces = found->faces;
+			} else if (found && g_target_since[{&t, st.instance}].first > state->search_serial) {
+				faces.clear();  // made after the search
+				found->search = state->search, found->vao = t.vao, found->faces.clear();
 			} else {
 				const SceneLight &at = state ? state->searched_as : l;
 				faces.clear();
@@ -1546,7 +1595,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		}
 		// The instance's own images, and the key of the batches drawn with them.
 		std::map<std::pair<const de::ObjectsFile *, uint32_t>, LayerImage> chosen;
-		std::string key;
+		std::string key = g_reflections_enabled ? "R" : "-";  // the GUI and the picker each keep their build
 		ref_key(key, a.actor);
 		if (a.image_of) {
 			for (auto &[mesh, manager, image] : st->second) {
@@ -1652,7 +1701,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 			if (!a.position_static) {
 				ProjectorTarget &t = mt->second;
 				t.light_owner = a.light_owner, t.position_static = false;
-				splash.push_back(splash_target(t, a.world, false));
+				splash.push_back(splash_target(t, a.world, false, a.instance));
 				continue;
 			}
 			auto &placed = placed_targets_[a.instance];
@@ -1673,9 +1722,10 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		for (auto &[k, t] : it->second) glDeleteBuffers(1, &t.vbo), glDeleteVertexArrays(1, &t.vao);
 		it = placed_targets_.erase(it);
 	}
-	if (splash.empty()) return;
-	load_projector_images(data);
-	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
+	if (!splash.empty()) {
+		load_projector_images(data);
+		glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
+	}
 	draw_splashes(prog_, splash);
 }
 

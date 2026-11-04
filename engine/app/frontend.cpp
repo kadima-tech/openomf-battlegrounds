@@ -755,7 +755,8 @@ int main(int argc, char **argv) {
 			glu::mul(vp, proj, view);
 			render::Lighting game_lighting = render::g_lighting;
 			if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
-			render::FrameLights lights = render::collect_lights(world, fr, gui_only);
+			render::FrameLights lights = render::collect_lights(world, fr, gui_only, 1);
+			render::g_reflections_enabled = true;  // the GUI's scene never autopauses: ApplyOptions forces it
 			std::vector<render::ActorMeshRenderer::Item> items, doors;
 			for (game::GameObject *o : world.scene_objects()) {
 				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !gui_only(o)) continue;
@@ -773,7 +774,7 @@ int main(int argc, char **argv) {
 				}
 				bool door = false;
 				for (const game::GameObject *p = o; p && !door; p = p->parent) door = p == app.transition;
-				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}});
+				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}, {}, o});
 			}
 			auto draw_picker = [&] {
 				render::Lighting gui_lighting = render::g_lighting;
@@ -791,13 +792,16 @@ int main(int argc, char **argv) {
 				glu::look_view(pview, ceye, f.data(), up.data());
 				glu::mul(pvp, pproj, pview);
 				if (auto *lf = world.data().file("LoadScene")) render::g_lighting.ambient = de::read_ambient(world.data(), *lf);
-				render::FrameLights plights = render::collect_lights(world, fr, picker_only);
+				render::FrameLights plights = render::collect_lights(world, fr, picker_only, 2);
+				// Its scene autopauses (+0x1c0 cleared), so unlike the GUI's it is not lit whatever the option.
+				if (!world.lighting_enabled) render::g_lighting.lights.clear();
+				render::g_reflections_enabled = world.reflections_enabled;
 				std::vector<render::ActorMeshRenderer::Item> pitems;
 				for (game::GameObject *o : world.scene_objects()) {
 					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;
 					bool live = true;
 					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
-					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}});
+					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}, {}, o});
 				}
 				actors_r.draw(world.data(), pitems, pvp, ceye);
 				// The robot creature: its stripped model, undeformed, painted by its pilot through the

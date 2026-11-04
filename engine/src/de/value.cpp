@@ -275,4 +275,21 @@ std::optional<float> child_float(const World &w, const ObjectRef &parent, const 
 	return std::nullopt;
 }
 
+bool child_bool(const ObjectRef &parent, const std::string &name) {
+	if (!parent) return false;
+	for (uint32_t c : ObjectsFile::children(parent.file->object_data(parent.info()))) {
+		const ObjectInfo &o = parent.file->objects()[c];
+		if (o.name != name || o.class_path.rfind("Value\\BOOL", 0) != 0) continue;
+		try {
+			Contents cc(parent.file->object_data(o).contents);
+			skip_object_chunk(cc);
+			Chunk ch = begin_chunk(cc);
+			return ch.end > cc.pos() && cc.u8() != 0;
+		} catch (const std::exception &) {
+			return false;
+		}
+	}
+	return false;
+}
+
 }  // namespace de

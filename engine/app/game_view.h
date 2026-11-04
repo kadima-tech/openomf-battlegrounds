@@ -51,6 +51,7 @@ public:
 	void wire_session();
 	// The arena whose static scene is drawn (its file stem); found from the scene when not set.
 	void load_arena(const std::string &stem);
+	int reflections_built_ = -1;  // the Reflections the arena and fighters were built with
 	bool has_arena() const { return !arena.empty(); }
 	// Draws into the bound viewport (dw x dh pixels). `fixed_step` (screenshot runs) snaps the
 	// camera instead of trailing.

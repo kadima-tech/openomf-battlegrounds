@@ -339,6 +339,14 @@ de::Transform GameView::ear() const {
 
 void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (!gl_ready_) return;
+	// DE_CRenderer::ApplyOptions (Core 2.123 0x2018ae90): ForceReflections on the session's master description reflects whatever the option.
+	game::World::ObjectValue *force_reflections = world.session && world.session->master_description ? world.object_value(world.session->master_description, "ForceReflections") : nullptr;
+	render::g_reflections_enabled = world.reflections_enabled || (force_reflections && force_reflections->bits);
+	if (reflections_built_ != int(render::g_reflections_enabled)) {
+		reflections_built_ = int(render::g_reflections_enabled);
+		if (!arena.empty()) load_arena(arena);
+		for (auto *fi : fighters) fi->renderer_loaded = false;
+	}
 	if (arena.empty() || follow_scene) {
 		// The session's environment came or went (a match began or ended).
 		std::string a = find_arena();
@@ -431,9 +439,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	// The frame's lights and their lighting owners (scene_lights.h).
 	render::FrameLights frame_lights = render::collect_lights(world, fr, [this](const game::GameObject *o) { return shown(o); });
-	if (!world.lighting_enabled) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
+	render::g_lighting.scene = world.session ? world.session->obj : nullptr;
+	// DE_CRenderer::ApplyOptions (Core 2.123 0x2018ae90): a session whose master description has ForceLighting set is lit whatever the option.
+	game::World::ObjectValue *force = world.session && world.session->master_description ? world.object_value(world.session->master_description, "ForceLighting") : nullptr;
+	const bool lighting = world.lighting_enabled || (force && force->bits);
+	if (!lighting) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
 	// The applied Shadow Type (default 0), only with the lights on.
-	const int shadow_type = world.lighting_enabled ? world.shadow_type : 0;
+	const int shadow_type = lighting ? world.shadow_type : 0;
 	shadows_r.append(render::g_lighting);
 	const auto &light_owners = frame_lights.owners;
 	// An inherited lighting owner is found once, when the actor's meshes are set up in the scene

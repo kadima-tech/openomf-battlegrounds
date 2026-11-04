@@ -802,6 +802,7 @@ GameObject &World::make_object(const de::ObjectsFile *f, uint32_t i) {
 			g.local = a.local;
 			g.position_mode = a.position_mode;
 			g.actor_flags = a.flags;
+			g.visible = a.rendered;
 			g.active = (a.flags & 8) != 0;  // +0x110 bit 8: active (else parked under its parent)
 		} catch (const std::exception &) {
 		}

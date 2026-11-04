@@ -135,11 +135,15 @@ struct SceneLight {
 	bool has_image = false;  // a sphere light with one gets no projector pass
 	std::string name;        // debugging: its affector / light
 	std::pair<uint32_t, uint32_t> id{0, 0};  // the light from frame to frame (object handle, Light index; 0 none)
+	bool rendered = true;  // its affector's own rendered flag (DE_CActor +0x108)
 };
 struct Lighting {
 	std::array<float, 3> ambient{0.3f, 0.3f, 0.3f};  // the environment's ambient (de::read_ambient)
 	std::vector<SceneLight> lights;
 	uint32_t serial = 0;  // a new one each time the lights are gathered (a renderer's frame)
+	int renderer = 0;     // which view gathered them: each renderer keeps its own lights
+	uint32_t options = 0;          // the options apply it was gathered after (World::render_options_applied)
+	const void *scene = nullptr;   // the scene its renderer shows
 };
 // The frame's lights; the app fills it before drawing.
 extern Lighting g_lighting;
@@ -148,6 +152,8 @@ extern de::LiveFloat g_live_values;
 // The applied Bump Mapping Enabled (options +8): off, DE_CGenericShader::AddStage inserts no
 // D3DTOP_BUMPENVMAP stage, so reflections are not bent.
 extern const bool *g_bump_enabled;
+// The renderer's applied Reflections (options +4, or forced): off, the meshes built drop their reflection passes.
+extern bool g_reflections_enabled;
 // The applied Texture Detail (options +0x1c: 0 High, 1 Medium, 2 Low); none: High.
 extern const int *g_texture_detail;
 // DE_CD3DTexture::CreateTextureFromImage (Direct3D 0x2001bce0): an image whose AdjustMipMapLevel
