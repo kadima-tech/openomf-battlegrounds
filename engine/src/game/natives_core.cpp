@@ -244,7 +244,7 @@ void register_core_natives(World &w) {
 				r->children.push_back(ch);
 				c.world.parented(ch, was);
 			}
-			// The texture managers in its tree whose image reference reaches this instance (FINDINGS 245).
+			// The texture managers in its tree whose image reference reaches this instance (FINDINGS 247).
 			if (o->is("Image")) {
 				GameObject *root = o;
 				while (root->parent) root = root->parent;

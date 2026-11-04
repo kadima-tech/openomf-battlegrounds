@@ -681,6 +681,24 @@ void register_ai_natives(World &w) {
 		if (a && a->is("Actor\\Creature\\Pilot")) a = fighter_of(a->parent);
 		c.ret_bool(fighter_is_enemy(a, b));
 	});
+	// DE_COMF2Fighter::NumEnemies / Enemy (OMF 2.123 0x1072a990 / 0x1072a9d0, creature vtable
+	// +0x174 / +0x178; a plain creature has none): the fighters of its scene list (+0x338) that
+	// take it as an enemy.
+	auto enemies = [](const NativeContext &c) {
+		std::vector<GameObject *> out;
+		GameObject *a = c.self();
+		if (!a || !a->fighter || !in_scene(*a)) return out;
+		for (GameObject *o : c.world.scene_objects()) {
+			if (o != a && o->fighter && World::enemy_fighter(*o, *a)) out.push_back(o);
+		}
+		return out;
+	};
+	reg("CCreature::int NumEnemy()", [enemies](const NativeContext &c) { c.ret_u32(uint32_t(enemies(c).size())); });
+	reg("CCreature::class CCreature Enemy(int)", [enemies](const NativeContext &c) {
+		auto e = enemies(c);
+		int i = c.arg<int32_t>(0);
+		c.ret_object(i >= 0 && size_t(i) < e.size() ? e[size_t(i)] : nullptr);
+	});
 	reg("CPilot::bool IsEnemy(class CActor)", [fighter_is_enemy](const NativeContext &c) {
 		GameObject *a = c.self(), *b = c.arg_object(0);
 		c.ret_bool(fighter_is_enemy(a ? fighter_of(a->parent) : nullptr, b));
