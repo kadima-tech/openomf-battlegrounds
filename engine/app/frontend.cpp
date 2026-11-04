@@ -756,6 +756,7 @@ int main(int argc, char **argv) {
 			render::Lighting game_lighting = render::g_lighting;
 			if (auto *gf = world.data().file(app.transfer_agent)) render::g_lighting.ambient = de::read_ambient(world.data(), *gf);
 			render::FrameLights lights = render::collect_lights(world, fr, gui_only, 1);
+			render::g_reflections_enabled = true;  // the GUI's scene never autopauses: ApplyOptions forces it
 			std::vector<render::ActorMeshRenderer::Item> items, doors;
 			for (game::GameObject *o : world.scene_objects()) {
 				if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !gui_only(o)) continue;
@@ -794,6 +795,7 @@ int main(int argc, char **argv) {
 				render::FrameLights plights = render::collect_lights(world, fr, picker_only, 2);
 				// Its scene autopauses (+0x1c0 cleared), so unlike the GUI's it is not lit whatever the option.
 				if (!world.lighting_enabled) render::g_lighting.lights.clear();
+				render::g_reflections_enabled = world.reflections_enabled;
 				std::vector<render::ActorMeshRenderer::Item> pitems;
 				for (game::GameObject *o : world.scene_objects()) {
 					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;

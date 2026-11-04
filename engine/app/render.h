@@ -152,6 +152,8 @@ extern de::LiveFloat g_live_values;
 // The applied Bump Mapping Enabled (options +8): off, DE_CGenericShader::AddStage inserts no
 // D3DTOP_BUMPENVMAP stage, so reflections are not bent.
 extern const bool *g_bump_enabled;
+// The renderer's applied Reflections (options +4, or forced): off, the meshes built drop their reflection passes.
+extern bool g_reflections_enabled;
 // The applied Texture Detail (options +0x1c: 0 High, 1 Medium, 2 Low); none: High.
 extern const int *g_texture_detail;
 // DE_CD3DTexture::CreateTextureFromImage (Direct3D 0x2001bce0): an image whose AdjustMipMapLevel
@@ -240,6 +242,7 @@ public:
 private:
 	GLuint prog_ = 0;
 	uint32_t built_version_ = 0;
+	bool built_reflections_ = true;
 	// Batches by actor and the images its stages draw.
 	std::map<std::string, std::vector<MeshBatch>> meshes_;
 	struct Stage {

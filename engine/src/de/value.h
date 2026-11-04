@@ -64,6 +64,8 @@ ColorValue read_color_value(const World &w, const ObjectRef &r);
 // DE_CObject::GetFLOATValue(name) for a value kept as a named child (GlowFactor on meshes and
 // particle renderers, SpecularFactor on texture managers): the child Value\FLOAT's value at 0.
 std::optional<float> child_float(const World &w, const ObjectRef &parent, const std::string &name);
+// A Value\BOOL child of that name (DE_CObject::GetBOOLValue on the data), false without one.
+bool child_bool(const ObjectRef &parent, const std::string &name);
 
 // CAdvancedReference contents: chunk v1 holding the embedded default value's contents.
 FloatValue read_embedded_float(Contents &c);

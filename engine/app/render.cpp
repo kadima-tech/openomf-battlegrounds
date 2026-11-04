@@ -273,6 +273,7 @@ void apply_texture_detail() {
 	for (auto &d : g_detail_textures) set_detail_level(d, detail);
 }
 const bool *g_bump_enabled = nullptr;
+bool g_reflections_enabled = true;
 
 bool SceneLight::lights(const void *owner) const {
 	return reaches_all || (owner && std::find(reaches.begin(), reaches.end(), owner) != reaches.end());
@@ -671,9 +672,20 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		if (only && m.name != only) continue;
 		material_glow = m.glow;
 		std::vector<std::vector<const de::Layer *>> passes;
-		bool previous_drawn = false;
+		bool previous_drawn = false, dropping = false;
 		for (auto &l : m.layers) {
 			bool usable = !l.disabled && (l.environment || (l.image && !l.uvs.empty()));
+			// DE_CMultiStageTextureProcess::Process (Core 2.123 0x2011f790): a stacked reflection stage
+			// CStage::ShouldProcess turns down drops the stage it stacks on and the stacked ones after it.
+			if (l.stacked && &l != &m.layers.front() && (dropping || (l.environment && !g_reflections_enabled && !l.never_disable))) {
+				if (!dropping && previous_drawn && !passes.empty()) {
+					passes.back().pop_back();
+					if (passes.back().empty()) passes.pop_back();
+				}
+				dropping = true, previous_drawn = false;
+				continue;
+			}
+			dropping = false;
 			// The first stage starts a pass whatever its stacked flag (Process pairs a stacked
 			// stage with the one before it).
 			if (l.stacked && &l != &m.layers.front()) {
@@ -1539,7 +1551,8 @@ de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint,
 void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye) {
 	g_world = &data;
 	if (!prog_) prog_ = glu::program(kArenaVS, kArenaFS);
-	if (texture_version != built_version_) {
+	if (texture_version != built_version_ || built_reflections_ != g_reflections_enabled) {
+		built_reflections_ = g_reflections_enabled;
 		for (auto &[k, list] : meshes_) {
 			for (auto &b : list) {
 				glDeleteBuffers(1, &b.vbo);

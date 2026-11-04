@@ -647,7 +647,7 @@ public:
 	// and Audio\SFX Volume, 1.0; the options' Audio panel sets them).
 	float music_volume = 0.6f, sfx_volume = 1.0f;
 	// Preferences\Renderer\Glow Enabled / Lighting Enabled (the options' Video panel).
-	bool glow_enabled = true, lighting_enabled = true;
+	bool glow_enabled = true, lighting_enabled = true, reflections_enabled = true;
 	uint32_t render_options_applied = 0;  // counts DE_CRenderer::ApplyOptions: each renderer then refreshes its actors
 	int shadow_type = 0;  // the applied Preferences\Renderer\Shadow Type
 	// The applied Bump Mapping Enabled (options +8) and Texture Mip Map, the panel's Texture Detail
