@@ -287,6 +287,9 @@ struct GameObject {
 	std::shared_ptr<std::unordered_map<const GameObject *, GameObject *>> copies;
 	uint64_t copy_seq = 0;
 	bool constructed = false;  // made from its file entry (CPassiveReference::New), not by NewCopy
+	bool system = false;       // DE_CObject +4 bits 1-2 clear (ObjIsSystem): never a reference's newest instance
+	const GameObject *entry = nullptr;  // a copy's loaded object, whose instance list it joined
+	uint64_t destroyed_seq = 0;
 	GameObject *replaced_by = nullptr;  // ReplaceWithThenDie re-pointed the references to it
 	uint64_t replaced_seq = 0;
 	// A texture manager's or mesh's image property as scripts set it (AddProperty,
@@ -547,6 +550,7 @@ public:
 	static constexpr float kTickMs = 16;
 	// The clock of the scene being passed or updated (outside a frame, the current session's).
 	float scene_ms() const { return float(scene_ms_); }
+	bool scene_ms_held() const { return scene_ms_set_; }
 	// The VCR's TemporalMoveToScale target and TemporalPassTime (Core 0x700788b0 / 0x70078bb0) on the
 	// replayed session's scene, handed to its temporal master each frame; a negative pass goes back.
 	float time_scale = 1;
@@ -592,6 +596,8 @@ public:
 	// DE_CScene +0x158: re-simulating (TemporalUpdate's deferred SetTimes), so creature ticks leave
 	// their command managers alone.
 	bool temporal_updating = false;
+	// The rate of the set advancing now (0 between advances): its ticks see DE_CScene::Time() one rate back.
+	uint32_t advancing_rate = 0;
 	// The scene's delta-tick list (+0x70): creatures with no tick rate whose +0x1e0 is set.
 	std::vector<uint32_t> delta_creatures;
 	// The GUI's own scenes: the top control's (GameObject::view 0) and a GUI scene viewer's (view 1,
@@ -980,7 +986,7 @@ private:
 	std::vector<Brain *> dead_brains_;  // of destroyed objects, until their stacks are released
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;
-	std::unordered_map<const GameObject *, std::vector<GameObject *>> constructed_;  // by loaded object, oldest first
+	std::unordered_map<const GameObject *, std::vector<GameObject *>> constructed_;  // instances by loaded object, oldest first
 	struct Interface {
 		Brain *brain;
 		uint32_t behavior;  // index into the brain's attached behaviors

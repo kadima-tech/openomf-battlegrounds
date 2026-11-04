@@ -116,9 +116,7 @@ struct StateManager {
 
 // A tick-based creature's clock in a replay (DE_CCreature +0x1d4 is GameObject::creature_ticks).
 struct Clock {
-	// +0x1d8: tick k runs at base + (k + 1) x rate; ours follows the ticks the creature ran (none
-	// while out of the scene), which its recorded times count.
-	uint32_t base = 0;
+	uint32_t base = 0;       // +0x1d8, the creation time, set once: tick k runs at base + (k + 1) x rate
 	int mode = 0;            // +0x2fc: 2 held since the clock went back
 	uint32_t until = 0;      // +0x1e4
 	uint32_t saved = 0;      // +0x1e8: the tick it was at when the hold began
@@ -858,7 +856,7 @@ void unpack_state(World &w, Packer &p, GameObject &o, uint32_t t) {
 		}
 	};
 	for (Brain *b : run) {
-		if (creature) w.at_scene_ms(clock ? clock->base + t * rate : t, [&] { pulse(b); });
+		if (creature) w.at_scene_ms(clock ? clock->base + (t + 1) * rate : t, [&] { pulse(b); });
 		else pulse(b);
 	}
 	if (!creature) return;
@@ -1092,8 +1090,9 @@ Clock &clock_of(World &w, GameObject &o, uint32_t rate, int64_t tick_ms = -1) {
 	auto [it, made] = rw(w).clocks.try_emplace(o.handle);
 	if (made) {
 		uint32_t now = uint32_t(w.scene_ms());
-		uint32_t at = tick_ms >= 0 ? uint32_t(tick_ms) : now - now % rate;
-		it->second.base = at - (o.creature_ticks + (tick_ms >= 0 ? 1 : 0)) * rate;
+		int64_t at = tick_ms >= 0 ? tick_ms : now - now % rate;
+		// DE_CCreature::ObjPrepare: the creation time is never 0.
+		it->second.base = uint32_t(std::max<int64_t>(1, at - int64_t(o.creature_ticks + (tick_ms >= 0 ? 1 : 0)) * rate));
 	}
 	return it->second;
 }
@@ -1248,6 +1247,9 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 	uint32_t rate = w.creature_rate(&o);
 	if (!rate) return;
 	Clock &c = clock_of(w, o, rate);
+	// Within a tick the original's Time() is the set's last tick (+0x38), one rate behind ours.
+	const uint32_t lag = w.scene_ms_held() ? rate : w.advancing_rate;
+	ms = ms > lag ? ms - lag : 0;
 	if (ms < c.base) {
 		o.creature_ticks = 0;
 		return;
@@ -1262,7 +1264,7 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 		n = 100;
 		o.creature_ticks = tick - 100;
 	}
-	for (; n; --n) retick(w, o, c.base + o.creature_ticks * rate);
+	for (; n; --n) retick(w, o, c.base + (o.creature_ticks + 1) * rate);
 	o.creature_ticks = tick;
 	c.until = tick;
 }
@@ -1638,7 +1640,6 @@ bool creature_state_tick(World &w, GameObject &o) {
 	if (!rate) return false;
 	Clock &c = clock_of(w, o, rate, int64_t(w.scene_ms()));
 	if (o.creation_time) c.base = o.creation_time;
-	else if (!rw(w).reticking) c.base = uint32_t(w.scene_ms()) - (o.creature_ticks + 1) * rate;
 	bool skip = c.mode == 2;
 	if (!skip && c.mode == 0 && c.ticked && c.unpacking != o.creature_ticks) {
 		if (StateManager *sm = manager_of(w, &o)) {
