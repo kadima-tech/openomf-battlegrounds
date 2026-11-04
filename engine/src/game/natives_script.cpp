@@ -282,7 +282,14 @@ void register_script_natives(World &w) {
 		c.world.send_event(t, e);
 		if (dbg) {
 			std::string h = c.world.read_string(c.mem().get<uint32_t>(e + kHandle));
-			if (h.find(dbg) != std::string::npos) fprintf(stderr, "[send %u] %s -> %s/%s INT1 %d -> %d\n", c.world.frame(), h.c_str(), t->parent ? t->parent->name.c_str() : "-", t->name.c_str(), before, c.mem().get<int32_t>(e + kInt1));
+			auto name = [&](uint32_t off) {
+				GameObject *o = c.world.object(c.mem().get<uint32_t>(e + off));
+				return o ? o->name : std::string("-");
+			};
+			if (h.find(dbg) != std::string::npos) {
+				fprintf(stderr, "[send %u] %s -> %s/%s INT1 %d -> %d INT3 %d objects %s %s\n", c.world.frame(), h.c_str(), t->parent ? t->parent->name.c_str() : "-", t->name.c_str(), before,
+				        c.mem().get<int32_t>(e + kInt1), c.mem().get<int32_t>(e + kInt3), name(kObject1).c_str(), name(kObject1 + 4).c_str());
+			}
 		}
 	});
 	// ProcessEventCaller (Core 0x70046230): the object's own ProcessEvent (vtable +0x70). For an
@@ -635,6 +642,21 @@ void register_script_natives(World &w) {
 		auto *v = c.world.object_value(c.self(), c.arg_string(0));
 		uint32_t t = c.arg<uint32_t>(1);
 		if (v && t) c.mem().set<uint32_t>(t, c.world.string(v->text));
+	});
+	// GetStringValueCaller (Core 2.123 0x20119500) → DE_CValueString::GetValue (0x2003dea0): the value's own text.
+	reg("CValueString::GetValue(class CText)", [](const NativeContext &c) {
+		GameObject *v = c.self();
+		uint32_t t = c.arg<uint32_t>(0);
+		if (!v || !t) return;
+		if (v->parent && value_child(v->parent, v->name) == v) {
+			if (auto *val = c.world.object_value(v->parent, v->name)) c.mem().set<uint32_t>(t, c.world.string(val->text));
+		} else if (auto p = value_payload(v); p && v->is("Value\\String") && p->size() >= 4) {
+			de::Contents cc(*p);
+			auto b = cc.bytes(cc.u32());
+			std::string s(b.begin(), b.end());
+			while (!s.empty() && s.back() == 0) s.pop_back();
+			c.mem().set<uint32_t>(t, c.world.string(s));
+		}
 	});
 	reg("CObject::CText::(opp =)(int)", [set_text](const NativeContext &c) { set_text(c, std::to_string(c.arg<int32_t>(0))); });
 	reg("CObject::CText::(opp +=)(int)", [text_of, set_text](const NativeContext &c) { set_text(c, text_of(c) + std::to_string(c.arg<int32_t>(0))); });

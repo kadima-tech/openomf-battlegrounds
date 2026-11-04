@@ -28,6 +28,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 		static std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::optional<de::LightInfo>> infos;
 		static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> light_images;
 		g_lighting.lights.clear();
+		++g_lighting.serial;
 		// An affector's lights: its Light children (the arenas) and the Lights among its
 		// properties (the GUI's MainLight, whose Light is a component reference).
 		std::vector<std::tuple<de::ObjectRef, game::GameObject *, game::GameObject *>> placed;  // light, its object, affector
@@ -54,6 +55,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 			l.frame = aff->world();
 			l.name = aff->name + "/" + lref.info().name + (o ? "" : " (property)") + " under " + (aff->parent ? aff->parent->name : "-");
 			l.position_static = game::position_static(*aff);
+			l.id = {(o ? o : aff)->handle, lref.index};
 			l.pos = l.frame.t;
 			if (aff->shape == game::GameObject::Shape::Sphere) {
 				l.shape = SceneLight::kSphere;
