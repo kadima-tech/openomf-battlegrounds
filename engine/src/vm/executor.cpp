@@ -422,6 +422,7 @@ int Executor::continue_execution() {
 			}
 			case 315: {  // KillCallers: keep only the running frame of this call chain
 				if (frames_.size() > call_floor_ + 1) {
+					for (size_t i = call_floor_; i + 1 < frames_.size(); ++i) close_frame(frames_[i]);
 					Frame top = std::move(frames_.back());
 					frames_.resize(call_floor_);
 					frames_.push_back(std::move(top));

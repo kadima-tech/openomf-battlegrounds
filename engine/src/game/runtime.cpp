@@ -330,7 +330,9 @@ void World::destroy(GameObject *o) {
 		branch.insert(branch.end(), branch[i]->children.begin(), branch[i]->children.end());
 	}
 	std::set<uint32_t> gone;
+	const uint64_t destroyed = ++reference_seq_;
 	for (GameObject *b : branch) {
+		if (!b->destroyed_seq) b->destroyed_seq = destroyed;
 		by_handle_.erase(b->handle);
 		relays.erase(b);
 		root_session.erase(b);
@@ -457,10 +459,10 @@ GameObject *World::copy_tree(const GameObject &o, bool construct) {
 		GameObject *c = copy_node(from);
 		c->copies = copies;
 		c->copy_seq = seq;
-		if (construct && !from.copied) {
-			c->constructed = true;
-			constructed_[&from].push_back(c);
-		}
+		c->constructed = construct && !from.copied;
+		// ObjNewCopy and the transfer agent's New add each object to its file entry's instance list.
+		c->entry = from.copied ? from.entry : from.file ? &from : nullptr;
+		if (c->entry && !c->system) constructed_[c->entry].push_back(c);
 		(*copies)[&from] = c;
 		for (const GameObject *ch : from.children) {
 			GameObject *cc = copy(*ch);
@@ -477,6 +479,7 @@ GameObject *World::copy_node(const GameObject &o) {
 	g.copied = true;
 	g.copied_from = &o;
 	g.constructed = false;
+	g.destroyed_seq = 0;
 	g.replaced_by = nullptr;
 	g.handle = mem_.alloc(kObjectBlock);
 	memcpy(mem_.ptr(g.handle, kObjectBlock), mem_.ptr(o.handle, kObjectBlock), kObjectBlock);
@@ -514,7 +517,8 @@ GameObject *World::referent(const GameObject *from, const de::ObjectRef &r) cons
 			// ExtractReference: a constructed object's reference names the target's newest instance.
 			if (auto in = constructed_.find(t); in != constructed_.end()) {
 				for (auto c = in->second.rbegin(); c != in->second.rend(); ++c) {
-					if ((*c)->copy_seq < o->copy_seq && object((*c)->handle) == *c) {
+					const GameObject *k = *c;
+					if (k->copy_seq < o->copy_seq && !k->system && (!k->destroyed_seq || k->destroyed_seq > o->copy_seq)) {
 						t = *c;
 						break;
 					}
@@ -1623,6 +1627,12 @@ void World::input_tick(uint32_t manager) {
 // DE_CTemporalElementSet::AdvanceTime (Core 0x70072090): every element, newest first.
 void World::advance(TemporalSet &set) {
 	auto elements = set.elements;  // a tick may add elements
+	const uint32_t outer_rate = advancing_rate;
+	advancing_rate = set.rate;
+	struct Restore {
+		uint32_t &r, v;
+		~Restore() { r = v; }
+	} restore{advancing_rate, outer_rate};
 	for (auto it = elements.rbegin(); it != elements.rend(); ++it) {
 		switch (it->kind) {
 		case Temporal::Creature:

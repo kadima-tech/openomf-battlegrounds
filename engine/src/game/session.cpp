@@ -379,6 +379,7 @@ GameObject *World::create_object_reference(GameObject *o) {
 		GameObject *tpl = global_object(data_.by_guid(target));
 		if (!tpl) return nullptr;
 		GameObject *n = copy_tree(*tpl, true);
+		n->system = true;  // DE_CPassiveObjectReference::Create (Core 0x7004dbd0)
 		if (under_parent && o->parent) {
 			n->parent = o->parent;
 			o->parent->children.push_back(n);
