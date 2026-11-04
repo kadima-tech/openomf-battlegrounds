@@ -1169,6 +1169,12 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 	for (auto &item : de::collect_scene(world, *file)) {
 		std::vector<uint32_t> chain;
 		for (int p = int(item.actor_index); p >= 0; p = parents[size_t(p)]) chain.push_back(uint32_t(p));
+		// Only the environment's own branch is in the scene; the file's other actors (templates such
+		// as the Trophy Room's trophies) appear only as copies, drawn where they are.
+		if (std::none_of(chain.begin(), chain.end(), [&](uint32_t i) { return file->objects()[i].class_path == "Actor\\Creature\\Environment"; })) {
+			if (getenv("OPENBG_DEBUG_MATERIALS")) fprintf(stderr, "[mesh] %s: outside the environment, not baked\n", item.actor.c_str());
+			continue;
+		}
 		static const bool debug = getenv("OPENBG_DEBUG_MATERIALS") != nullptr;
 		if (debug) {
 			float l[3] = {1e30f, 1e30f, 1e30f}, h[3] = {-1e30f, -1e30f, -1e30f};

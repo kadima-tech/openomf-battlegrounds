@@ -78,6 +78,7 @@ struct Pilot {
 	float quality = 0.43f;              // +0x7cc: AI quality degradation (higher = clumsier)
 	int difficulty = 2;                 // DE_COMF2Manager::AIDifficulty: 0 Rookie .. 4 World Champion
 	float difficulty_offset = 0;        // +0x3e4 (CPilot::SetAIDifficultyOffset)
+	uint32_t sex = 0;                   // +0x3d4, after the AI stats: CPilot::sexMale, sexFemale, sexUndefined
 	float stat(uint32_t offset, float time_ms) const;
 	// The difficulty-dependent part of CalculateAIValues: quality degradation
 	// clamp(1 - (difficulty + offset) / 3.5, 0.01, 0.99) and the perception stats built on it.
@@ -747,6 +748,7 @@ public:
 	// CPrimitiveGeneratorMesh primitives (text, quads, status bars), by primitive object: what
 	// the HUD and on-screen messages are made of. Positions are mesh space; in a screen-space
 	// mesh, fractions of the screen with y down.
+	static constexpr float kTextLineSpacing = 1.2f;  // DE_CFlatText3 +0xa0, in font units
 	struct Primitive {
 		enum Kind { Text, Quad, StatusBar } kind = Text;
 		GameObject *mesh = nullptr;
@@ -860,6 +862,12 @@ public:
 	// 20 ms a frame, so screenshot and headless runs repeat.
 	std::function<uint32_t()> system_clock;
 	uint32_t system_ms() const { return system_clock ? system_clock() : frame_ * kFrameMs; }
+	// DE_GLOBAL::LastKeyPressTime: gTime at the last key or button press (Input2's controller update).
+	uint32_t last_key_press_ms = 0;
+	// Set by the app: DE_CUIManager::ActiveManager is not null (a UI manager is up), and
+	// DE_CNotification::NewUserInformation (the modal "User Information" dialog).
+	std::function<bool()> ui_manager_active;
+	std::function<void(const std::string &title, const std::string &text)> notify_user;
 	// CObject::DeleteThis: unlinks the object (and its branch); handles to it go inactive.
 	void destroy(GameObject *o);
 	// DE_GLOBAL::AddObjectToClean (DeleteThisLater, Die): destroyed by the next housekeeping,
@@ -944,6 +952,7 @@ private:
 	std::set<const GameObject *> activated_;  // objects whose executors were started
 	std::vector<Brain *> pending_starts_;      // attached by a deferred enter_scene, not yet started
 	std::deque<std::unique_ptr<Brain>> brains_;
+	std::vector<Brain *> dead_brains_;  // of destroyed objects, until their stacks are released
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;
 	struct Interface {

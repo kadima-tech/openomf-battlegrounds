@@ -17,13 +17,19 @@ Memory::Memory(uint32_t reserve) : reserved_(reserve) {
 Memory::~Memory() { de::release_pages(base_, reserved_); }
 
 uint32_t Memory::alloc(uint32_t size, uint32_t align) {
+	if (auto it = released_.find(size); it != released_.end() && !it->second.empty() && it->second.back() % align == 0) {
+		uint32_t a = it->second.back();
+		it->second.pop_back();
+		memset(base_ + a, 0, size);
+		return a;
+	}
 	uint64_t addr = (uint64_t(top_) + align - 1) & ~uint64_t(align - 1);
 	if (addr + size > reserved_) {
 		throw MemoryError("vm: script address space exhausted");
 	}
 	// Only addresses below top_ are ever touched (ptr() checks), so memory is committed as the
 	// arena grows. Windows has no overcommit: committing the whole reserve up front would charge
-	// 1 GB against the page file.
+	// the whole reserve against the page file.
 	if (addr + size > committed_) {
 		const uint64_t step = 1u << 20;
 		uint64_t end = std::min<uint64_t>((addr + size + step - 1) / step * step, reserved_);
@@ -35,6 +41,10 @@ uint32_t Memory::alloc(uint32_t size, uint32_t align) {
 	top_ = uint32_t(addr + size);
 	memset(base_ + addr, 0, size);
 	return uint32_t(addr);
+}
+
+void Memory::release(uint32_t addr, uint32_t size) {
+	if (addr && size) released_[size].push_back(addr);
 }
 
 uint32_t Memory::alloc_copy(const void *data, uint32_t size) {

@@ -95,6 +95,9 @@ public:
 	// brain restarts in `m` with `args`; if it is mid-execution it stops at the current call.
 	void set_state(ScriptMethod &m, std::span<const uint8_t> args);
 	bool executing() const { return executing_ > 0; }
+	// The brain is gone for good: its stack goes back to the arena (calls then fail as overflows).
+	bool release_stack();
+	bool released() const { return stack_size_ == 0; }
 	// One pulse. Returns true when execution has finished (nothing left to run).
 	bool pulse();
 	bool running() const { return !frames_.empty(); }

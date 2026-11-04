@@ -108,7 +108,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **HUD and messages.** Drawn from the scripts' screen-space primitives (text in `Font_Ariel` or the
   in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them. One font
   unit is the text size; HUD letters stretch with the screen's shape (x by its width, y by its height).
-  Every text primitive is on screen (crowd responses and pilot quotes too). Stat bars fill along
+  Every text primitive is on screen (crowd responses and pilot quotes too). A text's lines are
+  justified one by one, 1.2 font units apart; quotes sit on a dark blue underlay band (0, 0, 0.15 at
+  0.75 alpha) as tall as the text, with soft bands above and below. Stat bars fill along
   their length with a glowing cap at the value's end; the upright bars use the texture turned.
 - **Help.** A tree list: Plus / Minus icons 10 px wide at depth × 20 + 5, text at (depth + 1) × 20,
   branches collapsed at first, no tree lines. The topic's page fills the Window: its text blocks

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 
 #include "vm/disasm.h"
 
@@ -160,7 +161,16 @@ std::string Executor::format_varparams() {
 	return s;
 }
 
+bool Executor::release_stack() {
+	if (executing_ > 0 || !stack_size_) return false;
+	close_frames(0);
+	mem_.release(stack_, stack_size_);
+	stack_size_ = 0;
+	return true;
+}
+
 void Executor::set_state(ScriptMethod &m, std::span<const uint8_t> args) {
+	if (!stack_size_) return;
 	start(m);
 	size_t n = std::min<size_t>(args.size(), m.return_size() + m.param_size());
 	if (n) {
@@ -178,10 +188,23 @@ int Executor::continue_execution() {
 	int result = -1;
 	uint64_t budget = 0;
 	uint32_t resume_pc = 0;
+	// OPENBG_DEBUG_VM_ERRORS=1 names the instruction a script error left from.
+	struct ErrorAt {
+		const Executor &e;
+		uint32_t at = 0;
+		int32_t op = 0;
+		int pending = std::uncaught_exceptions();
+		~ErrorAt() {
+			static const bool on = getenv("OPENBG_DEBUG_VM_ERRORS") != nullptr;
+			if (on && std::uncaught_exceptions() > pending && e.method_)
+				fprintf(stderr, "[vm error] %s +%u op%d\n", e.method_->cm->signature.c_str(), at - e.method_->code_addr, op);
+		}
+	} error_at{*this};
 	for (;;) {
 		while (pc_ < end_) {
 			const uint32_t at = pc_;
 			int32_t op = mem_.get<int32_t>(pc_);
+			error_at.at = at, error_at.op = op;
 			pc_ += 4;
 			++executed_;
 			if (++budget > 2000000) {

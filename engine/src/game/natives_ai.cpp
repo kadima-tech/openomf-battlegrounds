@@ -957,6 +957,11 @@ void register_ai_natives(World &w) {
 		}
 		c.ret_object(img);
 	});
+	// SexCaller (OMF 0x35048260): +0x3d4, the last u32 of the pilot's contents.
+	reg("CPilot::dword Sex()", [](const NativeContext &c) {
+		const Pilot *p = c.self() ? pilot_of(c.self()) : nullptr;
+		c.ret_u32(p ? p->sex : 0);
+	});
 	// FactionCaller / SetFactionCaller (OMF 0x350482e0): the pilot's faction reference (+0x328,
 	// pointer +0x32c). Only BCreatureAndPilotPicker sets it, and only in team games; otherwise
 	// it stays null.

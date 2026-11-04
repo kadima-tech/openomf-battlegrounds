@@ -32,7 +32,8 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   managers' page flow (`src/game/ui.cpp`; FINDINGS 125-127):
   `engine/build/openbg source/patched/v2123/Data`. The main menu, the Quit page and Single
   Player's Choose Match work, and a chosen match's session runs its Choose Pilot / Choose Creature
-  screens; the matches themselves (sub-sessions) are next. Other screens say they are not ported yet.
+  screens, then its matches: a tournament plays through to its cinematic and back to the main menu
+  (FINDINGS 256-263), and the Trophy Room and Training run. Other screens say they are not ported yet.
   `--launch Training` starts a match at once (`--host "Last Man Standing"` as a joinable session, whose Choose Cast lists the
   Available Arenas), `--choose Elizabeth,Jaguar` has its screens pick those, and
   `--headless N` runs without a window and lists the natives still missing. `--screenshot out.png --frames N` with
@@ -54,7 +55,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   dmusic, vendored in `engine/third_party/dmusic`, MIT, through a port of Microsoft's software synthesizer).
   The game's own HUD and messages are drawn (fonts from Core.ModuleDLL) and also printed in the
   terminal, and the view is the game's fight camera (`--free-camera` for a mouse-orbit camera); `OPENBG_DEBUG_SESSION=1` lists the session's modifiers,
-  `OPENBG_DEBUG_EVENTS=1` traces event handle checks. In `openbg` screenshot runs, `OPENBG_AUTOPLAY=<frame>` hands the player's fighter to the AI from that frame (the scripts still see it as the user's) and `OPENBG_KO=<frame>,...` drains every computer fighter's health then. `OPENBG_QUIT_SESSION=<frame>` leaves the session then as the in-game menu's Main Menu does (closing a recording), `OPENBG_DEBUG_REPLAY=1` traces a recording's or replay's state managers and fighter positions, and `OPENBG_DEBUG_REWIND=<frame>:<ms>` sets a replay's clock back then. Attacks land:
+  `OPENBG_DEBUG_EVENTS=1` traces event handle checks. In `openbg` screenshot and headless runs, `OPENBG_AUTOPLAY=<frame>` hands the player's fighter to the AI from that frame (the scripts still see it as the user's) and `OPENBG_KO=<frame>,...` drains every computer fighter's health then, the player named as the attacker (the kill-hit event reaches the player; destructions are not credited); `OPENBG_KO=auto[:N]` does it N frames (default 150) after each start of the action, which plays a whole tournament (`--launch "North American Open" --choose Elizabeth,Jaguar` with `MOUSE` presses every 250 frames for the rules displays, notifications and the cinematic). `OPENBG_PLACE` works in `openbg` too (Training's pads), `OPENBG_DEBUG_REGISTRY=1` prints registry values as they change (unlocks), `OPENBG_DEBUG_TREE=<name>@<frame>` prints the scene branches under objects of that name, `OPENBG_DEBUG_MEMORY=N` the script arena's size every N frames, and `OPENBG_DEBUG_VM_ERRORS=1` the instruction a script error left from; screenshot runs end by listing the log and the natives still missing. `OPENBG_QUIT_SESSION=<frame>` leaves the session then as the in-game menu's Main Menu does (closing a recording), `OPENBG_DEBUG_REPLAY=1` traces a recording's or replay's state managers and fighter positions, and `OPENBG_DEBUG_REWIND=<frame>:<ms>` sets a replay's clock back then. Attacks land:
   hits run each robot's own damage, reaction and knockback scripts, and standing still (or walking
   back) blocks attacks from the front. `OPENBG_DEBUG_HITS=1` logs hits and knockback,
   `OPENBG_DEBUG_DANGER=1` the danger each robot perceives. Robots stand, walk and land on the arena's

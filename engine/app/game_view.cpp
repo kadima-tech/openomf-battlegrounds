@@ -476,6 +476,24 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		};
 	};
 	const de::ObjectsFile *arena_file = world.data().file(arena);
+	if (arena_file != environment_tree_file_) {
+		environment_tree_file_ = arena_file;
+		environment_tree_.clear();
+		if (arena_file) {
+			auto parents = arena_file->parents();
+			const auto &objs = arena_file->objects();
+			environment_tree_.assign(objs.size(), false);
+			for (size_t i = 0; i < objs.size(); ++i) {
+				for (int p = int(i); p >= 0; p = parents[size_t(p)]) {
+					if (objs[size_t(p)].class_path == "Actor\\Creature\\Environment") {
+						environment_tree_[i] = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+	auto in_environment = [this](uint32_t i) { return i < environment_tree_.size() && environment_tree_[i]; };
 	// The arena's actors that paths move (trains, cars, ...): drawn live, not baked.
 	std::vector<render::ActorMeshRenderer::Item> moving_items;
 	{
@@ -523,8 +541,9 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	{
 		for (game::GameObject *o : world.scene_objects()) {
 			if (!o->copied || !o->is_actor || o->fighter || !o->file || o->meshes_disabled || !shown(o)) continue;
-			// The arena's own actors are the static scene ArenaRenderer draws.
-			if (o->file == arena_file) continue;
+			// The arena's own actors are the static scene ArenaRenderer draws; a copy of one of its
+			// file's objects outside the environment (the Trophy Room's trophies) is drawn live.
+			if (o->file == arena_file && in_environment(o->index)) continue;
 			bool live = game::in_scene(*o);
 			live = live && o->visible;  // its own Renderable flag (not inherited)
 			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {

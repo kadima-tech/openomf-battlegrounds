@@ -1009,8 +1009,10 @@ void register_session_natives(World &w) {
 		reg(std::string(cls) + "bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
 		reg(std::string(cls) + "bool IsSimulating()", [](const NativeContext &c) { c.ret_bool(true); });
 		// AddPropertyCaller (Session 0x45014ba0 / 0x45019e60): appended to the property list.
-		reg(std::string(cls) + "AddProperty(class CObject)", [node](const NativeContext &c) {
-			if (auto *n = node(c); n && c.arg_object(0)) n->properties.push_back(c.arg_object(0));
+		reg(std::string(cls) + "AddProperty(class CObject)", [S](const NativeContext &c) {
+			SessionState *s = S(c);
+			if (!s || !c.self() || !c.arg_object(0)) return;
+			make_node(c.world, *s, c.self()).properties.push_back(c.arg_object(0));
 		});
 		reg(std::string(cls) + "int NumProperty()", [node](const NativeContext &c) {
 			auto *n = node(c);
@@ -1203,6 +1205,26 @@ void register_session_natives(World &w) {
 
 	// --- The session (CSession / CStandardSession) ----------------------------------------------
 	// DE_CSession::MaxPlayerClients (Core 0x70010f80): the top-level session's session info's.
+	// DE_CSession::AddModifier (Core 0x701f8f90): appended once to the modifier list; a begun
+	// session (+0xa4) initialises it (SymbiotSessionModifierInvalid 0x70200640), without Begin.
+	reg("CSession::AddModifier(class CSessionModifier)", [](const NativeContext &c) {
+		SessionState *s = session_of(c.world, c.self());
+		GameObject *m = c.arg_object(0);
+		if (!s || !m) return;
+		if (std::find(s->modifiers.begin(), s->modifiers.end(), m) == s->modifiers.end()) {
+			if (m->parent != s->obj) {
+				if (m->parent) {
+					auto &ch = m->parent->children;
+					ch.erase(std::remove(ch.begin(), ch.end(), m), ch.end());
+				}
+				m->parent = s->obj;
+				s->obj->children.push_back(m);
+			}
+			s->modifiers.push_back(m);
+		}
+		SessionNode &n = make_node(c.world, *s, m);
+		if (s->begun) initialize_node(c.world, *s, n);
+	});
 	reg("CSession::int MaxPlayerClients()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		while (s && s->owner) s = s->owner;
@@ -1659,6 +1681,15 @@ void register_session_natives(World &w) {
 	reg("CScene::ActivateSceneWatchers()", [caller_scene](const NativeContext &c) {
 		if (World::gui_scene_view(c.self()) >= 0) return;
 		if (SessionState *s = session_of(c.world, caller_scene(c))) s->watchers_active = true;
+	});
+	// IsLoadingCompleteCaller (Core 2.123 0x20071b80): the scene's +0x1c8, which ActivateSceneWatchers sets.
+	reg("CScene::bool IsLoadingComplete()", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) >= 0) {
+			c.ret_bool(true);
+			return;
+		}
+		SessionState *s = session_of(c.world, caller_scene(c));
+		c.ret_bool(s && s->watchers_active);
 	});
 	// IsPausedCaller (Core 0x7006de90): the scene's +0xf0, set by ObjInitContents and Pause, cleared by
 	// Genesis and Continue. A session's scene starts when a modifier owns the environment.

@@ -115,7 +115,7 @@ void settle(World &w, Brain &b, uint64_t before) {
 }
 
 bool Brain::call(World &w, const std::string &name, std::vector<uint8_t> &args) {
-	vm::ScriptMethod *m = cls.find_by_name(name);
+	vm::ScriptMethod *m = exec && !exec->released() ? cls.find_by_name(name) : nullptr;
 	if (!m) {
 		return false;
 	}
@@ -133,6 +133,7 @@ bool Brain::call(World &w, const std::string &name, std::vector<uint8_t> &args) 
 
 bool Brain::call_handle(World &w, uint32_t handle, std::vector<uint8_t> &args) {
 	vm::ScriptMethod *m = nullptr;
+	if (!exec || exec->released()) return false;
 	for (auto &cand : cls.methods) {
 		if (cand.handle == handle) {
 			m = &cand;
@@ -335,7 +336,7 @@ void World::destroy(GameObject *o) {
 		root_session.erase(b);
 		b->spawned = false;
 		b->active = false;
-		if (b->brain) b->brain->inst.shut_down = true;
+		if (b->brain) b->brain->inst.shut_down = true, dead_brains_.push_back(b->brain);
 		gone.insert(b->handle);
 	}
 	// Its primitives (text, quads, bars) go with it.
@@ -1061,6 +1062,10 @@ std::optional<Pilot> read_pilot(const de::ObjectsFile &f, const de::ObjectInfo &
 			v.variation = c.squeezed();
 			v.wave = c.squeezed();
 		}
+		if (c.pos() + 8 <= end) {
+			c.u32();
+			p.sex = c.u32();
+		}
 	} catch (const std::exception &) {
 		return std::nullopt;
 	}
@@ -1784,6 +1789,8 @@ void World::tick(uint32_t ms) {
 	frame_ms_ = ms;
 	destroy_closed_instances();
 	housekeeping();
+	// A destroyed object's brain never runs again: its 256 KB stack is reused.
+	std::erase_if(dead_brains_, [](Brain *b) { return !b->exec || b->exec->release_stack(); });
 	for (auto it = swept_affectors.begin(); it != swept_affectors.end();) {
 		if (object((*it)->handle) != *it || !in_scene(**it)) {
 			it = swept_affectors.erase(it);

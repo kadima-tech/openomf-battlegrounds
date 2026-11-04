@@ -22,6 +22,7 @@
 #include <iterator>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -182,6 +183,8 @@ int main(int argc, char **argv) {
 		game::ui::AppManager app(world);
 		app.cast_presets = choose;
 		game::ui::system_time = [&world] { return world.system_ms(); };
+		world.ui_manager_active = [&app] { return app.current && app.current->activated; };
+		world.notify_user = [&app](const std::string &title, const std::string &text) { app.notify(title, text); };
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);
 		// OPENBG_SET="name=value;..." sets registry values for this run (testing).
@@ -195,7 +198,7 @@ int main(int argc, char **argv) {
 			}
 		}
 		app.apply_settings();
-		auto saved_registry = world.registry;
+		auto saved_registry = world.registry, traced_registry = world.registry;
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
 		auto persistent = [&](const char *name) {
@@ -327,6 +330,117 @@ int main(int argc, char **argv) {
 			// DE_CGameLauncherWindow::ObjInitContents: the main menu is the first UI manager.
 			app.set_next(app.main_menu(), true);
 		}
+		// The testing switches that act on the world at a frame (screenshot and headless runs).
+		auto test_switches = [&](int fr) {
+			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
+			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
+				for (game::GameObject *o : world.scene_objects()) {
+					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1), o->autoplayed = true;
+				}
+			}
+			// OPENBG_KO=<frame>[,<frame>...]: every computer fighter loses all its health then, the player
+			// named as the attacker (testing the end of a match). OPENBG_KO=auto[:N] does it N frames
+			// (default 150) after each start of the action (the session master's
+			// StandardSessionIsActionStarted).
+			if (const char *ko = getenv("OPENBG_KO")) {
+				auto knock_out = [&] {
+					game::GameObject *user = nullptr;
+					for (game::GameObject *o : world.scene_objects()) {
+						if (o->fighter && (o->user_controlled || o->autoplayed)) user = o;
+					}
+					for (game::GameObject *o : world.scene_objects()) {
+						if (o->fighter) fprintf(stderr, "[ko %d] %s %s at %.0f %.0f %.0f\n", fr, o->name.c_str(), o == user ? "player" : "computer", o->world().t[0], o->world().t[1], o->world().t[2]);
+					}
+					for (game::GameObject *o : world.scene_objects()) {
+						if (!o->fighter || o == user) continue;
+						for (game::GameObject *ch : o->children) {
+							if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
+							std::vector<uint8_t> args(16, 0);
+							uint32_t h = user ? user->handle : 0;
+							float dmg = -100000, stun = 0;
+							memcpy(&args[0], &h, 4), memcpy(&args[4], &dmg, 4), memcpy(&args[8], &stun, 4);
+							ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
+						}
+					}
+				};
+				if (!strncmp(ko, "auto", 4)) {
+					static int started = -1;
+					const int delay = ko[4] == ':' ? atoi(ko + 5) : 150;
+					bool action = false;
+					for (auto &s : world.sessions) {
+						if (s->ended || s->modifiers.empty() || !s->modifiers[0]->brain) continue;
+						std::vector<uint8_t> ret(4, 0);
+						if (s->modifiers[0]->brain->call(world, "bool StandardSessionIsActionStarted()", ret) && ret[0]) action = true;
+					}
+					if (!action) started = -1;
+					else if (started < 0) started = fr;
+					else if (fr - started == delay) knock_out();
+				}
+				for (const char *p = ko; *p && isdigit((unsigned char)*p);) {
+					if (atoi(p) == fr) knock_out();
+					const char *c = strchr(p, ',');
+					if (!c) break;
+					p = c + 1;
+				}
+			}
+			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
+			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
+			if (fr == quit_session) game::destroy_all_sessions(world);
+			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
+			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
+			if (fr == test_snapshot) {
+				for (game::Brain *b : world.brains()) {
+					std::vector<uint8_t> args(8);
+					if (b->call(world, "SubSessionCaptureSnapshot(class CCreature,class CCreature)", args)) {
+						fprintf(stderr, "test snapshot on %s\n", b->owner->name.c_str());
+						break;
+					}
+				}
+			}
+			// OPENBG_PLACE="Jaguar:0,90,1035@900;...": puts a fighter somewhere at a frame, as openbg-fight does.
+			if (const char *pl = getenv("OPENBG_PLACE")) {
+				std::string spec = pl;
+				for (size_t p = 0; p < spec.size();) {
+					size_t q = spec.find(';', p);
+					std::string item = spec.substr(p, q == std::string::npos ? std::string::npos : q - p);
+					char who[32] = {};
+					float x = 0, y = 0, z = 0;
+					int at = 0;
+					if (sscanf(item.c_str(), "%31[^:]:%f,%f,%f@%d", who, &x, &y, &z, &at) == 5 && at == fr) {
+						for (game::GameObject *o : world.scene_objects()) {
+							if (o->fighter && o->name == who) o->local.t = {x, y, z}, o->momentum = {0, 0, 0};
+						}
+					}
+					if (q == std::string::npos) break;
+					p = q + 1;
+				}
+			}
+			static const int memory_every = getenv("OPENBG_DEBUG_MEMORY") ? std::max(1, atoi(getenv("OPENBG_DEBUG_MEMORY"))) : 0;
+			if (memory_every && fr % memory_every == 0) fprintf(stderr, "[memory %d] script arena %u MB, %zu objects\n", fr, world.memory().used() >> 20, world.scene_objects().size());
+			// OPENBG_DEBUG_TREE=<name>@<frame> prints the scene branches under objects of that name then.
+			if (const char *dt = getenv("OPENBG_DEBUG_TREE"); dt && strchr(dt, '@') && atoi(strchr(dt, '@') + 1) == fr) {
+				std::string name(dt, strchr(dt, '@'));
+				std::function<void(game::GameObject *, int)> dump = [&](game::GameObject *o, int depth) {
+					auto t = o->world().t;
+					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2]);
+					if (depth < 6) for (game::GameObject *ch : o->children) dump(ch, depth + 1);
+				};
+				std::function<void(game::GameObject *)> find = [&](game::GameObject *o) {
+					if (o->name == name) dump(o, 0);
+					else for (game::GameObject *ch : o->children) find(ch);
+				};
+				for (game::GameObject *r : world.scene_roots) find(r);
+			}
+			// OPENBG_DEBUG_REGISTRY=1 prints each registry value as it changes (testing unlocks).
+			static const bool debug_registry = getenv("OPENBG_DEBUG_REGISTRY") != nullptr;
+			if (debug_registry && world.registry != traced_registry) {
+				for (auto &[k, v] : world.registry) {
+					auto it = traced_registry.find(k);
+					if (it == traced_registry.end() || it->second != v) fprintf(stderr, "[registry %u] %s=%s\n", world.frame(), k.c_str(), v.c_str());
+				}
+				traced_registry = world.registry;
+			}
+		};
 		if (headless) {
 			// OPENBG_RECORD_AUDIO=<file>: what is heard, mixed offline (raw f32 stereo, 44100 Hz).
 			auto offline = std::make_unique<audio::Mixer>();
@@ -347,6 +461,7 @@ int main(int argc, char **argv) {
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
 				world.autopaused = app.autopaused();
 				world.tick(game::World::kFrameMs);
+				test_switches(fr);
 				offline->play_requests(world, view.player ? view.ear() : ear);
 				if (recording) {
 					offline->update_music(world);
@@ -563,55 +678,7 @@ int main(int argc, char **argv) {
 				view.draw(dw, dh, fr, shot != nullptr);
 				game_shown = view.has_arena();
 			}
-			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
-			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
-				for (game::GameObject *o : world.scene_objects()) {
-					if (o->fighter && o->user_controlled) world.set_user_controlled(*o, -1), o->autoplayed = true;
-				}
-			}
-			// OPENBG_KO=<frame>[,<frame>...]: every computer fighter loses all its health then (testing
-			// the end of a match).
-			if (const char *ko = getenv("OPENBG_KO")) {
-				for (const char *p = ko; *p;) {
-					if (atoi(p) == fr) {
-						game::GameObject *user = nullptr;
-						for (game::GameObject *o : world.scene_objects()) {
-							if (o->fighter && o->user_controlled) user = o;
-						}
-						for (game::GameObject *o : world.scene_objects()) {
-							if (o->fighter) fprintf(stderr, "[ko %d] %s %s at %.0f %.0f %.0f\n", fr, o->name.c_str(), o->user_controlled ? "player" : "computer", o->world().t[0], o->world().t[1], o->world().t[2]);
-						}
-						for (game::GameObject *o : world.scene_objects()) {
-							if (!o->fighter || o->user_controlled) continue;
-							for (game::GameObject *ch : o->children) {
-								if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
-								std::vector<uint8_t> args(16, 0);
-								uint32_t h = user ? user->handle : 0;
-								float dmg = -100000, stun = 0;
-								memcpy(&args[0], &h, 4), memcpy(&args[4], &dmg, 4), memcpy(&args[8], &stun, 4);
-								ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
-							}
-						}
-					}
-					const char *c = strchr(p, ',');
-					if (!c) break;
-					p = c + 1;
-				}
-			}
-			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
-			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
-			if (fr == quit_session) game::destroy_all_sessions(world);
-			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
-			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
-			if (fr == test_snapshot) {
-				for (game::Brain *b : world.brains()) {
-					std::vector<uint8_t> args(8);
-					if (b->call(world, "SubSessionCaptureSnapshot(class CCreature,class CCreature)", args)) {
-						fprintf(stderr, "test snapshot on %s\n", b->owner->name.c_str());
-						break;
-					}
-				}
-			}
+			test_switches(fr);
 			// The frame's captures (CRenderTargetImage::Capture): the scene from each camera into
 			// its image's 256 x 256 target.
 			for (auto &[img, cam_handle] : world.capture_requests) {
@@ -825,6 +892,10 @@ int main(int argc, char **argv) {
 		SDL_GL_DeleteContext(ctx);
 		SDL_DestroyWindow(win);
 		SDL_Quit();
+		if (shot) {
+			for (auto &l : world.log) printf("log: %s\n", l.c_str());
+			for (auto &[k, n] : world.missing()) printf("missing native: %s (%llu calls)\n", k.c_str(), (unsigned long long)n);
+		}
 	} catch (const std::exception &e) {
 		fprintf(stderr, "error: %s\n", e.what());
 		return 1;

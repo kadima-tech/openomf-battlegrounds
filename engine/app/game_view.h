@@ -93,6 +93,8 @@ private:
 	bool owners_set = false;
 	// Each drawn actor's inherited lighting owner (AssureLightable).
 	std::map<const game::GameObject *, const game::GameObject *> inherited_owner_;
+	const de::ObjectsFile *environment_tree_file_ = nullptr;
+	std::vector<bool> environment_tree_;  // the arena file's objects under its environment
 	bool gl_ready_ = false;
 };
 

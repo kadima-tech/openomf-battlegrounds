@@ -2638,6 +2638,7 @@ void AppManager::text(const std::string &t) {
 
 void AppManager::key(int sym, int scancode) {
 	last_scancode = scancode;
+	world.last_key_press_ms = world.system_ms();
 	// The impulses go first: the robot's pulse reaches its targets before the page's queued click.
 	if (int vk = virtual_key(sym, scancode)) world.impulses->key(vk, true, shift_held, ctrl_held);
 	world.impulses->flush();

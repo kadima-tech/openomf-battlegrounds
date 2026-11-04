@@ -425,8 +425,25 @@ void register_core_natives(World &w) {
 	reg("CScene::class CSession Session()", [](const NativeContext &c) {
 		c.ret_object(c.world.session ? c.world.session->obj : singleton(c.world, "Session", "Session"));
 	});
-	reg("CCreature::class CCreature Environment()",
-	    [](const NativeContext &c) { c.ret_object(singleton(c.world, "Environment", "Actor\\Creature\\Environment")); });
+	// DE_CCreature::Environment (Creature 0x15018f80): the last of its root scene's actors that is an
+	// environment.
+	reg("CCreature::class CCreature Environment()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || !in_scene(*o)) {
+			c.ret_object(nullptr);
+			return;
+		}
+		const GameObject *top = o;
+		while (top->parent) top = top->parent;
+		GameObject *session = c.world.scene_session_of(o);
+		GameObject *found = nullptr;
+		for (auto it = c.world.scene_roots.rbegin(); it != c.world.scene_roots.rend() && !found; ++it) {
+			GameObject *r = *it;
+			if (r->gui != top->gui || (!top->gui && c.world.scene_session_of(r) != session) || !in_scene(*r)) continue;
+			if (r->is("Actor\\Creature\\Environment")) found = r;
+		}
+		c.ret_object(found);
+	});
 	// Scene time is in milliseconds (scripts wait e.g. 200 between navigation commands); 60 frames/s.
 	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(scene_time(c)); });
 	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(true); });

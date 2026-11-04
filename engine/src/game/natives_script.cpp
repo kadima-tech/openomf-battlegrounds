@@ -21,6 +21,7 @@
 #include "game/descriptions.h"
 
 #include "de/value.h"
+#include "de/font.h"
 
 namespace game {
 
@@ -86,6 +87,26 @@ std::optional<std::vector<uint8_t>> value_payload(const GameObject *v) {
 	}
 }
 
+// A reference held inside a copied branch to an object of the branch it was copied from names
+// that object's copy (a Training pad's Activator switches its own pad, not the template).
+GameObject *copy_of_target(GameObject *holder, GameObject *t) {
+	for (GameObject *p = holder; p; p = p->parent) {
+		if (!p->copied || !p->file) continue;
+		for (const GameObject *a = t; a; a = a->parent) {
+			if (a->file != p->file || a->index != p->index) continue;
+			std::function<GameObject *(GameObject *)> find = [&](GameObject *o) -> GameObject * {
+				if (o->file == t->file && o->index == t->index) return o;
+				for (GameObject *c : o->children) {
+					if (GameObject *h = find(c)) return h;
+				}
+				return nullptr;
+			};
+			if (GameObject *c = find(p)) return c;
+		}
+	}
+	return t;
+}
+
 }  // namespace
 
 // Object values: Set*Value at run time, else the Value\\* data child of that name. A session
@@ -112,7 +133,7 @@ World::ObjectValue *World::object_value(GameObject *o, const std::string &name) 
 				for (auto &lists : reference_lists(data(), de::ObjectRef{v->file, v->index})) {
 					for (auto &l : lists) {
 						for (auto &r : l) {
-							if (GameObject *t = global_object(r)) val.objects.push_back(t->handle);
+							if (GameObject *t = global_object(r)) val.objects.push_back(copy_of_target(v, t)->handle);
 						}
 					}
 				}
@@ -166,6 +187,21 @@ void register_script_natives(World &w) {
 	reg("CObject::float MouseScreenPositionX()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_x); });
 	reg("CObject::float MouseScreenPositionY()", [](const NativeContext &c) { c.ret_f32(c.world.mouse_y); });
 	reg("CObject::float ScreenAspectRatio()", [](const NativeContext &c) { c.ret_f32(c.world.screen_aspect); });
+	// UnlockCaller (Core 2.123 0x201f8aa0): Unlock (vtable +0x13c) with id 0; 0x201f8ac0 passes the id.
+	reg("CDescription::Unlock()", [](const NativeContext &c) {
+		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, 0);
+	});
+	// UnlockAndNotifyCaller (Core 2.123 0x201f8b00): UnlockAndNotify(0, text) (0x201f9c20): a locked
+	// description is unlocked and says so in a "Feature Unlocked" notification, the text or else
+	// "<name> will now be available.", and the registry is saved.
+	reg("CDescription::UnlockAndNotify(string)", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || !o->file || !description_locked(c.world, {o->file, o->index}, 0)) return;
+		unlock_description(c.world, {o->file, o->index}, 0);
+		std::string text = c.arg_string(0);
+		if (text.empty()) text = o->name + " will now be available.";
+		if (c.world.notify_user) c.world.notify_user("Feature Unlocked", text);
+	});
 	reg("CDescription::Unlock(dword)", [](const NativeContext &c) {
 		if (GameObject *o = c.self(); o && o->file) unlock_description(c.world, {o->file, o->index}, c.arg<uint32_t>(0));
 	});
@@ -645,6 +681,10 @@ void register_script_natives(World &w) {
 		c.ret_object(top);
 	});
 	reg("CObject::dword SystemTime()", [](const NativeContext &c) { c.ret_u32(c.world.system_ms()); });
+	// IsUIManagerActiveCaller (Core 2.123 0x2004a4f0): DE_CUIManager::ActiveManager() != 0.
+	reg("CObject::bool IsUIManagerActive()", [](const NativeContext &c) { c.ret_bool(c.world.ui_manager_active && c.world.ui_manager_active()); });
+	// LastKeyPressedSystemTimeCaller (Core 2.123 0x2004a240): DE_GLOBAL::LastKeyPressTime.
+	reg("CObject::dword LastKeyPressedSystemTime()", [](const NativeContext &c) { c.ret_u32(c.world.last_key_press_ms); });
 	// DeleteThis: detach from the tree; references to it read as inactive.
 	auto remove = [](const NativeContext &c) {
 		if (GameObject *o = c.self()) c.world.destroy(o);
@@ -880,12 +920,47 @@ void register_script_natives(World &w) {
 		}
 	});
 	reg(tp + "SnapToRight()", [text](const NativeContext &c) { if (auto *t = text(c)) t->snap_right = true; });
+	// TextGetSizeCaller (Core 2.123 0x20130ca0): DE_CFlatText3::GetActualSize, the widest line by
+	// (lines - 1) x the line spacing + the font's height, in font units times the size.
+	reg(tp + "GetSize(class CVector)", [text](const NativeContext &c) {
+		auto *t = text(c);
+		uint32_t out = c.arg<uint32_t>(0);
+		if (!out) return;
+		float size[2] = {0, 0};
+		if (t) {
+			static std::map<std::pair<const de::World *, bool>, std::optional<de::Font>> fonts;
+			auto &f = fonts[{&c.world.data(), t->in_game_font}];
+			if (!f) {
+				try {
+					f = de::read_font(c.world.data(), t->in_game_font ? "Font_Metalic" : "Font_Ariel");
+				} catch (const std::exception &) {
+					f = de::Font{};
+				}
+			}
+			int lines = 1;
+			float line = 0;
+			for (unsigned char ch : t->text) {
+				if (ch == '\n') ++lines, line = 0;
+				if (ch == '\n' || ch == '\r') continue;
+				auto &g = f->glyphs[ch];
+				line += g.present ? g.x1 - g.x0 : 0.5f;
+				size[0] = std::max(size[0], line);
+			}
+			size[1] = float(lines - 1) * World::kTextLineSpacing + f->height;
+			size[0] *= t->height, size[1] *= t->height;
+		}
+		c.mem().set<float>(out, size[0]);
+		c.mem().set<float>(out + 4, size[1]);
+		c.mem().set<float>(out + 8, 0);
+	});
 	// CPrimitive (all kinds).
 	const std::string pr = "CPrimitiveGeneratorMesh::CPrimitive::";
 	reg(pr + "SetSortValue(int)", [text](const NativeContext &c) { if (auto *t = text(c)) t->sort = c.arg<int32_t>(0); });
 	reg(pr + "SetTexture(class CImage)", [text](const NativeContext &c) { if (auto *t = text(c)) t->texture = c.arg_object(0); });
 	reg(pr + "SetAsOverlay()", [text](const NativeContext &c) { if (auto *t = text(c)) t->overlay = true; });
 	reg(pr + "SetBlendUnsortedTranslucentAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = false; });
+	// PrimitiveSetBlendTranslucentAlphaCaller (Core 2.123 0x20130860): blend mode 3.
+	reg(pr + "SetBlendTranslucentAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = false, t->modulate = false; });
 	reg(pr + "SetBlendAddAlpha()", [text](const NativeContext &c) { if (auto *t = text(c)) t->additive = true, t->modulate = false; });
 	reg(pr + "SetBlendModulate()", [text](const NativeContext &c) { if (auto *t = text(c)) t->modulate = true, t->additive = false; });
 	auto set_color = [text](const NativeContext &c) {
