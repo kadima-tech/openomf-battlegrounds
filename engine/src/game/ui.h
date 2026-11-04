@@ -177,6 +177,8 @@ public:
 	void setup_controls(AppManager &app) override;
 	void click(AppManager &app, Control &c) override;
 	void draw(AppManager &app, std::vector<DrawItem> &out) override;
+	// Testing (OPENBG_HELP_CYCLE): show entry i as a click on its row would; its name, empty past the end.
+	std::string show_entry(AppManager &app, size_t i);
 
 private:
 	void choose(AppManager &app, const de::ObjectRef &d);

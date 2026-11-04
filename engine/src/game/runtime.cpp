@@ -1628,12 +1628,6 @@ void World::input_tick(uint32_t manager) {
 // DE_CTemporalElementSet::AdvanceTime (Core 0x70072090): every element, newest first.
 void World::advance(TemporalSet &set) {
 	auto elements = set.elements;  // a tick may add elements
-	const uint32_t outer_rate = advancing_rate;
-	advancing_rate = set.rate;
-	struct Restore {
-		uint32_t &r, v;
-		~Restore() { r = v; }
-	} restore{advancing_rate, outer_rate};
 	for (auto it = elements.rbegin(); it != elements.rend(); ++it) {
 		switch (it->kind) {
 		case Temporal::Creature:
@@ -1772,8 +1766,8 @@ void World::pass_scene(const GameObject *session, uint32_t real_ms) {
 	double global = 0;
 	uint32_t left = scene_step(c, real_ms, global);
 	const uint32_t now_global = global_ms();
-	// The set whose next tick comes first (the first made, on a tie) advances, the clock standing at
-	// that tick, until the next tick lies beyond what passes.
+	// The set whose next tick comes first (the first made, on a tie) advances, until the next tick
+	// lies beyond what passes; while its elements tick the clock stands at its last tick (+0x38).
 	for (;;) {
 		register_temporals();
 		TemporalSet *first = nullptr;
@@ -1782,9 +1776,11 @@ void World::pass_scene(const GameObject *session, uint32_t real_ms) {
 		}
 		if (!first || first->next - scene_ms_ > left) break;
 		left -= first->next - scene_ms_;
-		scene_ms_ = first->next;
+		const uint32_t at = first->next;
+		scene_ms_ = at - first->rate;
 		first->next += first->rate;
 		advance(*first);
+		scene_ms_ = at;
 		forces->tick();
 		start_pending_brains();
 	}
@@ -1841,11 +1837,13 @@ void World::tick_gui(int view, uint32_t ms) {
 		}
 		if (!first || first->next - now > left) break;
 		left -= first->next - now;
-		now = first->next;
+		const uint32_t at = first->next;
+		now = at - first->rate;
 		first->next += first->rate;
 		// Scene().Add from a GUI script adds to that script's scene.
 		std::vector<GameObject *> roots = scene_roots;
 		advance(*first);
+		now = at;
 		start_pending_brains();
 		for (GameObject *r : scene_roots) {
 			if (!r->gui && std::find(roots.begin(), roots.end(), r) == roots.end()) r->gui = true, r->view = view;
@@ -2210,6 +2208,16 @@ uint32_t World::new_instance(vm::Executor &ex, uint32_t class_index, uint32_t co
 	std::string name = cls && class_index < cls->code.classes.size() ? cls->code.classes[class_index].name : "";
 	return make_instance(name, count);
 }
+
+// DE_CPCNodeClass::NewCopyInstance (op 42): `source` copied, an instance of the class it names.
+uint32_t World::new_local_instance(vm::Executor &ex, uint32_t class_index, uint32_t source) {
+	uint32_t a = vm::Host::new_local_instance(ex, class_index, source);
+	const vm::ScriptClass *cls = ex.current_class();
+	if (cls && class_index < cls->code.classes.size()) instance_classes_[a] = cls->code.classes[class_index].name;
+	return a;
+}
+
+void World::destroy_instance(vm::Executor &, uint32_t instance) { instance_classes_.erase(instance); }
 
 uint32_t World::make_instance(const std::string &name, uint32_t count) {
 	uint32_t n = count ? count : 1;

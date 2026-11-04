@@ -16,10 +16,16 @@ struct Sound {
 	int rate = 22050, channels = 1;
 	// DE_CStreamNoise::Length: the whole file's bytes x 1000 / nAvgBytesPerSec (integer ms).
 	uint32_t length_ms = 0;
+	// The RIFF file's bytes and a sample frame's: a buffer's PlayProgress is its write cursor over
+	// file bytes - 44 (DE_CDirectXSpeakerElement::PlayProgress).
+	uint32_t file_bytes = 0;
+	int block_align = 2;
 	std::vector<int16_t> samples;  // interleaved
 	std::vector<ObjectRef> alternates;
 };
 
+// Its contents and alternates only (any noise, a DirectMusic segment too).
+Sound read_noise(const World &w, const ObjectRef &noise);
 // Throws FormatError when the object has no decodable samples.
 Sound read_sound(const World &w, const ObjectRef &noise);
 

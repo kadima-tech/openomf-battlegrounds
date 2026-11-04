@@ -534,6 +534,7 @@ int main(int argc, char **argv) {
 				offline = std::make_unique<audio::Mixer>();
 				offline->open_offline(44100);
 			}
+			audio::Mixer speakers;  // without a recording: the speakers only
 			double audio_carry = 0;
 			for (int fr = 0; fr < frames; ++fr) {
 				if (fr == spawn_frame) {
@@ -555,6 +556,8 @@ int main(int argc, char **argv) {
 					int n = int(audio_carry);
 					audio_carry -= n;
 					offline->pump(n);
+				} else {
+					speakers.update_speakers(world, ear_of_player());
 				}
 				world.sound_requests.clear();
 				// OPENBG_WATCH="RightPunchMediumHitDetector": print that actor's world position and

@@ -1753,6 +1753,13 @@ void DescriptionSelector::select(AppManager &app, int i) {
 	}
 }
 
+std::string DescriptionSelector::show_entry(AppManager &app, size_t i) {
+	if (i >= entries_.size()) return {};
+	if (list_) list_->select(int(i), false);
+	select(app, int(i));
+	return entries_[i].info().name;
+}
+
 void DescriptionSelector::choose(AppManager &app, const de::ObjectRef &d) {
 	chosen = d;
 	if (d && d.info().class_path == "Description\\Pilot") app.last_pilot = d;

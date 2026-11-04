@@ -6,6 +6,7 @@
 #include <exception>
 
 #include "de/sound.h"
+#include "de/value.h"
 #include "game/session.h"
 
 namespace game {
@@ -24,14 +25,92 @@ de::ObjectRef reference_at(const de::World &data, const GameObject &o, size_t ch
 
 }  // namespace
 
+// [unique actor property][speaker: name, Volume (advanced reference), loop | v2 + autoplay |
+// v3 + a frequency reference it drops | v4 + finish | v5 + track | v6 loop, autoplay, finish,
+// track, squeezed 3D mode, frequency].
+static void read_speaker_contents(const GameObject &s, MusicSystem::Speaker &sp) {
+	if (!s.file) return;
+	try {
+		de::Contents c(s.file->object_data(s.file->objects()[s.index]).contents);
+		c.seek(de::begin_chunk(c).end);
+		de::Chunk ch = de::begin_chunk(c);
+		const uint32_t name = c.u32();
+		c.seek(c.pos() + name);
+		if (ch.version < 1 || ch.version > 6) return;
+		sp.volume = de::read_embedded_float(c).value;
+		sp.loop = c.boolean();
+		if (ch.version >= 2) sp.autoplay = c.boolean();
+		if (ch.version >= 3 && ch.version <= 5) de::read_embedded_float(c);
+		if (ch.version >= 4) sp.finish = c.boolean();
+		if (ch.version >= 5) sp.track = c.boolean();
+		if (ch.version == 6) {
+			sp.mode = c.squeezed();
+			sp.frequency = c.f32();
+		}
+		if (sp.frequency == 0) sp.frequency = 1;
+		sp.play_pending = sp.autoplay;
+	} catch (const std::exception &) {
+	}
+}
+
 MusicSystem::Speaker &MusicSystem::speaker(GameObject *s) {
 	Speaker &sp = speakers_[s];
 	if (!sp.read && s) {
 		sp.read = true;
 		// UniqueActorProperty\Speaker: references chunk 2, list 1 is its noise.
 		if (de::ObjectRef n = reference_at(w_.data(), *s, 2, 1)) sp.active = sp.initial = w_.global_object(n);
+		read_speaker_contents(*s, sp);
+		// ObjProcessReferences (Core 2.123 0x20222130) runs SetActiveNoise on the data's noise.
+		if (GameObject *n = sp.active) {
+			sp.active = nullptr;
+			set_active_noise(s, n, true);
+		}
 	}
 	return sp;
+}
+
+const de::Sound &MusicSystem::noise_info(GameObject *noise) {
+	auto it = info_.find(noise);
+	if (it != info_.end()) return it->second;
+	de::Sound s;
+	try {
+		s = de::read_noise(w_.data(), {noise->file, noise->index});
+	} catch (const std::exception &) {
+	}
+	return info_.emplace(noise, std::move(s)).first->second;
+}
+
+int MusicSystem::draw(bool loading) {
+	if (!loading) return crt_rand();
+	// The draws a speaker makes as it loads: a stream of their own (FINDINGS 314).
+	load_rand_ = load_rand_ * 214013u + 2531011u;
+	return int(load_rand_ >> 16 & 0x7fff);
+}
+
+void MusicSystem::set_active_noise(GameObject *s, GameObject *noise, bool loading) {
+	Speaker &sp = speaker(s);
+	if (!noise || !noise->is("Noise2")) {
+		sp.active = sp.to_play = nullptr;
+		return;
+	}
+	if (sp.active != noise) {
+		sp.play_pending = sp.autoplay;
+		sp.active = noise;
+	}
+	// DE_CNoise::GetNoiseToPlay (0x2021d4e0): an alternate with the alternate chance, by
+	// MATH::Rand(100.0f) and MATH::Rand(count).
+	sp.to_play = noise;
+	const de::Sound *info = &noise_info(noise);
+	if (!info->alternates.empty() && float(draw(loading)) * 100.0f / 32768.0f < info->alternate_chance) {
+		int k = draw(loading) * int(info->alternates.size()) / 32768;
+		if (GameObject *a = w_.global_object(info->alternates[size_t(k)])) {
+			sp.to_play = a;
+			info = &noise_info(a);
+		}
+	}
+	// MATH::CenterRand(v) = rand() v / 32768 - v / 2; the product is capped at 1.5.
+	float center = float(draw(loading)) * info->frequency_variance / 32768.0f - info->frequency_variance * 0.5f;
+	sp.play_frequency = std::min(1.5f, (center + 1.0f) * sp.frequency * info->frequency);
 }
 
 GameObject *MusicSystem::music_speaker() {
@@ -129,34 +208,47 @@ void register_music_natives(World &w) {
 		GameObject *s = c.self();
 		c.ret_object(s ? c.world.music->speaker(s).active : nullptr);
 	});
+	// A speaker trades with its element in the app's mixer (Mixer::update_speakers); the music
+	// player's speaker plays its segments through the music player.
+	auto is_music = [](const NativeContext &c, GameObject *s) { return s == c.world.music->music_speaker(); };
 	reg("CSpeaker::SetActiveNoise(class CNoise)", [](const NativeContext &c) {
-		if (GameObject *s = c.self()) c.world.music->speaker(s).active = c.arg_object(0);
-	});
-	reg("CSpeaker::bool IsPlaying()", [](const NativeContext &c) {
 		GameObject *s = c.self();
-		if (s) c.world.music->play_progress(s);
+		if (!s) return;
+		c.world.music->set_active_noise(s, c.arg_object(0));
+	});
+	reg("CSpeaker::bool IsPlaying()", [is_music](const NativeContext &c) {
+		GameObject *s = c.self();
+		if (s && is_music(c, s)) c.world.music->play_progress(s);
 		c.ret_bool(s && c.world.music->speaker(s).playing);
 	});
 	// PlayProgressCaller (Core 2.123 0x20221830): +0xd4.
-	reg("CSpeaker::float PlayProgress()", [](const NativeContext &c) {
+	reg("CSpeaker::float PlayProgress()", [is_music](const NativeContext &c) {
 		GameObject *s = c.self();
-		c.ret_f32(s ? c.world.music->play_progress(s) : 0.0f);
+		c.ret_f32(!s ? 0.0f : is_music(c, s) ? c.world.music->play_progress(s) : c.world.music->speaker(s).progress);
 	});
 	// SetVolumeCaller (Core 2.123 0x20221770): the Volume value (+0x9c) takes it.
 	reg("CSpeaker::SetVolume(float)", [](const NativeContext &c) {
 		if (GameObject *s = c.self()) c.world.music->speaker(s).volume = c.arg<float>(0);
 	});
-	reg("CSpeaker::Play()", [](const NativeContext &c) {
+	reg("CSpeaker::Play()", [is_music](const NativeContext &c) {
 		GameObject *s = c.self();
 		if (!s) return;
-		c.world.music->play(s);
 		auto &sp = c.world.music->speaker(s);
+		if (!is_music(c, s)) {
+			sp.play_pending = true;
+			return;
+		}
+		c.world.music->play(s);
 		if (kDebug) fprintf(stderr, "[music %u] play %s/%s (mood %d)\n", c.world.frame(), sp.active && sp.active->file ? sp.active->file->master().name.c_str() : "-", sp.active ? sp.active->name.c_str() : "-", sp.mood);
 	});
-	reg("CSpeaker::Stop()", [](const NativeContext &c) {
+	reg("CSpeaker::Stop()", [is_music](const NativeContext &c) {
 		GameObject *s = c.self();
 		if (!s) return;
 		auto &sp = c.world.music->speaker(s);
+		if (!is_music(c, s)) {
+			sp.stop_pending = true;
+			return;
+		}
 		if (kDebug && sp.playing) fprintf(stderr, "[music %u] stop\n", c.world.frame());
 		sp.playing = false;
 		++sp.serial;

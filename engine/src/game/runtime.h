@@ -371,6 +371,7 @@ struct Brain {
 	std::vector<std::string> behavior_names;
 	bool started = false;  // its entry has been run up to its first wait (activation)
 	bool initial_tick = true;  // ClassExecutor +0x48: its entry runs as the scene adds it
+	int states_at_once = -1;  // ClassExecutor +0x4c (IsExecuteStatesFromAllInstant); -1 not read from one
 	// Its ClassExecutor's interval (+0x44, ms): a temporal of that rate (DE_CClassExecutorInstance::
 	// Setup), 0 none. A creature's behaviour executor is ticked by the creature instead.
 	uint32_t interval = 0;
@@ -550,7 +551,6 @@ public:
 	static constexpr float kTickMs = 16;
 	// The clock of the scene being passed or updated (outside a frame, the current session's).
 	float scene_ms() const { return float(scene_ms_); }
-	bool scene_ms_held() const { return scene_ms_set_; }
 	// The VCR's TemporalMoveToScale target and TemporalPassTime (Core 0x700788b0 / 0x70078bb0) on the
 	// replayed session's scene, handed to its temporal master each frame; a negative pass goes back.
 	float time_scale = 1;
@@ -596,8 +596,6 @@ public:
 	// DE_CScene +0x158: re-simulating (TemporalUpdate's deferred SetTimes), so creature ticks leave
 	// their command managers alone.
 	bool temporal_updating = false;
-	// The rate of the set advancing now (0 between advances): its ticks see DE_CScene::Time() one rate back.
-	uint32_t advancing_rate = 0;
 	// The scene's delta-tick list (+0x70): creatures with no tick rate whose +0x1e0 is set.
 	std::vector<uint32_t> delta_creatures;
 	// The GUI's own scenes: the top control's (GameObject::view 0) and a GUI scene viewer's (view 1,
@@ -928,6 +926,8 @@ public:
 	uint32_t global_entry(vm::Executor &ex, uint32_t index) override;
 	uint32_t final_instance(vm::Executor &ex, uint32_t index) override;
 	uint32_t new_instance(vm::Executor &ex, uint32_t class_index, uint32_t count) override;
+	uint32_t new_local_instance(vm::Executor &ex, uint32_t class_index, uint32_t source) override;
+	void destroy_instance(vm::Executor &ex, uint32_t instance) override;
 	// A native value-class instance, initialised as its constructor would (CAttackInfo defaults).
 	uint32_t make_instance(const std::string &class_name, uint32_t count);
 	void reset_attack_info(uint32_t block);

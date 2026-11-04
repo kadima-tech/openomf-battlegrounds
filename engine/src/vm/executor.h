@@ -64,6 +64,8 @@ public:
 	virtual uint32_t new_local_instance(Executor &, uint32_t index, uint32_t source);
 	// CloseStack: an instance SetupStack made for a frame that has closed.
 	virtual void close_instance(Executor &, uint32_t /*instance*/) {}
+	// The class's destroy (vtable +0xd4) on an op 42 copy as its frame ends.
+	virtual void destroy_instance(Executor &, uint32_t /*instance*/) {}
 	// Behavior interfaces (ops 23-25, 27, 29, 37, 88): handles to another brain's behavior.
 	virtual bool interface_valid(Executor &, uint32_t /*iface*/) { return false; }
 	virtual uint32_t interface_global_id(Executor &, uint32_t /*iface*/) { return 0; }
@@ -147,6 +149,7 @@ private:
 		ScriptMethod *method;
 		bool sync;          // return to the native caller when this frame finishes
 		std::vector<uint32_t> local_refs;  // ops 20-22
+		std::vector<uint32_t> local_instances;  // op 42 copies (DE_CExecuteInfo +0x10)
 	};
 	struct VarParam {
 		int32_t value;

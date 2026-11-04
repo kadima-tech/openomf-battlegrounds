@@ -75,6 +75,7 @@ void Executor::close_frame(const Frame &f) {
 		if (ci.flag || ci.value + 4 > size) continue;
 		if (uint32_t a = mem_.get<uint32_t>(stack_ + f.base + ci.value)) host_.close_instance(*this, a);
 	}
+	for (auto it = f.local_instances.rbegin(); it != f.local_instances.rend(); ++it) host_.destroy_instance(*this, *it);
 }
 
 void Executor::close_frames(size_t keep) {
@@ -366,7 +367,9 @@ int Executor::continue_execution() {
 			}
 			case 42: {  // local instance: class, dst slot, source slot (layout per case 0x2a)
 				uint32_t idx = u32(), dst = u32();
-				set<uint32_t>(dst, host_.new_local_instance(*this, idx, get<uint32_t>(dst)));
+				uint32_t a = host_.new_local_instance(*this, idx, get<uint32_t>(dst));
+				set<uint32_t>(dst, a);
+				frames_.back().local_instances.push_back(a);
 				break;
 			}
 			case 62: {  // assign ref member

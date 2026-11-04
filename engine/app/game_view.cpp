@@ -298,7 +298,11 @@ void GameView::load_arena(const std::string &stem) {
 // The session's environment in the scene: its file is the arena.
 std::string GameView::find_arena() const {
 	for (game::GameObject *o : world.scene_objects()) {
-		if (o->file && o->class_path == "Actor\\Creature\\Environment" && shown(o)) return o->file->master().name;
+		if (!o->file || o->class_path != "Actor\\Creature\\Environment" || !shown(o)) continue;
+		// The file's stem: Volcano's master object is named "Volcanoe".
+		for (auto &[stem, f] : world.data().files()) {
+			if (f.get() == o->file) return stem;
+		}
 	}
 	return {};
 }

@@ -116,7 +116,7 @@ struct StateManager {
 
 // A tick-based creature's clock in a replay (DE_CCreature +0x1d4 is GameObject::creature_ticks).
 struct Clock {
-	uint32_t base = 0;       // +0x1d8, the creation time, set once: tick k runs at base + (k + 1) x rate
+	uint32_t base = 0;       // +0x1d8, the creation time, set once: tick k sees Time() = base + k x rate
 	int mode = 0;            // +0x2fc: 2 held since the clock went back
 	uint32_t until = 0;      // +0x1e4
 	uint32_t saved = 0;      // +0x1e8: the tick it was at when the hold began
@@ -595,6 +595,7 @@ std::vector<Brain *> brains_of(World &w, const GameObject &o) {
 // DE_CClassExecutor +0x4c (contents v4/v5, default 1; IsExecuteStatesFromAllInstant 0x70146440):
 // the brain runs a restored state at once.
 bool executes_states_instantly(World &w, const Brain &b) {
+	if (b.states_at_once >= 0) return b.states_at_once != 0;
 	if (!b.owner) return true;
 	std::vector<GameObject *> around(b.owner->children);
 	around.insert(around.end(), b.owner->components.begin(), b.owner->components.end());
@@ -856,7 +857,7 @@ void unpack_state(World &w, Packer &p, GameObject &o, uint32_t t) {
 		}
 	};
 	for (Brain *b : run) {
-		if (creature) w.at_scene_ms(clock ? clock->base + (t + 1) * rate : t, [&] { pulse(b); });
+		if (creature) w.at_scene_ms(clock ? clock->base + t * rate : t, [&] { pulse(b); });
 		else pulse(b);
 	}
 	if (!creature) return;
@@ -1092,7 +1093,7 @@ Clock &clock_of(World &w, GameObject &o, uint32_t rate, int64_t tick_ms = -1) {
 		uint32_t now = uint32_t(w.scene_ms());
 		int64_t at = tick_ms >= 0 ? tick_ms : now - now % rate;
 		// DE_CCreature::ObjPrepare: the creation time is never 0.
-		it->second.base = uint32_t(std::max<int64_t>(1, at - int64_t(o.creature_ticks + (tick_ms >= 0 ? 1 : 0)) * rate));
+		it->second.base = uint32_t(std::max<int64_t>(1, at - int64_t(o.creature_ticks) * rate));
 	}
 	return it->second;
 }
@@ -1245,16 +1246,35 @@ void rewind_time(World &w, GameObject &o, Clock &c, uint32_t to) {
 // creature re-ticks up to it, at most 100 ticks; ahead of it, it rewinds.
 void set_time(World &w, GameObject &o, uint32_t ms) {
 	uint32_t rate = w.creature_rate(&o);
-	if (!rate) return;
+	if (!rate) {
+		Clock &c = rw(w).clocks[o.handle];
+		// Never ticked: DeltaTick(0), then its state at or before the time.
+		if (!c.ticked) {
+			if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s has never ticked: one delta tick at %u ms\n", w.frame(), o.name.c_str(), ms);
+			creature_delta_tick(w, o);
+			c.ticked = true;
+			if (StateManager *sm = manager_of(w, &o)) {
+				if (auto st = newest_state(*sm, 0, ms)) restore(w, *sm, *st);
+			}
+		}
+		o.creature_ticks = ms;
+		return;
+	}
 	Clock &c = clock_of(w, o, rate);
-	// Within a tick the original's Time() is the set's last tick (+0x38), one rate behind ours.
-	const uint32_t lag = w.scene_ms_held() ? rate : w.advancing_rate;
-	ms = ms > lag ? ms - lag : 0;
 	if (ms < c.base) {
 		o.creature_ticks = 0;
 		return;
 	}
-	uint32_t tick = (ms - c.base) / rate, at = c.base + o.creature_ticks * rate;
+	uint32_t tick = (ms - c.base) / rate;
+	if (!c.ticked) {
+		// Never ticked (+0x20c): it ticks once, then takes its state at or before that tick.
+		if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s has never ticked: one tick at %u ms\n", w.frame(), o.name.c_str(), uint32_t(w.scene_ms()));
+		w.retick(o, uint32_t(w.scene_ms()));
+		if (StateManager *sm = manager_of(w, &o)) {
+			if (auto st = newest_state(*sm, 0, tick)) restore(w, *sm, *st);
+		}
+	}
+	uint32_t at = c.base + o.creature_ticks * rate;
 	if (ms <= at) {
 		if (tick < o.creature_ticks) rewind_time(w, o, c, tick);
 		return;
@@ -1264,7 +1284,7 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 		n = 100;
 		o.creature_ticks = tick - 100;
 	}
-	for (; n; --n) retick(w, o, c.base + (o.creature_ticks + 1) * rate);
+	for (; n; --n) retick(w, o, c.base + o.creature_ticks * rate);
 	o.creature_ticks = tick;
 	c.until = tick;
 }
@@ -1728,7 +1748,10 @@ bool replay_driven(World &w, const GameObject *o) {
 	auto &R = rw(w);
 	if (!R.record || R.record->recording) return false;
 	for (; o; o = o->component_owner && o->component_owner != o ? o->component_owner : o->parent) {
-		if (StateManager *sm = manager_of(w, o)) return sm->replay;
+		StateManager *sm = manager_of(w, o);
+		// DE_CStateManager::ObjPrepare joins the record before the owner's executors run their entries.
+		if (!sm && !o->is("StateManager") && !in_gui(*o) && has_state_manager(*o) && in_session(w, o)) sm = &join(w, *const_cast<GameObject *>(o));
+		if (sm) return sm->replay;
 	}
 	return false;
 }
