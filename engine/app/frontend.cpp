@@ -402,6 +402,16 @@ int main(int argc, char **argv) {
 					p = c + 1;
 				}
 			}
+			// OPENBG_HELP_CYCLE="<frame>,<every>": from that frame the open description selector shows its entries in turn.
+			if (const char *hc = getenv("OPENBG_HELP_CYCLE")) {
+				int start = 0, every = 1;
+				if (sscanf(hc, "%d,%d", &start, &every) == 2 && every > 0 && fr >= start && (fr - start) % every == 0) {
+					if (auto *sel = dynamic_cast<game::ui::DescriptionSelector *>(app.current.get())) {
+						std::string n = sel->show_entry(app, size_t((fr - start) / every));
+						if (!n.empty()) fprintf(stderr, "[help %d] entry %d: %s\n", fr, (fr - start) / every, n.c_str());
+					}
+				}
+			}
 			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
 			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
 			if (fr == quit_session) game::destroy_all_sessions(world);
