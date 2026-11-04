@@ -103,6 +103,7 @@ struct ActorInfo {
 	// ObjInitContents' defaults stand for older versions.
 	int32_t position_mode = 2;
 	uint32_t flags = 6;
+	bool rendered = true;  // v2+ its fourth BOOL (+0x108, SetRendered / SetUnrendered)
 };
 // The detail level (the registry's high-detail BOOL, default 1, global 0x7035dec0).
 inline bool g_high_detail = true;

@@ -960,7 +960,6 @@ struct SplashTarget {
 	const void *light_owner;
 	bool position_static;
 	const void *instance;  // with the target, which copy of its mesh this is
-	bool keyed = true;     // false: a shared mesh's target with no instance to tell the copies apart
 };
 
 SplashTarget splash_target(const ProjectorTarget &t, const de::Transform &frame, bool baked, const void *instance = nullptr) {
@@ -1010,7 +1009,8 @@ void update_touches(LightTouches &s, const SceneLight &l) {
 		++s.search;
 		s.cleared = false;
 	};
-	if (l.intensity <= 0) {
+	// IsVisible (vtable +0x80): its render actor's +0xa8, the light's actor's rendered flag.
+	if (!l.rendered || l.intensity <= 0) {
 		s.cleared = true;
 		return;
 	}
@@ -1066,7 +1066,7 @@ void update_touches(LightTouches &s, const SceneLight &l) {
 void update_light_touches() {
 	static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
 	static uint32_t updated = 0;
-	if (updated == g_lighting.serial) return;
+	if (updated == g_lighting.serial || !g_lighting.enabled) return;
 	updated = g_lighting.serial;
 	for (const SceneLight &l : g_lighting.lights) {
 		if (!l.id.first) continue;
@@ -1087,7 +1087,6 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 	static const bool debug = getenv("OPENBG_DEBUG_PROJECTORS") != nullptr;
 	update_light_touches();
 	for (const SplashTarget &st : targets) {
-		if (!st.keyed) continue;
 		auto &since = g_target_since[{st.target, st.instance}];
 		if (!since.first || since.second != st.target->vao) since = {g_lighting.serial, st.target->vao};
 	}
@@ -1143,7 +1142,7 @@ void draw_splashes(GLuint prog, const std::vector<SplashTarget> &targets) {
 		for (auto &st : targets) {
 			const ProjectorTarget &t = *st.target;
 			if ((l.reaches_all && l.position_static && st.position_static) || !l.lights(st.light_owner)) continue;
-			LightTouches::Found *found = state && st.keyed ? &state->found[{&t, st.instance}] : nullptr;
+			LightTouches::Found *found = state ? &state->found[{&t, st.instance}] : nullptr;
 			if (found && found->search == state->search && found->vao == t.vao) {
 				faces = found->faces;
 			} else if (found && g_target_since[{&t, st.instance}].first > state->search_serial) {
@@ -1683,7 +1682,6 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				ProjectorTarget &t = mt->second;
 				t.light_owner = a.light_owner, t.position_static = false;
 				splash.push_back(splash_target(t, a.world, false, a.instance));
-				splash.back().keyed = a.instance != nullptr;
 				continue;
 			}
 			auto &placed = placed_targets_[a.instance];

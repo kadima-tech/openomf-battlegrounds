@@ -773,7 +773,7 @@ int main(int argc, char **argv) {
 				}
 				bool door = false;
 				for (const game::GameObject *p = o; p && !door; p = p->parent) door = p == app.transition;
-				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}});
+				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}, {}, o});
 			}
 			auto draw_picker = [&] {
 				render::Lighting gui_lighting = render::g_lighting;
@@ -797,7 +797,7 @@ int main(int argc, char **argv) {
 					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;
 					bool live = true;
 					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
-					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}});
+					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}, {}, o});
 				}
 				actors_r.draw(world.data(), pitems, pvp, ceye);
 				// The robot creature: its stripped model, undeformed, painted by its pilot through the

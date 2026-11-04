@@ -431,7 +431,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	// The frame's lights and their lighting owners (scene_lights.h).
 	render::FrameLights frame_lights = render::collect_lights(world, fr, [this](const game::GameObject *o) { return shown(o); });
-	if (!world.lighting_enabled) render::g_lighting.lights.clear();  // Preferences\Renderer\Lighting Enabled
+	if (!world.lighting_enabled) render::g_lighting.lights.clear(), render::g_lighting.enabled = false;  // Preferences\Renderer\Lighting Enabled
 	// The applied Shadow Type (default 0), only with the lights on.
 	const int shadow_type = world.lighting_enabled ? world.shadow_type : 0;
 	shadows_r.append(render::g_lighting);

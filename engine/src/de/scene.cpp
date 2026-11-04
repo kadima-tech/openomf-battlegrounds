@@ -295,8 +295,11 @@ ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o) {
 	for (auto &v : a.local.r) {
 		v = c.f32();
 	}
+	for (int k = 0; k < 4; ++k) {
+		bool b = c.boolean();
+		if (k == 3) a.rendered = b;
+	}
 	if (ch.version >= 4) {
-		for (int k = 0; k < 4; ++k) c.boolean();
 		a.position_mode = c.i32();
 		if (ch.version >= 5) a.flags = c.u32();
 	}

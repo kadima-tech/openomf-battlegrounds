@@ -142,6 +142,7 @@ struct Lighting {
 	std::vector<SceneLight> lights;
 	uint32_t serial = 0;  // a new one each time the lights are gathered (a renderer's frame)
 	int renderer = 0;     // which view gathered them: each renderer keeps its own lights
+	bool enabled = true;  // Lighting Enabled: off, the renderer updates none of its lights
 };
 // The frame's lights; the app fills it before drawing.
 extern Lighting g_lighting;
