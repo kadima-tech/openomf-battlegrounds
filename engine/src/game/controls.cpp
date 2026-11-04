@@ -388,6 +388,12 @@ void Button::paint_self(Painter &p) {
 		p.bevel(x0, y0, x1, y1, b, b, dn);
 		float l = dn ? x0 + 1.5f * b : x0 + b, r = dn ? x1 - b : x1 - 1.5f * b;
 		float t = dn ? y0 + b : y0 + 1.5f * b, bt = dn ? y1 - 1.5f * b : y1 - b;
+		// SetVisualFace (2.123 Core 0x200c35b0, per state 0x200c4260): the label becomes a frameless
+		// control filling the holder, its fill the tint over the image.
+		if (const de::ObjectRef &img = state && face_down ? face_down : face_up) {
+			p.image(img, l, t, r, bt, face_tint);
+			break;
+		}
 		float hh = std::min(label_px, bt - t);
 		p.text(label, (l + r) / 2, (t + bt) / 2 - hh / 2, hh, label_color, true);
 		break;
@@ -681,6 +687,15 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 				p.text(t, tx, y + (row_h() - text_px) / 2, text_px, c);
 				continue;
 			}
+			if (r.check) {
+				// NewCheck (2.123 Core 0x200c39b0): CreateCheckButtonControl's box and mark, the label after.
+				float s = gui.vx(18), bx0 = body_->x0 + 2, by0 = y + (row_h() - s) / 2;
+				p.bevel_filled(bx0, by0, bx0 + s, by0 + s, 1, 1, true, theme::kWindowBack);
+				bool on = *r.check != 0 || down_row_ == i;
+				if (on) p.image(gui.image("CheckMark"), bx0 + 1, by0 + 1, bx0 + s - 1, by0 + s - 1, theme::kText);
+				if (!r.cells.empty()) p.text(r.cells[0], bx0 + gui.vx(4) + s, y + (row_h() - text_px) / 2, text_px, r.color);
+				continue;
+			}
 			// CColEntry::ShowAsSelected (0x700a7510) and the hover (control 0x25): the highlight's alpha.
 			if (i == selected) p.rect(body_->x0, y, body_->x1, y + row_h(), theme::kListSelection);
 			else if (i == hover && r.selectable) p.rect(body_->x0, y, body_->x1, y + row_h(), {0, 0, 0.5f, 0.5f});
@@ -690,7 +705,7 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 				Rgba c = r.color;
 				if (!r.selectable) c.a *= 0.5f;
 				p.push_clip(x, y, x + cw, y + row_h());
-				p.text(r.cells[k], x + gui.vx(3), y + (row_h() - text_px) / 2, text_px, c);
+				p.text(r.cells[k], x + (k == 0 && r.text_x >= 0 ? r.text_x : gui.vx(3)), y + (row_h() - text_px) / 2, text_px, c);
 				p.pop_clip();
 				x += cw;
 			}
@@ -720,12 +735,18 @@ List::List(Gui &g) : Ctl(g), text_px(g.vy(16)) {
 	};
 	body_->on_up = [this, part](float x, float y, bool over) {
 		int r = row_at(y);
+		// The check button fills its entry and takes the click (DE_CButtonControl3d::Click, a toggle).
+		if (over && r >= 0 && r == down_row_ && rows[size_t(r)].check) {
+			down_row_ = -1;
+			*rows[size_t(r)].check = !*rows[size_t(r)].check;
+			return;
+		}
 		if (over && r >= 0 && r == down_row_ && part(x, r) == 1 && rows[size_t(r)].selectable && r != selected) select(r);
 		down_row_ = -1;
 	};
 	body_->on_move = [this, part](float x, float y) {
 		int r = row_at(y);
-		hover = part(x, r) == 1 ? r : -1;
+		hover = part(x, r) == 1 && (r < 0 || !rows[size_t(r)].check) ? r : -1;
 	};
 	body_->on_leave = [this] { hover = -1; };
 }

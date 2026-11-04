@@ -33,7 +33,8 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   `engine/build/openbg source/patched/v2123/Data`. The main menu, the Quit page and Single
   Player's Choose Match work, and a chosen match's session runs its Choose Pilot / Choose Creature
   screens; the matches themselves (sub-sessions) are next. Other screens say they are not ported yet.
-  `--launch Training` starts a match at once, `--choose Elizabeth,Jaguar` has its screens pick those, and
+  `--launch Training` starts a match at once (`--host "Last Man Standing"` as a joinable session, whose Choose Cast lists the
+  Available Arenas), `--choose Elizabeth,Jaguar` has its screens pick those, and
   `--headless N` runs without a window and lists the natives still missing. `--screenshot out.png --frames N` with
   `MOUSE="0.5,0.93@50;down@52;up@54"` (fractions of the 4:3 menu area) scripts the mouse.
   Screenshot and headless runs depend only on their inputs (data, `MOUSE`, `HOLD`, flags and switches):

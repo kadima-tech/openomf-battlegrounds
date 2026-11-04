@@ -347,6 +347,8 @@ public:
 		bool selectable = true;
 		Rgba color = theme::kText;
 		int parent = -1;  // tree: the row it is listed under
+		int *check = nullptr;  // the entry is a check button bound to it, its first cell the label
+		float text_x = -1;     // the first cell's inset, pixels (-1: VPU 3)
 	};
 	std::vector<Column> columns;
 	std::vector<Row> rows;
