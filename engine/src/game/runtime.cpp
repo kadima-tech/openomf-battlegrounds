@@ -451,6 +451,7 @@ GameObject *World::create_child(GameObject *parent, const std::string &name, con
 GameObject *World::copy_tree(const GameObject &o) {
 	GameObject &g = objects_.emplace_back(o);
 	g.copied = true;
+	g.copied_from = &o;
 	g.handle = mem_.alloc(kObjectBlock);
 	memcpy(mem_.ptr(g.handle, kObjectBlock), mem_.ptr(o.handle, kObjectBlock), kObjectBlock);
 	g.vec_world_pos = g.handle + kWorldPosOffset;
@@ -472,6 +473,89 @@ GameObject *World::copy_tree(const GameObject &o) {
 		g.children.push_back(cc);
 	}
 	return &g;
+}
+
+GameObject *World::instance_near(const GameObject *from, const de::ObjectRef &r) const {
+	if (!r) return nullptr;
+	std::function<GameObject *(GameObject *, const GameObject *)> find = [&](GameObject *o, const GameObject *skip) -> GameObject * {
+		if (o == skip) return nullptr;
+		if (o->file == r.file && o->index == r.index) return o;
+		for (GameObject *ch : o->children) {
+			if (GameObject *h = find(ch, skip)) return h;
+		}
+		return nullptr;
+	};
+	const GameObject *skip = nullptr;
+	for (int hops = 0; from && hops < 64; ++hops) {
+		if (GameObject *h = find(const_cast<GameObject *>(from), skip)) return h;
+		if (from->parent) {
+			skip = from;
+			from = from->parent;
+		} else {
+			skip = nullptr;
+			from = from->copied_from;
+		}
+	}
+	return nullptr;
+}
+
+void World::set_instance_image(GameObject *manager, GameObject *image) {
+	if (!manager) return;
+	manager->image = image;
+	manager->image_set = true;
+	if (manager->file) instance_images.insert({manager->file, manager->index});
+	++texture_override_version;
+}
+
+// The model's references (chunk v2-v3 after DE_CObject's): [instanced objects (+0x48)][properties
+// (+0x34)], v3 [BOOL + creature description (+0x54)] (DE_CCreatureModel::ObjProcessReferences
+// 0x35037240). Setup gives the creature the properties, and a copy of each instanced object as a
+// child; then, when one of the creature's children is an ImageFilter\OMF2Fighter, every image
+// under the model becomes a property too, RGBMain* and ReflectionMask* filtered by it and
+// RGBScaled* in its scaled list (RGBStatic* its static list, which no shipped image is).
+void World::setup_creature_model(GameObject *model, GameObject *creature) {
+	if (!model || !creature || !model->file) return;
+	auto lists = reference_lists(data_, {model->file, model->index});
+	static const std::vector<de::ObjectRef> none;
+	auto list = [&](size_t i) -> const std::vector<de::ObjectRef> & { return lists.size() > 1 && i < lists[1].size() ? lists[1][i] : none; };
+	for (auto &r : list(1)) {
+		if (GameObject *p = instance_near(model, r)) creature->components.push_back(p);
+	}
+	for (auto &r : list(0)) {
+		if (GameObject *tpl = global_object(r)) {
+			GameObject *n = copy_tree(*tpl);
+			n->parent = creature;
+			creature->children.push_back(n);
+		}
+	}
+	GameObject *filter = nullptr;
+	for (GameObject *ch : creature->children) {
+		if (ch->is("ImageFilter\\OMF2Fighter")) {
+			filter = ch;
+			break;
+		}
+	}
+	if (!filter) return;
+	std::vector<GameObject *> branch;  // ObjDescendant's order
+	std::function<void(GameObject *)> gather = [&](GameObject *o) {
+		branch.insert(branch.end(), o->children.begin(), o->children.end());
+		for (GameObject *ch : o->children) gather(ch);
+	};
+	gather(model);
+	for (GameObject *img : branch) {
+		if (!img->is("Image")) continue;
+		const std::string &n = img->name;
+		if (n.rfind("RGBMain", 0) == 0 || n.rfind("ReflectionMask", 0) == 0) {
+			img->image_filter = filter;
+			if (img->file) {
+				instance_images.insert({img->file, img->index});
+				image_filters[{img->file, img->index}] = filter;
+			}
+		} else if (n.rfind("RGBScaled", 0) == 0 && img->file) {
+			filter->scaled_images.push_back({img->file, img->index});
+		}
+		creature->components.push_back(img);
+	}
 }
 
 void World::pose_skeleton(GameObject &f) {
@@ -1070,7 +1154,7 @@ void read_affector(GameObject &g, const de::World &data, const de::ObjectsFile &
 		c.seek(chunks[1].first);
 		g.groups = c.u32();
 		if (versions[1] == 3) {
-			c.boolean();
+			g.swept = c.boolean();
 			g.encompasser = c.boolean();
 			g.auto_encompass = c.boolean();
 		}
@@ -1586,6 +1670,14 @@ void World::tick(uint32_t ms) {
 	frame_ms_ = ms;
 	destroy_closed_instances();
 	housekeeping();
+	for (auto it = swept_affectors.begin(); it != swept_affectors.end();) {
+		if (object((*it)->handle) != *it || !in_scene(**it)) {
+			it = swept_affectors.erase(it);
+		} else {
+			(*it)->swept_from = (*it)->world().t;
+			++it;
+		}
+	}
 	impulses->flush();
 	// OPENBG_CALLS="Katana@400-402" (or "*@..."): log the methods brains of that owner enter.
 	static const char *calls = getenv("OPENBG_CALLS");

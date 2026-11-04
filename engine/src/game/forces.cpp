@@ -286,12 +286,29 @@ std::optional<Contact> touch(World &w, GameObject &source, GameObject &target) {
 	}
 }
 
+static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b,
+                                                            std::vector<std::pair<float, Contact>> *all);
+
 std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 	std::vector<Contact> out;
 	GameObject *self = top_fighter(&source);
+	// Its first test starts the line where it stands (ObjPrepare's +0x13c).
+	if (source.swept && w.swept_affectors.insert(&source).second) source.swept_from = source.world().t;
 	w.walk_affectors(groups, [&](GameObject *target, bool record) {
 		if (target == &source) return false;
 		if (self && top_fighter(target) == self) return false;
+		// DE_CMeshAffector::IsTouchingSphere (Core 0x70082260) for a sphere with +0x138: the mesh
+		// against the line it moved along this frame, as a cone (none when it did not move).
+		if (target->shape == GameObject::Shape::Mesh && source.shape == GameObject::Shape::Sphere && source.swept) {
+			Vec now = source.world().t;
+			if (now == source.swept_from) return false;
+			std::vector<std::pair<float, Contact>> faces;
+			segment_hit(target, source.swept_from, now, &faces);
+			if (record) {
+				for (auto &f : faces) out.push_back(f.second);
+			}
+			return !faces.empty();
+		}
 		if (target->shape == GameObject::Shape::Mesh && source.shape == GameObject::Shape::Sphere) {
 			auto faces = touch_faces(w, source, *target);
 			if (record) out.insert(out.end(), faces.begin(), faces.end());
@@ -308,7 +325,7 @@ std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 // mesh face it crosses goes there too, in face order (DE_COctree::GetPotentialLineSegmentCollisions
 // merges the cells' sorted face ids, so the candidates come in face order).
 static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b,
-                                                            std::vector<std::pair<float, Contact>> *all = nullptr) {
+                                                            std::vector<std::pair<float, Contact>> *all) {
 	Vec d = sub(b, a);
 	de::Transform t = target->world();
 	Vec la = t.inverse_rotate(sub(a, t.t)), ld = t.inverse_rotate(d);
@@ -414,7 +431,7 @@ std::optional<Contact> segment(World &w, const Vec &a, const Vec &b, uint32_t gr
 	for (GameObject *target : w.affectors()) {
 		if (!in_scene(*target) || !(target->groups & groups)) continue;
 		if (target->shape == GameObject::Shape::Sphere) continue;  // surfaces only
-		auto h = segment_hit(target, a, b);
+		auto h = segment_hit(target, a, b, nullptr);
 		if (h && (!best || h->second.distance < best->distance)) best = h->second;
 	}
 	return best;

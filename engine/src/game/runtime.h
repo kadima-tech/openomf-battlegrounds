@@ -267,6 +267,10 @@ struct GameObject {
 	GameObject *data_owner = nullptr;                     // +0x118 from the data (references chunk 2)
 	bool data_owner_read = false;
 	bool encompasser = false;                             // +0x16c: AutoEncompase may choose it
+	// +0x138: against a mesh it tests the line from where it stood when the frame began (+0x13c,
+	// DE_CScene::PassTime) to where it is.
+	bool swept = false;
+	std::array<float, 3> swept_from{0, 0, 0};
 	bool auto_encompass = false;                          // +0x170: finds its encompasser when prepared
 	GameObject *data_encompasser = nullptr;               // +0x124 from the data (references chunk 2 v4)
 	bool data_encompasser_read = false;
@@ -277,6 +281,13 @@ struct GameObject {
 	bool physics_enabled = true;  // CActor::Enable/DisablePhysics
 	bool path_moved = false;      // placed by an AnimationStreamPlayer path (drawn live)
 	bool copied = false;          // made at run time (NewCopy, passive references): drawn live
+	const GameObject *copied_from = nullptr;  // the instance copy_tree copied (its references' context)
+	// A texture manager's or mesh's image property as scripts set it (AddProperty,
+	// RemoveAllProperty, ReplaceWithThenDie of its image): this instance's, null for none.
+	GameObject *image = nullptr;
+	bool image_set = false;
+	GameObject *image_filter = nullptr;  // an image's fighter paint filter (CCreatureModel::Setup, AddFilter)
+	std::vector<de::ObjectRef> scaled_images;  // a paint filter's scaled list (+0x40)
 	// DE_CPassiveActorReference::Create appends the reference's own properties to the actor's.
 	std::vector<de::ObjectRef> extra_properties;
 	bool executorless = false;  // COMF2Projectile::NewExecutorlessCopy: its data's executors are dropped
@@ -640,6 +651,12 @@ public:
 	// DE_COMF2Fighter::Tick's attack-range step (natives_ai.cpp).
 	void jitter_attack_range(GameObject &fighter);
 	GameObject *resolve_passive_reference(GameObject *reference);
+	// The instance of data object `r` that a reference from `from` reaches, as a copy's references
+	// are re-pointed into the copy: `from`'s branch, then each ancestor's, then (from a copy's
+	// root) the branch it was copied from; null when none is instantiated there.
+	GameObject *instance_near(const GameObject *from, const de::ObjectRef &r) const;
+	// DE_CCreatureModel::Setup (OMF 0x35037470): hooks a FighterModel instance up to its creature.
+	void setup_creature_model(GameObject *model, GameObject *creature);
 	// An actor's properties (DE_CActor +0x20 list): its executors, state manager, ...
 	std::vector<de::ObjectRef> actor_properties(const de::ObjectRef &r) const;
 	// The same for a live object: its data's list plus what a passive reference gave it.
@@ -788,14 +805,16 @@ public:
 	// CImage::SetPhase (DE_CImage +0x54) by image data object: an AVI image shows the frame for
 	// it (the renderer's animated textures follow this map).
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, float> image_phases;
-	// CImage::AddFilter: images given a filter at run time (Mantis's bug images get the fighter's
-	// paint filter), by image object.
+	// CImage::AddFilter / CCreatureModel::Setup: images given a fighter's paint filter, by image
+	// data object, for drawing an image no instance is found for (the instance's image_filter
+	// otherwise).
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GameObject *> image_filters;
-	// Texture managers (and meshes) whose image properties scripts replaced (RemoveAllProperty +
-	// AddProperty: Canyon's gun shows its shooter's pilot photo, pilots their mood icon): the image
-	// now shown, none after a RemoveAllProperty. `texture_override_version` counts the changes.
-	std::map<std::pair<const de::ObjectsFile *, uint32_t>, de::ObjectRef> texture_overrides;
+	// Data objects of which some instance carries an image_set / image_filter: only those are
+	// looked up per instance when drawing. `texture_override_version` counts the changes.
+	std::set<std::pair<const de::ObjectsFile *, uint32_t>> instance_images;
 	uint32_t texture_override_version = 0;
+	void set_instance_image(GameObject *manager, GameObject *image);
+	std::set<GameObject *> swept_affectors;  // DE_CScene +0x190: affectors with +0x138 in the scene
 	// Scene().RegisterRenderTickHook: called every rendered frame with the time passed (ms).
 	std::vector<std::pair<Brain *, uint32_t>> render_tick_hooks;
 	// Scene().RegisterDeltaTickHook: called every scene tick with the time it covers (ms).

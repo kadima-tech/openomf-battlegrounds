@@ -580,12 +580,13 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	if (res && src.info().class_path == "Description\\Creature\\Fighter") {
 		// [resource][default model][extra actor (the HUD)]: the extra and the model (the
 		// chosen one, else the default) become children of the fighter.
-		auto add = [&](const de::ObjectRef &r) {
-			if (GameObject *tpl = w.global_object(r)) {
-				GameObject *ch = w.copy_tree(*tpl);
-				ch->parent = res;
-				res->children.push_back(ch);
-			}
+		auto add = [&](const de::ObjectRef &r) -> GameObject * {
+			GameObject *tpl = w.global_object(r);
+			if (!tpl) return nullptr;
+			GameObject *ch = w.copy_tree(*tpl);
+			ch->parent = res;
+			res->children.push_back(ch);
+			return ch;
 		};
 		if (refs.size() > 2) add(refs[2]);
 		// DE_CFighterDescription::NewResource(GUID) (OMF 0x10733930): a FighterModelDescription's
@@ -596,7 +597,8 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 			m = res.empty() ? de::ObjectRef{} : res[0];
 		}
 		if (!m && refs.size() > 1) m = refs[1];
-		if (m) add(m);
+		GameObject *model = m ? add(m) : nullptr;
+		if (model && model->is("FighterModel")) w.setup_creature_model(model, res);
 	}
 	// DE_CDescription::NewResource: each of the description's replacement objects (+0x80) takes
 	// the place of the resource's descendant of its name, and a copy of each resource component

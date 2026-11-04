@@ -84,6 +84,7 @@ private:
 	void load_renderers();
 	std::string find_arena() const;
 	bool shown(const game::GameObject *o) const;
+	std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &)> images_of(const game::GameObject *o);
 
 	std::string arena;
 	std::array<float, 16> screen_vp{};

@@ -17,6 +17,7 @@
 #include "game/navigation.h"
 #include "game/observer.h"
 #include "game/runtime.h"
+#include "game/simple_physics.h"
 
 namespace game {
 
@@ -757,7 +758,19 @@ void register_ai_natives(World &w) {
 		// MomentumCaller (Core): each physics component's momentum x its TimeScale; a fighter's
 		// physics runs at 1/16 (1 / ms per frame), so this is units per millisecond.
 		float k = o->fighter ? 1.0f / 16 : 1.0f;
-		write_vec(c.mem(), o->momentum_vec, {o->momentum[0] * k, o->momentum[1] * k, o->momentum[2] * k});
+		std::array<float, 3> m{o->momentum[0] * k, o->momentum[1] * k, o->momentum[2] * k};
+		// A simple physics' (DE_CSimplePhysics::GetMomentum while enabled) at TimeScale 1 / rate,
+		// or 1 when stepped by the scene's time.
+		if (!o->fighter) {
+			for (GameObject *p : c.world.simple_physics->physics_of(*o)) {
+				if (p->class_path != "Physics\\Simple") continue;
+				const SimplePhysics &s = c.world.simple_physics->state(*p);
+				if (!s.enabled) continue;
+				float t = s.rate > 0 ? 1.0f / float(s.rate) : 1.0f;
+				for (int i = 0; i < 3; ++i) m[size_t(i)] += s.momentum[size_t(i)] * t;
+			}
+		}
+		write_vec(c.mem(), o->momentum_vec, m);
 		c.ret_u32(o->momentum_vec);
 	});
 

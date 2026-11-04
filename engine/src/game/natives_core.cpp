@@ -228,18 +228,25 @@ void register_core_natives(World &w) {
 				r->children.push_back(ch);
 				c.world.parented(ch, was);
 			}
-			if (o->file && r->file && o->is("Image")) {
-				for (uint32_t i = 0; i < o->file->objects().size(); ++i) {
-					if (o->file->objects()[i].class_path.rfind("TextureManager", 0) != 0) continue;
-					for (auto &l : reference_lists(c.world.data(), {o->file, i})) {
-						for (auto &refs : l) {
-							for (auto &ref : refs) {
-								if (ref.file == o->file && ref.index == o->index) c.world.texture_overrides[{o->file, i}] = de::ObjectRef{r->file, r->index};
+			// The texture managers in its tree whose image reference reaches this instance: each
+			// copy of a branch has its own images and references (FINDINGS 243).
+			if (o->is("Image")) {
+				GameObject *root = o;
+				while (root->parent) root = root->parent;
+				std::vector<GameObject *> branch = {root};
+				for (size_t i = 0; i < branch.size(); ++i) branch.insert(branch.end(), branch[i]->children.begin(), branch[i]->children.end());
+				for (GameObject *t : branch) {
+					if (!t->is("TextureManager")) continue;
+					bool refers = t->image_set ? t->image == o : false;
+					if (!t->image_set && t->file && o->file) {
+						for (auto &l : reference_lists(c.world.data(), {t->file, t->index})) {
+							for (auto &refs : l) {
+								for (auto &ref : refs) refers = refers || (ref.file == o->file && ref.index == o->index && c.world.instance_near(t, ref) == o);
 							}
 						}
 					}
+					if (refers) c.world.set_instance_image(t, r);
 				}
-				++c.world.texture_override_version;
 			}
 		}
 		c.world.clean_later(o);
@@ -257,6 +264,7 @@ void register_core_natives(World &w) {
 	});
 	reg("CObject::class CObject NewCopy()", [](const NativeContext &c) {
 		auto *o = c.self();
+		if (o && getenv("OPENBG_DEBUG_DEBRIS")) fprintf(stderr, "[debris %u] copy %s under %s of %s\n", c.world.frame(), o->name.c_str(), o->parent ? o->parent->name.c_str() : "-", o->parent && o->parent->parent ? o->parent->parent->name.c_str() : "-");
 		c.ret_object(o ? c.world.copy_tree(*o) : nullptr);
 	});
 
@@ -518,7 +526,13 @@ void register_core_natives(World &w) {
 	// AddFilterCaller (0x7018d300): the filter joins the image's list (+0x34).
 	reg("CImage::AddFilter(class CImageFilter)", [](const NativeContext &c) {
 		GameObject *img = c.self(), *f = c.arg_object(0);
-		if (img && f && img->file) c.world.image_filters[{img->file, img->index}] = f;
+		if (!img || !f) return;
+		img->image_filter = f;
+		if (img->file) {
+			c.world.image_filters[{img->file, img->index}] = f;
+			c.world.instance_images.insert({img->file, img->index});
+		}
+		++c.world.texture_override_version;
 	});
 	// UpdateCaller (0x701d5120): the generator's instances step to the scene time; every live
 	// effect steps each frame here anyway (ParticleSystem::step).

@@ -195,29 +195,41 @@ private:
 // Meshes of actors made at run time, drawn where they are each frame.
 class ActorMeshRenderer {
 public:
+	using Paint = std::array<std::array<float, 3>, 3>;
+	// What one instance's texture stage draws: its image and, for an image a fighter's paint
+	// filter holds, the pilot's colours and the filter's scaled images.
+	struct LayerImage {
+		de::ObjectRef image;
+		std::optional<Paint> paint;
+		std::vector<de::ObjectRef> scaled;
+	};
 	struct Item {
 		de::ObjectRef actor;
 		de::Transform world;
 		const void *light_owner = nullptr;  // see SceneLight::reaches
 		// This actor's values as its scripts set them (each instance has its own); else g_live_values.
 		de::LiveFloat live;
+		// This instance's image for a stage (its texture manager, the data's image); none: the data's.
+		std::function<std::optional<LayerImage>(const de::ObjectRef &manager, const de::ObjectRef &image)> image_of;
 	};
 	void draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye);
 	// Their glow and specular-glow passes, for the meshes `draw` built.
 	void draw_glow(const std::vector<Item> &actors, const float *vp, const float *eye);
 	// The pilot colours an image is painted with when a script gave it a fighter's paint filter
-	// (CImage::AddFilter); none for an unfiltered image. Asked once per image.
-	std::function<std::optional<std::array<std::array<float, 3>, 3>>(const de::ObjectRef &image)> paint_of;
-	// A texture manager's image as scripts set it (World::texture_overrides), when they did; the
-	// meshes are rebuilt whenever `texture_version` changes.
-	std::function<std::optional<de::ObjectRef>(const de::ObjectRef &manager)> image_of;
+	// (CImage::AddFilter) and the item's image_of did not say; none for an unfiltered image.
+	std::function<std::optional<Paint>(const de::ObjectRef &image)> paint_of;
+	// The meshes are rebuilt whenever `texture_version` changes.
 	uint32_t texture_version = 0;
 
 private:
 	GLuint prog_ = 0;
 	uint32_t built_version_ = 0;
-	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<MeshBatch>> meshes_;
+	// Batches by actor and the images its stages draw.
+	std::map<std::string, std::vector<MeshBatch>> meshes_;
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::vector<std::pair<de::ObjectRef, de::ObjectRef>>> stages_;
+	std::vector<const std::vector<MeshBatch> *> drawn_;  // per item of the last draw
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures_;
+	std::map<std::string, GLuint> painted_;
 };
 
 // A fighter's mesh, skin and rig (from <Name>Model1.DEObjects and <Name>.DEObjects), drawn with

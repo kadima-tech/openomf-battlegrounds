@@ -63,7 +63,50 @@ std::optional<std::array<std::array<float, 3>, 3>> paint_colours(game::World &wo
 	return colours;
 }
 
+// The fighter whose paint filter `filter` is: its pilot's colours and the filter's scaled images.
+std::optional<render::ActorMeshRenderer::LayerImage> filtered(game::World &world, const game::GameObject *filter, const de::ObjectRef &image) {
+	for (game::GameObject *p = filter ? filter->parent : nullptr; p; p = p->parent) {
+		if (!p->fighter) continue;
+		auto paint = paint_colours(world, p);
+		if (!paint) return std::nullopt;
+		return render::ActorMeshRenderer::LayerImage{image, paint, filter->scaled_images};
+	}
+	return std::nullopt;
+}
+
 }  // namespace
+
+// What an instance's texture stages draw: a texture manager instance near it whose image a script
+// set (AddProperty, ReplaceWithThenDie), and an image instance's fighter paint filter. Only data
+// objects some instance has changed are looked up.
+std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &)> GameView::images_of(const game::GameObject *o) {
+	if (world.instance_images.empty()) return nullptr;
+	return [this, o](const de::ObjectRef &manager, const de::ObjectRef &image) -> std::optional<render::ActorMeshRenderer::LayerImage> {
+		auto changed = [this](const de::ObjectRef &r) { return r && world.instance_images.count({r.file, r.index}); };
+		de::ObjectRef img = image;
+		const game::GameObject *from = o;
+		bool set = false;
+		if (changed(manager)) {
+			if (const game::GameObject *t = world.instance_near(o, manager)) {
+				from = t;
+				if (t->image_set) {
+					set = true;
+					img = t->image && t->image->file ? de::ObjectRef{t->image->file, t->image->index} : de::ObjectRef{};
+					if (t->image && t->image->image_filter) {
+						if (auto f = filtered(world, t->image->image_filter, img)) return f;
+					}
+				}
+			}
+		}
+		if (!set && changed(img)) {
+			if (const game::GameObject *i = world.instance_near(from, img); i && i->image_filter) {
+				if (auto f = filtered(world, i->image_filter, img)) return f;
+			}
+		}
+		if (!set) return std::nullopt;
+		return render::ActorMeshRenderer::LayerImage{img, std::nullopt, {}};
+	};
+}
 
 Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats) {
 	const de::ObjectsFile *ff = world.data().file(name);
@@ -222,12 +265,7 @@ void GameView::init_gl() {
 		}
 		return std::nullopt;
 	};
-	actors_r.image_of = [this](const de::ObjectRef &tm) -> std::optional<de::ObjectRef> {
-		auto it = world.texture_overrides.find({tm.file, tm.index});
-		if (it == world.texture_overrides.end()) return std::nullopt;
-		return it->second;
-	};
-	// A Mantis bug's images carry the fighter's paint filter: the filter's fighter's pilot colours.
+	// An image no instance of is found near the drawn actor: the filter last given its data object.
 	actors_r.paint_of = [this](const de::ObjectRef &img) -> std::optional<std::array<std::array<float, 3>, 3>> {
 		auto it = world.image_filters.find({img.file, img.index});
 		if (it == world.image_filters.end()) return std::nullopt;
@@ -443,7 +481,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		std::set<uint32_t> moving;
 		std::function<void(game::GameObject *)> add = [&](game::GameObject *o) {
 			if (!o->file || o->file != arena_file) return;
-			if (o->is_actor) moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o)});
+			if (o->is_actor) moving_items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o)});
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
@@ -491,7 +529,12 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 			}
-			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o)});
+			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o)});
+			static const bool dbg_debris = getenv("OPENBG_DEBUG_DEBRIS") != nullptr;
+			if (dbg_debris && live && o->name.rfind("Piece", 0) == 0 && world.world_to_screen) {
+				auto sp = world.world_to_screen(o->world().t);
+				fprintf(stderr, "[debris %d] draw %s at screen %.0f %.0f (depth %.0f)\n", fr, o->name.c_str(), sp[0] * dw, (1 - sp[1]) * dh, sp[2]);
+			}
 			static const bool dbg = getenv("OPENBG_DEBUG_ACTOR_MESHES") != nullptr;
 			if (dbg && live && fr == 900) fprintf(stderr, "[actor mesh] %s (%s) under %s\n", o->name.c_str(), o->class_path.c_str(), o->parent ? o->parent->name.c_str() : "-");
 		}

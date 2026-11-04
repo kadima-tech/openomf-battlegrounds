@@ -1343,42 +1343,102 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 		built_version_ = texture_version;
 	}
 	use_mesh_program(prog_, vp, eye);
-	for (const Item &a : actors) {
+	drawn_.assign(actors.size(), nullptr);
+	auto ref_key = [](std::string &out, const de::ObjectRef &r) {
+		char buf[48];
+		snprintf(buf, sizeof buf, "%p:%u;", static_cast<const void *>(r.file), r.index);
+		out += buf;
+	};
+	auto paint_key = [](std::string &out, const Paint &p) {
+		char buf[160];
+		snprintf(buf, sizeof buf, "%g,%g,%g,%g,%g,%g,%g,%g,%g;", p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2], p[2][0], p[2][1], p[2][2]);
+		out += buf;
+	};
+	for (size_t ai = 0; ai < actors.size(); ++ai) {
+		const Item &a = actors[ai];
 		if (!a.actor) continue;
-		auto key = std::make_pair(a.actor.file, a.actor.index);
+		auto akey = std::make_pair(a.actor.file, a.actor.index);
+		auto st = stages_.find(akey);
+		if (st == stages_.end()) {
+			std::vector<std::pair<de::ObjectRef, de::ObjectRef>> stages;
+			try {
+				for (auto &m : de::actor_meshes(data, a.actor, false)) {
+					for (auto &mat : de::read_materials(data, m)) {
+						for (auto &l : mat.layers) stages.emplace_back(l.manager, l.image);
+					}
+				}
+			} catch (const std::exception &) {
+			}
+			st = stages_.emplace(akey, std::move(stages)).first;
+		}
+		// The instance's own images, and the key of the batches drawn with them.
+		std::map<std::pair<const de::ObjectsFile *, uint32_t>, LayerImage> chosen;
+		std::string key;
+		ref_key(key, a.actor);
+		if (a.image_of) {
+			for (auto &[manager, image] : st->second) {
+				auto c = a.image_of(manager, image);
+				if (!c) continue;
+				key += "|";
+				ref_key(key, manager);
+				ref_key(key, c->image);
+				if (c->paint) {
+					paint_key(key, *c->paint);
+					for (auto &sc : c->scaled) ref_key(key, sc);
+				}
+				chosen.emplace(std::make_pair(manager.file, manager.index), std::move(*c));
+			}
+		}
 		auto it = meshes_.find(key);
 		if (it == meshes_.end()) {
 			std::vector<MeshBatch> all;
-			auto tex = [this](const de::ObjectRef &r) -> GLuint {
+			std::map<std::pair<const de::ObjectsFile *, uint32_t>, const LayerImage *> painted_by;
+			auto tex = [&](const de::ObjectRef &r) -> GLuint {
+				if (!r) return 0;
 				// A filtered image: painted like the fighter's RGBMain / ReflectionMask.
-				if (r && paint_of) {
-					auto k = std::make_pair(r.file, r.index);
-					if (auto it = textures_.find(k); it != textures_.end()) return it->second;
-					if (auto p = paint_of(r)) {
-						GLuint t = 0;
-						try {
-							auto img = de::read_image(*r.file, r.info());
-							if (!img.channels.empty()) {
-								auto px = paint_image(img, *p, r.info().name == "ReflectionMask").rgba();
-								t = glu::texture_rgba(img.width, img.height, px.data());
-								detail_texture(t, img);
-							}
-						} catch (const std::exception &) {
-						}
-						return textures_[k] = t;
+				std::optional<Paint> paint;
+				const std::vector<de::ObjectRef> *scaled = nullptr;
+				if (auto pb = painted_by.find(std::make_pair(r.file, r.index)); pb != painted_by.end()) {
+					paint = pb->second->paint;
+					scaled = &pb->second->scaled;
+				} else if (paint_of) {
+					paint = paint_of(r);
+				}
+				if (!paint) return texture_of(textures_, r);
+				std::string pkey;
+				ref_key(pkey, r);
+				paint_key(pkey, *paint);
+				std::vector<de::Image> scaled_images;
+				for (const de::ObjectRef &sc : scaled ? *scaled : std::vector<de::ObjectRef>{}) {
+					ref_key(pkey, sc);
+					try {
+						scaled_images.push_back(de::read_image(*sc.file, sc.info()));
+					} catch (const std::exception &) {
 					}
 				}
-				return texture_of(textures_, r);
+				if (auto pt = painted_.find(pkey); pt != painted_.end()) return pt->second;
+				GLuint t = 0;
+				try {
+					auto img = de::read_image(*r.file, r.info());
+					if (!img.channels.empty()) {
+						auto px = paint_image(img, *paint, r.info().name == "ReflectionMask", scaled_images).rgba();
+						t = glu::texture_rgba(img.width, img.height, px.data());
+						detail_texture(t, img);
+					}
+				} catch (const std::exception &) {
+				}
+				return painted_[pkey] = t;
 			};
 			try {
 				for (auto &m : de::actor_meshes(data, a.actor, false)) {
 					auto mesh = de::read_mesh(*m.file, m.info());
 					auto materials = de::read_materials(data, m);
-					if (image_of) {
-						for (auto &mat : materials) {
-							for (auto &l : mat.layers) {
-								if (auto img = image_of(l.manager)) l.image = *img;
-							}
+					for (auto &mat : materials) {
+						for (auto &l : mat.layers) {
+							auto c = chosen.find(std::make_pair(l.manager.file, l.manager.index));
+							if (c == chosen.end()) continue;
+							l.image = c->second.image;
+							if (l.image && c->second.paint) painted_by[std::make_pair(l.image.file, l.image.index)] = &c->second;
 						}
 					}
 					auto b = build_batches(mesh, materials, de::Transform{}, tex, nullptr, nullptr, false, mesh_scale(data, m));
@@ -1388,6 +1448,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 			}
 			it = meshes_.emplace(key, std::move(all)).first;
 		}
+		drawn_[ai] = &it->second;
 		if (it->second.empty()) continue;
 		const de::Transform &t = a.world;
 		float m[16] = {t.r[0], t.r[1], t.r[2], 0, t.r[3], t.r[4], t.r[5], 0, t.r[6], t.r[7], t.r[8], 0, t.t[0], t.t[1], t.t[2], 1};
@@ -1399,16 +1460,16 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 }
 
 void ActorMeshRenderer::draw_glow(const std::vector<Item> &actors, const float *vp, const float *eye) {
-	if (!prog_) return;
+	if (!prog_ || drawn_.size() != actors.size()) return;
 	use_mesh_program(prog_, vp, eye);
-	for (const Item &a : actors) {
-		auto it = meshes_.find(std::make_pair(a.actor.file, a.actor.index));
-		if (it == meshes_.end() || it->second.empty()) continue;
+	for (size_t ai = 0; ai < actors.size(); ++ai) {
+		const Item &a = actors[ai];
+		if (!drawn_[ai] || drawn_[ai]->empty()) continue;
 		const de::Transform &t = a.world;
 		float m[16] = {t.r[0], t.r[1], t.r[2], 0, t.r[3], t.r[4], t.r[5], 0, t.r[6], t.r[7], t.r[8], 0, t.t[0], t.t[1], t.t[2], 1};
 		glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, m);
 		g_item_live = &a.live;
-		draw_glow_batches(prog_, it->second, &t.t, a.light_owner);
+		draw_glow_batches(prog_, *drawn_[ai], &t.t, a.light_owner);
 		g_item_live = nullptr;
 	}
 }
