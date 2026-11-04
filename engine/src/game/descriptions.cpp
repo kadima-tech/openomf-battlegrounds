@@ -179,6 +179,55 @@ void migrate_lock_records(std::map<std::string, std::string> &reg) {
 	for (auto &[k, v] : add) reg[k] = v;
 }
 
+std::string guid_pool_value(const std::vector<de::Guid> &pool) {
+	std::vector<uint8_t> b = {1, uint8_t(pool.size() & 0xff), uint8_t(pool.size() >> 8 & 0xff)};
+	for (const de::Guid &g : pool) b.insert(b.end(), g.bytes, g.bytes + 16);
+	static const char hex[] = "0123456789abcdef";
+	std::string v;
+	for (uint8_t x : b) v += hex[x >> 4], v += hex[x & 15];
+	return v;
+}
+
+std::vector<de::Guid> read_guid_pool_value(const std::string &value) {
+	auto nibble = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; };
+	auto parse = [&](const std::string &hex, std::vector<uint8_t> &out) {
+		if (hex.size() % 2) return false;
+		for (size_t i = 0; i < hex.size(); i += 2) {
+			int hi = nibble(hex[i]), lo = nibble(hex[i + 1]);
+			if (hi < 0 || lo < 0) return false;
+			out.push_back(uint8_t(hi << 4 | lo));
+		}
+		return true;
+	};
+	std::vector<de::Guid> pool;
+	if (value.find('-') != std::string::npos) {
+		for (size_t p = 0; p < value.size();) {
+			size_t q = value.find(' ', p);
+			std::string t = value.substr(p, q == std::string::npos ? std::string::npos : q - p);
+			t.erase(std::remove(t.begin(), t.end(), '-'), t.end());
+			std::vector<uint8_t> b;
+			if (t.size() == 32 && parse(t, b)) {
+				static const int order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+				de::Guid g;
+				for (int i = 0; i < 16; ++i) g.bytes[order[i]] = b[size_t(i)];
+				pool.push_back(g);
+			}
+			if (q == std::string::npos) break;
+			p = q + 1;
+		}
+		return pool;
+	}
+	std::vector<uint8_t> b;
+	if (!parse(value, b) || b.size() < 3 || b[0] != 1) return pool;
+	size_t n = std::min<size_t>(size_t(b[1] | b[2] << 8), (b.size() - 3) / 16);
+	for (size_t i = 0; i < n; ++i) {
+		de::Guid g;
+		std::copy_n(b.begin() + long(3 + i * 16), 16, g.bytes);
+		pool.push_back(g);
+	}
+	return pool;
+}
+
 std::string read_string_value(const de::ObjectRef &v) {
 	if (!v) return {};
 	try {

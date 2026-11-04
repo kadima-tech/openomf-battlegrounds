@@ -76,6 +76,9 @@ public:
 	bool persistent = false;       // the factory's persistent instance: never deleted
 	bool deleted = false;          // DeleteThisLater'd: never shown again
 	GameObject *script = nullptr;  // the DE_CUIManager object the scripts hold, if any
+	// +0x38 (DE_CMultipleReferenceCompleteCreatedObjects): what its completion made, deleted
+	// (DeleteThisLater) when it begins again or deactivates backed out.
+	std::vector<uint32_t> created;
 
 	std::vector<Control> controls;
 	// The page's 3D controls (built by setup_controls, gone when it deactivates).
@@ -289,7 +292,7 @@ public:
 	// The renderer's resolutions ("W x H"; GetAvailableResolutions).
 	std::vector<std::pair<int, int>> resolutions;
 	// DE_COMF2Manager::ProcessEvent on the session chooser's Complete: start the chosen session.
-	std::function<void(const de::ObjectRef &master_description, bool single_player)> launch_session;
+	std::function<SessionState *(const de::ObjectRef &master_description, bool single_player)> launch_session;
 	// DE_CSession::SatisfyMasterRequirements: true when the master's required casts are met;
 	// otherwise the Choose Cast page is queued and `begin` runs when it completes.
 	bool satisfy_master_requirements(SessionState &s, std::function<void()> begin);

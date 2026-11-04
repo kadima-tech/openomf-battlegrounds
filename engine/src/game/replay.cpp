@@ -1,6 +1,7 @@
 #include "game/replay.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -101,6 +102,7 @@ struct StateManager {
 	StateRecord *record = nullptr;
 	bool replay = false;       // +0x78
 	uint32_t applied = ~0u;    // +0x80
+	bool need_fixup = false;   // +0x48: AddLaggedState added a state
 	uint64_t joined = 0;       // the session's managers are searched newest first
 	bool got_hit = false;      // fighter +0x4a0: RegisterGetHitState since its last state
 	uint32_t window = 1000;    // CleanOldStates: 1000 / +0xb8 (a tick-based creature's rate)
@@ -339,6 +341,10 @@ StateManager &join(World &w, GameObject &o) {
 		}
 		sm.replay = sm.record && !rec->recording;
 		if (sm.record) R.joined[sm.record].push_back(o.handle);
+		if (sm.replay && rec->shared_clock_begin && !sm.record->rebased && !o.is("Actor\\Creature")) {
+			for (auto &st : sm.record->states) st.first = st.first > rec->shared_clock_begin ? st.first - rec->shared_clock_begin : 0;
+			sm.record->rebased = true;
+		}
 	}
 	if (getenv("OPENBG_DEBUG_REPLAY")) {
 		std::string shown;
@@ -1170,10 +1176,10 @@ std::optional<std::pair<uint32_t, std::vector<uint8_t>>> newest_state(StateManag
 }
 std::optional<std::pair<uint32_t, std::vector<uint8_t>>> state_at(StateManager &sm, uint32_t t) { return newest_state(sm, t, t); }
 
-// UpdateForReplay (Core 0x701af350): the newest recorded state at or before `t` (the owner's
-// local time), when not the last one taken, joins the history; the session's fixup then restores
-// it (SetupOwnerForState, 0x701af020).
-void update_for_replay(World &w, StateManager &sm, uint32_t t) {
+// UpdateForReplay (Core 0x701af350, 2.123 0x201b5eb0): the newest recorded state at or before `t`
+// (the owner's local time), when not the last one taken, joins the history (AddLaggedState,
+// 2.123 0x201b5770, which flags the manager's fixup); the session update's fixup restores it.
+void update_for_replay(World &, StateManager &sm, uint32_t t) {
 	if (!sm.record || sm.record->states.empty()) return;
 	auto &st = sm.record->states;
 	size_t &c = sm.record->cursor;
@@ -1182,7 +1188,7 @@ void update_for_replay(World &w, StateManager &sm, uint32_t t) {
 	while (c + 1 < st.size() && st[c + 1].first <= t) ++c;
 	if (st[c].first > t || st[c].first == sm.applied) return;
 	sm.applied = st[c].first;
-	if (add_lagged_state(sm, st[c].first, st[c].second)) restore(w, sm, sm.lagged.back());
+	if (add_lagged_state(sm, st[c].first, st[c].second)) sm.need_fixup = true;
 }
 
 void retick(World &w, GameObject &o, uint32_t at_ms) {
@@ -1428,6 +1434,42 @@ void replay_session_ended(World &w, SessionState &s) {
 	forget(w);
 }
 
+namespace {
+
+bool has_guid_text(const std::string &id) {
+	static const int groups[4] = {8, 4, 4, 16};
+	for (size_t at = 0; at + 35 <= id.size(); ++at) {
+		size_t p = at;
+		bool ok = true;
+		for (int g = 0; g < 4 && ok; ++g) {
+			for (int k = 0; k < groups[g] && ok; ++k) ok = std::isxdigit(static_cast<unsigned char>(id[p++])) != 0;
+			if (ok && g < 3) ok = id[p++] == '-';
+		}
+		if (ok) return true;
+	}
+	return false;
+}
+
+// Their length is the end over 1000 whatever the session's speed, and their session nodes' (the
+// session and slot modifiers', IDs with GUID text) states from the session's Begin to its Genesis,
+// which a session's own clock stamps 0, run on from the shared clock's time at Begin. The last of
+// that run (states under 2 s apart) stands for Genesis; the load's last moments are not recorded.
+uint32_t shared_clock_begin(const SessionRecord &r) {
+	if (std::fabs(double(r.length) * 1000.0 - double(r.end_ms)) > 1.0) return 0;
+	std::vector<uint32_t> stamps;
+	for (auto &m : r.managers) {
+		if (!has_guid_text(m->id)) continue;
+		for (auto &st : m->states) stamps.push_back(st.first);
+	}
+	std::sort(stamps.begin(), stamps.end());
+	if (stamps.empty() || stamps[0] == 0) return 0;
+	size_t i = 0;
+	while (i + 1 < stamps.size() && stamps[i + 1] - stamps[i] < 2000) ++i;
+	return stamps[i] < r.end_ms ? stamps[i] : 0;
+}
+
+}  // namespace
+
 bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec) {
 	if (!rec) return false;
 	de::ObjectRef desc = w.data().by_guid(rec->master);
@@ -1438,6 +1480,18 @@ bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec) {
 	auto &R = rw(w);
 	rec->recording = false;
 	for (auto &m : rec->managers) m->cursor = 0;
+	if (!rec->shared_clock_begin && (rec->shared_clock_begin = shared_clock_begin(*rec))) {
+		rec->end_ms -= rec->shared_clock_begin;
+		printf("an earlier build's recording: its session began at %u ms on the shared clock\n", rec->shared_clock_begin);
+	}
+	if (getenv("OPENBG_DEBUG_REPLAY")) {
+		fprintf(stderr, "[replay] end %u ms, length %.3f s\n", rec->end_ms, rec->length);
+		for (auto &m : rec->managers) {
+			std::string shown;
+			for (char ch : m->id) shown += ch >= 32 && ch < 127 ? ch : '.';
+			if (!m->states.empty()) fprintf(stderr, "[replay] %s: %zu states %u..%u\n", shown.c_str(), m->states.size(), m->states.front().first, m->states.back().first);
+		}
+	}
 	R.record = rec;
 	auto &ss = start_session(w, {res[0]});
 	ss.master_description = w.global_object(desc);
@@ -1506,6 +1560,15 @@ void replay_update(World &w) {
 	for (Brain *b : w.brains()) {
 		if (b->owner && b->owner->is("Actor\\Creature")) b->inst.controlled = false;
 	}
+	for (auto &[h, sm] : R.managers) {
+		if (sm.replay) update_for_replay(w, sm, local_time(w, *sm.owner));
+	}
+}
+
+void replay_after_pass(World &w) {
+	auto &R = rw(w);
+	if (!R.record || R.record->recording || !R.session) return;
+	uint32_t now = uint32_t(w.scene_ms());
 	// DE_CScene::PassTime back (Core 0x70070040): its TimeRewound event deletes the run-time actors
 	// prepared after the new time (DE_CActor::ProcessEvent 0x70090ed0, "ScenePrepareTime").
 	if (now < R.last_ms) {
@@ -1516,8 +1579,11 @@ void replay_update(World &w) {
 	}
 	R.last_ms = now;
 	for (GameObject *o : w.scene_objects()) R.prepared.emplace(o->handle, now);
+	// DE_CSession::Update's fixups (NeedFixup, then SetupOwnerForState of the newest held state).
 	for (auto &[h, sm] : R.managers) {
-		if (sm.replay) update_for_replay(w, sm, local_time(w, *sm.owner));
+		if (!sm.replay || !sm.need_fixup) continue;
+		sm.need_fixup = false;
+		if (!sm.lagged.empty() && w.object(h) == sm.owner) restore(w, sm, std::pair(sm.lagged.back()));
 	}
 }
 
@@ -1576,6 +1642,8 @@ bool creature_state_tick(World &w, GameObject &o) {
 	bool skip = c.mode == 2;
 	if (!skip && c.mode == 0 && c.ticked && c.unpacking != o.creature_ticks) {
 		if (StateManager *sm = manager_of(w, &o)) {
+			// DE_CStateManager::GetState (Core 2.123 0x201b8a50): a replay-driven manager first fetches.
+			if (sm->replay) update_for_replay(w, *sm, o.creature_ticks);
 			if (auto st = state_at(*sm, o.creature_ticks)) {
 				restore(w, *sm, *st);
 				skip = true;
