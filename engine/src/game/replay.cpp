@@ -1254,6 +1254,7 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 	uint32_t tick = (ms - c.base) / rate;
 	if (!c.ticked) {
 		// Never ticked (+0x20c): it ticks once, then takes its state at or before that tick.
+		if (getenv("OPENBG_DEBUG_REPLAY")) fprintf(stderr, "[replay %u] %s has never ticked: one tick at %u ms\n", w.frame(), o.name.c_str(), uint32_t(w.scene_ms()));
 		w.retick(o, uint32_t(w.scene_ms()));
 		if (StateManager *sm = manager_of(w, &o)) {
 			if (auto st = newest_state(*sm, 0, tick)) restore(w, *sm, *st);
