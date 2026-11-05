@@ -2101,16 +2101,16 @@ std::vector<GameObject *> World::fighters() {
 // DE_CSimplePhysics::ApplySingleSurfaceFriction (Core 0x701dc6d0): momentum eases towards the surface's own.
 void World::surface_friction(GameObject &o, float material, const std::array<float, 3> &surface) {
 	// SurfaceFrictionSlowdown (0x3503a5b0) is 0 while SkipFriction's flag is set.
-	float f = material * o.traction, slow = o.propelled || o.skip_friction ? 0 : 0.1f * f;
+	float f = material * o.traction, slow = o.skip_friction ? 0 : 0.1f * f;
+	if (f == 0) return;
+	o.surface_momentum = surface;
 	std::array<float, 3> rel{surface[0] - o.momentum[0], surface[1] - o.momentum[1], surface[2] - o.momentum[2]};
 	float len = std::sqrt(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]);
-	if (f != 0) {
-		if (slow * f <= len) {
-			float k = f >= 1 ? slow : slow * f;
-			for (int i = 0; i < 3; ++i) o.momentum[size_t(i)] += rel[size_t(i)] * k;
-		} else {
-			o.momentum = surface;
-		}
+	if (slow * f <= len) {
+		float k = f >= 1 ? slow : slow * f;
+		for (int i = 0; i < 3; ++i) o.momentum[size_t(i)] += rel[size_t(i)] * k;
+	} else {
+		o.momentum = surface;
 	}
 }
 
@@ -2135,7 +2135,7 @@ void World::physics_step(GameObject &o) {
 	}
 	if (o.on_floor) {
 		surface_friction(o);
-		o.skip_friction = false;
+		o.skip_friction = false;  // the flag outlasts airborne ticks
 	} else {
 		o.momentum[1] -= 0.037f * o.gravity;
 	}
@@ -2144,7 +2144,6 @@ void World::physics_step(GameObject &o) {
 	} else if (o.gravity > 1) {
 		o.gravity = std::max(1.0f, o.gravity - o.gravity_recover);
 	}
-	o.propelled = false;
 	float before = o.local.t[1];
 	for (int k = 0; k < 3; ++k) {
 		o.local.t[size_t(k)] += o.momentum[size_t(k)];

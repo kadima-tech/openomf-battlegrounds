@@ -46,12 +46,12 @@ struct Contact {
 // Does `source` (a sphere) touch `target`? Spheres, boxes, meshes and cones (a cone only against a
 // sphere).
 std::optional<Contact> touch(World &w, GameObject &source, GameObject &target);
-// Every face of a mesh affector that `source` touches.
-std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &target);
+// Every face of a mesh affector that `source` touches (`physics`: as a simple physics' results).
+std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &target, bool physics = false);
 // Every active scene affector in `groups` that `source` touches (not `source` itself or its own
 // branch's fighter), in the scene's affector order (DE_CAffector::IsTouching 0x7007b900 does not
 // sort; scripts ask for SortByTouchDistance when they want the nearest first).
-std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups);
+std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups, bool physics = false);
 // The nearest mesh or flat box surface in `groups` the segment a-b meets.
 std::optional<Contact> segment(World &w, const std::array<float, 3> &a, const std::array<float, 3> &b, uint32_t groups);
 // DE_CScene::TestLineSegment (Core 0x700731b0): the scene's ray cone (penumbra 0, far end the
