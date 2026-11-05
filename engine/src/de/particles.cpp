@@ -255,6 +255,21 @@ ParticleGeneratorDef read_generator(const World &w, const ObjectRef &r) {
 		}
 	} catch (const std::exception &) {
 	}
+	// Each modifier's Setup assures the channels it writes, on top of the generator's own BOOLs.
+	for (const auto &m : g.modifiers) {
+		if (m.kind == "Gravity" || m.kind == "Wind" || m.kind == "MomentumAndAcceleration" || m.kind == "InitialMomentumFall") {
+			g.channels[kChMomentum] = true;
+		} else if (m.kind == "NewParticleModifier") {
+			if (m.rotation_mode) g.channels[kChRotation] = true;
+			if (m.orientation_mode) g.channels[kChOrientation] = true;
+			if (m.momentum_mode) g.channels[kChMomentum] = true;
+			if (m.color_mode) g.channels[kChColor] = true;
+		} else if (m.kind == "Rotator") {
+			g.channels[kChRotation] = true;
+		} else if (m.kind == "SpringSpawner" || (m.kind == "ManualParticleSpawner" && m.manual_orientation)) {
+			g.channels[kChOrientation] = true;
+		}
+	}
 	return g;
 }
 
