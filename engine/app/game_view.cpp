@@ -500,7 +500,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (arena_file != environment_tree_file_) {
 		environment_tree_file_ = arena_file;
 		environment_tree_.clear();
-		first_local_.clear();
+		data_world_.clear();
 		turned_.clear();
 		if (arena_file) {
 			auto parents = arena_file->parents();
@@ -517,6 +517,28 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		}
 	}
 	auto in_environment = [this](uint32_t i) { return i < environment_tree_.size() && environment_tree_[i]; };
+	// Where the bake places an arena object: its data transforms down the file's tree.
+	auto data_world = [this, arena_file](uint32_t i) -> const de::Transform & {
+		if (data_world_.size() != arena_file->objects().size()) {
+			data_world_.assign(arena_file->objects().size(), de::Transform{});
+			data_world_done_.assign(arena_file->objects().size(), false);
+			data_parents_ = arena_file->parents();
+		}
+		std::vector<uint32_t> chain;
+		for (int p = int(i); p >= 0 && !data_world_done_[size_t(p)]; p = data_parents_[size_t(p)]) chain.push_back(uint32_t(p));
+		for (size_t k = chain.size(); k-- > 0;) {
+			uint32_t c = chain[k];
+			de::Transform local;
+			try {
+				local = de::read_actor(*arena_file, arena_file->objects()[c]).local;
+			} catch (const std::exception &) {
+			}
+			int p = data_parents_[c];
+			data_world_[c] = p >= 0 ? data_world_[size_t(p)].then(local) : local;
+			data_world_done_[c] = true;
+		}
+		return data_world_[i];
+	};
 	// The arena's actors that paths move (trains, cars, ...): drawn live, not baked.
 	std::vector<render::ActorMeshRenderer::Item> moving_items;
 	{
@@ -532,11 +554,18 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		};
 		for (game::GameObject *o : world.scene_objects()) {
 			if (o->file != arena_file || !shown(o)) continue;
-			// Any actor can be moved at run time (BActorRotator turns City's sign block): one whose
-			// local transform changes is drawn live from then on.
-			if (o->is_actor && !o->path_moved && !turned_.count(o)) {
-				auto [it, fresh] = first_local_.try_emplace(o, o->local);
-				if (!fresh && (it->second.r != o->local.r || it->second.t != o->local.t)) turned_.insert(o);
+			// Any actor can be moved at run time (BActorRotator turns City's sign block, scripts place
+			// others before the first draw): one no longer where the bake put it is drawn live.
+			if (o->is_actor && !o->path_moved && !turned_.count(o) && in_environment(o->index)) {
+				const de::Transform &data = data_world(o->index);
+				const de::Transform now = o->world();
+				float d = 0;
+				for (int k = 0; k < 9; ++k) d = std::fmax(d, std::fabs(data.r[k] - now.r[k]));
+				for (int k = 0; k < 3; ++k) d = std::fmax(d, std::fabs(data.t[k] - now.t[k]) * 1e-3f);
+				if (d > 1e-4f) {
+					turned_.insert(o);
+					if (getenv("OPENBG_DEBUG_PATHS")) fprintf(stderr, "[live %d] %s leaves the bake\n", fr, o->name.c_str());
+				}
 			}
 			if (!o->path_moved && !turned_.count(o)) continue;
 			moving.insert(o->index);
