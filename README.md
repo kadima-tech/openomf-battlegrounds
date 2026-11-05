@@ -2,7 +2,7 @@
 
 ![A fight in the City arena](docs/screenshot.png)
 
-**openomf-battlegrounds** is an open-source reimplementation of the engine behind
+**openomf-battlegrounds** is a source-available, non-commercial reimplementation of the engine behind
 *One Must Fall: Battlegrounds* (Diversions Entertainment, 2003), the 3D sequel to *One Must Fall: 2097*.
 In the spirit of [OpenOMF](https://github.com/omf2097/openomf) and ScummVM, it runs the original
 game's own data (the robots, pilots, arenas, menus, scripts, sound and music) on a new, native
@@ -191,7 +191,10 @@ using [SECURITY.md](SECURITY.md).
 ## License
 
 This project's original code and documentation are available under the
-[MIT license](LICENSE), including its warranty disclaimer and limitation of liability.
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0](LICENSE) license (CC BY-NC-SA 4.0).
+You may use, modify and redistribute them for non-commercial purposes, with credit, and anything
+you build from them must be shared under the same license. Releases published before the change
+from MIT keep the MIT license they were published under.
 The downloads include this license and the dependency notices in
 `Battlegrounds.app/Contents/Resources/licenses/` (macOS) or `Battlegrounds\resources\licenses\`
 (Windows).
@@ -199,7 +202,7 @@ The downloads include this license and the dependency notices in
 Third-party components retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The original game and its update
 data, including the bundled cumulative update, are not covered by this project's
-MIT license. You still need your own copy of the game.
+license. You still need your own copy of the game.
 
 ## Credits
 
