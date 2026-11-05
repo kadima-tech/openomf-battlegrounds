@@ -1030,15 +1030,22 @@ std::map<std::string, InputSequence> read_input_bank(const de::ObjectsFile &f, c
 	return out;
 }
 
-float VariedStat::value(float t) const {
+static float varied_at(const VariedStat &v, float t) {
 	static const float k[4] = {0.001f, 0.002f, 0.004f, 0.015f};
-	float x = (t + phase) * frequency;
-	float w = wave < 4 ? std::sin(x * k[wave]) : x;
-	return base + w * amplitude;
+	float x = t * v.frequency;
+	float w = v.wave < 4 ? std::sin(x * k[v.wave]) : x;
+	return v.base + w * v.amplitude;
+}
+
+float VariedStat::value(float t) const { return varied_at(*this, t + phase); }
+
+float VariedStat::advance(float &t) const {
+	t += phase;
+	return varied_at(*this, t);
 }
 
 void Pilot::apply_difficulty() {
-	quality = std::clamp(1.0f - (float(difficulty) + difficulty_offset) / 3.5f, 0.01f, 0.99f);
+	quality = std::clamp(1.0f - (float(effective_difficulty()) + difficulty_offset) / 3.5f, 0.01f, 0.99f);
 	// Perception: VariationAroundNormalized(phase, frequency, quality), then + quality x 0.4.
 	static const float around[9] = {0, 0.1f, 0.2f, 0.3f, 0.45f, 0.6f, 0.75f, 0.9f, 1.0f};
 	const std::pair<uint32_t, std::pair<float, float>> perception[4] = {
@@ -1050,9 +1057,16 @@ void Pilot::apply_difficulty() {
 	}
 }
 
+int Pilot::effective_difficulty() const { return int(float(difficulty) + difficulty_offset); }
+
 float Pilot::stat(uint32_t offset, float t) const {
 	auto it = ai.find(offset);
 	return it == ai.end() ? 1.0f : it->second.value(t);
+}
+
+float Pilot::stat_advance(uint32_t offset, float &t) const {
+	auto it = ai.find(offset);
+	return it == ai.end() ? 1.0f : it->second.advance(t);
 }
 
 std::optional<Pilot> read_pilot(const de::ObjectsFile &f, const de::ObjectInfo &o, int difficulty) {
@@ -1531,7 +1545,6 @@ void World::creature_tick(GameObject &o) {
 	creature_state_tick_end(*this, o);
 	++o.creature_ticks;
 	if (o.fighter) {
-		if (!skip && o.invulnerable_frames > 0) --o.invulnerable_frames;
 		if (!replay_held(*this, o)) {
 			guide(o);
 			particles->tick_trailers(o);
@@ -2074,6 +2087,8 @@ void World::physics_step(GameObject &o) {
 	if (debug_momentum) {
 		fprintf(stderr, "[momentum] frame %u %s (%.2f %.2f %.2f)\n", frame_, o.name.c_str(), o.momentum[0], o.momentum[1], o.momentum[2]);
 	}
+	// FighterPhysics::Tick (0x35039970) counts the invulnerable frames (+0x1a4) down before the brain runs.
+	if (o.invulnerable_frames != 0) --o.invulnerable_frames;
 	// DE_CFighterPhysics::Tick against the arena's surface affectors.
 	if (forces->fighter_tick(o)) {
 		return;

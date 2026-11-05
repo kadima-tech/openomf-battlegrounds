@@ -75,7 +75,7 @@ GameObject *pilot_target(World &w, GameObject &o) {
 // AIAttackRangeCaller (OMF 0x35020d60): base (+0x5f4, 1 to start, see jitter_attack_range) x
 // multiplier (+0x5f8) x the pilot's attack-range stat, at least 40.
 float attack_range(World &w, const GameObject &o) {
-	float stat = o.pilot ? o.pilot->stat(0x5e8, time_ms(w)) : 120.0f;
+	float stat = o.pilot ? o.pilot->stat(0x5e8, float(w.system_ms())) : 120.0f;  // gTime, not the scene's
 	return std::max(40.0f, o.ai_range_base * o.ai_range_multiplier * stat);
 }
 
@@ -88,7 +88,7 @@ float desirability(World &w, GameObject &o, const std::array<float, 3> &p) {
 	if (!t) {
 		return 0;
 	}
-	float time = time_ms(w);
+	float time = float(w.system_ms());  // gTime
 	auto stat = [&](uint32_t off) { return o.pilot ? o.pilot->stat(off, time) : 1.0f; };
 	auto me = o.world().t;
 	de::Transform tt = t->world();
@@ -177,30 +177,26 @@ uint32_t affinity_stat(int bit) {
 	return bit < 16 ? table[bit] : 0;
 }
 
-// The mean over the flagged attack categories of stat / usage (0.1 when none count). Whenever
-// (time + the flagged stats' phases) / 500 changes, every usage slot decays by 0.15 x the
-// variation stat, down to 1 (the original's clock really does include those phases).
+// The mean over the flagged attack categories of stat / usage (0.1 when none count), the bits
+// taken in AttackAffinity's order with one clock that gains each stat's phase as it is read
+// (CVariedStat::GetValue). Whenever that clock / 500 changes, every usage slot decays by 0.15 x
+// the variation stat, read on the same clock once per slot, down to 1.
 float attack_affinity(World &w, GameObject &o, uint32_t flags) {
-	float t = time_ms(w);
-	float clock = t;
+	static const int order[11] = {0, 1, 15, 14, 2, 3, 4, 13, 5, 9, 10};
+	float clock = time_ms(w);
 	float sum = 0, n = 0;
-	for (int i = 0; i < 22; ++i) {
-		if ((flags & (1u << i)) && affinity_stat(i)) {
-			float stat = o.pilot ? o.pilot->stat(affinity_stat(i), t) : 1.0f;
-			if (o.pilot) {
-				auto it = o.pilot->ai.find(affinity_stat(i));
-				clock += it != o.pilot->ai.end() ? it->second.phase : 0;
-			}
-			// usage 0 (never decayed yet) divides by zero in the original: infinite affinity
-			sum += o.attack_usage[size_t(i)] > 0 ? stat / o.attack_usage[size_t(i)] : 1e6f;
-			n += 1;
-		}
+	for (int i : order) {
+		if (!(flags & (1u << i))) continue;
+		float stat = o.pilot ? o.pilot->stat_advance(affinity_stat(i), clock) : 1.0f;
+		// usage 0 (never decayed yet) divides by zero in the original: infinite affinity
+		sum += o.attack_usage[size_t(i)] > 0 ? stat / o.attack_usage[size_t(i)] : 1e6f;
+		n += 1;
 	}
 	float aff = n > 0 ? sum / n : 0.1f;
 	int32_t second = int32_t(clock / 500);
 	if (second != o.usage_second) {
-		float variety = o.pilot ? o.pilot->stat(0x608, t) : 1.0f;
 		for (auto &u : o.attack_usage) {
+			float variety = o.pilot ? o.pilot->stat_advance(0x608, clock) : 1.0f;
 			u -= variety * 0.15f;
 			if (u < 1) {
 				u = 1;
@@ -225,12 +221,82 @@ const Pilot *pilot_of(GameObject *o) {
 	return nullptr;
 }
 
+namespace {
+void sort_commands(GameObject &o);
+}
+
+// Whether the creature's CommandManager property references a CommandModifier\Forget
+// (Fighter.DEObjects' StandardFighterCommandManager: FighterForgetCommandModifier).
+static bool has_forget_modifier(World &w, GameObject &o) {
+	for (const de::ObjectRef &p : w.properties_of(o)) {
+		if (!p || p.info().class_path != "UniqueActorProperty\\CommandManager") continue;
+		try {
+			de::Contents c(p.file->object_data(p.info()).references);
+			while (c.remaining() > 1) {
+				de::Chunk ch = de::begin_chunk(c);
+				if (ch.end > c.size()) break;
+				while (c.pos() < ch.end) {
+					while (c.pos() < ch.end && c.boolean()) {
+						de::ObjectRef t = w.data().resolve(*p.file, de::Reference::read(c));
+						if (t && t.info().class_path == "CommandModifier\\Forget") return true;
+					}
+				}
+				c.seek(ch.end);
+			}
+		} catch (const std::exception &) {
+		}
+	}
+	return false;
+}
+
+// DE_CCommandManager::ReceiveCommand (Creature 0x1501dc70): the commands already there age by
+// the ticks since the last new one (at least 1); then each modifier's NewCommand.
+// DE_CForgetCommandModifier::NewCommand (0x15020800): every 21st command, of each type in the
+// mask 0x3e only the first 10 in sorted order are kept.
 void World::issue_command(GameObject &o, GameObject::Command c) {
 	auto &m = o.commands;
+	if (m.forget < 0) m.forget = has_forget_modifier(*this, o);
+	if (m.ticks == 0) m.ticks = 1;
+	for (auto &e : m.list) e.age += m.ticks;
+	m.ticks = 0;
 	c.id = m.next_id++;
 	c.step = c.pos;
+	c.age = 0;
 	m.list.push_back(c);
 	m.dirty = true;
+	if (!m.forget || ++m.forget_count <= 20) return;
+	if (m.dirty) sort_commands(o);
+	std::vector<uint32_t> kill;
+	for (size_t i : m.order) kill.push_back(m.list[i].id);
+	for (int bit = 0; bit < 32; ++bit) {
+		uint32_t b = 1u << bit;
+		if (!(b & 0x3e)) continue;
+		int kept = 0;
+		for (auto &id : kill) {
+			if (!id || !(m.find(id)->type & b)) continue;
+			if (kept >= 10) break;
+			id = 0;
+			++kept;
+		}
+	}
+	for (uint32_t id : kill) {
+		if (id) remove_command(o, id);
+	}
+	m.forget_count = 0;
+}
+
+// DE_CCommandManager::RemoveCommand (0x1501db00).
+void World::remove_command(GameObject &o, uint32_t id) {
+	auto &m = o.commands;
+	m.dirty = true;
+	for (size_t i = 0; i < m.list.size(); ++i) {
+		if (m.list[i].id == id) {
+			m.list.erase(m.list.begin() + long(i));
+			break;
+		}
+	}
+	if (m.active == id) m.active = 0;
+	m.backups.erase(std::remove(m.backups.begin(), m.backups.end(), id), m.backups.end());
 }
 
 // DE_CCommandManager::Forget: every command whose type lies within the mask is removed
@@ -238,12 +304,8 @@ void World::issue_command(GameObject &o, GameObject::Command c) {
 void World::forget_commands(GameObject &o, uint32_t mask) {
 	auto &m = o.commands;
 	for (size_t i = m.list.size(); i-- > 0;) {
-		uint32_t id = m.list[i].id;
 		if ((m.list[i].type & mask) != m.list[i].type) continue;
-		m.list.erase(m.list.begin() + long(i));
-		m.dirty = true;
-		if (m.active == id) m.active = 0;
-		m.backups.erase(std::remove(m.backups.begin(), m.backups.end(), id), m.backups.end());
+		remove_command(o, m.list[i].id);
 	}
 }
 
@@ -286,7 +348,8 @@ float confidence(const GameObject &o, const GameObject::Command &c) {
 }
 
 // DE_CCommandManager::Sort: key = priority (1), MoveTo::ModifySort drops it to 0 within the
-// required distance of its path position; a stable bubble sort, highest first.
+// required distance of its path position, DE_CForgetCommandModifier::ModifySort (0x15020960)
+// scales it by (1000 - age) / 1000; a stable bubble sort, highest first.
 void sort_commands(GameObject &o) {
 	auto &m = o.commands;
 	auto me = o.world().t;
@@ -295,6 +358,7 @@ void sort_commands(GameObject &o) {
 		auto &c = m.list[i];
 		c.sort = 1;
 		if (c.type == kTypeNavigation && distance(me, c.step) < c.distance) c.sort = 0;
+		if (m.forget > 0) c.sort = (1000.0f - float(c.age)) / 1000.0f * c.sort;
 		m.order.push_back(i);
 	}
 	std::stable_sort(m.order.begin(), m.order.end(), [&](size_t x, size_t y) { return m.list[x].sort > m.list[y].sort; });
@@ -451,6 +515,7 @@ GameObject *World::current_target_of(GameObject &f) {
 
 void World::run_commands(GameObject &o) {
 	auto &m = o.commands;
+	++m.ticks;
 	if (m.reassign) reassign_commands(o);
 	if (m.list.empty()) return;
 	std::array<float, 3> me = o.world().t;
@@ -1048,9 +1113,9 @@ void register_ai_natives(World &w) {
 					if (ch->class_path == "Actor\\Creature\\Pilot") their = ch;
 				}
 				auto listed = [&](const std::vector<uint32_t> &l) { return their && std::find(l.begin(), l.end(), their->handle) != l.end(); };
-				// CVariedStat values at the clock advanced by each stat's phase, as the original does.
-				if (listed(pilot->love) && stats) d = stats->stat(0x7a8, clock) * d * 2;
-				if (listed(pilot->hate) && stats) d = d / (stats->stat(0x768, clock) * 2);
+				// One clock for the whole walk, gaining each stat's phase as it is read.
+				if (listed(pilot->love) && stats) d = stats->stat_advance(0x7a8, clock) * d * 2;
+				if (listed(pilot->hate) && stats) d = d / (stats->stat_advance(0x768, clock) * 2);
 			}
 			float score = d / (it->second + 0.01f);
 			if ((score < best_score || !best) && global_interest(c.world, o) > 0) {
@@ -1120,12 +1185,13 @@ void register_ai_natives(World &w) {
 			c.ret_f32(std::clamp(p ? p->stats.*f / 100.0f : 0.5f, 0.0f, 1.0f));
 		});
 	}
-	// SetAIDifficultyOffsetCaller (OMF 0x35048...): +0x3e4, then CalculateAIValues again.
+	// SetAIDifficultyOffsetCaller (2.123 0x10748e10): +0x3e8, then CalculateAIValues, which rereads the manager's difficulty.
 	reg("CPilot::SetAIDifficultyOffset(float)", [](const NativeContext &c) {
 		GameObject *f = fighter_of(c.self());
 		if (f && f->pilot) {
 			auto *p = const_cast<Pilot *>(f->pilot);
 			p->difficulty_offset = c.arg<float>(0);
+			p->difficulty = c.world.ai_difficulty;
 			p->apply_difficulty();
 		}
 	});
@@ -1178,9 +1244,10 @@ void register_ai_natives(World &w) {
 			return;
 		}
 		float bump = (o->pilot ? o->pilot->quality : 0.43f) * 0.2f + 0.7f;
-		float variety = o->pilot ? o->pilot->stat(0x608, time_ms(c.world)) : 1.0f;
+		float clock = time_ms(c.world);
 		for (int i = 0; i < 22; ++i) {
 			if (flags & (1u << i)) {
+				float variety = o->pilot ? o->pilot->stat_advance(0x608, clock) : 1.0f;
 				o->attack_usage[size_t(i)] += bump * variety;
 			}
 		}
@@ -1217,7 +1284,7 @@ void register_ai_natives(World &w) {
 	});
 	reg("COMF2Fighter::int AIDifficulty()", [](const NativeContext &c) {
 		auto *o = c.self();
-		c.ret_u32(o && o->pilot ? uint32_t(o->pilot->difficulty) : 2);
+		c.ret_u32(o && o->pilot ? uint32_t(o->pilot->effective_difficulty()) : 2);
 	});
 
 	reg("CObject::BInterface Interface(BGlobalID)", [](const NativeContext &c) {
@@ -1229,7 +1296,9 @@ void register_ai_natives(World &w) {
 	reg("CObject::float Random(float)", [](const NativeContext &c) { c.ret_f32(random01(c.world) * c.arg<float>(0)); });
 	// MATH::CenterRand: -x/2 .. x/2; MATH::Rand(int): 0 .. n-1.
 	reg("CObject::float CenterRandom(float)", [](const NativeContext &c) {
-		c.ret_f32((random01(c.world) - 0.5f) * c.arg<float>(0));
+		// MATH::CenterRand (Core 0x70025ec0): float(rand() x n) / 32768 - n x 0.5, the subtraction unrounded.
+		float n = c.arg<float>(0), a = float(crt_rand()) * n / 32768.0f;
+		c.ret_f32(float(double(a) - double(n) * 0.5));
 	});
 	reg("CObject::int Random(int)", [](const NativeContext &c) {
 		int32_t v = crt_rand() * c.arg<int32_t>(0);  // MATH::Rand(int) 0x70025ea0

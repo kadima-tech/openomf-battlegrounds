@@ -49,7 +49,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   driven by their own compiled script brains, in an arena:
   `engine/build/openbg-fight source/patched/v2123/Data Jaguar --opponent Katana --arena Desert`
   (`--opponent none` for solo; `--pilot` / `--opponent-pilot` pick pilots from Pilots.DEObjects,
-  `--difficulty rookie|amateur|veteran|champion|world-champion` sets the AI quality, `--wins 1|2|5|10|20|50`
+  `--difficulty rookie|amateur|veteran|champion|world-champion|master` sets the AI difficulty (default rookie, as the registry's), `--wins 1|2|5|10|20|50`
   the score limit (default 2); `--direct` skips the session and spawns both robots straight away (in the real arena, at the session's spawn points, each with its pilot driving it as in a session; the same robot can be both fighters); `--watch` lets the computer drive your robot too, for watching AI against AI.)
   The arena's song plays and follows the fight's moods (DirectMusic segments rendered by GothicKit
   dmusic, vendored in `engine/third_party/dmusic`, MIT, through a port of Microsoft's software synthesizer).

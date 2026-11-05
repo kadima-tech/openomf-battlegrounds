@@ -97,7 +97,7 @@ Sound and music are accepted as close enough to the original (2026-10-30): the r
 
 | What | Kind | Notes |
 |---|---|---|
-| Command manager | Ported | `World::run_commands` (FINDINGS 98, 106): the command list, sort, per-type assignment, primary/alternate arbitration and counters, once per creature update. Look-at offsets are always zero, as in the original (`DE_CLookAtCommand::SetOffset` has no caller). |
+| Command manager | Ported | `World::run_commands` (FINDINGS 98, 106): the command list, sort, per-type assignment, primary/alternate arbitration and counters, once per creature update, with the fighters' Forget modifier (ages, newest first, at most 10 per type: FINDINGS 368). Look-at offsets are always zero, as in the original (`DE_CLookAtCommand::SetOffset` has no caller). |
 | Creature needs | Ported | `needs.cpp` (FINDINGS 106, 117, 171): the 100000-unit test sphere at the focal point over group 0x800, each touched affector's Need, walked from the last in the scene's affector order, sub-affectors reached through their encompassers (FINDINGS 189); a fighter's team is its pilot's faction's TeamIndex (-1 without one), the need's area weight is its affector's intensity at the creature, and the enemy bonus asks `IsEnemyFighter`. |
 | Interface calls that switch state | Ported (equivalent mechanism) | Op 0x22 (`ContinueExecutionInternal`, FINDINGS 118) runs a state called from an instant method by tearing down the instance's main executer and setting the state, and runs an instant method called from a state on the instance's second executer (+0x8c), abandoning the calling state if it switched. Our VM runs both on one stack and stops the same way (the restart and the `state_switched_` flag), with the same outcome; it keeps no second executer. The frames below a call from outside belong to the state (`Executor::call_floor_`), so `KillCallers` in the call keeps them and the call's end resumes them, as the instant executer's own frame list does (FINDINGS 274). |
 | Force details | Ported | FINDINGS 117, 118: floor-event recipients are `DE_CPCodeEventRelay`s that call their method with no argument (the null event is the original's); each material with a threshold has its own incident recorder (`AddIncidentIfAbsent` per touched owner, inclusive); the simple physics' own force, the particle material's created-actor orientation and face extent, `CCollisionResults::ApplyForce`; surface-change recipients are never called, as in the original. |
@@ -131,7 +131,7 @@ registration in the DLLs either, but their methods are in Session.ModuleDLL and 
 
 | What | Kind | Notes |
 |---|---|---|
-| Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. |
+| Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. The stats are read on the clocks the original uses (FINDINGS 367); the `GetStat*` natives leave out the per-pilot time offset (+0x7c8, 3.4917 ms per pilot object initialised before), which only shifts the stats' phase. |
 | VMC2 trailing bytes | Ported | `DE_CClass::LoadVMCode` seeks to the chunk end after the final instances: the 1–3 bytes there are never read by the original either. |
 
 ## Patch level

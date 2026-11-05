@@ -67,6 +67,8 @@ struct VariedStat {
 	uint32_t level = 4, variation = 0, wave = 0;
 	float base = 1, amplitude = 0, phase = 0, frequency = 0;
 	float value(float time_ms) const;
+	// CVariedStat::GetValue(float &): the time it is handed keeps the phase added.
+	float advance(float &time_ms) const;
 };
 struct Pilot {
 	std::string name;
@@ -76,12 +78,15 @@ struct Pilot {
 	std::array<std::array<float, 3>, 3> colours{{{0.75f, 0.78f, 0.82f}, {0.10f, 0.35f, 0.85f}, {1.00f, 0.80f, 0.15f}}};
 	std::map<uint32_t, VariedStat> ai;  // by DE_CPilot offset (0x3e8 AffinityLeft ... 0x7a8 EmotionValor)
 	float quality = 0.43f;              // +0x7cc: AI quality degradation (higher = clumsier)
-	int difficulty = 2;                 // DE_COMF2Manager::AIDifficulty: 0 Rookie .. 4 World Champion
+	int difficulty = 2;                 // +0x7d4, DE_COMF2Manager::AIDifficulty: 0 Rookie .. 5 Master
 	float difficulty_offset = 0;        // +0x3e4 (CPilot::SetAIDifficultyOffset)
 	uint32_t sex = 0;                   // +0x3d4, after the AI stats: CPilot::sexMale, sexFemale, sexUndefined
 	float stat(uint32_t offset, float time_ms) const;
-	// The difficulty-dependent part of CalculateAIValues: quality degradation
-	// clamp(1 - (difficulty + offset) / 3.5, 0.01, 0.99) and the perception stats built on it.
+	float stat_advance(uint32_t offset, float &time_ms) const;
+	// trunc(difficulty + offset): COMF2Fighter::AIDifficulty (OMF 2.123 0x107211a0).
+	int effective_difficulty() const;
+	// The difficulty-dependent part of CalculateAIValues (2.123 0x1074ccc0): quality degradation
+	// clamp(1 - (trunc(difficulty + offset) + offset) / 3.5, 0.01, 0.99), the offset counted twice.
 	void apply_difficulty();
 };
 // `difficulty` is the app's AI difficulty (DE_COMF2Manager::AIDifficulty, normally from the
@@ -164,6 +169,7 @@ struct GameObject {
 		float step_distance = 0;             // ... and the distance left (+0x7c)
 		bool updated = false;
 		float sort = 1;         // +0x4c: priority (+0x48, always 1) after ModifySort
+		uint32_t age = 0;       // +0x58: manager ticks, added at each new command
 	};
 	struct CommandManager {
 		std::vector<Command> list;
@@ -171,6 +177,9 @@ struct GameObject {
 		bool dirty = true;             // +0xa0: sort before the next SortedCommand
 		bool reassign = false;         // +0xa4
 		uint32_t next_id = 1;
+		uint32_t ticks = 0;            // +0x94: ticks since the last new command
+		int forget = -1;               // the manager references a CommandModifier\Forget (-1: not looked yet)
+		int forget_count = 0;          // its +0x2c
 		// The creature's one controller (CControllerInfo).
 		uint32_t candidate = 0;        // +0x2c/+0x34: the primary being chosen (command id)
 		float candidate_conf = 0;      // +0x30
@@ -858,6 +867,7 @@ public:
 	// DE_CCreature::Command* -> DE_CCommandManager::ReceiveCommand / Forget.
 	void issue_command(GameObject &o, GameObject::Command c);
 	void forget_commands(GameObject &o, uint32_t mask);
+	void remove_command(GameObject &o, uint32_t id);
 	// The fighter the camera follows (the user's): its HUD and effects count as rendered.
 	const GameObject *focus = nullptr;
 	// openbg-fight --watch: the computer drives the user's fighter too (a test mode, not the game's).
