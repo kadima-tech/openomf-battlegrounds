@@ -177,11 +177,16 @@ void register_creature_natives(World &w) {
 	// DE_CCreature::AddComponent (Creature 0x15017180, vtable +0x188): the creature becomes this
 	// one's component (+0x218, listed at +0x128) and its child; its creation time is aligned to
 	// ours (+0x1d8, rounded down to its own update interval) so that it updates in step with us.
-	// Update phases are not modelled here, so only the parenting and the owner remain.
+	// Then SetActive (vtable +0x124) brings a parked component into the scene. Update phases are not modelled.
 	reg("CCreature::AddComponent(class CCreature)", [](const NativeContext &c) {
 		GameObject *o = c.self(), *k = c.arg_object(0);
 		if (!o || !k || k == o) return;
 		k->component_owner = o;
+		if (!k->active) {
+			bool was = in_scene(*k);
+			k->active = true;
+			if (!was && in_scene(*k)) c.world.prepare_branch(k);
+		}
 		if (k->parent != o) {
 			if (k->parent) {
 				auto &v = k->parent->children;

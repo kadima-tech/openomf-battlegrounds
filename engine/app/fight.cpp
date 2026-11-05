@@ -455,6 +455,20 @@ int main(int argc, char **argv) {
 				p = q + 1;
 			}
 		}
+		// OPENBG_ENERGY="Force@250": fill that fighter's energy bar then (super moves; several separated by ';').
+		std::vector<std::pair<std::string, int>> energies;
+		if (const char *en = getenv("OPENBG_ENERGY")) {
+			std::string spec = en;
+			for (size_t p = 0; p < spec.size();) {
+				size_t q = spec.find(';', p);
+				std::string item = spec.substr(p, q == std::string::npos ? std::string::npos : q - p);
+				char who[32] = {};
+				int at = 0;
+				if (sscanf(item.c_str(), "%31[^@]@%d", who, &at) == 2) energies.emplace_back(who, at);
+				if (q == std::string::npos) break;
+				p = q + 1;
+			}
+		}
 		// OPENBG_FIND="EnergyBoost@2600": where objects of that name are at that frame.
 		std::string find_name;
 		int find_at = -1;
@@ -485,6 +499,19 @@ int main(int argc, char **argv) {
 				if (fr != at) continue;
 				for (auto *fi : fighters) {
 					if (fi->actor->name == who) fi->actor->local.t = p, fi->actor->momentum = {0, 0, 0};
+				}
+			}
+			for (auto &[who, at] : energies) {
+				if (fr != at) continue;
+				for (auto *fi : fighters) {
+					if (fi->actor->name != who) continue;
+					for (game::GameObject *ch : fi->actor->children) {
+						if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
+						std::vector<uint8_t> args(4, 0);
+						float full = 1e6f;
+						memcpy(&args[0], &full, 4);
+						ch->brain->call(world, "AdjustEnergy(float)", args);
+					}
 				}
 			}
 		};

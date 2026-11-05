@@ -180,6 +180,31 @@ int main(int argc, char **argv) {
 			p = q + 1;
 		}
 	}
+	// HOLD="left_punch@300-420,up@500-510": the user's buttons held over those frames, as in openbg-fight.
+	std::vector<std::tuple<bool game::Input::*, int, int>> holds;
+	if (const char *h = getenv("HOLD")) {
+		const std::map<std::string, bool game::Input::*> keys = {
+		    {"up", &game::Input::up}, {"down", &game::Input::down}, {"left", &game::Input::left},
+		    {"right", &game::Input::right}, {"jump", &game::Input::jump}, {"duck", &game::Input::duck},
+		    {"evade", &game::Input::evade}, {"left_punch", &game::Input::left_punch},
+		    {"right_punch", &game::Input::right_punch}, {"left_kick", &game::Input::left_kick},
+		    {"right_kick", &game::Input::right_kick}};
+		std::string spec = h;
+		for (size_t p = 0; p < spec.size();) {
+			size_t q = spec.find(',', p);
+			std::string item = spec.substr(p, q == std::string::npos ? std::string::npos : q - p);
+			int a = 0, b = 0;
+			char key[32] = {};
+			if (sscanf(item.c_str(), "%31[a-z_]@%d-%d", key, &a, &b) == 3 && keys.count(key)) holds.emplace_back(keys.at(key), a, b);
+			if (q == std::string::npos) break;
+			p = q + 1;
+		}
+	}
+	auto held = [&holds](game::Input &in, int fr) {
+		for (auto &[f, a, b] : holds) {
+			if (fr >= a && fr <= b) in.*f = true;
+		}
+	};
 	try {
 		fprintf(stderr, "Loading game data from %s (this takes a while)...\n", data.c_str());
 		game::World world(data);
@@ -485,6 +510,8 @@ int main(int argc, char **argv) {
 					if (m.frame == fr && m.kind == 4) app.key(27);
 					if (m.frame == fr && m.kind == 5) app.key(int(m.x)), app.text(std::string(1, char(m.x)));
 				}
+				world.input = {};
+				if (!(app.current && app.current->input_off)) held(world.input, fr);
 				app.update();
 				rules_displayed();
 				world.tick_gui(0, game::World::kFrameMs);
@@ -669,6 +696,7 @@ int main(int argc, char **argv) {
 					if (sc > 0 && sc < SDL_NUM_SCANCODES && k[sc]) world.input.*fields[i] = true;
 				}
 			}
+			if (shot && !(app.current && app.current->input_off)) held(world.input, fr);
 			app.update();
 			rules_displayed();
 			world.tick_gui(0, frame_ms);

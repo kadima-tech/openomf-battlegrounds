@@ -141,6 +141,16 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 	in->def = def;
 	in->actor = actor;
 	in->time = float(w_.scene_ms_of(actor));
+	// DE_CParticleGenerator::NewInstance (Core 0x701d5c80) keeps one instance per actor (+0x40, keyed by +0x10).
+	const de::ObjectRef &gr = def->generator.object;
+	for (auto &o : instances_) {
+		const de::ObjectRef &og = o->def->generator.object;
+		if (o->actor == actor && !o->shared && og.file == gr.file && og.index == gr.index && def->kind != "FourFaceTriangle" &&
+		    o->def->kind != "FourFaceTriangle") {
+			in->shared = o.get();
+			break;
+		}
+	}
 	if (auto sp = actor_spawning_.find(actor); sp != actor_spawning_.end()) in->spawning = sp->second;
 	const de::ObjectRef &g = def->generator.object;
 	if (auto gs = generator_spawning_.find({{g.file, g.index}, actor}); gs != generator_spawning_.end()) in->spawning = gs->second;
@@ -400,6 +410,13 @@ void ParticleSystem::step() {
 }
 
 void ParticleSystem::step(ParticleInstance &in, float now) {
+	if (in.def->kind == "BillboardedQuad" && in.def->mode == 4 && in.stepped != w_.frame()) in.actor_momentum = actor_momentum(w_, in.actor);
+	if (in.shared) {
+		step(*in.shared, now);
+		in.time = in.shared->time;
+		in.stepped = in.shared->stepped;
+		return;
+	}
 	const auto &gen = in.def->generator;
 	float dt = std::clamp(now - in.time, 0.0f, kMaxStep);
 	in.time = now;

@@ -924,11 +924,18 @@ void register_ai_natives(World &w) {
 			if (bool *b = button(f->ai_input, c.arg<int32_t>(0))) *b = false;
 		}
 	});
-	reg("CCreatureController::bool IsButtonDown(int)", [=](const NativeContext &c) {
+	// IsButtonDownCaller / IsButtonUpCaller (Creature 0x15026c50 / 0x15026c30): the controller's
+	// ButtonState (vtable +0x11c), the user's device for the user's creature, else the defaults.
+	auto button_down = [=](const NativeContext &c) {
 		auto *f = fighter_of(c.self());
-		bool *b = f ? button(f->ai_input, c.arg<int32_t>(0)) : nullptr;
-		c.ret_bool(b && *b);
-	});
+		if (!f) return false;
+		Input in = f->user_controlled ? c.world.input : f->ai_input;
+		in.duck = in.duck_evade();
+		bool *b = button(in, c.arg<int32_t>(0));
+		return b && *b;
+	};
+	reg("CCreatureController::bool IsButtonDown(int)", [=](const NativeContext &c) { c.ret_bool(button_down(c)); });
+	reg("CCreatureController::bool IsButtonUp(int)", [=](const NativeContext &c) { c.ret_bool(!button_down(c)); });
 	reg("CCreatureController::ClearAllDefaults()", [](const NativeContext &c) {
 		if (auto *f = fighter_of(c.self())) f->ai_input = {};
 	});

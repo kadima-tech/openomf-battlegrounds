@@ -1154,7 +1154,14 @@ void register_session_natives(World &w) {
 		auto *sl = slot(c);
 		GameObject *m = c.arg_object(0);
 		if (!sl || !m) return;
-		sl->modifiers.push_back(m);
+		// DE_CStandardSessionSlot::AddModifier (Session 0x4501aff0): listed once, and the modifier's
+		// slot (+0x68, what Slot() returns) is this one.
+		if (std::find(sl->modifiers.begin(), sl->modifiers.end(), m) == sl->modifiers.end()) sl->modifiers.push_back(m);
+		if (m->parent != sl->obj) {
+			if (m->parent) std::erase(m->parent->children, m);
+			m->parent = sl->obj;
+			sl->obj->children.push_back(m);
+		}
 		make_node(c.world, *S(c), m).slot = sl;
 		if (sl->begun) {  // added to a running slot: start it now
 			auto &n = *S(c)->node(m);
