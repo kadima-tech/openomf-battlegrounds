@@ -831,6 +831,19 @@ void register_core_natives(World &w) {
 	}
 	// IsDuckButtonDownCaller: controller button 5 (duck/evade).
 	reg("COMF2Fighter::bool IsDuckButtonDown()", [](const NativeContext &c) { c.ret_bool(c.input().duck_evade()); });
+	// Is*ButtonUpCaller (OMF 2.123 0x35022a80-0x35022c60): false without a controller, else !button.
+	const std::vector<std::pair<const char *, bool Input::*>> buttons_up = {
+		{"COMF2Fighter::bool IsJumpButtonUp()", &Input::jump},
+		{"COMF2Fighter::bool IsLeftPunchButtonUp()", &Input::left_punch},
+		{"COMF2Fighter::bool IsRightPunchButtonUp()", &Input::right_punch},
+		{"COMF2Fighter::bool IsLeftKickButtonUp()", &Input::left_kick},
+		{"COMF2Fighter::bool IsRightKickButtonUp()", &Input::right_kick},
+	};
+	for (auto &[key, field] : buttons_up) {
+		auto f = field;
+		reg(key, [f](const NativeContext &c) { c.ret_bool(c.owner() && !(c.input().*f)); });
+	}
+	reg("COMF2Fighter::bool IsDuckButtonUp()", [](const NativeContext &c) { c.ret_bool(c.owner() && !c.input().duck_evade()); });
 	// Diagonals: both directions held.
 	const std::vector<std::tuple<const char *, bool Input::*, bool Input::*>> diagonals = {
 		{"COMF2Fighter::bool IsJoystickUpLeft()", &Input::up, &Input::left},

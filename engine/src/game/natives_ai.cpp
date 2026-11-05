@@ -929,6 +929,11 @@ void register_ai_natives(World &w) {
 		bool *b = f ? button(f->ai_input, c.arg<int32_t>(0)) : nullptr;
 		c.ret_bool(b && *b);
 	});
+	reg("CCreatureController::bool IsButtonUp(int)", [=](const NativeContext &c) {
+		auto *f = fighter_of(c.self());
+		bool *b = f ? button(f->ai_input, c.arg<int32_t>(0)) : nullptr;
+		c.ret_bool(!(b && *b));
+	});
 	reg("CCreatureController::ClearAllDefaults()", [](const NativeContext &c) {
 		if (auto *f = fighter_of(c.self())) f->ai_input = {};
 	});
