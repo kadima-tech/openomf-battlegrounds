@@ -187,7 +187,19 @@ std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &targe
 	return out;
 }
 
+static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b,
+                                                            std::vector<std::pair<float, Contact>> *all);
+
 std::optional<Contact> touch(World &w, GameObject &source, GameObject &target) {
+	// DE_CMeshReference::IsTouchingCone (Core 0x70085140): only penumbra 0, as the segment apex to far end.
+	if (source.shape == GameObject::Shape::Cone && (target.shape == GameObject::Shape::Mesh || target.shape == GameObject::Shape::Box)) {
+		if (source.penumbra != 0) return std::nullopt;
+		de::Transform t = source.world();
+		auto h = segment_hit(&target, t.t, add(t.t, t.rotate({0, 0, source.far_end})), nullptr);
+		if (!h) return std::nullopt;
+		h->second.source = &source;
+		return h->second;
+	}
 	// A box or mesh testing a sphere: the sphere's view of it, turned round.
 	if (source.shape != GameObject::Shape::Sphere) {
 		if (target.shape != GameObject::Shape::Sphere) return std::nullopt;
@@ -286,9 +298,6 @@ std::optional<Contact> touch(World &w, GameObject &source, GameObject &target) {
 		return std::nullopt;
 	}
 }
-
-static std::optional<std::pair<float, Contact>> segment_hit(GameObject *target, const Vec &a, const Vec &b,
-                                                            std::vector<std::pair<float, Contact>> *all);
 
 std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 	std::vector<Contact> out;
