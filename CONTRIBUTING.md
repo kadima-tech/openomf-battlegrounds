@@ -59,13 +59,13 @@ and the Windows x64 packaging checks in CI; data-dependent engine tests are not 
 ## Rights and licensing
 
 Submit only work you have the right to contribute. Contributions to the project's
-original code and documentation are provided under the [CC BY-NC-SA 4.0 license](LICENSE).
+original code and documentation are provided under the [MIT license](LICENSE).
 Keep third-party copyright and license notices intact; identify the source,
 version and license of any dependency you add, and update
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the app's packaged notices.
 
 The original game, its data, trademarks and official updates belong to their
-respective rights holders and are not covered by the project's license.
+respective rights holders and are not covered by the project's MIT license.
 Keep your disc files, extracted assets and analysis dumps local. Changes to the
 bundled cumulative update must follow its documented reproduction and hash
 validation process in [launcher/README.md](launcher/README.md#cumulative-update-provenance);

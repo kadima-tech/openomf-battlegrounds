@@ -23,7 +23,7 @@ BEGIN
       VALUE "FileDescription", "One Must Fall: Battlegrounds launcher"
       VALUE "FileVersion", OPENBG_VERSION_TEXT
       VALUE "InternalName", "Battlegrounds"
-      VALUE "LegalCopyright", "Copyright (c) 2026 Kadima Tech, CC BY-NC-SA 4.0"
+      VALUE "LegalCopyright", "MIT License"
       VALUE "OriginalFilename", "Battlegrounds.exe"
       VALUE "ProductName", "openomf-battlegrounds"
       VALUE "ProductVersion", OPENBG_VERSION_TEXT

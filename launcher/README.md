@@ -97,7 +97,7 @@ launcher/build-app.sh
 
 Distribute `dist/Battlegrounds.app` as a zip. The build script includes the
 engine, static extractor, cumulative update, relocatable CPython 3.12.12 and
-bsdiff4 1.2.6, together with the project's CC BY-NC-SA 4.0 license, third-party notice index
+bsdiff4 1.2.6, together with the project's MIT license, third-party notice index
 and upstream license files in `Contents/Resources/licenses/`. Additional runtime
 and package notices remain inside `python/` and `python-packages/`. See
 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for the component list and the
