@@ -354,6 +354,12 @@ void register_core_natives(World &w) {
 		auto v = read_vec(c.mem(), c.self_handle()), u = read_vec(c.mem(), c.arg<uint32_t>(0));
 		write_vec(c.mem(), c.self_handle(), {v[0] + u[0], v[1] + u[1], v[2] + u[2]});
 	});
+	// EqualsAddOpperatorFLOATCaller (Core 0x7014a9b0): the float added to every component.
+	reg("CObject::CVector::(opp +=)(float)", [](const NativeContext &c) {
+		auto v = read_vec(c.mem(), c.self_handle());
+		float k = c.arg<float>(0);
+		write_vec(c.mem(), c.self_handle(), {v[0] + k, v[1] + k, v[2] + k});
+	});
 	reg("CObject::CVector::(opp -=)(class CVector)", [](const NativeContext &c) {
 		auto v = read_vec(c.mem(), c.self_handle()), u = read_vec(c.mem(), c.arg<uint32_t>(0));
 		write_vec(c.mem(), c.self_handle(), {v[0] - u[0], v[1] - u[1], v[2] - u[2]});

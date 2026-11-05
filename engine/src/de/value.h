@@ -10,6 +10,9 @@
 //  - Value\RGBA\ModulatedRGBA v1: an RGBA reference and a FLOAT reference (their embedded
 //    defaults in the contents, the referenced objects in the references); GetValue(t) is the
 //    colour at t with alpha scaled by the float at t.
+//  - Value\RGBA\ImageMap v1 (DE_CValueRGBAImageMap 0x701135f0): references, the last chunk
+//    [v1: BOOL, image]; GetValue(t) is the image's pixel at (t x width, 0) (rgb white unless the
+//    image has all three colour channels, alpha 1 unless it has alpha).
 #pragma once
 
 #include <array>
@@ -49,11 +52,14 @@ struct FloatValue {
 	float eval(float t, const LiveFloat &live = {}) const;
 };
 
+struct Image;
+
 struct ColorValue {
 	std::array<float, 4> rgba{1, 1, 1, 1};
 	// ModulatedRGBA: colour and alpha modulator.
 	std::shared_ptr<ColorValue> color;
 	std::shared_ptr<FloatValue> alpha;
+	std::shared_ptr<const Image> map;
 	std::array<float, 4> eval(float t, const LiveFloat &live = {}) const;
 };
 

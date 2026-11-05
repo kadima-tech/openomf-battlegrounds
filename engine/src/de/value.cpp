@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "de/contents.h"
+#include "de/image.h"
 
 namespace de {
 
@@ -130,6 +131,16 @@ float FloatValue::eval(float t, const LiveFloat &live) const {
 }
 
 std::array<float, 4> ColorValue::eval(float t, const LiveFloat &live) const {
+	if (map) {
+		// DE_CImage::GetNormalizedPixel: ftol(t x width), clamped.
+		const int x = std::clamp(int(t * float(map->width)), 0, map->width - 1);
+		auto px = [&](int ch) {
+			auto it = map->channels.find(ch);
+			return it == map->channels.end() || it->second.size() <= size_t(x) ? 1.0f : float(it->second[size_t(x)]) / 255.0f;
+		};
+		const bool rgb = map->channels.count(0) && map->channels.count(1) && map->channels.count(2);
+		return {rgb ? px(0) : 1, rgb ? px(1) : 1, rgb ? px(2) : 1, px(3)};
+	}
 	if (!color) return rgba;
 	auto v = color->eval(t, live);
 	if (alpha) v[3] *= alpha->eval(t, live);
@@ -260,6 +271,26 @@ ColorValue read_color_value(const World &w, const ObjectRef &r) {
 				v.alpha = alpha;
 			}
 			c.seek(ch.end);
+		} else if (cls == "Value\\RGBA\\ImageMap") {
+			Contents rc(d.references);
+			size_t last = 0;
+			while (rc.remaining() > 1) {
+				last = rc.pos();
+				Chunk skip = begin_chunk(rc);
+				rc.seek(skip.end);
+			}
+			rc.seek(last);
+			Chunk m = begin_chunk(rc);
+			if (m.version == 1 && m.end > rc.pos() && rc.boolean()) {
+				ObjectRef ir = w.resolve(*r.file, Reference::read(rc));
+				if (ir && ir.info().class_path.rfind("Image", 0) == 0) {
+					auto img = std::make_shared<Image>(read_image(*ir.file, ir.info()));
+					if (img->width > 0 && img->height > 0) {
+						v.map = img;
+						v.rgba = v.eval(0);
+					}
+				}
+			}
 		}
 	} catch (const std::exception &) {
 	}
