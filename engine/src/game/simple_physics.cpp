@@ -164,7 +164,7 @@ void SimplePhysicsSystem::step(GameObject &p, SimplePhysics &s, GameObject &acto
 	contacts.clear();
 	for (GameObject *a : s.affectors) {
 		if (!s.groups || !in_scene(*a)) continue;
-		auto c = touches(w_, *a, s.groups);
+		auto c = touches(w_, *a, s.groups, true);
 		contacts.insert(contacts.end(), c.begin(), c.end());
 	}
 	if (contacts.empty()) return;

@@ -669,7 +669,7 @@ FighterState capture_physics(World &w, GameObject &o) {
 	s.recover = o.gravity_recover;
 	s.turn_rate = o.turn_rate;
 	s.forward_speed = o.forward_speed;
-	s.skip_friction = o.skip_friction || o.propelled;
+	s.skip_friction = o.skip_friction;
 	s.skip_push = fs.skip_push;
 	s.on_floor = o.on_floor;
 	s.last_hit = o.last_hit ? o.last_hit->handle : 0;
