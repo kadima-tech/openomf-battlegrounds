@@ -38,14 +38,14 @@ Vec rot(const Vec &v, int axis, float a) {
 void rotate_rows(Rows &r, int axis, float a);
 namespace {
 Vec sub3(const Vec &a, const Vec &b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
-// DE_CCoordinateSystem::Set(direction) (0x70025fe0): Z the normalised direction, Y the world up
-// made perpendicular to it (world Z when parallel), X = Y x Z.
-Rows rows_from_direction(Vec z) {
+// DE_CCoordinateSystem::Set(direction) (0x70025fe0), CoordinateSystemSet(z, y) (0x70147f40): Z the
+// direction, Y the up made perpendicular to it ((d up.x, 0, d) when parallel, d = Z . up), X = Y x Z.
+Rows rows_from_direction(Vec z, Vec up = {0, 1, 0}) {
 	float l = std::sqrt(z[0] * z[0] + z[1] * z[1] + z[2] * z[2]);
 	if (l > 0) for (auto &k : z) k /= l;
-	float d = z[1];
-	Vec y{-z[0] * d, 1 - z[1] * d, -z[2] * d};
-	if (d >= 1 || d <= -1) y = {0, 0, d};
+	float d = z[0] * up[0] + z[1] * up[1] + z[2] * up[2];
+	Vec y{up[0] - z[0] * d, up[1] - z[1] * d, up[2] - z[2] * d};
+	if (d >= 1 || d <= -1) y = {up[0] * d, 0, d};
 	float ly = std::sqrt(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
 	if (ly > 0) for (auto &k : y) k /= ly;
 	Vec x{y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0]};
@@ -291,6 +291,16 @@ void register_transform_natives(World &w) {
 		Vec z = read_vec(c.mem(), v);
 		if (z[0] == 0 && z[1] == 0 && z[2] == 0) return;
 		write_rows(c.mem(), a, rows_from_direction(z));
+		changed(c, a);
+	});
+	// CoordinateSystemPointZWithYCaller (0x7014b490): both normalised, then CoordinateSystemSet(z, y).
+	reg(cs + "PointZWithY(class CVector,class CVector)", [changed](const NativeContext &c) {
+		uint32_t a = c.self_handle(), zv = c.arg<uint32_t>(0), yv = c.arg<uint32_t>(1);
+		if (!a || !zv || !yv) return;
+		Vec z = read_vec(c.mem(), zv), y = read_vec(c.mem(), yv);
+		float ly = std::sqrt(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+		if (ly > 0) for (auto &k : y) k /= ly;
+		write_rows(c.mem(), a, rows_from_direction(z, y));
 		changed(c, a);
 	});
 	// CoordinateSystemSetCaller (0x7014b0e0): a copy of the other system, identity for none.

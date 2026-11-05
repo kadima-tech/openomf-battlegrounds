@@ -506,7 +506,7 @@ static int cmd_particles(const char *dir, const char *only) {
 			printf("%s/%s [%s] blend %d mode %d uv %d color %d size %gx%g cone %d norm %d off %g,%g,%g rgba %.2f,%.2f,%.2f,%.2f%s image %s\n",
 			       stem.c_str(), r.info().name.c_str(), p.kind.c_str(), p.blend, p.mode, p.uv_mode, p.color_mode, p.width,
 			       p.height, p.cone_mode, p.normalize, p.offset[0], p.offset[1], p.offset[2], p.color.rgba[0], p.color.rgba[1],
-			       p.color.rgba[2], p.color.rgba[3], p.color.color ? " (modulated)" : "",
+			       p.color.rgba[2], p.color.rgba[3], p.color.color ? " (modulated)" : p.color.map ? " (image map)" : "",
 			       p.image ? p.image.info().name.c_str() : "-");
 			if (p.kind == "FourFaceTriangle")
 				printf("    triangle %g,%g,%g %g,%g,%g %g,%g,%g jitter %g,%g,%g,%g,%g,%g,%g,%g,%g b4 %g,%g,%g,%g facing %d uv plane %d\n", p.tri_corners[0],
