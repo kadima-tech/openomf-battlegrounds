@@ -914,6 +914,8 @@ public:
 	// Set by the app: DE_CUIManager::ActiveManager is not null (a UI manager is up), and
 	// DE_CNotification::NewUserInformation (the modal "User Information" dialog).
 	std::function<bool()> ui_manager_active;
+	// DE_CAppManager::IsActive for the page of a session's UI manager object (IsActiveLocally).
+	std::function<bool(const GameObject *ui)> ui_active_locally;
 	std::function<void(const std::string &title, const std::string &text)> notify_user;
 	// CObject::DeleteThis: unlinks the object (and its branch); handles to it go inactive.
 	void destroy(GameObject *o);
