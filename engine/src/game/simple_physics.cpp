@@ -25,6 +25,7 @@ namespace {
 
 using Vec = std::array<float, 3>;
 Vec add(const Vec &a, const Vec &b) { return {a[0] + b[0], a[1] + b[1], a[2] + b[2]}; }
+Vec sub(const Vec &a, const Vec &b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
 Vec mul(const Vec &a, float k) { return {a[0] * k, a[1] * k, a[2] * k}; }
 float dot(const Vec &a, const Vec &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 float len(const Vec &a) { return std::sqrt(dot(a, a)); }
@@ -131,6 +132,15 @@ std::vector<GameObject *> SimplePhysicsSystem::physics_of(GameObject &actor) {
 			if (!p) {
 				if (GameObject *g = w_.global_object(r)) p = w_.forces->unique_property(actor, *g);
 			}
+			// A monitor measures one actor: those sharing one in the data each get their own.
+			if (p && p->class_path == "Physics\\MomentumMonitor") {
+				auto owner = actors_.find(p);
+				if (owner != actors_.end() && owner->second != &actor) {
+					GameObject *&own = monitor_copies_[{&actor, p}];
+					if (!own) own = w_.copy_tree(*p);
+					p = own;
+				}
+			}
 			if (p && std::find(out.begin(), out.end(), p) == out.end()) {
 				out.push_back(p);
 				actors_[p] = &actor;
@@ -233,6 +243,115 @@ void SimplePhysicsSystem::tick() {
 			}
 		}
 	}
+}
+
+de::Transform rotation_of(const Vec &w) {
+	de::Transform t;
+	float a = len(w);
+	if (a < 1e-12f) return t;
+	Vec n = mul(w, 1 / a);
+	float c = std::cos(a), s = std::sin(a), k = 1 - c;
+	// Column j is the image of axis j.
+	for (int j = 0; j < 3; ++j) {
+		Vec e{0, 0, 0};
+		e[size_t(j)] = 1;
+		Vec x{n[1] * e[2] - n[2] * e[1], n[2] * e[0] - n[0] * e[2], n[0] * e[1] - n[1] * e[0]};
+		float d = dot(n, e);
+		for (int i = 0; i < 3; ++i) t.r[size_t(j * 3 + i)] = e[size_t(i)] * c + x[size_t(i)] * s + n[size_t(i)] * d * k;
+	}
+	return t;
+}
+
+namespace {
+
+// The turn from `prev` to `cur` (world frames) as an axis times its angle.
+Vec turn_between(const de::Transform &prev, const de::Transform &cur) {
+	auto m = [&](int i, int j) {
+		float v = 0;
+		for (int k = 0; k < 3; ++k) v += cur.r[size_t(k * 3 + i)] * prev.r[size_t(k * 3 + j)];
+		return v;
+	};
+	Vec v{0.5f * (m(2, 1) - m(1, 2)), 0.5f * (m(0, 2) - m(2, 0)), 0.5f * (m(1, 0) - m(0, 1))};
+	float s = len(v), c = 0.5f * (m(0, 0) + m(1, 1) + m(2, 2) - 1);
+	if (s < 1e-9f) return {0, 0, 0};
+	return mul(v, std::atan2(s, c) / s);
+}
+
+}  // namespace
+
+MomentumMonitor &SimplePhysicsSystem::monitor(GameObject &p) {
+	MomentumMonitor &m = monitors_[&p];
+	if (m.read || !p.file) return m;
+	m.read = true;
+	try {
+		de::Contents c(p.file->object_data(p.file->objects()[p.index]).contents);
+		de::Chunk base = de::begin_chunk(c);
+		c.block();
+		if (base.version == 2) {
+			m.enabled = c.boolean();
+			m.rate = c.i32();
+		}
+	} catch (const std::exception &) {
+	}
+	if (GameObject *a = actor_of(p)) {
+		m.prev = m.cur = a->world();
+		m.asked_pos = m.cur.t;
+	}
+	m.asked_ms = w_.scene_ms_of(&p);
+	return m;
+}
+
+void SimplePhysicsSystem::monitor_tick(GameObject &p) {
+	MomentumMonitor &m = monitor(p);
+	GameObject *a = actor_of(p);
+	if (!a) return;
+	m.prev = m.cur;
+	m.cur = a->world();
+	if (!m.ticked) m.prev = m.cur;
+	m.ticked = true;
+}
+
+Vec SimplePhysicsSystem::momentum_at(GameObject &actor, const Vec &at) {
+	Vec linear{0, 0, 0}, turn{0, 0, 0};
+	for (GameObject *p : physics_of(actor)) {
+		if (p->class_path == "Physics\\Simple") {
+			const SimplePhysics &sp = state(*p);
+			if (sp.enabled) linear = add(linear, mul(sp.momentum, sp.rate > 0 ? 1.0f / float(sp.rate) : 1.0f));
+			continue;
+		}
+		if (p->class_path != "Physics\\MomentumMonitor") continue;
+		MomentumMonitor &m = monitor(*p);
+		if (!m.enabled) continue;
+		if (m.rate > 0) {
+			float k = 1.0f / float(m.rate);
+			linear = add(linear, mul(sub(m.cur.t, m.prev.t), k));
+			turn = add(turn, mul(turn_between(m.prev, m.cur), k));
+		} else if (GameObject *a = actor_of(*p)) {
+			uint32_t now = w_.scene_ms_of(p);
+			if (now > m.asked_ms) {
+				Vec pos = a->world().t;
+				m.on_demand = mul(sub(pos, m.asked_pos), 1.0f / float(now - m.asked_ms));
+				m.asked_pos = pos;
+			}
+			m.asked_ms = now;
+			linear = add(linear, m.on_demand);
+		}
+	}
+	if (len(turn) > 0) {
+		Vec r = sub(at, actor.world().t);
+		linear = add(linear, sub(rotation_of(turn).rotate(r), r));
+	}
+	return linear;
+}
+
+Vec SimplePhysicsSystem::rotational_momentum(GameObject &actor) {
+	Vec turn{0, 0, 0};
+	for (GameObject *p : physics_of(actor)) {
+		if (p->class_path != "Physics\\MomentumMonitor") continue;
+		MomentumMonitor &m = monitor(*p);
+		if (m.enabled && m.rate > 0) turn = add(turn, mul(turn_between(m.prev, m.cur), 1.0f / float(m.rate)));
+	}
+	return turn;
 }
 
 void SimplePhysicsSystem::delta_tick(GameObject &p) {

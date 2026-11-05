@@ -1390,7 +1390,7 @@ void World::add_temporal(uint32_t rate, Temporal t, const GameObject *clock) {
 	}
 	static const bool debug = getenv("OPENBG_DEBUG_TEMPORALS") != nullptr;
 	if (debug) {
-		const char *kinds[] = {"creature", "executor", "tester", "input"};
+		const char *kinds[] = {"creature", "executor", "tester", "input", "monitor"};
 		std::string who = t.brain && t.brain->owner ? t.brain->owner->name : t.handle && object(t.handle) ? object(t.handle)->name : "-";
 		fprintf(stderr, "[temporal %u] %s %s every %u ms in %s\n", scene_ms_, kinds[t.kind], who.c_str(), rate,
 		        s.scene ? "the GUI" : s.clock ? s.clock->name.c_str() : "no session");
@@ -1415,10 +1415,31 @@ void World::register_temporals() {
 		input_registered_ = true;
 		add_temporal(16, {Temporal::Input, 0, nullptr});  // DE_CJoystickInputManager +0x10c
 	}
-	for (GameObject *o : scene_objects()) register_creature(o);
+	for (GameObject *o : scene_objects()) {
+		register_creature(o);
+		register_monitors(o);
+	}
 	for (auto &bp : brains_) {
 		Brain *b = bp.get();
 		if (b->started) register_brain(b);
+	}
+}
+
+// DE_CPhysics::UpdateEnabled (Core 0x701d97f0): an enabled momentum monitor with a rate joins its set.
+void World::register_monitors(GameObject *o) {
+	if (o->monitors_registered || !o->is_actor || !o->file) return;
+	o->monitors_registered = true;
+	bool any = false;
+	for (auto &r : actor_properties({o->file, o->index})) {
+		if (r && r.info().class_path == "Physics\\MomentumMonitor") any = true;
+	}
+	if (!any) return;
+	for (GameObject *p : simple_physics->physics_of(*o)) {
+		if (p->class_path != "Physics\\MomentumMonitor") continue;
+		MomentumMonitor &m = simple_physics->monitor(*p);
+		static const bool debug = getenv("OPENBG_DEBUG_TEMPORALS") != nullptr;
+		if (debug) fprintf(stderr, "[monitor] %s: enabled %d rate %d\n", o->name.c_str(), m.enabled, m.rate);
+		if (m.enabled && m.rate > 0) add_temporal(uint32_t(m.rate), {Temporal::Monitor, p->handle, nullptr}, clock_key(o));
 	}
 }
 
@@ -1636,6 +1657,9 @@ void World::advance(TemporalSet &set) {
 		case Temporal::Brain: pulse(*this, it->brain); break;
 		case Temporal::Tester: tick_collision_tester(*this, it->handle); break;
 		case Temporal::Input: input_tick(it->handle); break;
+		case Temporal::Monitor:
+			if (GameObject *p = object(it->handle)) simple_physics->monitor_tick(*p);
+			break;
 		}
 	}
 }
@@ -2046,21 +2070,18 @@ std::vector<GameObject *> World::fighters() {
 
 // DE_CFighterPhysics::Tick without surfaces (arenas lacking fighting-surface affectors): gravity
 // while airborne, surface friction on the floor, then a height field under the fighter.
-// DE_CSimplePhysics::ApplySingleSurfaceFriction against a static surface: friction f = material
-// x traction; slowdown = 0 while propelled, else 0.1 f. Momentum loses slowdown x min(f, 1) of
-// itself per frame and stops once under slowdown x f.
-void World::surface_friction(GameObject &o, float material) {
+// DE_CSimplePhysics::ApplySingleSurfaceFriction (Core 0x701dc6d0): momentum eases towards the surface's own.
+void World::surface_friction(GameObject &o, float material, const std::array<float, 3> &surface) {
 	// SurfaceFrictionSlowdown (0x3503a5b0) is 0 while SkipFriction's flag is set.
 	float f = material * o.traction, slow = o.propelled || o.skip_friction ? 0 : 0.1f * f;
-	float len = std::sqrt(o.momentum[0] * o.momentum[0] + o.momentum[1] * o.momentum[1] + o.momentum[2] * o.momentum[2]);
+	std::array<float, 3> rel{surface[0] - o.momentum[0], surface[1] - o.momentum[1], surface[2] - o.momentum[2]};
+	float len = std::sqrt(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]);
 	if (f != 0) {
 		if (slow * f <= len) {
 			float k = f >= 1 ? slow : slow * f;
-			for (auto &v : o.momentum) {
-				v -= v * k;
-			}
+			for (int i = 0; i < 3; ++i) o.momentum[size_t(i)] += rel[size_t(i)] * k;
 		} else {
-			o.momentum = {0, 0, 0};
+			o.momentum = surface;
 		}
 	}
 }
