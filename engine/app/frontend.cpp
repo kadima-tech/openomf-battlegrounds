@@ -220,6 +220,7 @@ int main(int argc, char **argv) {
 		app.cast_presets = choose;
 		game::ui::system_time = [&world] { return world.system_ms(); };
 		world.ui_manager_active = [&app] { return app.current && app.current->activated; };
+		world.ui_active_locally = [&app](const game::GameObject *ui) { return app.ui_active(app.page_of(ui)); };
 		world.notify_user = [&app](const std::string &title, const std::string &text) { app.notify(title, text); };
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);

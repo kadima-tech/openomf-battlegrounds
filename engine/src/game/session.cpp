@@ -1506,7 +1506,8 @@ void register_session_natives(World &w) {
 		if (auto it = c.world.rules_displays.find(ui); ui && it != c.world.rules_displays.end()) return it->second.shown;
 		auto *s = S(c);
 		auto it = s && ui ? s->ui.find(ui) : decltype(s->ui.end()){};
-		return s && ui && it != s->ui.end() && it->second.shown;
+		if (!s || !ui || it == s->ui.end()) return false;
+		return c.world.ui_active_locally ? c.world.ui_active_locally(ui) : it->second.shown;
 	};
 	reg("CClient::bool IsUIManagerActive()", [client, shown](const NativeContext &c) {
 		auto *cl = client(c);

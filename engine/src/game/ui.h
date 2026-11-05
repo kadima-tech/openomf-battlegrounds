@@ -72,7 +72,8 @@ public:
 	bool input_off = true;         // +0xbc
 	bool show_overlay = true;      // +0xc8
 	bool auto_select = false;      // +0x94
-	bool backed_out = false;       // +0x60
+	bool backed_out = false;       // +0x60, cleared by Begin and Activate
+	bool read_only = false;        // UIManagerComplete's dialog ReadOnlyOn: no mouse until it deactivates
 	bool persistent = false;       // the factory's persistent instance: never deleted
 	bool deleted = false;          // DeleteThisLater'd: never shown again
 	GameObject *script = nullptr;  // the DE_CUIManager object the scripts hold, if any
@@ -96,6 +97,8 @@ public:
 	virtual void wheel(AppManager &, int) {}
 	virtual void text(AppManager &, const std::string &) {}
 	virtual void deactivated(AppManager &) {}
+	// The UI manager it owns as a child object, if any (IsActive looks through it).
+	virtual UIManager *child() const { return nullptr; }
 	// Once per app update while it is the current page (DE_GLOBAL::AddUpdateObject).
 	virtual void update(AppManager &) {}
 
@@ -174,6 +177,7 @@ public:
 	void setup_controls(AppManager &app) override;
 	void click(AppManager &app, Control &c) override;
 	void draw(AppManager &app, std::vector<DrawItem> &out) override;
+	UIManager *child() const override { return picker_.get(); }
 	// Testing (OPENBG_HELP_CYCLE): show entry i as a click on its row would; its name, empty past the end.
 	std::string show_entry(AppManager &app, size_t i);
 
@@ -250,6 +254,10 @@ public:
 	static bool is_active(const GameObject *actor);
 
 	void set_next(const UIPtr &mgr, bool push);
+	// DE_CAppManager::IsActive (Core 0x7019aeb0).
+	bool ui_active(const UIManager *m);
+	// The page whose script object is `ui` (current, next or stacked), if any.
+	UIManager *page_of(const GameObject *ui) const;
 	// NextUIManager (Core 0x201a1570) and GetUIManager as the scripts see them (the 2.101 natives
 	// NextUIManager(), CurrentUIManager()): the queued / current page's script object.
 	GameObject *next_ui_object() const { return next ? next->script : nullptr; }
