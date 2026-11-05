@@ -125,8 +125,8 @@ std::vector<GameObject *> SimplePhysicsSystem::physics_of(GameObject &actor) {
 	for (GameObject *c : actor.children) {
 		if (c->is("Physics")) out.push_back(c);
 	}
-	if (actor.file) {
-		for (auto &r : w_.actor_properties({actor.file, actor.index})) {
+	{
+		for (auto &r : w_.properties_of(actor)) {
 			if (!r || r.info().class_path.rfind("Physics", 0) != 0) continue;
 			GameObject *p = find_in_branch(&actor, r);
 			if (!p) {
@@ -226,7 +226,7 @@ GameObject *SimplePhysicsSystem::creature_physics(GameObject &creature) {
 	GameObject *found = nullptr;
 	if (creature.is("Actor\\Creature") && creature.file) {
 		auto list = physics_of(creature);
-		for (auto &r : w_.actor_properties({creature.file, creature.index})) {
+		for (auto &r : w_.properties_of(creature)) {
 			if (!r || r.info().class_path.rfind("Physics", 0) != 0) continue;
 			for (GameObject *p : list) {
 				if (p->file == r.file && p->index == r.index) found = p;
@@ -333,9 +333,9 @@ Vec SimplePhysicsSystem::momentum_at(GameObject &actor, const Vec &at) {
 	for (GameObject *p : physics_of(actor)) {
 		if (p->class_path == "Physics\\Simple") {
 			const SimplePhysics &sp = state(*p);
-			// DE_CPhysics::TimeScale (+0x44): 1 / the rate of a creature that ticks it.
+			// DE_CPhysics::TimeScale (Core 0x701d8de0): 1 / its own rate, else +0x44 (1 / a ticking creature's rate, or 1).
 			const uint32_t ticks = p == creature_physics(actor) ? w_.creature_rate(&actor) : 0;
-			const float per_ms = ticks ? 1.0f / float(ticks) : sp.rate > 0 ? 1.0f / float(sp.rate) : 1.0f;
+			const float per_ms = sp.rate > 0 ? 1.0f / float(sp.rate) : ticks ? 1.0f / float(ticks) : 1.0f;
 			if (sp.enabled) linear = add(linear, mul(sp.momentum, per_ms));
 			continue;
 		}
