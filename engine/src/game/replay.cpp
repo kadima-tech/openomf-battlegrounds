@@ -1612,10 +1612,9 @@ void replay_after_pass(World &w) {
 void register_state(World &w, GameObject *owner, bool got_hit) {
 	auto &R = rw(w);
 	if (!owner) return;
-	// The state manager of the object (or of the creature it is a component of).
+	// RegisterExecutorState (Creature 0x15015650) uses only the creature's own manager (+0x204).
 	GameObject *o = owner;
-	while (o && !has_state_manager(*o)) o = o->component_owner && o->component_owner != o ? o->component_owner : o->parent;
-	if (!o || in_gui(*o)) return;
+	if (!has_state_manager(*o) || in_gui(*o)) return;
 	StateManager &sm = R.record && R.record->recording && in_session(w, o) ? join(w, *o) : own_manager(w, *o);
 	if (sm.replay) return;
 	// CreateCurrentState (Core 0x701aeea0) at the owner's local time (RegisterExecutorState,
