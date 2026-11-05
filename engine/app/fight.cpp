@@ -1,7 +1,7 @@
 // openbg-fight: a fighter driven by its own compiled brain through the native runtime.
 //
 //   openbg-fight <Data dir> <Fighter, e.g. Jaguar> [--opponent Katana|none] [--arena Desert]
-//                [--opponent-pilot Elizabeth] [--difficulty rookie|amateur|veteran|champion|world-champion]
+//                [--opponent-pilot Elizabeth] [--difficulty rookie|amateur|veteran|champion|world-champion|master]
 //                [--pilot Lucas] [--wins 1|2|5|10|20|50] [--direct]
 //                [--watch] [--headless [frames]] [--screenshot out.png --frames N]
 //
@@ -167,11 +167,11 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[i], "--opponent-pilot") && i + 1 < argc) {
 			opponent_pilot = argv[++i];
 		} else if (!strcmp(argv[i], "--difficulty") && i + 1 < argc) {
-			// DE_COMF2Manager::SetupAIDifficultyList: Rookie, Amateur, Veteran, Champion, World Champion.
+			// DE_COMF2Manager::SetupAIDifficultyList: Rookie, Amateur, Veteran, Champion, World Champion, Master.
 			std::string d = argv[++i];
-			const char *names[] = {"rookie", "amateur", "veteran", "champion", "world-champion"};
+			const char *names[] = {"rookie", "amateur", "veteran", "champion", "world-champion", "master"};
 			difficulty = isdigit(d[0]) ? atoi(d.c_str()) : 2;
-			for (int k = 0; k < 5; ++k) {
+			for (int k = 0; k < 6; ++k) {
 				if (d == names[k]) difficulty = k;
 			}
 		} else if (!strcmp(argv[i], "--free-camera")) {
@@ -204,6 +204,7 @@ int main(int argc, char **argv) {
 			r.shown = r.displayed = r.authorized = true;
 		};
 		world.all_ai = watch;
+		world.ai_difficulty = difficulty;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
 		static std::deque<game::Pilot> pilots;
 		auto load_pilot = [&](const std::string &who) -> const game::Pilot * {

@@ -1420,9 +1420,11 @@ void register_combat_natives(World &w) {
 		c.ret_object(o ? c.world.current_target_of(*o) : nullptr);
 	});
 	reg("COMF2Fighter::SetInvulnerabilityFramesRemaining(int)", [](const NativeContext &c) { if (auto *o = c.self()) o->invulnerable_frames = c.arg<int32_t>(0); });
-	reg("COMF2Fighter::IncrementInvulnerabilityFramesRemaining(int)", [](const NativeContext &c) { if (auto *o = c.self()) o->invulnerable_frames += c.arg<int32_t>(0); });
-	reg("COMF2Fighter::int InvulnerabilityFramesRemaining()", [](const NativeContext &c) { auto *o = c.self(); c.ret_u32(o ? uint32_t(std::max(0, o->invulnerable_frames)) : 0); });
-	reg("COMF2Fighter::bool IsInvulnerable()", [](const NativeContext &c) { auto *o = c.self(); c.ret_bool(o && o->invulnerable_frames > 0); });
+	reg("COMF2Fighter::IncrementInvulnerabilityFramesRemaining(int)", [](const NativeContext &c) {
+		if (auto *o = c.self()) o->invulnerable_frames = std::max(0, o->invulnerable_frames + c.arg<int32_t>(0));
+	});
+	reg("COMF2Fighter::int InvulnerabilityFramesRemaining()", [](const NativeContext &c) { auto *o = c.self(); c.ret_u32(o ? uint32_t(o->invulnerable_frames) : 0); });
+	reg("COMF2Fighter::bool IsInvulnerable()", [](const NativeContext &c) { auto *o = c.self(); c.ret_bool(o && o->invulnerable_frames != 0); });
 	// Run-time generated moves: capture the pose now (initial) or after setting a sequence (final).
 	reg("CCreature::AnimCaptureAsInitial()", [](const NativeContext &c) {
 		if (auto *o = c.self(); o && o->fighter) c.world.validate_animation(*o);  // the Caller validates first
