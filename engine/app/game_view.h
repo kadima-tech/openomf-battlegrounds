@@ -41,6 +41,8 @@ struct CameraLens {
 	float fov = 80, near = 10, far = 100000;
 };
 CameraLens camera_lens(const game::GameObject *actor);
+// The value objects an actor's modifiers read, as set on that actor or one above it.
+de::LiveFloat actor_values(const game::World &world, const game::GameObject *o);
 
 class GameView {
 public:

@@ -237,6 +237,24 @@ bool GameView::shown(const game::GameObject *o) const {
 	return !s || !world.session || s == world.session->obj;
 }
 
+de::LiveFloat actor_values(const game::World &world, const game::GameObject *o) {
+	return [&world, o](const de::ObjectRef &r) -> std::optional<float> {
+		for (const game::GameObject *p = o; p; p = p->parent) {
+			auto it = world.values.find(p);
+			if (it == world.values.end()) continue;
+			for (const game::GameObject *ch : p->children) {
+				if (ch->file != r.file || ch->index != r.index) continue;
+				auto v = it->second.find(ch->name);
+				if (v == it->second.end()) break;
+				float f;
+				memcpy(&f, &v->second.bits, 4);
+				return f;
+			}
+		}
+		return std::nullopt;
+	};
+}
+
 void GameView::init_gl() {
 	overlay.load(world.data());
 	particles_r.load();
@@ -246,6 +264,7 @@ void GameView::init_gl() {
 	// A FLOAT value object as the scripts set it (BSetSceneTime's SceneTime every render tick).
 	render::g_live_values = [this](const de::ObjectRef &r) -> std::optional<float> {
 		for (auto &[parent, named] : world.values) {
+			if (parent->destroyed_seq) continue;  // a page's old copy keeps its last values
 			for (const game::GameObject *ch : parent->children) {
 				if (ch->file != r.file || ch->index != r.index) continue;
 				auto it = named.find(ch->name);
@@ -464,24 +483,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (fresh && o->parent) it->second = static_cast<const game::GameObject *>(frame_lights.owner_of(o->parent));
 		return it->second && light_owners.count(it->second) ? it->second : nullptr;
 	};
-	// The value objects an actor's modifiers read, as set on that actor or one above it.
-	auto live_of = [this](const game::GameObject *o) -> de::LiveFloat {
-		return [this, o](const de::ObjectRef &r) -> std::optional<float> {
-			for (const game::GameObject *p = o; p; p = p->parent) {
-				auto it = world.values.find(p);
-				if (it == world.values.end()) continue;
-				for (const game::GameObject *ch : p->children) {
-					if (ch->file != r.file || ch->index != r.index) continue;
-					auto v = it->second.find(ch->name);
-					if (v == it->second.end()) break;
-					float f;
-					memcpy(&f, &v->second.bits, 4);
-					return f;
-				}
-			}
-			return std::nullopt;
-		};
-	};
+	auto live_of = [this](const game::GameObject *o) { return actor_values(world, o); };
 	const de::ObjectsFile *arena_file = world.data().file(arena);
 	if (arena_file != environment_tree_file_) {
 		environment_tree_file_ = arena_file;

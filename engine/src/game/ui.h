@@ -129,8 +129,6 @@ public:
 	bool result = false;  // +0x118: left with Next
 
 	void setup_controls(AppManager &app) override;
-	void click(AppManager &app, Control &c) override;
-	void draw(AppManager &app, std::vector<DrawItem> &out) override;
 	void deactivated(AppManager &app) override;
 
 	// What the scene viewer control shows.
@@ -150,8 +148,7 @@ private:
 
 	DescriptionSelector *chooser_;
 	GameObject *template_ = nullptr;  // +0x98
-	Control *name_ = nullptr, *prev_ = nullptr, *next_ = nullptr, *back_ = nullptr, *done_ = nullptr;
-	de::ObjectRef prev_image_, next_image_;
+	Button *name_ = nullptr;
 };
 
 // DE_CGenericDescriptionSelector (Core 0x701e46c0..0x701e5370; FINDINGS 127): a name-sorted list
