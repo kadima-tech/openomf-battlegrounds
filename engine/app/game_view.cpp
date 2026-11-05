@@ -447,6 +447,18 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		glu::perspective(proj, 50.0f, float(dw) / float(dh), 2.0f, 20000.0f);
 		glu::fps_view(view, eye, -cy, pitch);
 	}
+	// OPENBG_EYE=x,y,z,tx,ty,tz: look from there at that point (testing).
+	if (const char *e = getenv("OPENBG_EYE"); e && !capture_camera) {
+		float v[6];
+		if (sscanf(e, "%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+			float f[3] = {v[3] - v[0], v[4] - v[1], v[5] - v[2]}, up[3] = {0, 1, 0};
+			float l = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+			for (float &c : f) c /= l;
+			glu::perspective(proj, 50.0f, float(dw) / float(dh), 2.0f, 20000.0f);
+			memcpy(eye, v, sizeof eye);
+			glu::look_view(view, eye, f, up);
+		}
+	}
 	glu::mul(vp, proj, view);
 	// CRenderer::ConvertFromWorldToScreen for the HUD: screen fractions (y up), view depth.
 	if (!capture_camera) memcpy(screen_vp.data(), vp, sizeof vp);
@@ -488,6 +500,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (arena_file != environment_tree_file_) {
 		environment_tree_file_ = arena_file;
 		environment_tree_.clear();
+		first_local_.clear();
+		turned_.clear();
 		if (arena_file) {
 			auto parents = arena_file->parents();
 			const auto &objs = arena_file->objects();
@@ -507,6 +521,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	std::vector<render::ActorMeshRenderer::Item> moving_items;
 	{
 		std::set<uint32_t> moving;
+		std::vector<game::GameObject *> roots;
 		std::function<void(game::GameObject *)> add = [&](game::GameObject *o) {
 			if (!o->file || o->file != arena_file) return;
 			if (o->is_actor) {
@@ -516,9 +531,22 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
-			if (!o->path_moved || o->file != arena_file || !shown(o)) continue;
+			if (o->file != arena_file || !shown(o)) continue;
+			// Any actor can be moved at run time (BActorRotator turns City's sign block): one whose
+			// local transform changes is drawn live from then on.
+			if (o->is_actor && !o->path_moved && !turned_.count(o)) {
+				auto [it, fresh] = first_local_.try_emplace(o, o->local);
+				if (!fresh && (it->second.r != o->local.r || it->second.t != o->local.t)) turned_.insert(o);
+			}
+			if (!o->path_moved && !turned_.count(o)) continue;
 			moving.insert(o->index);
-			add(o);
+			roots.push_back(o);
+		}
+		// Each moving branch once, from its topmost moving actor.
+		for (game::GameObject *o : roots) {
+			bool under = false;
+			for (const game::GameObject *p = o->parent; p && !under; p = p->parent) under = p->file == arena_file && (p->path_moved || turned_.count(p));
+			if (!under) add(o);
 		}
 		arena_r.set_moving(moving);
 		// The arena batches' lighting owners: their actors are the arena's scene objects.
