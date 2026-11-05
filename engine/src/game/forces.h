@@ -132,6 +132,7 @@ public:
 		std::vector<Contact> contacts; // physics results (+0xe4)
 		std::array<float, 3> accel{0, 0, 0};  // +0x98: gravity while airborne
 		float friction = 1;            // +0x100: the floor contact's material value
+		GameObject *floor = nullptr;   // +0x104: the affector of the contact facing most upwards
 		GameObject *push_sphere = nullptr;  // +0x1b0: "OtherFighterPushSphere"
 		bool skip_push = false;        // +0x188: SkipFighterCollision, for one tick
 		std::array<float, 3> last_pos{0, 0, 0};  // +0x178: where the last tick left the fighter

@@ -1119,13 +1119,8 @@ void register_combat_natives(World &w) {
 	// IsAirStateCaller -> IsJumpingState (0x35029c60): the running state inherits the "Air" state.
 	reg("COMF2Fighter::bool IsAirState()", [](const NativeContext &c) {
 		auto *o = c.self();
-		bool air = false;
-		if (o && o->brain && o->brain->exec) {
-			for (auto *m = o->brain->exec->current_state(); m && !air; m = m->parent) {
-				air = m->cm->name == "Air()";
-			}
-		}
-		c.ret_bool(air);
+		auto *m = o && o->brain && o->brain->exec ? o->brain->exec->current_state() : nullptr;
+		c.ret_bool(m && m->inherits("Air()"));
 	});
 	// Dampen*Momentum(k): scale the speed along those axes by (1 - speed x k), stopping at zero.
 	reg("COMF2Fighter::DampenHorizontalMomentum(float)", [](const NativeContext &c) {

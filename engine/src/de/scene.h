@@ -104,7 +104,12 @@ struct ActorInfo {
 	int32_t position_mode = 2;
 	uint32_t flags = 6;
 	bool rendered = true;  // v2+ its fourth BOOL (+0x108, SetRendered / SetUnrendered)
+	// The first two BOOLs (+0xd8, +0xdc): add the parent's world position, turn by its system.
+	bool inherit_position = true, inherit_rotation = true;
+	Transform placed(const Transform &parent_world) const;
 };
+// DE_CActor::InternalWorldUpdate (Core 0x70090ac0): a local transform under a parent's world one.
+Transform place_under(const Transform &parent_world, const Transform &local, bool inherit_position, bool inherit_rotation);
 // The detail level (the registry's high-detail BOOL, default 1, global 0x7035dec0).
 inline bool g_high_detail = true;
 // DE_CActor::ObjPrepare: an actor without its detail level's flag is left out of the scene.
