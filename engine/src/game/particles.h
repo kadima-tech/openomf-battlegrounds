@@ -179,6 +179,7 @@ public:
 	// actor: kept for instances not made yet.
 	void set_generator_spawning(const de::ObjectRef &generator, const GameObject *actor, bool on);
 	const de::ParticleRendererDef *renderer(const de::ObjectRef &r);
+	static bool live(const de::ParticleRendererDef &def);
 	// A material's particles (DE_CParticleSpawningMaterial::ObjPrepare adds its renderer to the
 	// actor's properties): the request list of `spawner` in the actor's instance of `renderer`.
 	std::vector<NewParticleInfo> *requests(GameObject *actor, const de::ObjectRef &renderer, const de::ObjectRef &spawner);

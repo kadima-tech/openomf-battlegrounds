@@ -426,7 +426,7 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 			layer.colour = st.colour;
 			// A colour Value instead (DE_CRenderMaterialElement::FlatColor: its GetValue(RGBA&),
 			// which a ModulatedRGBA takes at its time member, 0; inter values at 0 too).
-			if (ObjectRef v = w.resolve(*mesh.file, st.colour_value)) layer.colour = read_color_value(w, v).eval(0);
+			if (ObjectRef v = w.resolve(*mesh.file, st.colour_value)) layer.colour = read_color_value(w, v).eval(0), layer.colour_value = true;
 			layer.stacked = st.flag_2c;
 			layer.disabled = st.disabled;
 			m.layers.push_back(std::move(layer));

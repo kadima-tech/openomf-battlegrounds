@@ -785,7 +785,7 @@ int main(int argc, char **argv) {
 				}
 				bool door = false;
 				for (const game::GameObject *p = o; p && !door; p = p->parent) door = p == app.transition;
-				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), {}, {}, o});
+				if (live) (door ? doors : items).push_back({{o->file, o->index}, o->world(), lights.owner_of(o), app::actor_values(world, o), {}, o});
 			}
 			auto draw_picker = [&] {
 				render::Lighting gui_lighting = render::g_lighting;
@@ -812,7 +812,7 @@ int main(int argc, char **argv) {
 					if (!o->is_actor || !o->file || o->meshes_disabled || !game::in_scene(*o) || !picker_only(o)) continue;
 					bool live = true;
 					for (const game::GameObject *p = o; p && live; p = p->parent) live = p->visible;
-					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), {}, {}, o});
+					if (live) pitems.push_back({{o->file, o->index}, o->world(), plights.owner_of(o), app::actor_values(world, o), {}, o});
 				}
 				actors_r.draw(world.data(), pitems, pvp, ceye);
 				// The robot creature: its stripped model, undeformed, painted by its pilot through the
@@ -837,6 +837,9 @@ int main(int argc, char **argv) {
 			};
 			render::update_animated_textures(world.image_phases);
 			actors_r.texture_version = world.texture_override_version;
+			// The scene viewer is a control under the page's own actors (VE.LoadFrame's console).
+			draw_picker();
+			glClear(GL_DEPTH_BUFFER_BIT);
 			actors_r.draw(world.data(), items, vp, eye);
 			particles_r.only = gui_only;
 			particles_r.draw(world, vp, view, eye);
@@ -845,7 +848,6 @@ int main(int argc, char **argv) {
 				overlay.draw_world(world, vp);
 				overlay.draw(world, vpt.w, vpt.h);
 			}
-			draw_picker();
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};

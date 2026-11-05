@@ -152,6 +152,7 @@ struct Layer {
 	bool environment = false;
 	bool disabled = false;
 	bool never_disable = false;  // its "NeverDisable" BOOL: kept with Reflections off
+	bool colour_value = false;   // the colour is a Value object's (element +0x50), not the flat one
 	// The stage's colour channel: one RGB per face corner, in `uvs` order (white when empty).
 	std::vector<std::array<float, 3>> corner_colours;
 	// A "SpecularFactor" child (1 without one): a pass with a reflection stage (render element

@@ -3,6 +3,8 @@
 // camera. Shared by openbg-fight and the front end.
 #pragma once
 
+#include <set>
+
 #include <array>
 #include <optional>
 #include <map>
@@ -41,6 +43,8 @@ struct CameraLens {
 	float fov = 80, near = 10, far = 100000;
 };
 CameraLens camera_lens(const game::GameObject *actor);
+// The value objects an actor's modifiers read, as set on that actor or one above it.
+de::LiveFloat actor_values(const game::World &world, const game::GameObject *o);
 
 class GameView {
 public:
@@ -97,6 +101,11 @@ private:
 	std::map<const game::GameObject *, const game::GameObject *> inherited_owner_;
 	const de::ObjectsFile *environment_tree_file_ = nullptr;
 	std::vector<bool> environment_tree_;  // the arena file's objects under its environment
+	// Where the bake places the arena file's objects, and its actors that are elsewhere (drawn live).
+	std::vector<de::Transform> data_world_;
+	std::vector<bool> data_world_done_;
+	std::vector<int> data_parents_;
+	std::set<const game::GameObject *> turned_;
 	bool gl_ready_ = false;
 };
 

@@ -597,9 +597,11 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 				// A quad along the axis, turned to face the camera.
 				if ((d.mode == 6 || d.mode == 16 || d.mode == 17) && local) axis = at.rotate(axis);
 				float sw = use_wh ? hw : p.size, sh = use_wh ? hh : p.size;
-				if (use_wh) axis = norm(axis);
+				// Not normalised: a scaled actor's axis carries its scale on top of the extent's (+0x38).
 				Vec side = norm(cross(norm(sub(c, cam)), norm(axis)));
-				quad(c, mul(side, sw), mul(axis, sh));
+				Vec a = mul(axis, sh), s = mul(side, sw);
+				// The offset moves the centre by half-extents (y 1: the particle at one end); v0, v1 at the +axis end.
+				quad(add(c, add(mul(s, d.offset[0]), mul(a, d.offset[1]))), s, mul(a, -1));
 			} else if (d.mode >= 1 && d.mode <= 5) {
 				// A kite in screen space at the particle's depth: its sides at the particle, its tip
 				// half a width past the end point (+0x6c along the direction), its back half a width

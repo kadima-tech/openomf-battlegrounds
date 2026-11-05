@@ -129,10 +129,10 @@ float FloatValue::eval(float t, const LiveFloat &live) const {
 	return shape.value(min, max, t);
 }
 
-std::array<float, 4> ColorValue::eval(float t) const {
+std::array<float, 4> ColorValue::eval(float t, const LiveFloat &live) const {
 	if (!color) return rgba;
-	auto v = color->eval(t);
-	if (alpha) v[3] *= alpha->eval(t);
+	auto v = color->eval(t, live);
+	if (alpha) v[3] *= alpha->eval(t, live);
 	return v;
 }
 

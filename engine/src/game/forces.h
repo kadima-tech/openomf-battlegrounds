@@ -16,7 +16,8 @@
 // against group 0x200 and apply themselves to what it touches (the bounce rumble).
 // A Physics\Simple with a force tests its actor every tick (group from its contents) and
 // applies the force to every touched surface: a fighter's floor sphere carries PlayerForce
-// (type 0x20) into jump pads, mine fields and the death volume this way.
+// (type 0x20) into jump pads and the death volume this way; the fighter physics' own
+// FighterGroundCollisionForce reaches the fighting surfaces (mine fields).
 #pragma once
 
 #include <array>
@@ -127,7 +128,7 @@ public:
 		bool resolved = false;
 		GameObject *sphere = nullptr;  // physics +0x50[0] (FloorCollisionAffector)
 		uint32_t groups = 0;           // physics +0x94 (0x200000: the fighting surfaces)
-		GameObject *force = nullptr;   // fighter +0x5a0 (PlayerForce)
+		GameObject *force = nullptr;   // fighter +0x5a0 (2.123 +0x5a4): FighterGroundCollisionForce
 		std::vector<Contact> contacts; // physics results (+0xe4)
 		std::array<float, 3> accel{0, 0, 0};  // +0x98: gravity while airborne
 		float friction = 1;            // +0x100: the floor contact's material value

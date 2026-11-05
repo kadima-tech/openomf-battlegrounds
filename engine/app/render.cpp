@@ -572,7 +572,10 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 	auto corner = corner_normals(mesh, npos);
 	std::vector<bool> covered(mesh.faces.size(), false);
 	float material_glow = 0;
-	auto emit = [&](const std::vector<const de::Layer *> &pass, const std::vector<uint32_t> &faces, bool stand_in, bool overlay, bool late = false) {
+	// later: not the element's first shader, which InitialSetup (Direct3D 0x2002e550) alone gives
+	// the lighting flag (8).
+	auto emit = [&](const std::vector<const de::Layer *> &pass, const std::vector<uint32_t> &faces, bool stand_in, bool overlay, bool late = false,
+	                bool later = false) {
 		std::vector<std::map<uint32_t, size_t>> uvs(pass.size());
 		for (size_t s = 0; s < pass.size(); ++s) {
 			for (size_t k = 0; k < pass[s]->uvs.size(); ++k) uvs[s][pass[s]->uvs[k].face] = k;
@@ -611,11 +614,19 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 			bt.alpha[s] = !pass[size_t(s)]->environment && image_has_alpha(pass[size_t(s)]->image);
 			memcpy(bt.colour[s], pass[size_t(s)]->colour.data(), sizeof bt.colour[s]);
 		}
+		// CStage::Setup (Direct3D 0x20031760): a lit first stage is texture x DIFFUSE, so its flat
+		// colour (the patch's TFACTOR) is not seen; a colour Value is the material's, which vertex
+		// colours replace.
+		const de::Layer &first = *pass[0];
+		if (bt.stages && lighting == 1 && !later && first.corner_colours.empty() && !first.colour_value) {
+			bt.colour[0][0] = bt.colour[0][1] = bt.colour[0][2] = 1;
+		}
 		bt.stand_in_light = stand_in;
 		bt.overlay = overlay;
 		bt.late = late;
-		bt.lighting = lighting;
+		bt.lighting = later && lighting == 1 ? 0 : lighting;
 		bt.two_sided = (mesh.flags & 0x4000) != 0;
+		bt.top = (mesh.flags & 0x80) != 0;
 		bt.placement = mesh.placement_times;
 		for (auto *l : pass) {
 			if (l->environment && l->cube) {
@@ -735,7 +746,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 			std::vector<uint32_t> faces;
 			if (passes[i][0]->environment) faces = all;
 			else for (auto &fu : passes[i][0]->uvs) faces.push_back(fu.face);
-			emit(passes[i], faces, false, i > 0, passes[0][0]->mode != 0);
+			emit(passes[i], faces, false, i > 0, passes[0][0]->mode != 0, i > 0);
 		}
 	}
 	material_glow = 0;
@@ -807,9 +818,18 @@ void set_cull(bool two_sided) {
 }
 
 std::vector<DeferredDraw> *g_sink = nullptr;
+std::vector<DeferredDraw> *g_top_sink = nullptr;
+bool g_top_pass = false;
 float g_vp[16], g_eye[3];
 // The values of the actor being drawn (ActorMeshRenderer::Item::live), for its dynamic modifiers.
 const de::LiveFloat *g_item_live = nullptr;
+// The drawn actor's own values first, then the scene's.
+const de::LiveFloat g_drawn_live = [](const de::ObjectRef &r) -> std::optional<float> {
+	if (g_item_live && *g_item_live) {
+		if (auto v = (*g_item_live)(r)) return v;
+	}
+	return g_live_values ? g_live_values(r) : std::nullopt;
+};
 
 void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches, int phase, const std::array<float, 3> *at, const void *owner);
 
@@ -817,8 +837,13 @@ void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase,
                   const void *owner = nullptr) {
 	std::vector<const MeshBatch *> list;
 	for (auto &b : batches) {
-		if (phase >= 0 && b.late != (phase == 1)) continue;
-		if (g_sink && b.late) {
+		if (g_top_sink && b.top) {
+			if (phase == 1) continue;
+		} else if (phase >= 0 && b.late != (phase == 1)) {
+			continue;
+		}
+		std::vector<DeferredDraw> *sink = g_top_sink && b.top ? g_top_sink : g_sink && b.late ? g_sink : nullptr;
+		if (sink) {
 			// A blended first pass joins the transparent layer, drawn later in its sorted order
 			// with the state it would have had now.
 			float model[16];
@@ -833,7 +858,11 @@ void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase,
 			                                 : std::array<float, 3>{(b.bmin[0] + b.bmax[0]) / 2, (b.bmin[1] + b.bmax[1]) / 2, (b.bmin[2] + b.bmax[2]) / 2};
 			const MeshBatch *pb = &b;
 			de::LiveFloat live = g_item_live ? *g_item_live : de::LiveFloat{};
-			g_sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb, live] {
+			if (!at && b.top) {
+				const auto c = origin;
+				for (int k = 0; k < 3; ++k) origin[size_t(k)] = m[size_t(k)] * c[0] + m[size_t(4 + k)] * c[1] + m[size_t(8 + k)] * c[2] + m[size_t(12 + k)];
+			}
+			sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb, live] {
 				                   glUseProgram(prog);
 				                   glUniform1f(glGetUniformLocation(prog, "out_scale"), 1);
 				                   glUniform1f(glGetUniformLocation(prog, "fog_density"), 0);
@@ -874,13 +903,13 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		// CStage::SetStates (0x20031b60), every draw: a RotateValue turns the du/dv (radians = value x
 		// 0.000723) and the factor is ignored; while it is 0 the matrix is BumpFactor x identity.
 		if (b.bump_factor || b.bump_rotate) {
-			const float rot = b.bump_rotate ? b.bump_rotate->eval(0, g_live_values) : 0;
+			const float rot = b.bump_rotate ? b.bump_rotate->eval(0, g_drawn_live) : 0;
 			if (rot != 0) {
 				const float a = rot * 0.000723f;
 				bump_matrix[0] = std::cos(a), bump_matrix[1] = -std::sin(a);
 				bump_matrix[2] = std::sin(a), bump_matrix[3] = std::cos(a);
 			} else {
-				bump_matrix[0] = bump_matrix[3] = b.bump_factor ? b.bump_factor->eval(0, g_live_values) : 0;
+				bump_matrix[0] = bump_matrix[3] = b.bump_factor ? b.bump_factor->eval(0, g_drawn_live) : 0;
 				bump_matrix[1] = bump_matrix[2] = 0;
 			}
 		}
@@ -889,7 +918,7 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		memcpy(uv_xf, b.uv_xf, sizeof uv_xf);
 		for (int s = 0; s < 4; ++s) {
 			if (!b.uv_mod[s]) continue;
-			auto xf = b.uv_mod[s]->uv(g_live_values);
+			auto xf = b.uv_mod[s]->uv(g_drawn_live);
 			memcpy(uv_xf[s], xf.data(), sizeof uv_xf[s]);
 		}
 		glUniform4fv(glGetUniformLocation(prog, "uv_xf"), 4, &uv_xf[0][0]);
@@ -919,7 +948,9 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 			set_vertex_lights(prog, {(b.bmin[0] + b.bmax[0]) / 2, (b.bmin[1] + b.bmax[1]) / 2, (b.bmin[2] + b.bmax[2]) / 2}, b.position_static,
 			                  b.light_owner);
 		}
-		set_cull(b.two_sided);
+		const bool top = g_top_pass && b.top;
+		if (top) glUniform1i(glGetUniformLocation(prog, "lighting"), 0);
+		set_cull(b.two_sided || top);
 		switch (pass_mode) {
 		case 1: case 3: glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE); break;
 		case 2: glEnable(GL_BLEND); glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA); break;
@@ -929,6 +960,7 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		bool no_depth_write = b.overlay || pass_mode != 0;
 		glDepthMask(no_depth_write ? GL_FALSE : GL_TRUE);
 		glDepthFunc(b.overlay ? GL_LEQUAL : GL_LESS);
+		if (top) glDisable(GL_DEPTH_TEST), glDepthMask(GL_FALSE);
 		glBindVertexArray(b.vao);
 		glDrawArrays(GL_TRIANGLES, 0, b.count);
 	}
@@ -1274,6 +1306,20 @@ void use_mesh_program(GLuint prog, const float *vp, const float *eye) {
 }  // namespace
 
 void set_transparent_sink(std::vector<DeferredDraw> *sink) { g_sink = sink; }
+void set_top_sink(std::vector<DeferredDraw> *sink) { g_top_sink = sink; }
+
+// DE_CClipVolume::DrawShaders draws layer 10 after the glow, sorted as layers 6 and 8 (DrawLayer: highest
+// static key, 1000 x placement times, minus view z first), with PrepareForShaders' states (2.123 Direct3D
+// 0x10332fd0): no depth test or writes, no culling, no lighting.
+void draw_top_layer(std::vector<DeferredDraw> &draws, const float *view) {
+	auto z = [view](const DeferredDraw &d) { return view[2] * d.origin[0] + view[6] * d.origin[1] + view[10] * d.origin[2] + view[14]; };
+	auto key = [&](const DeferredDraw &d) { return 1000.0f * float(d.placement * d.stages) + z(d); };
+	std::stable_sort(draws.begin(), draws.end(), [&](const DeferredDraw &a, const DeferredDraw &b) { return key(a) > key(b); });
+	g_top_pass = true;
+	for (auto &d : draws) d.draw();
+	g_top_pass = false;
+	draws.clear();
+}
 
 // DE_CEnvironment::ObjProcessReferences (Creature 0x1500b7f0) v5, the last references chunk:
 // [RGBA advanced reference][seven BOOL + image slots: +0x320, +0x338, +0x32c, +0x308, +0x314,

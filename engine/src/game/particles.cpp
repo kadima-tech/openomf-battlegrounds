@@ -99,6 +99,10 @@ Vec actor_momentum(const GameObject *a) {
 
 float scene_time_ms(const World &w) { return w.scene_ms(); }
 
+// DE_CParticleRenderer::Process (Core 0x701c30a0): the material and the generator's instance are
+// made only when the renderer's properties hold an image.
+bool ParticleSystem::live(const de::ParticleRendererDef &def) { return def.generator.object && def.image; }
+
 ModifierControl &ParticleSystem::control(GameObject *modifier) { return controls_[modifier]; }
 
 const de::ParticleRendererDef *ParticleSystem::renderer(const de::ObjectRef &r) {
@@ -146,8 +150,12 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 		}
 		return nullptr;
 	};
+	// Each reference resolved from its holder (actor -> renderer -> generator -> modifiers), as World::referent does.
+	GameObject *rend = w_.referent(actor, def->object);
+	GameObject *gen = rend ? w_.referent(rend, def->generator.object) : nullptr;
 	for (auto &m : def->generator.modifiers) {
-		GameObject *mo = find(actor, m.object);
+		GameObject *mo = gen ? w_.referent(gen, m.object) : nullptr;
+		if (!mo) mo = find(actor, m.object);
 		if (!mo) mo = w_.global_object(m.object);
 		in->modifier_objects.push_back(mo);
 		// DE_CParticleModifier::Begin.
@@ -190,7 +198,7 @@ std::vector<const de::ParticleRendererDef *> &ParticleSystem::renderers_of(GameO
 std::vector<NewParticleInfo> *ParticleSystem::requests(GameObject *actor, const de::ObjectRef &r, const de::ObjectRef &spawner) {
 	if (!actor || !de::is_particle_renderer(r)) return nullptr;
 	const de::ParticleRendererDef *def = renderer(r);
-	if (!def->generator.object) return nullptr;
+	if (!live(*def)) return nullptr;
 	auto &list = renderers_of(actor);
 	if (std::find(list.begin(), list.end(), def) == list.end()) list.push_back(def);
 	ParticleInstance &in = instance(actor, def);
@@ -338,7 +346,7 @@ void ParticleSystem::step() {
 	for (GameObject *o : w_.scene_objects()) {
 		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
 		for (auto *def : renderers_of(o)) {
-			if (!def->generator.object) continue;
+			if (!live(*def)) continue;
 			step(instance(o, def), float(w_.scene_ms_of(o)));
 		}
 	}

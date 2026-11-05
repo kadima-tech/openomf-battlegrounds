@@ -237,6 +237,24 @@ bool GameView::shown(const game::GameObject *o) const {
 	return !s || !world.session || s == world.session->obj;
 }
 
+de::LiveFloat actor_values(const game::World &world, const game::GameObject *o) {
+	return [&world, o](const de::ObjectRef &r) -> std::optional<float> {
+		for (const game::GameObject *p = o; p; p = p->parent) {
+			auto it = world.values.find(p);
+			if (it == world.values.end()) continue;
+			for (const game::GameObject *ch : p->children) {
+				if (ch->file != r.file || ch->index != r.index) continue;
+				auto v = it->second.find(ch->name);
+				if (v == it->second.end()) break;
+				float f;
+				memcpy(&f, &v->second.bits, 4);
+				return f;
+			}
+		}
+		return std::nullopt;
+	};
+}
+
 void GameView::init_gl() {
 	overlay.load(world.data());
 	particles_r.load();
@@ -246,6 +264,7 @@ void GameView::init_gl() {
 	// A FLOAT value object as the scripts set it (BSetSceneTime's SceneTime every render tick).
 	render::g_live_values = [this](const de::ObjectRef &r) -> std::optional<float> {
 		for (auto &[parent, named] : world.values) {
+			if (parent->destroyed_seq) continue;  // a page's old copy keeps its last values
 			for (const game::GameObject *ch : parent->children) {
 				if (ch->file != r.file || ch->index != r.index) continue;
 				auto it = named.find(ch->name);
@@ -428,6 +447,18 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		glu::perspective(proj, 50.0f, float(dw) / float(dh), 2.0f, 20000.0f);
 		glu::fps_view(view, eye, -cy, pitch);
 	}
+	// OPENBG_EYE=x,y,z,tx,ty,tz: look from there at that point (testing).
+	if (const char *e = getenv("OPENBG_EYE"); e && !capture_camera) {
+		float v[6];
+		if (sscanf(e, "%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+			float f[3] = {v[3] - v[0], v[4] - v[1], v[5] - v[2]}, up[3] = {0, 1, 0};
+			float l = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+			for (float &c : f) c /= l;
+			glu::perspective(proj, 50.0f, float(dw) / float(dh), 2.0f, 20000.0f);
+			memcpy(eye, v, sizeof eye);
+			glu::look_view(view, eye, f, up);
+		}
+	}
 	glu::mul(vp, proj, view);
 	// CRenderer::ConvertFromWorldToScreen for the HUD: screen fractions (y up), view depth.
 	if (!capture_camera) memcpy(screen_vp.data(), vp, sizeof vp);
@@ -464,28 +495,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (fresh && o->parent) it->second = static_cast<const game::GameObject *>(frame_lights.owner_of(o->parent));
 		return it->second && light_owners.count(it->second) ? it->second : nullptr;
 	};
-	// The value objects an actor's modifiers read, as set on that actor or one above it.
-	auto live_of = [this](const game::GameObject *o) -> de::LiveFloat {
-		return [this, o](const de::ObjectRef &r) -> std::optional<float> {
-			for (const game::GameObject *p = o; p; p = p->parent) {
-				auto it = world.values.find(p);
-				if (it == world.values.end()) continue;
-				for (const game::GameObject *ch : p->children) {
-					if (ch->file != r.file || ch->index != r.index) continue;
-					auto v = it->second.find(ch->name);
-					if (v == it->second.end()) break;
-					float f;
-					memcpy(&f, &v->second.bits, 4);
-					return f;
-				}
-			}
-			return std::nullopt;
-		};
-	};
+	auto live_of = [this](const game::GameObject *o) { return actor_values(world, o); };
 	const de::ObjectsFile *arena_file = world.data().file(arena);
 	if (arena_file != environment_tree_file_) {
 		environment_tree_file_ = arena_file;
 		environment_tree_.clear();
+		data_world_.clear();
+		turned_.clear();
 		if (arena_file) {
 			auto parents = arena_file->parents();
 			const auto &objs = arena_file->objects();
@@ -501,10 +517,33 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		}
 	}
 	auto in_environment = [this](uint32_t i) { return i < environment_tree_.size() && environment_tree_[i]; };
+	// Where the bake places an arena object: its data transforms down the file's tree.
+	auto data_world = [this, arena_file](uint32_t i) -> const de::Transform & {
+		if (data_world_.size() != arena_file->objects().size()) {
+			data_world_.assign(arena_file->objects().size(), de::Transform{});
+			data_world_done_.assign(arena_file->objects().size(), false);
+			data_parents_ = arena_file->parents();
+		}
+		std::vector<uint32_t> chain;
+		for (int p = int(i); p >= 0 && !data_world_done_[size_t(p)]; p = data_parents_[size_t(p)]) chain.push_back(uint32_t(p));
+		for (size_t k = chain.size(); k-- > 0;) {
+			uint32_t c = chain[k];
+			de::Transform local;
+			try {
+				local = de::read_actor(*arena_file, arena_file->objects()[c]).local;
+			} catch (const std::exception &) {
+			}
+			int p = data_parents_[c];
+			data_world_[c] = p >= 0 ? data_world_[size_t(p)].then(local) : local;
+			data_world_done_[c] = true;
+		}
+		return data_world_[i];
+	};
 	// The arena's actors that paths move (trains, cars, ...): drawn live, not baked.
 	std::vector<render::ActorMeshRenderer::Item> moving_items;
 	{
 		std::set<uint32_t> moving;
+		std::vector<game::GameObject *> roots;
 		std::function<void(game::GameObject *)> add = [&](game::GameObject *o) {
 			if (!o->file || o->file != arena_file) return;
 			if (o->is_actor) {
@@ -514,9 +553,29 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			for (game::GameObject *ch : o->children) add(ch);
 		};
 		for (game::GameObject *o : world.scene_objects()) {
-			if (!o->path_moved || o->file != arena_file || !shown(o)) continue;
+			if (o->file != arena_file || !shown(o)) continue;
+			// Any actor can be moved at run time (BActorRotator turns City's sign block, scripts place
+			// others before the first draw): one no longer where the bake put it is drawn live.
+			if (o->is_actor && !o->path_moved && !turned_.count(o) && in_environment(o->index)) {
+				const de::Transform &data = data_world(o->index);
+				const de::Transform now = o->world();
+				float d = 0;
+				for (int k = 0; k < 9; ++k) d = std::fmax(d, std::fabs(data.r[k] - now.r[k]));
+				for (int k = 0; k < 3; ++k) d = std::fmax(d, std::fabs(data.t[k] - now.t[k]) * 1e-3f);
+				if (d > 1e-4f) {
+					turned_.insert(o);
+					if (getenv("OPENBG_DEBUG_PATHS")) fprintf(stderr, "[live %d] %s leaves the bake\n", fr, o->name.c_str());
+				}
+			}
+			if (!o->path_moved && !turned_.count(o)) continue;
 			moving.insert(o->index);
-			add(o);
+			roots.push_back(o);
+		}
+		// Each moving branch once, from its topmost moving actor.
+		for (game::GameObject *o : roots) {
+			bool under = false;
+			for (const game::GameObject *p = o->parent; p && !under; p = p->parent) under = p->file == arena_file && (p->path_moved || turned_.count(p));
+			if (!under) add(o);
 		}
 		arena_r.set_moving(moving);
 		// The arena batches' lighting owners: their actors are the arena's scene objects.
@@ -544,6 +603,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	// (OPENBG_NO_DEFER=1 draws them in their meshes' passes instead, debugging).
 	std::vector<render::DeferredDraw> transparent;
 	render::set_transparent_sink(getenv("OPENBG_NO_DEFER") ? nullptr : &transparent);
+	std::vector<render::DeferredDraw> top_layer;
+	render::set_top_sink(&top_layer);
 	arena_r.draw(vp, eye);
 	// Actors made at run time (pickups, jets, spawned props), where they are now: shown,
 	// active, and not a fighter's own body.
@@ -641,6 +702,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	if (!capture_camera) world.particles->process_trailers();
 	render::set_transparent_sink(nullptr);
+	render::set_top_sink(nullptr);
 	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, false, &transparent);
 	else for (auto &t : transparent) t.draw();
 	overlay.draw_world(world, vp);
@@ -659,6 +721,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}
+	render::draw_top_layer(top_layer, view);
 	if (!capture_camera) overlay.draw(world, dw, dh);
 }
 
