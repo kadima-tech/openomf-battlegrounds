@@ -121,7 +121,7 @@ void ParticleRenderer::ring(const game::ParticleInstance &in, const std::array<f
 	b.additive = additive;
 	constexpr int kSegments = 20;
 	auto neg = [](const Vec &v) { return Vec{-v[0], -v[1], -v[2]}; };
-	for (const game::Particle &p : in.particles) {
+	for (const game::Particle &p : in.drawn()) {
 		Vec c = local ? at.apply(p.pos) : p.pos;
 		Vec A, B, N{0, 0, 0};
 		if (d.ring_plane == 3) {
@@ -194,7 +194,7 @@ void ParticleRenderer::stream(const game::World &world, const game::ParticleInst
 	std::array<float, 4> base = d.color.rgba;
 	const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
 	if (set_rgb) base = {(*set_rgb)[0], (*set_rgb)[1], (*set_rgb)[2], (*set_rgb)[3] >= 0 ? (*set_rgb)[3] : base[3]};
-	const auto &ps = in.particles;
+	const auto &ps = in.drawn();
 	const size_t n = ps.size();
 	auto pos = [&](size_t i) { return local ? at.apply(ps[i].pos) : ps[i].pos; };
 	auto connected = [&](size_t i) {
@@ -303,7 +303,7 @@ void ParticleRenderer::triangles(const game::World &world, const game::ParticleI
 	b.additive = additive;
 	const std::array<float, 4> *set_rgb = world.particles->value_color(d.color_ref);
 	const bool oriented = d.generator.channels[de::kChOrientation];
-	for (const game::Particle &p : in.particles) {
+	for (const game::Particle &p : in.drawn()) {
 		Vec c = local ? at.apply(p.pos) : p.pos;
 		float age = std::clamp(p.age, 0.0f, 1.0f);
 		std::array<float, 4> col = set_rgb ? *set_rgb : d.color.eval(age);
@@ -474,7 +474,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	}
 	for (auto &inp : world.particles->instances()) {
 		const game::ParticleInstance &in = *inp;
-		if (in.particles.empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled || (only && !only(in.actor))) continue;
+		if (in.drawn().empty() || in.stepped + 1 < world.frame() || in.actor->meshes_disabled || (only && !only(in.actor))) continue;
 		Batches &batches = element(&in, in.actor, true, in.def->placement_times);
 		const de::ParticleRendererDef &d = *in.def;
 		// The glow layer: only renderers with a GlowFactor, scaled by a quarter of it (clamped to 1),
@@ -531,10 +531,10 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 		const bool use_wh = d.width != 1 || d.height != 1;
 		auto camera_depth = [&](const Vec &w) { return -(view[2] * w[0] + view[6] * w[1] + view[10] * w[2] + view[14]); };
 		if (d.color_mode == 0) {
-			while (in.slot_color.size() < in.particles.size()) in.slot_color.push_back(base);
+			while (in.slot_color.size() < in.drawn().size()) in.slot_color.push_back(base);
 		}
 		size_t drawn = 0;
-		for (const game::Particle &p : in.particles) {
+		for (const game::Particle &p : in.drawn()) {
 			if (d.mode == 8 || d.mode == 10 || d.mode == 12 || d.mode < 0 || d.mode > 23) break;
 			Vec c = local ? at.apply(p.pos) : p.pos;
 			const bool camera_space = d.mode <= 5 || d.mode == 13;
@@ -609,7 +609,7 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 				if (d.mode == 2) continue;  // the original leaves the direction unset
 				Vec dir = d.mode == 1 ? sub(Vec{at.t[0], at.t[1], at.t[2]}, c)
 				        : d.mode == 3 ? p.momentum
-				        : d.mode == 4 ? Vec{in.actor->momentum[0], in.actor->momentum[1], in.actor->momentum[2]}
+				        : d.mode == 4 ? in.actor_momentum
 				                      : az;
 				if (d.normalize) dir = norm(dir);
 				Vec e = add(c, mul(dir, d.streak_length));

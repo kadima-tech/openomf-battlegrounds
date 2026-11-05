@@ -2,7 +2,8 @@
 // ManageParticles / ManageParticleUserData / Modify passes; Particles module modifiers).
 //
 // A particle renderer creates one generator instance per actor drawing it (NewInstance, at the
-// renderer's ObjPrepare / first Process), and steps it to the scene time whenever it is drawn:
+// renderer's ObjPrepare / first Process; renderers of one generator on one actor share it), and
+// steps it to the scene time whenever it is drawn:
 //  1. the instance takes the actor's world placement (world-space generators) and its movement
 //     since the last step;
 //  2. every modifier manages particles: spawners create them (timed by spawn time ± variation,
@@ -72,6 +73,9 @@ struct ModifierControl {
 struct ParticleInstance {
 	const de::ParticleRendererDef *def = nullptr;
 	GameObject *actor = nullptr;
+	// Another renderer's instance of the same generator on this actor, whose particles it draws.
+	ParticleInstance *shared = nullptr;
+	const std::vector<Particle> &drawn() const { return shared ? shared->particles : particles; }
 	std::vector<GameObject *> modifier_objects;  // the actor's copies of the generator's modifiers
 	struct PerModifier {
 		float countdown = 0;  // time until the next spawn (negative: overdue)
@@ -92,6 +96,7 @@ struct ParticleInstance {
 	bool interpolate_position = false, interpolate_rotation = false;  // +0x5c / +0x60
 	bool placed = false;
 	std::array<float, 3> actor_pos{}, actor_move{};
+	std::array<float, 3> actor_momentum{};  // DE_CActor::Momentum at the last step (billboard mode 4)
 	std::array<float, 9> actor_rot{1, 0, 0, 0, 1, 0, 0, 0, 1}, prev_rot{1, 0, 0, 0, 1, 0, 0, 0, 1};
 	float size_multiplier = 1;  // +0x64
 	int created = 0;
