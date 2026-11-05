@@ -28,9 +28,11 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Scene.** The 3D GUI scene in OMFBGGUI.DEObjects: persistent `V.*` actors (the frame, the
   transition doors, the tunnel backdrop, the environment) and one `F.<Screen>` folder per page, its
   `VE.*` actors the buttons. Their meshes, materials, lights, particles and scripts are the game's.
-- **Backdrop squares.** 2.123's tunnel backdrop drifts large translucent pale-blue squares
-  (additive, (0.62, 0.86, 1) at 0.09): the backdrop's `SpotsRenderer` lost its `Blinklightimage`
-  texture in 2.123, so its 5-unit billboards draw untextured.
+- **Backdrop.** The tunnel (`V.Backdrop`: dim streaked tube, lightning, teal lines) on black. No
+  drifting squares: 2.123's `SpotsRenderer` lost its `Blinklightimage` texture, and a particle
+  renderer without an image draws nothing (FINDINGS 327).
+- **Logo.** "ONE MUST FALL" light brushed metal (only the first pass lit, the base tint unused),
+  "BATTLEGROUNDS" bright scrolling fire, unlit (FINDINGS 329); the fire scrolls on every visit.
 - **Frame.** The GUI is laid out in a 4:3 field (x 0..1, y 0..0.75), drawn through a 60° horizontal
   field of view looking down −Z and stretched to fill the window (FINDINGS 126, 161).
 - **Buttons.** A hit rectangle over each button's `DisplayArea` mesh. Hover, leave and click go to
@@ -77,9 +79,10 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Model picker (Choose Creature's View).** The page's own 3D scene, `LoadScene`'s hangar
   (`ChooseFighterModelPickerEnvironment`), fills the 4:3 field through its `EnvironmentCamera`, the
   robot (a `FighterTemplate` creature carrying the model, standing undeformed) on `RobotPedistal`
-  in the last chosen pilot's colours. Over it, in the LoadFrame rectangle:
-  the model's name (top 30%), the `VCRFastBackward` / `VCRFastForward` images as arrows, Back and
-  Next along the bottom 30%. No main frame or backdrop.
+  in the last chosen pilot's colours. Over it `VE.LoadFrame`'s grey console, and in its LoadFrame
+  rectangle five push buttons (2-pixel bevel, half-alpha grey face): the model's name (top 30%),
+  the `VCRFastBackward` / `VCRFastForward` images as arrows, Back and Next along the bottom 30%.
+  No main frame or backdrop.
 - **Replays screen.** `F.MatchBrowser`: the "Recordings Browser" list (Name, Type, Date, Time, Length
   columns, the selected row highlighted) at ListWindow; the selected recording's game type (18
   virtual pixels), name, date, time and length in the Window, with Delete and Rename in a column

@@ -1930,35 +1930,36 @@ GameObject *descendant_named(GameObject *o, const std::string &name) {
 }
 }  // namespace
 
-// The robot's constructor (0x350551b0): the controls by fractions of the LoadFrame rectangle, and
-// the scene.
+// The robot's constructor (0x350551b0): five ButtonControl3d push buttons (bevel, face, label) by
+// fractions of the LoadFrame rectangle, and the scene.
 void ModelPicker::setup_controls(AppManager &app) {
 	result = false;
-	Control frame = *button(app, "", "LoadFrame");
-	controls.pop_back();
+	Gui &g = *gui;
+	Ctl *frame = g.place(marker(app, "LoadFrame"));
 	auto sub = [&](const std::string &text, float l, float t, float r, float b) {
-		Control &c = controls.emplace_back();
-		c.text = text;
-		float w = frame.right - frame.left, h = frame.bottom - frame.top;
-		c.left = frame.left + l * w, c.right = frame.left + r * w, c.top = frame.top + t * h, c.bottom = frame.top + b * h;
-		return &c;
+		auto *c = frame->add<Button>(text, Button::Push);
+		c->scale(l, t, r, b);
+		return c;
 	};
 	name_ = sub("", 0.05f, 0, 0.95f, 0.3f);
-	name_->enabled = false;
-	prev_ = sub("", 0.25f, 0.35f, 0.45f, 0.65f);
-	next_ = sub("", 0.55f, 0.35f, 0.75f, 0.65f);
-	back_ = sub("Back", 0.05f, 0.7f, 0.45f, 1);
-	back_->keys = {kKeyEscape};
-	done_ = sub("Next", 0.55f, 0.7f, 0.95f, 1);
-	done_->keys = {kKeyReturn};
-	if (const de::ObjectsFile *gui = app.world.data().file("OMFBGGUI")) {
-		for (uint32_t i = 0; i < gui->objects().size(); ++i) {
-			const de::ObjectInfo &o = gui->objects()[i];
-			if (o.class_path != "Image\\Standard") continue;
-			if (o.name == "VCRFastBackward") prev_image_ = {gui, i};
-			if (o.name == "VCRFastForward") next_image_ = {gui, i};
-		}
-	}
+	auto *prev = sub("", 0.25f, 0.35f, 0.45f, 0.65f), *next = sub("", 0.55f, 0.35f, 0.75f, 0.65f);
+	prev->face_up = g.image("VCRFastBackward");
+	next->face_up = g.image("VCRFastForward");
+	// ProcessButtonClickEvent (0x35055890): the arrows step the chooser's model, wrapping.
+	auto step = [this, &app](int d) {
+		if (!chooser_ || chooser_->models_.empty()) return;
+		int n = int(chooser_->models_.size());
+		chooser_->model_ = (chooser_->model_ + d + n) % n;
+		update_model(app);
+	};
+	prev->on_click = [step] { step(-1); };
+	next->on_click = [step] { step(1); };
+	auto *back = sub("Back", 0.05f, 0.7f, 0.45f, 1);
+	back->keys = {kKeyEscape};
+	back->on_click = [this, &app] { result = false, app.set_last(); };
+	auto *done = sub("Next", 0.55f, 0.7f, 0.95f, 1);
+	done->keys = {kKeyReturn};
+	done->on_click = [this, &app] { result = true, app.set_last(); };
 	environment = app.construct("LoadScene\\ChooseFighterModelPickerEnvironment");
 	pedestal = camera = nullptr;
 	if (environment) {
@@ -1984,7 +1985,7 @@ void ModelPicker::update_model(AppManager &app) {
 	if (robot) w.clean_later(robot);
 	robot = nullptr;
 	de::ObjectRef m = model();
-	if (name_) name_->text = m ? m.info().name : "";
+	if (name_) name_->label = m ? m.info().name : "";
 	if (!template_ || !pedestal) return;
 	auto adopt = [](GameObject *child, GameObject *parent) {
 		child->parent = parent;
@@ -2018,31 +2019,6 @@ const GameObject *ModelPicker::robot_pilot(const GameObject *robot) {
 		if (c->pilot) return c;
 	}
 	return nullptr;
-}
-
-// ProcessButtonClickEvent (0x35055890): the arrows step the chooser's model, wrapping.
-void ModelPicker::click(AppManager &app, Control &c) {
-	if (&c == done_) {
-		result = true;
-		app.set_last();
-	} else if (&c == back_) {
-		result = false;
-		app.set_last();
-	} else if ((&c == next_ || &c == prev_) && chooser_ && !chooser_->models_.empty()) {
-		int n = int(chooser_->models_.size());
-		chooser_->model_ = (chooser_->model_ + (&c == next_ ? 1 : n - 1)) % n;
-		update_model(app);
-	}
-}
-
-void ModelPicker::draw(AppManager &, std::vector<DrawItem> &out) {
-	for (auto [c, img] : {std::pair{prev_, prev_image_}, std::pair{next_, next_image_}}) {
-		if (!c || !img) continue;
-		DrawItem d;
-		d.kind = DrawItem::Image;
-		d.x0 = c->left, d.x1 = c->right, d.y0 = c->top, d.y1 = c->bottom, d.image = img;
-		out.push_back(d);
-	}
 }
 
 void ModelPicker::deactivated(AppManager &app) {
