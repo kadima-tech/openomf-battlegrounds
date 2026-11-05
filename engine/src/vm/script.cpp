@@ -30,6 +30,21 @@ ScriptMethod *ScriptClass::find(const std::string &signature) const {
 	return nullptr;
 }
 
+bool ScriptMethod::inherits(const std::string &name) const {
+	const ScriptMethod *m = this;
+	for (int guard = 0; m && guard < 64; ++guard) {
+		if (m->cm->name == name) return true;
+		if (m->cm->v78 >= 0) {
+			m = m->cls ? m->cls->method(uint32_t(m->cm->v78)) : nullptr;
+			continue;
+		}
+		const ScriptMethod *p = m->parent;
+		while (p && !p->is_state()) p = p->parent;
+		m = p;
+	}
+	return false;
+}
+
 ScriptMethod *ScriptClass::resolve_virtual(uint32_t slot, const ScriptMethod *running) const {
 	// A state carries its own virtual table (its base methods, one per slot), which already
 	// accounts for `inherit` and the enclosing states.

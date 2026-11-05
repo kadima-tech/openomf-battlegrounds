@@ -42,6 +42,10 @@ void set_transparent_sink(std::vector<DeferredDraw> *sink);
 // Layer 10 (DE_CMesh +0x40 flag 0x80 -> placement 7): while a sink is set, those meshes' passes are
 // handed to it; draw_top_layer (`view` the camera's view matrix) draws them after the glow.
 void set_top_sink(std::vector<DeferredDraw> *sink);
+// The glow target's first pass (DE_CClipVolume::DrawLayer into a texture, Direct3D 0x20029ee0): while
+// on, the draw_glow calls draw the opaque first passes of every mesh black with depth writes, so the
+// glow passes after them are hidden behind nearer geometry.
+void set_glow_occluders(bool on);
 void draw_top_layer(std::vector<DeferredDraw> &draws, const float *view);
 
 // A projector-lit mesh as the light projector passes see it (DE_CD3DRenderMeshElement::

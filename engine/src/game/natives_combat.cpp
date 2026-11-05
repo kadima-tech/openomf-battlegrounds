@@ -1119,13 +1119,8 @@ void register_combat_natives(World &w) {
 	// IsAirStateCaller -> IsJumpingState (0x35029c60): the running state inherits the "Air" state.
 	reg("COMF2Fighter::bool IsAirState()", [](const NativeContext &c) {
 		auto *o = c.self();
-		bool air = false;
-		if (o && o->brain && o->brain->exec) {
-			for (auto *m = o->brain->exec->current_state(); m && !air; m = m->parent) {
-				air = m->cm->name == "Air()";
-			}
-		}
-		c.ret_bool(air);
+		auto *m = o && o->brain && o->brain->exec ? o->brain->exec->current_state() : nullptr;
+		c.ret_bool(m && m->inherits("Air()"));
 	});
 	// Dampen*Momentum(k): scale the speed along those axes by (1 - speed x k), stopping at zero.
 	reg("COMF2Fighter::DampenHorizontalMomentum(float)", [](const NativeContext &c) {
@@ -1425,9 +1420,11 @@ void register_combat_natives(World &w) {
 		c.ret_object(o ? c.world.current_target_of(*o) : nullptr);
 	});
 	reg("COMF2Fighter::SetInvulnerabilityFramesRemaining(int)", [](const NativeContext &c) { if (auto *o = c.self()) o->invulnerable_frames = c.arg<int32_t>(0); });
-	reg("COMF2Fighter::IncrementInvulnerabilityFramesRemaining(int)", [](const NativeContext &c) { if (auto *o = c.self()) o->invulnerable_frames += c.arg<int32_t>(0); });
-	reg("COMF2Fighter::int InvulnerabilityFramesRemaining()", [](const NativeContext &c) { auto *o = c.self(); c.ret_u32(o ? uint32_t(std::max(0, o->invulnerable_frames)) : 0); });
-	reg("COMF2Fighter::bool IsInvulnerable()", [](const NativeContext &c) { auto *o = c.self(); c.ret_bool(o && o->invulnerable_frames > 0); });
+	reg("COMF2Fighter::IncrementInvulnerabilityFramesRemaining(int)", [](const NativeContext &c) {
+		if (auto *o = c.self()) o->invulnerable_frames = std::max(0, o->invulnerable_frames + c.arg<int32_t>(0));
+	});
+	reg("COMF2Fighter::int InvulnerabilityFramesRemaining()", [](const NativeContext &c) { auto *o = c.self(); c.ret_u32(o ? uint32_t(o->invulnerable_frames) : 0); });
+	reg("COMF2Fighter::bool IsInvulnerable()", [](const NativeContext &c) { auto *o = c.self(); c.ret_bool(o && o->invulnerable_frames != 0); });
 	// Run-time generated moves: capture the pose now (initial) or after setting a sequence (final).
 	reg("CCreature::AnimCaptureAsInitial()", [](const NativeContext &c) {
 		if (auto *o = c.self(); o && o->fighter) c.world.validate_animation(*o);  // the Caller validates first

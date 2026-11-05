@@ -1,7 +1,7 @@
 // openbg-fight: a fighter driven by its own compiled brain through the native runtime.
 //
 //   openbg-fight <Data dir> <Fighter, e.g. Jaguar> [--opponent Katana|none] [--arena Desert]
-//                [--opponent-pilot Elizabeth] [--difficulty rookie|amateur|veteran|champion|world-champion]
+//                [--opponent-pilot Elizabeth] [--difficulty rookie|amateur|veteran|champion|world-champion|master]
 //                [--pilot Lucas] [--wins 1|2|5|10|20|50] [--direct]
 //                [--watch] [--headless [frames]] [--screenshot out.png --frames N]
 //
@@ -168,11 +168,11 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[i], "--opponent-pilot") && i + 1 < argc) {
 			opponent_pilot = argv[++i];
 		} else if (!strcmp(argv[i], "--difficulty") && i + 1 < argc) {
-			// DE_COMF2Manager::SetupAIDifficultyList: Rookie, Amateur, Veteran, Champion, World Champion.
+			// DE_COMF2Manager::SetupAIDifficultyList: Rookie, Amateur, Veteran, Champion, World Champion, Master.
 			std::string d = argv[++i];
-			const char *names[] = {"rookie", "amateur", "veteran", "champion", "world-champion"};
+			const char *names[] = {"rookie", "amateur", "veteran", "champion", "world-champion", "master"};
 			difficulty = isdigit(d[0]) ? atoi(d.c_str()) : 2;
-			for (int k = 0; k < 5; ++k) {
+			for (int k = 0; k < 6; ++k) {
 				if (d == names[k]) difficulty = k;
 			}
 		} else if (!strcmp(argv[i], "--free-camera")) {
@@ -205,6 +205,7 @@ int main(int argc, char **argv) {
 			r.shown = r.displayed = r.authorized = true;
 		};
 		world.all_ai = watch;
+		world.ai_difficulty = difficulty;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
 		static std::deque<game::Pilot> pilots;
 		auto load_pilot = [&](const std::string &who) -> const game::Pilot * {
@@ -469,8 +470,9 @@ int main(int argc, char **argv) {
 					game::Brain *br = nullptr;
 					for (game::GameObject *x = o; x && !br; x = nullptr) br = x->brain;
 					auto *st = br && br->exec ? br->exec->current_state() : nullptr;
-					fprintf(stderr, "[find %d] %s (%s) at %.1f %.1f %.1f parent %s active %d visible %d state %s\n", fr, o->name.c_str(), o->class_path.c_str(),
-					        t[0], t[1], t[2], o->parent ? o->parent->name.c_str() : "-", o->active, o->visible, st ? st->cm->signature.c_str() : "-");
+					auto z = o->world().rotate({0, 0, 1});
+					fprintf(stderr, "[find %d] %s (%s) at %.1f %.1f %.1f z (%.2f %.2f %.2f) parent %s active %d visible %d state %s\n", fr, o->name.c_str(), o->class_path.c_str(),
+					        t[0], t[1], t[2], z[0], z[1], z[2], o->parent ? o->parent->name.c_str() : "-", o->active, o->visible, st ? st->cm->signature.c_str() : "-");
 				}
 			}
 			world.input = {};

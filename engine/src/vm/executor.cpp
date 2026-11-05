@@ -49,6 +49,14 @@ void Executor::call(ScriptMethod &m, std::span<uint8_t> args) {
 		Floor(size_t &f, size_t now) : floor(f), outer(f) { f = now; }
 		~Floor() { floor = outer; }
 	} floor(call_floor_, frames_.size());
+	struct Outer {
+		size_t &n;
+		size_t was;
+		Outer(size_t &x, size_t now) : n(x), was(x) {
+			if (n == SIZE_MAX) n = now;
+		}
+		~Outer() { n = was; }
+	} outer(state_frames_, frames_.size());
 	const uint64_t gen = generation_;
 	internal_execute(m, off, true);
 	if (generation_ == gen && frames_.size() == floor.floor && !frames_.empty()) {
@@ -90,6 +98,7 @@ void Executor::start(ScriptMethod &m) {
 	if (!m.is_instant() || m.is_state()) state_ = &m;
 	close_frames(0);
 	call_floor_ = 0;
+	state_frames_ = SIZE_MAX;
 	inst_.sleep = 0;  // a new state runs: exSleep() only holds the state that called it
 	base_ = 0;
 	method_ = &m;
@@ -683,7 +692,8 @@ int Executor::continue_execution() {
 
 std::vector<Executor::StatusFrame> Executor::status() const {
 	std::vector<StatusFrame> out;
-	for (size_t i = 0; i < frames_.size(); ++i) {
+	const size_t n = std::min(state_frames_, frames_.size());
+	for (size_t i = 0; i < n; ++i) {
 		const Frame &f = frames_[i];
 		bool live = i + 1 == frames_.size();
 		uint32_t pc = live ? pc_ : f.pc;
@@ -696,6 +706,7 @@ void Executor::restore(const std::vector<RestoreFrame> &frames,
                        const std::function<void(ScriptMethod &, uint32_t, std::vector<uint32_t> &)> &fill) {
 	++generation_;
 	frames_.clear();
+	state_frames_ = SIZE_MAX;
 	base_ = 0;
 	pc_ = 0;
 	uint32_t base = 0;

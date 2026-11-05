@@ -67,6 +67,8 @@ struct VariedStat {
 	uint32_t level = 4, variation = 0, wave = 0;
 	float base = 1, amplitude = 0, phase = 0, frequency = 0;
 	float value(float time_ms) const;
+	// CVariedStat::GetValue(float &): the time it is handed keeps the phase added.
+	float advance(float &time_ms) const;
 };
 struct Pilot {
 	std::string name;
@@ -76,12 +78,15 @@ struct Pilot {
 	std::array<std::array<float, 3>, 3> colours{{{0.75f, 0.78f, 0.82f}, {0.10f, 0.35f, 0.85f}, {1.00f, 0.80f, 0.15f}}};
 	std::map<uint32_t, VariedStat> ai;  // by DE_CPilot offset (0x3e8 AffinityLeft ... 0x7a8 EmotionValor)
 	float quality = 0.43f;              // +0x7cc: AI quality degradation (higher = clumsier)
-	int difficulty = 2;                 // DE_COMF2Manager::AIDifficulty: 0 Rookie .. 4 World Champion
+	int difficulty = 2;                 // +0x7d4, DE_COMF2Manager::AIDifficulty: 0 Rookie .. 5 Master
 	float difficulty_offset = 0;        // +0x3e4 (CPilot::SetAIDifficultyOffset)
 	uint32_t sex = 0;                   // +0x3d4, after the AI stats: CPilot::sexMale, sexFemale, sexUndefined
 	float stat(uint32_t offset, float time_ms) const;
-	// The difficulty-dependent part of CalculateAIValues: quality degradation
-	// clamp(1 - (difficulty + offset) / 3.5, 0.01, 0.99) and the perception stats built on it.
+	float stat_advance(uint32_t offset, float &time_ms) const;
+	// trunc(difficulty + offset): COMF2Fighter::AIDifficulty (OMF 2.123 0x107211a0).
+	int effective_difficulty() const;
+	// The difficulty-dependent part of CalculateAIValues (2.123 0x1074ccc0): quality degradation
+	// clamp(1 - (trunc(difficulty + offset) + offset) / 3.5, 0.01, 0.99), the offset counted twice.
 	void apply_difficulty();
 };
 // `difficulty` is the app's AI difficulty (DE_COMF2Manager::AIDifficulty, normally from the
@@ -111,6 +116,7 @@ struct GameObject {
 	de::Transform local;
 	bool visible = true;
 	int32_t position_mode = 2;  // DE_CActor +0x10c (0 inherit, 1 static, 2 dynamic)
+	bool inherit_position = true, inherit_rotation = true;  // DE_CActor +0xd8, +0xdc
 	uint32_t actor_flags = 6;   // DE_CActor +0x110 (2 shown at low detail, 4 at high detail)
 	bool meshes_disabled = false;  // CActor::DisableAllMeshProperties: its own mesh properties are not drawn
 
@@ -148,6 +154,7 @@ struct GameObject {
 	bool user_controlled = false;  // reads World::input; otherwise driven by AI commands
 	bool autoplayed = false;       // OPENBG_AUTOPLAY: AI-driven, but still the user's to the scripts
 	const Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
+	float pilot_time_add = 0;       // a pilot object's +0x7cc (2.123): the static TimeAdd when it was made
 	const std::map<std::string, std::vector<struct InputRequirement>> *inputs = nullptr;  // kind 24 bank
 
 	// AI commands (DE_CCommand: navigation / look-at / attack) and the fighter script's hooks
@@ -164,6 +171,7 @@ struct GameObject {
 		float step_distance = 0;             // ... and the distance left (+0x7c)
 		bool updated = false;
 		float sort = 1;         // +0x4c: priority (+0x48, always 1) after ModifySort
+		uint32_t age = 0;       // +0x58: manager ticks, added at each new command
 	};
 	struct CommandManager {
 		std::vector<Command> list;
@@ -171,6 +179,9 @@ struct GameObject {
 		bool dirty = true;             // +0xa0: sort before the next SortedCommand
 		bool reassign = false;         // +0xa4
 		uint32_t next_id = 1;
+		uint32_t ticks = 0;            // +0x94: ticks since the last new command
+		int forget = -1;               // the manager references a CommandModifier\Forget (-1: not looked yet)
+		int forget_count = 0;          // its +0x2c
 		// The creature's one controller (CControllerInfo).
 		uint32_t candidate = 0;        // +0x2c/+0x34: the primary being chosen (command id)
 		float candidate_conf = 0;      // +0x30
@@ -210,6 +221,7 @@ struct GameObject {
 	std::vector<StateHook> state_hooks;  // +0x1b8: RegisterCreatureStateChangedHook
 	float ai_range_base = 1;        // fighter +0x5f4: AIAttackRange's base, jittered every 64 updates
 	bool temporal_registered = false;  // in its rate's temporal set
+	bool monitors_registered = false;  // its momentum monitors joined their sets
 	uint64_t affector_seq = 0;  // its place in the scene's affector list (0: not in it)
 	std::vector<uint32_t> linked_fighters;  // fighter +0x334, filled pairwise by ObjPrepare
 	bool fighter_prepared = false;
@@ -330,7 +342,11 @@ std::array<float, 3> focal_point(const GameObject &o);
 // in its parent's inactive list (DE_CActor::ObjSetParent / SetInnactive, Core 0x7008afb0 /
 // 0x700903e0): it and its branch are out of the scene. A root added to the scene is in it whatever
 // its own flag.
-inline bool parked(const GameObject &o) { return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags)); }
+// An actor under a Folder has no actor parent (DE_CActor::ObjSetParent 0x7008afb0) and a Folder
+// prepares nothing, so it stays out of the scene unless added itself.
+inline bool parked(const GameObject &o) {
+	return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
+}
 inline bool in_scene(const GameObject &o) {
 	const GameObject *r = &o;
 	for (; r->parent; r = r->parent) {
@@ -858,6 +874,7 @@ public:
 	// DE_CCreature::Command* -> DE_CCommandManager::ReceiveCommand / Forget.
 	void issue_command(GameObject &o, GameObject::Command c);
 	void forget_commands(GameObject &o, uint32_t mask);
+	void remove_command(GameObject &o, uint32_t id);
 	// The fighter the camera follows (the user's): its HUD and effects count as rendered.
 	const GameObject *focus = nullptr;
 	// openbg-fight --watch: the computer drives the user's fighter too (a test mode, not the game's).
@@ -956,7 +973,7 @@ public:
 	// COMF2Fighter::CurrentTarget: the nearest enemy fighter in front, within 200 units.
 	GameObject *best_melee_target(GameObject &o);
 	void guide(GameObject &o);  // DE_COMF2Fighter::Guide, once per frame
-	void surface_friction(GameObject &o, float material = 1);  // DE_COMF2Fighter::ApplySurfaceFriction
+	void surface_friction(GameObject &o, float material = 1, const std::array<float, 3> &surface = {0, 0, 0});  // DE_COMF2Fighter::ApplySurfaceFriction
 	// Summed danger at `p` from active danger-group affectors (not `ignore_owner`'s own), and
 	// optionally the strongest one's CDanger property and level.
 	float danger_at(const std::array<float, 3> &p, const GameObject *ignore_owner, GameObject **greatest, float *greatest_level);
@@ -999,6 +1016,8 @@ private:
 	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
 	uint64_t reference_seq_ = 0;  // orders copies and replacements
+	float pilot_time_add_ = 0;    // DE_CPilot::ObjInitContents' static TimeAdd
+	void count_pilot(GameObject &g);
 	GameObject *copy_node(const GameObject &o);
 	std::map<const GameObject *, SceneClock> clocks_;
 	const GameObject *clock_ = nullptr;  // the scene scene_ms_ is the time of
@@ -1009,8 +1028,8 @@ private:
 	uint64_t affector_seq_ = 0;
 	// DE_CScene's temporal sets (TemporalElementSetForRate 0x70072230), in creation order.
 	struct Temporal {
-		enum Kind { Creature, Brain, Tester, Input } kind;
-		uint32_t handle = 0;      // creature object / collision tester
+		enum Kind { Creature, Brain, Tester, Input, Monitor } kind;
+		uint32_t handle = 0;      // creature object / collision tester / momentum monitor
 		struct Brain *brain = nullptr;
 	};
 	struct TemporalSet {
@@ -1027,6 +1046,7 @@ private:
 	void add_temporal(uint32_t rate, Temporal t, const GameObject *clock);
 	void register_temporals();
 	void register_creature(GameObject *o);
+	void register_monitors(GameObject *o);
 	void register_branch(GameObject *o, std::vector<Brain *> *prepared = nullptr);
 public:
 	void register_brain(Brain *b);

@@ -528,13 +528,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		for (int p = int(i); p >= 0 && !data_world_done_[size_t(p)]; p = data_parents_[size_t(p)]) chain.push_back(uint32_t(p));
 		for (size_t k = chain.size(); k-- > 0;) {
 			uint32_t c = chain[k];
-			de::Transform local;
+			de::ActorInfo a;
 			try {
-				local = de::read_actor(*arena_file, arena_file->objects()[c]).local;
+				a = de::read_actor(*arena_file, arena_file->objects()[c]);
 			} catch (const std::exception &) {
 			}
 			int p = data_parents_[c];
-			data_world_[c] = p >= 0 ? data_world_[size_t(p)].then(local) : local;
+			data_world_[c] = p >= 0 ? a.placed(data_world_[size_t(p)]) : a.local;
 			data_world_done_[c] = true;
 		}
 		return data_world_[i];
@@ -710,14 +710,17 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	static const bool no_glow = getenv("OPENBG_NO_GLOW") != nullptr;
 	if (!no_glow && world.glow_enabled) {
 		glow_r.begin();
-		arena_r.draw_glow(vp, eye);
-		// Moved and run-time actors keep their glow passes (DE_CShader::GetShader is per mesh).
-		if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
-		{
+		// Opaque meshes first, black with depth (DE_CClipVolume::DrawLayer into the glow target), then
+		// the glow passes; moved and run-time actors keep theirs (DE_CShader::GetShader is per mesh).
+		for (bool occluders : {true, false}) {
+			render::set_glow_occluders(occluders);
+			arena_r.draw_glow(vp, eye);
+			if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
 			for (auto *fi : fighters) {
 				if (fi->actor->spawned && fi->renderer_loaded && shown(fi->actor)) fi->renderer.draw_glow(vp, eye);
 			}
 		}
+		render::set_glow_occluders(false);
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}

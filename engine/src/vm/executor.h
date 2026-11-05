@@ -186,6 +186,7 @@ private:
 	ScriptMethod *state_ = nullptr;
 	std::vector<Frame> frames_;       // +0x40 DE_CExecuteInfo array
 	size_t call_floor_ = 0;  // frames below belong to the state; a native call's are the instant executer's (+0x8c)
+	size_t state_frames_ = SIZE_MAX;  // below the outermost native call: the main executer's frames, all GenerateStatus writes
 	std::vector<int32_t> vp_frames_;
 	std::pair<size_t, size_t> vp_last_{0, 0};  // the most recently closed varparam frame  // +0x10 variable-parameter frame starts
 	std::vector<VarParam> varparams_;

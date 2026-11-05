@@ -83,7 +83,7 @@ std::vector<PlacedLight> read_scene_lights(const World &w, const ObjectsFile &fi
 			const std::string &cls = objs[*it].class_path;
 			if (cls != "Actor" && cls.rfind("Actor\\", 0) != 0) continue;
 			try {
-				t = t.then(read_actor(file, objs[*it]).local);
+				t = read_actor(file, objs[*it]).placed(t);
 			} catch (const FormatError &) {
 			}
 		}

@@ -10,6 +10,7 @@
 #include "de/mesh.h"
 #include "game/particles.h"
 #include "game/session.h"
+#include "game/simple_physics.h"
 
 namespace game {
 namespace {
@@ -894,10 +895,8 @@ GameObject *find_in_branch(GameObject *o, const de::ObjectRef &r) {
 // DE_COMF2Fighter::IsStandingState (0x35029ad0): the running state inherits "Ground()".
 bool standing_state(GameObject &o) {
 	if (!o.brain || !o.brain->exec) return false;
-	for (auto *m = o.brain->exec->current_state(); m; m = m->parent) {
-		if (m->cm->name == "Ground()") return true;
-	}
-	return false;
+	auto *m = o.brain->exec->current_state();
+	return m && m->inherits("Ground()");
 }
 
 void call_hooks(World &w, const std::vector<std::pair<Brain *, uint32_t>> &hooks, const std::vector<uint8_t> &a) {
@@ -969,6 +968,7 @@ bool ForceSystem::collide(GameObject &f, FighterSurfaces &fs, bool probe, bool w
 	}
 	if (fs.contacts.empty()) {
 		fs.friction = 1;
+		fs.floor = nullptr;
 		return false;
 	}
 	// UpdateForFriction: the contact facing most upwards gives the surface's material value
@@ -977,6 +977,7 @@ bool ForceSystem::collide(GameObject &f, FighterSurfaces &fs, bool probe, bool w
 	for (auto &c : fs.contacts) {
 		if (c.normal[1] > 0 && (!top || c.normal[1] > top->normal[1])) top = &c;
 	}
+	fs.floor = top ? top->touched : nullptr;
 	GameObject *mat = top ? material_of(*top) : nullptr;
 	fs.friction = mat ? material(*mat).value : 1;
 	Vec m = f.momentum;
@@ -1154,7 +1155,28 @@ bool ForceSystem::fighter_tick(GameObject &f) {
 	if (!f.on_floor) {
 		fs.accel = {0, -f.gravity * 0.037f, 0};
 	} else {
-		w_.surface_friction(f, fs.friction);
+		// The floor's motion per ms, times SceneTicksPerUpdate (the fighter physics' 1 / TimeScale).
+		Vec surface{0, 0, 0}, turn{0, 0, 0};
+		if (GameObject *owner = fs.floor ? w_.affector_owner(fs.floor) : nullptr) {
+			float ticks = float(std::max<uint32_t>(w_.creature_rate(&f), 1));
+			surface = mul(w_.simple_physics->momentum_at(*owner, f.world().t), ticks);
+			turn = mul(w_.simple_physics->rotational_momentum(*owner), ticks);
+		}
+		static const bool debug_floor = getenv("OPENBG_DEBUG_FLOOR") != nullptr;
+		if (debug_floor && fs.floor) {
+			de::Transform ow = w_.affector_owner(fs.floor)->world();
+			Vec in = ow.inverse().apply(f.world().t);
+			float yaw = std::atan2(ow.r[6], ow.r[8]) * 57.29578f, fyaw = std::atan2(f.local.r[6], f.local.r[8]) * 57.29578f;
+			fprintf(stderr, "[floor %u] %s on %s yaw %.3f: at %.1f %.1f %.1f (there %.1f %.1f %.1f) facing %.3f surface %.3f %.3f %.3f turn %.5f\n", w_.frame(),
+			        f.name.c_str(), fs.floor->name.c_str(), yaw, f.local.t[0], f.local.t[1], f.local.t[2], in[0], in[1], in[2], fyaw, surface[0],
+			        surface[1], surface[2], turn[1]);
+		}
+		w_.surface_friction(f, fs.friction, surface);
+		if (fs.friction * f.traction != 0 && len(turn) > 0) {
+			Vec t = f.local.t;
+			f.local = rotation_of(turn).then(f.local);
+			f.local.t = t;
+		}
 		f.skip_friction = false;
 		fs.accel = {0, 0, 0};
 	}

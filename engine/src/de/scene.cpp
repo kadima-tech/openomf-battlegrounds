@@ -277,6 +277,15 @@ const Layer *Material::light() const {
 	return nullptr;
 }
 
+Transform place_under(const Transform &pw, const Transform &local, bool inherit_position, bool inherit_rotation) {
+	if (inherit_position && inherit_rotation) return pw.then(local);
+	Transform t = inherit_rotation ? Transform{pw.r, {0, 0, 0}}.then(local) : local;
+	if (inherit_position) t.t = {t.t[0] + pw.t[0], t.t[1] + pw.t[1], t.t[2] + pw.t[2]};
+	return t;
+}
+
+Transform ActorInfo::placed(const Transform &parent_world) const { return place_under(parent_world, local, inherit_position, inherit_rotation); }
+
 ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o) {
 	Contents c(f.object_data(o).contents);
 	Chunk ch = begin_chunk(c);
@@ -297,6 +306,8 @@ ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o) {
 	}
 	for (int k = 0; k < 4; ++k) {
 		bool b = c.boolean();
+		if (k == 0) a.inherit_position = b;
+		if (k == 1) a.inherit_rotation = b;
 		if (k == 3) a.rendered = b;
 	}
 	if (ch.version >= 4) {
@@ -472,7 +483,7 @@ std::vector<DrawItem> collect_scene(const World &w, const ObjectsFile &file) {
 		world[i] = parent;
 		if (is_actor_class(objs[i].class_path)) {
 			try {
-				world[i] = parent.then(read_actor(file, objs[i]).local);
+				world[i] = read_actor(file, objs[i]).placed(parent);
 			} catch (const FormatError &) {
 			}
 		}

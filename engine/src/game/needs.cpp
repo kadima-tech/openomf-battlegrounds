@@ -125,7 +125,7 @@ struct NeedSystem {
 		}
 		const Pilot *p = creature->fighter ? pilot_of(creature) : nullptr;
 		if (!p) return 0;
-		float now = w.scene_ms(), out = 0;
+		float now = float(w.system_ms()), out = 0;
 		const NeedWeights &k = n.weights;
 		if (flags & 8) {
 			float v = p->stat(0x688, now) * area * team * k.w54;
@@ -158,7 +158,7 @@ struct NeedSystem {
 				if (!o->is("UniqueActorProperty\\Need")) continue;
 				GameObject *h = o->parent;
 				const NeedWeights &k = weights_for(o);
-				float now = w.scene_ms();
+				float now = float(w.system_ms());
 				fprintf(stderr, "[needs %u]   %s on %s (%s) active %d groups %#x file %d weights %.1f %.1f %.1f %.1f %.1f stats %.2f %.2f desire %.3f\n", w.frame(), o->name.c_str(),
 				        h ? h->name.c_str() : "-", h ? h->class_path.c_str() : "-", h ? h->active : 0, h ? h->groups : 0, o->file != nullptr, k.w50, k.w54, k.w58, k.w5c, k.w60,
 				        pilot_of(creature) ? pilot_of(creature)->stat(0x5a8, now) : -1, pilot_of(creature) ? pilot_of(creature)->stat(0x5c8, now) : -1, h ? desire({o, h, k}, ~0u, creature) : -1);
@@ -196,7 +196,7 @@ struct NeedSystem {
 		Known &k = update(fighter);
 		GameObject *best = nullptr;
 		float best_desire = 0;
-		float now = w.scene_ms();
+		float now = float(w.system_ms());
 		for (auto it = k.needs.rbegin(); it != k.needs.rend(); ++it) {
 			float d = desire(*it, 2, fighter);
 			GameObject *a = it->holder;
