@@ -150,11 +150,12 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 		}
 		return nullptr;
 	};
+	// Each reference resolved from its holder (actor -> renderer -> generator -> modifiers), as World::referent does.
+	GameObject *rend = w_.referent(actor, def->object);
+	GameObject *gen = rend ? w_.referent(rend, def->generator.object) : nullptr;
 	for (auto &m : def->generator.modifiers) {
-		// The nearest copy up the actor's branch: a copied tree's references name its own copies
-		// (Katana's Cone draws QuadGenerator, whose TravelingParticleSpawner is a child of ProjectileActor).
-		GameObject *mo = nullptr;
-		for (GameObject *up = actor; up && !mo; up = up->parent) mo = find(up, m.object);
+		GameObject *mo = gen ? w_.referent(gen, m.object) : nullptr;
+		if (!mo) mo = find(actor, m.object);
 		if (!mo) mo = w_.global_object(m.object);
 		in->modifier_objects.push_back(mo);
 		// DE_CParticleModifier::Begin.
