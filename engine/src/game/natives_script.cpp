@@ -923,7 +923,10 @@ void register_script_natives(World &w) {
 		return it == c.world.texts.end() ? nullptr : &it->second;
 	};
 	const std::string tp = "CPrimitiveGeneratorMesh::CTextPrimitive::";
-	reg(tp + "SetText(string)", [text](const NativeContext &c) { if (auto *t = text(c)) t->text = c.arg_string(0); });
+	reg(tp + "SetText(string)", [text](const NativeContext &c) {
+		// Deliberate deviation (PLACEHOLDERS.md): BTimeAccelerate's hint is never shown.
+		if (auto *t = text(c)) t->text = c.arg_string(0) == "Hold attack buttons to accelerate time" ? "" : c.arg_string(0);
+	});
 	reg(tp + "SetPosition(float,float,float)", [text](const NativeContext &c) {
 		if (auto *t = text(c)) t->x = c.arg<float>(0), t->y = c.arg<float>(1), t->z = c.arg<float>(2);
 	});
