@@ -118,6 +118,7 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   word-wrapped to the page less the scroll bar's width and twice the font, left-aligned in 2.123's
   data (centred where a page asks, as Credits does), stacked downwards; a page taller than the
   Window gets the launcher's 24-pixel vertical scroll bar and scrolls by bar, track or wheel.
+- **Arena lights.** A light shines at its colour times its alpha; Blast Furnace is lit grey-white, and each flamethrower throws a warm orange glow only while it fires, fading after.
 - **Shadows (off by default).** Each robot's silhouette darkens the floor under it to about half (Medium, High), from the static lights' direction (High adds one from the moving lights); Low casts one from straight above, darker.
 - **Camera.** The game's fight camera (the player's `CameraActor`, 70.5° horizontal at 4:3) while the
   player fights. Before and between rounds, after the player's fighter is beaten, and through a whole

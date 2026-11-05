@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
 			l.near_begin = pl.near_begin, l.near_end = pl.near_end;
 			l.position_static = pl.position_static;
 			auto c = pl.info.colour.eval(0);
-			l.colour = {c[0], c[1], c[2]};
+			l.colour = {c[0] * c[3], c[1] * c[3], c[2] * c[3]};
 			l.intensity = pl.info.intensity;
 			l.mask = pl.info.mask();
 			render::g_lighting.lights.push_back(l);

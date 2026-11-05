@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <tuple>
@@ -70,8 +71,25 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 				l.inner = aff->far_begin, l.outer = aff->far_end, l.umbra = aff->umbra, l.penumbra = aff->penumbra;
 				l.near_begin = aff->near_begin, l.near_end = aff->near_end;
 			}
-			auto col = info.colour.eval(float(world.scene_ms_of(aff)) / 1000.0f);
-			l.colour = {col[0], col[1], col[2]};
+			// A value the scripts set on this copy (BEffectFader's Intensity) rather than the data's.
+			de::LiveFloat live = [&world, aff](const de::ObjectRef &r) -> std::optional<float> {
+				for (const game::GameObject *p = aff; p; p = p->parent) {
+					auto it = world.values.find(p);
+					if (it == world.values.end()) continue;
+					for (const game::GameObject *ch : p->children) {
+						if (ch->file != r.file || ch->index != r.index) continue;
+						auto v = it->second.find(ch->name);
+						if (v == it->second.end()) break;
+						float f;
+						memcpy(&f, &v->second.bits, 4);
+						return f;
+					}
+				}
+				return std::nullopt;
+			};
+			// DE_CLight::Color: the colour value's rgb times its alpha.
+			auto col = info.colour.eval(float(world.scene_ms_of(aff)) / 1000.0f, live);
+			l.colour = {col[0] * col[3], col[1] * col[3], col[2] * col[3]};
 			l.intensity = info.intensity;
 			l.mask = info.mask();
 			// DE_CStandardRenderLight::UpdateLitActors: its affector against the render affectors.

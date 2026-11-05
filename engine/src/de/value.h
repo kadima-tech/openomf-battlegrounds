@@ -54,7 +54,7 @@ struct ColorValue {
 	// ModulatedRGBA: colour and alpha modulator.
 	std::shared_ptr<ColorValue> color;
 	std::shared_ptr<FloatValue> alpha;
-	std::array<float, 4> eval(float t) const;
+	std::array<float, 4> eval(float t, const LiveFloat &live = {}) const;
 };
 
 // A Value object (by class path).
