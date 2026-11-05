@@ -87,8 +87,8 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 				}
 				return std::nullopt;
 			};
-			// DE_CLight::Color: the colour value's rgb times its alpha.
-			auto col = info.colour.eval(float(world.scene_ms_of(aff)) / 1000.0f, live);
+			// DE_CLight::Color: the timeless GetValue (a ModulatedRGBA's time member is always 0), rgb times alpha.
+			auto col = info.colour.eval(0, live);
 			l.colour = {col[0] * col[3], col[1] * col[3], col[2] * col[3]};
 			l.intensity = info.intensity;
 			l.mask = info.mask();
