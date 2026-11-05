@@ -88,13 +88,11 @@ std::vector<std::string> param_types(const std::string &sig) {
 }  // namespace
 
 de::Transform GameObject::world() const {
-	de::Transform t = local;
-	for (const GameObject *p = parent; p; p = p->parent) {
-		if (p->is_actor) {
-			t = p->local.then(t);
-		}
-	}
-	return t;
+	const GameObject *p = parent;
+	while (p && !p->is_actor) p = p->parent;
+	if (!p) return local;
+	if (!inherit_position && !inherit_rotation) return local;
+	return de::place_under(p->world(), local, inherit_position, inherit_rotation);
 }
 
 // A call from outside the brain (a hook, an event relay, another brain's interface call) that
@@ -801,6 +799,8 @@ GameObject &World::make_object(const de::ObjectsFile *f, uint32_t i) {
 			de::ActorInfo a = de::read_actor(*f, objs[i]);
 			g.local = a.local;
 			g.position_mode = a.position_mode;
+			g.inherit_position = a.inherit_position;
+			g.inherit_rotation = a.inherit_rotation;
 			g.actor_flags = a.flags;
 			g.visible = a.rendered;
 			g.active = (a.flags & 8) != 0;  // +0x110 bit 8: active (else parked under its parent)

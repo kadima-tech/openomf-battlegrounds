@@ -528,13 +528,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		for (int p = int(i); p >= 0 && !data_world_done_[size_t(p)]; p = data_parents_[size_t(p)]) chain.push_back(uint32_t(p));
 		for (size_t k = chain.size(); k-- > 0;) {
 			uint32_t c = chain[k];
-			de::Transform local;
+			de::ActorInfo a;
 			try {
-				local = de::read_actor(*arena_file, arena_file->objects()[c]).local;
+				a = de::read_actor(*arena_file, arena_file->objects()[c]);
 			} catch (const std::exception &) {
 			}
 			int p = data_parents_[c];
-			data_world_[c] = p >= 0 ? data_world_[size_t(p)].then(local) : local;
+			data_world_[c] = p >= 0 ? a.placed(data_world_[size_t(p)]) : a.local;
 			data_world_done_[c] = true;
 		}
 		return data_world_[i];

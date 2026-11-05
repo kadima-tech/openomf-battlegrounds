@@ -111,6 +111,7 @@ struct GameObject {
 	de::Transform local;
 	bool visible = true;
 	int32_t position_mode = 2;  // DE_CActor +0x10c (0 inherit, 1 static, 2 dynamic)
+	bool inherit_position = true, inherit_rotation = true;  // DE_CActor +0xd8, +0xdc
 	uint32_t actor_flags = 6;   // DE_CActor +0x110 (2 shown at low detail, 4 at high detail)
 	bool meshes_disabled = false;  // CActor::DisableAllMeshProperties: its own mesh properties are not drawn
 
