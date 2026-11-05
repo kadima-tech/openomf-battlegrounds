@@ -919,8 +919,11 @@ ForceSystem::FighterSurfaces &ForceSystem::surfaces(GameObject &f) {
 		if (c->name == "OtherFighterPushSphere" && c->shape == GameObject::Shape::Sphere) fs.push_sphere = c;
 	}
 	fs.last_pos = f.local.t;
-	// The fighter's properties: its Physics\Simple\Fighter (test affectors in references
-	// chunk 2, groups in its contents) and the force it applies to what it touches.
+	// DE_COMF2Fighter::ObjInitContents: every fighter makes its own force (type 0x20, CommonForce defaults).
+	fs.force = w_.create_child(nullptr, "FighterGroundCollisionForce", "UniqueActorProperty\\Force\\Common");
+	owners_[fs.force] = &f;
+	force(*fs.force).type = 0x20;
+	// The fighter's Physics\Simple\Fighter: test affectors in references chunk 2, groups in its contents.
 	for (auto &r : w_.actor_properties({f.file, f.index})) {
 		if (!r) continue;
 		const std::string &cls = r.info().class_path;
@@ -938,10 +941,6 @@ ForceSystem::FighterSurfaces &ForceSystem::surfaces(GameObject &f) {
 				}
 			} catch (const std::exception &) {
 			}
-		} else if (r.info().name == "PlayerForce" && cls.rfind("UniqueActorProperty\\Force", 0) == 0) {
-			fs.force = find_in_branch(&f, r);
-			if (!fs.force) fs.force = unique_property(f, *w_.global_object(r));
-			if (fs.force) owners_[fs.force] = &f;
 		}
 	}
 	return fs;
