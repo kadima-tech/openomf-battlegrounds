@@ -211,6 +211,7 @@ struct GameObject {
 	std::vector<StateHook> state_hooks;  // +0x1b8: RegisterCreatureStateChangedHook
 	float ai_range_base = 1;        // fighter +0x5f4: AIAttackRange's base, jittered every 64 updates
 	bool temporal_registered = false;  // in its rate's temporal set
+	bool monitors_registered = false;  // its momentum monitors joined their sets
 	uint64_t affector_seq = 0;  // its place in the scene's affector list (0: not in it)
 	std::vector<uint32_t> linked_fighters;  // fighter +0x334, filled pairwise by ObjPrepare
 	bool fighter_prepared = false;
@@ -957,7 +958,7 @@ public:
 	// COMF2Fighter::CurrentTarget: the nearest enemy fighter in front, within 200 units.
 	GameObject *best_melee_target(GameObject &o);
 	void guide(GameObject &o);  // DE_COMF2Fighter::Guide, once per frame
-	void surface_friction(GameObject &o, float material = 1);  // DE_COMF2Fighter::ApplySurfaceFriction
+	void surface_friction(GameObject &o, float material = 1, const std::array<float, 3> &surface = {0, 0, 0});  // DE_COMF2Fighter::ApplySurfaceFriction
 	// Summed danger at `p` from active danger-group affectors (not `ignore_owner`'s own), and
 	// optionally the strongest one's CDanger property and level.
 	float danger_at(const std::array<float, 3> &p, const GameObject *ignore_owner, GameObject **greatest, float *greatest_level);
@@ -1010,8 +1011,8 @@ private:
 	uint64_t affector_seq_ = 0;
 	// DE_CScene's temporal sets (TemporalElementSetForRate 0x70072230), in creation order.
 	struct Temporal {
-		enum Kind { Creature, Brain, Tester, Input } kind;
-		uint32_t handle = 0;      // creature object / collision tester
+		enum Kind { Creature, Brain, Tester, Input, Monitor } kind;
+		uint32_t handle = 0;      // creature object / collision tester / momentum monitor
 		struct Brain *brain = nullptr;
 	};
 	struct TemporalSet {
@@ -1028,6 +1029,7 @@ private:
 	void add_temporal(uint32_t rate, Temporal t, const GameObject *clock);
 	void register_temporals();
 	void register_creature(GameObject *o);
+	void register_monitors(GameObject *o);
 	void register_branch(GameObject *o, std::vector<Brain *> *prepared = nullptr);
 public:
 	void register_brain(Brain *b);
