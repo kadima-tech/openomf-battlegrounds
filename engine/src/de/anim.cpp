@@ -139,8 +139,8 @@ std::vector<Transform> AnimBank::pose(const AnimSequence &seq, float t, bool roo
 		});
 		sample(s.rot, t, [&](auto &a, auto &b, float u) { rot[s.channel] = slerp(a.q, b.q, u); });
 	}
+	const int body = channel("Body");
 	if (!root_motion) {
-		int body = channel("Body");
 		if (body >= 0) {
 			pos[size_t(body)] = {0, 0, 0};
 			rot[size_t(body)] = {0, 0, 0, 1};
@@ -154,7 +154,8 @@ std::vector<Transform> AnimBank::pose(const AnimSequence &seq, float t, bool roo
 			if (done[i]) {
 				continue;
 			}
-			int p = channels[i].parent;
+			// Body is the fighter, the root of the actor tree the streams land in (Warlord's bank names Pelvis).
+			int p = int(i) == body ? -1 : channels[i].parent;
 			if (p >= 0 && size_t(p) < channels.size() && !done[size_t(p)]) {
 				continue;
 			}
