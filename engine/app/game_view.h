@@ -3,6 +3,9 @@
 // camera. Shared by openbg-fight and the front end.
 #pragma once
 
+#include <set>
+#include <unordered_map>
+
 #include <array>
 #include <optional>
 #include <map>
@@ -99,6 +102,9 @@ private:
 	std::map<const game::GameObject *, const game::GameObject *> inherited_owner_;
 	const de::ObjectsFile *environment_tree_file_ = nullptr;
 	std::vector<bool> environment_tree_;  // the arena file's objects under its environment
+	// The arena's actors as first drawn, and those whose local transform has changed since (rotators).
+	std::unordered_map<const game::GameObject *, de::Transform> first_local_;
+	std::set<const game::GameObject *> turned_;
 	bool gl_ready_ = false;
 };
 
