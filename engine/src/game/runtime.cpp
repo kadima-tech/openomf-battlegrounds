@@ -1567,7 +1567,10 @@ void World::creature_tick(GameObject &o) {
 	}
 	// A replay's held creature, or one re-taking its state for this tick, skips physics and brain.
 	bool skip = creature_state_tick(*this, o);
-	if (o.fighter && !skip) physics_step(o);
+	if (!skip) {
+		if (o.fighter) physics_step(o);
+		else simple_physics->creature_tick(o);
+	}
 	for (auto &bp : brains_) {
 		if (bp->owner == &o) {
 			if (!skip && is_creature_behaviour(*this, *bp)) pulse(*this, bp.get());

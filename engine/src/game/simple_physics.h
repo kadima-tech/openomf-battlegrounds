@@ -52,12 +52,17 @@ public:
 	GameObject *actor_of(GameObject &physics);
 	// The actor's physics (children and properties; CActor::Physics(i) indexes it).
 	std::vector<GameObject *> physics_of(GameObject &actor);
+	// The physics a creature holds (+0x1cc): its last Physics property (DE_CCreature::ObjPrepare).
+	GameObject *creature_physics(GameObject &creature);
+	// Every physics the scene steps itself; a creature with a tick rate steps its own (+0x3c).
 	void tick();
 	MomentumMonitor &monitor(GameObject &physics);
 	void monitor_tick(GameObject &physics);
 	// DE_CActor::MomentumAtPosition (Core 0x700906a0) / RotationalMomentum (0x700905c0), per ms.
 	std::array<float, 3> momentum_at(GameObject &actor, const std::array<float, 3> &p);
 	std::array<float, 3> rotational_momentum(GameObject &actor);
+	// DE_CSimplePhysics::Tick (Core 0x701dbfc0) from DE_CCreature::Tick (Creature 0x15016870).
+	void creature_tick(GameObject &creature);
 	// DE_CSimplePhysics::DeltaTick (Core 0x701dc060): a step over the scene time since its last.
 	void delta_tick(GameObject &physics);
 	// The clock of `session`'s scene went back to `now`: nothing there has run after it.
@@ -76,6 +81,7 @@ private:
 	std::map<std::pair<const GameObject *, const GameObject *>, GameObject *> monitor_copies_;
 	std::map<const GameObject *, GameObject *> actors_;
 	std::map<const GameObject *, std::vector<GameObject *>> lists_;
+	std::map<const GameObject *, GameObject *> creature_physics_;
 };
 
 // The rotation by an axis times its angle (radians).

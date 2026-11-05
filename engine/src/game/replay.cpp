@@ -787,10 +787,10 @@ void repack_physics(World &w, Packer &src, Packer &dst, bool got_hit) {
 	encode_physics(w, dst, s, got_hit);
 }
 
-// The creature's physics (+0x1cc): a fighter's, else its first simple physics.
+// The creature's physics (+0x1cc), when it is a simple physics.
 GameObject *simple_physics_of(World &w, GameObject &o) {
-	auto ps = w.simple_physics->physics_of(o);
-	return ps.empty() ? nullptr : ps[0];
+	GameObject *p = w.simple_physics->creature_physics(o);
+	return p && p->class_path == "Physics\\Simple" ? p : nullptr;
 }
 
 // DE_CObject::PackState (Core 0x7003de40) / DE_CCreature::PackState (Creature 0x150150b0): each

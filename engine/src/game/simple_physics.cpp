@@ -220,12 +220,29 @@ void SimplePhysicsSystem::bounce(GameObject &, SimplePhysics &s, const std::vect
 	}
 }
 
+GameObject *SimplePhysicsSystem::creature_physics(GameObject &creature) {
+	auto it = creature_physics_.find(&creature);
+	if (it != creature_physics_.end()) return it->second;
+	GameObject *found = nullptr;
+	if (creature.is("Actor\\Creature") && creature.file) {
+		auto list = physics_of(creature);
+		for (auto &r : w_.actor_properties({creature.file, creature.index})) {
+			if (!r || r.info().class_path.rfind("Physics", 0) != 0) continue;
+			for (GameObject *p : list) {
+				if (p->file == r.file && p->index == r.index) found = p;
+			}
+		}
+	}
+	return creature_physics_[&creature] = found;
+}
+
 void SimplePhysicsSystem::tick() {
 	for (GameObject *actor : w_.scene_objects()) {
 		if (!actor->is_actor || actor->fighter || !in_scene(*actor)) continue;
 		const uint32_t now = w_.scene_ms_of(actor);
+		GameObject *own = w_.creature_rate(actor) && actor->is("Actor\\Creature") ? creature_physics(*actor) : nullptr;
 		for (GameObject *p : physics_of(*actor)) {
-			if (p->class_path != "Physics\\Simple") continue;
+			if (p->class_path != "Physics\\Simple" || p == own) continue;
 			SimplePhysics &s = state(*p);
 			if (!s.enabled || !actor->physics_enabled) {
 				s.last_ms = now;
@@ -316,7 +333,10 @@ Vec SimplePhysicsSystem::momentum_at(GameObject &actor, const Vec &at) {
 	for (GameObject *p : physics_of(actor)) {
 		if (p->class_path == "Physics\\Simple") {
 			const SimplePhysics &sp = state(*p);
-			if (sp.enabled) linear = add(linear, mul(sp.momentum, sp.rate > 0 ? 1.0f / float(sp.rate) : 1.0f));
+			// DE_CPhysics::TimeScale (+0x44): 1 / the rate of a creature that ticks it.
+			const uint32_t ticks = p == creature_physics(actor) ? w_.creature_rate(&actor) : 0;
+			const float per_ms = ticks ? 1.0f / float(ticks) : sp.rate > 0 ? 1.0f / float(sp.rate) : 1.0f;
+			if (sp.enabled) linear = add(linear, mul(sp.momentum, per_ms));
 			continue;
 		}
 		if (p->class_path != "Physics\\MomentumMonitor") continue;
@@ -352,6 +372,14 @@ Vec SimplePhysicsSystem::rotational_momentum(GameObject &actor) {
 		if (m.enabled && m.rate > 0) turn = add(turn, mul(turn_between(m.prev, m.cur), 1.0f / float(m.rate)));
 	}
 	return turn;
+}
+
+void SimplePhysicsSystem::creature_tick(GameObject &creature) {
+	GameObject *p = creature_physics(creature);
+	if (!p || p->class_path != "Physics\\Simple") return;
+	SimplePhysics &s = state(*p);
+	s.last_ms = w_.scene_ms_of(&creature);
+	if (s.enabled && creature.physics_enabled) step(*p, s, creature, 1, false);
 }
 
 void SimplePhysicsSystem::delta_tick(GameObject &p) {

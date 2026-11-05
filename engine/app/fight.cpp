@@ -469,8 +469,9 @@ int main(int argc, char **argv) {
 					game::Brain *br = nullptr;
 					for (game::GameObject *x = o; x && !br; x = nullptr) br = x->brain;
 					auto *st = br && br->exec ? br->exec->current_state() : nullptr;
-					fprintf(stderr, "[find %d] %s (%s) at %.1f %.1f %.1f parent %s active %d visible %d state %s\n", fr, o->name.c_str(), o->class_path.c_str(),
-					        t[0], t[1], t[2], o->parent ? o->parent->name.c_str() : "-", o->active, o->visible, st ? st->cm->signature.c_str() : "-");
+					auto z = o->world().rotate({0, 0, 1});
+					fprintf(stderr, "[find %d] %s (%s) at %.1f %.1f %.1f z (%.2f %.2f %.2f) parent %s active %d visible %d state %s\n", fr, o->name.c_str(), o->class_path.c_str(),
+					        t[0], t[1], t[2], z[0], z[1], z[2], o->parent ? o->parent->name.c_str() : "-", o->active, o->visible, st ? st->cm->signature.c_str() : "-");
 				}
 			}
 			world.input = {};

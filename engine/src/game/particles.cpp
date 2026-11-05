@@ -1,11 +1,13 @@
 #include "game/particles.h"
 
 #include "game/session.h"
+#include "game/simple_physics.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 
 namespace game {
@@ -38,13 +40,13 @@ Vec inverse_rotate(const Vec &v, const Rows &r) {
 Vec cross(const Vec &a, const Vec &b) {
 	return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
 }
-// DE_CCoordinateSystem::Set(vector): a frame whose Z axis is the direction.
+// DE_CCoordinateSystem::Set(vector) (Core 0x70025fe0): a zero direction leaves Z and X zero.
 Rows frame_from_z(const Vec &dir) {
 	Vec z = normalize(dir);
-	if (length(z) == 0) return {1, 0, 0, 0, 1, 0, 0, 0, 1};
-	Vec up = std::fabs(z[1]) > 0.99f ? Vec{1, 0, 0} : Vec{0, 1, 0};
-	Vec x = normalize(cross(up, z));
-	Vec y = cross(z, x);
+	float d = z[1];
+	Vec y = d >= 1 || d <= -1 ? Vec{0, 0, d} : Vec{-z[0] * d, 1 - z[1] * d, -z[2] * d};
+	y = normalize(y);
+	Vec x = cross(y, z);
 	return {x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]};
 }
 // DE_CCoordinateSystem::RotateLocalX/Y/Z: the frame turned about its own axis (the other two
@@ -87,12 +89,12 @@ constexpr uint32_t kRelative = 2, kAlive = 4, kNew = 8, kLooping = 0x10;
 // are enabled.
 bool shown(const GameObject *o) { return o->visible && !o->meshes_disabled; }
 
-// The actor's momentum as DE_CActor::Momentum reports it (units per millisecond).
-Vec actor_momentum(const GameObject *a) {
-	for (; a; a = a->parent) {
-		if (a->fighter) return mul(a->momentum, 1.0f / 16);
+// DE_CActor::Momentum (Core 0x700904e0), per ms: each physics' momentum times its TimeScale.
+Vec actor_momentum(World &w, GameObject *a) {
+	for (const GameObject *f = a; f; f = f->parent) {
+		if (f->fighter) return mul(f->momentum, 1.0f / 16);
 	}
-	return {0, 0, 0};
+	return a ? w.simple_physics->momentum_at(*a, a->world().t) : Vec{0, 0, 0};
 }
 
 }  // namespace
@@ -216,6 +218,24 @@ void ParticleSystem::set_trail_enabled(GameObject *mesh, bool on) {
 	for (auto &t : trails_) {
 		if (t->mesh == mesh) t->enabled = on;
 	}
+}
+
+de::LiveFloat ParticleSystem::live_values(const GameObject *modifier) const {
+	if (!modifier) return {};
+	auto seen = std::make_shared<std::map<std::pair<const de::ObjectsFile *, uint32_t>, const GameObject *>>();
+	return [this, modifier, seen](const de::ObjectRef &r) -> std::optional<float> {
+		auto [at, fresh] = seen->try_emplace({r.file, r.index}, nullptr);
+		if (fresh) at->second = w_.referent(modifier, r);
+		const GameObject *v = at->second;
+		if (!v || !v->parent) return std::nullopt;
+		auto it = w_.values.find(v->parent);
+		if (it == w_.values.end()) return std::nullopt;
+		auto jt = it->second.find(v->name);
+		if (jt == it->second.end()) return std::nullopt;
+		float f;
+		memcpy(&f, &jt->second.bits, 4);
+		return f;
+	};
 }
 
 void ParticleSystem::step_trails() {
@@ -650,7 +670,7 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 				if (p.flags & kNew) fn(p);
 			}
 		};
-		Vec am = actor_momentum(in.actor);
+		Vec am = actor_momentum(w_, in.actor);
 		for (const auto &m : gen.modifiers) {
 			if (m.kind == "NewParticleModifier") {
 				if (m.rotation_mode == 1) fresh([&](Particle &p) { p.rotation = rand_to(w, 1); });
@@ -717,8 +737,9 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 				// DE_CMiscellaneousNewParticleFunctions::ManageParticleUserData (0x40004980): each new
 				// particle's orientation turns about its own X / Y / Z by a random angle within
 				// +- half the curve at its age, in degrees.
+				const de::LiveFloat live = live_values(in.modifier_objects[size_t(&m - gen.modifiers.data())]);
 				fresh([&](Particle &p) {
-					p.orientation = rotate_local(p.orientation, int(m.misc_mode), center_rand(w, m.curve.eval(p.age)) * 0.017453292f);
+					p.orientation = rotate_local(p.orientation, int(m.misc_mode), center_rand(w, m.curve.eval(p.age, live)) * 0.017453292f);
 				});
 			} else if (m.kind == "MomentumAndAcceleration") {
 				Rows ar = in.actor->world().r;
@@ -811,8 +832,9 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 			float f = m.strength != 0 ? dt / m.strength / 1000 : 0;
 			for (auto &p : in.particles) p.momentum = sub(p.momentum, mul(p.momentum, f));
 		} else if (m.kind == "MiscellaneousParticleFunctions") {
+			const de::LiveFloat live = live_values(in.modifier_objects[size_t(&m - gen.modifiers.data())]);
 			for (auto &p : in.particles) {
-				float v = m.curve.eval(p.age);
+				float v = m.curve.eval(p.age, live);
 				if (m.misc_mode == 0) {
 					p.size = v;
 				} else if (m.misc_mode == 1) {
@@ -867,8 +889,9 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 			}
 		} else if (m.kind == "Rotator") {
 			// DE_CRotator::Modify (0x40009150), on the rotation channel.
+			const de::LiveFloat live = live_values(in.modifier_objects[size_t(&m - gen.modifiers.data())]);
 			for (auto &p : in.particles) {
-				float v = m.curve.eval(p.age);
+				float v = m.curve.eval(p.age, live);
 				if (m.rotator_mode == 1) p.rotation += v * m.rotator_factor * dt;
 				else if (m.rotator_mode == 3) p.rotation += p.size * m.rotator_factor * v * dt;
 				else if (m.rotator_mode == 4) p.rotation = v + m.rotator_factor;
