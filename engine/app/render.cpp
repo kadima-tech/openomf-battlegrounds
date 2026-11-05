@@ -626,6 +626,7 @@ std::vector<MeshBatch> build_batches(const de::Mesh &mesh, const std::vector<de:
 		bt.late = late;
 		bt.lighting = later && lighting == 1 ? 0 : lighting;
 		bt.two_sided = (mesh.flags & 0x4000) != 0;
+		bt.top = (mesh.flags & 0x80) != 0;
 		bt.placement = mesh.placement_times;
 		for (auto *l : pass) {
 			if (l->environment && l->cube) {
@@ -817,6 +818,8 @@ void set_cull(bool two_sided) {
 }
 
 std::vector<DeferredDraw> *g_sink = nullptr;
+std::vector<DeferredDraw> *g_top_sink = nullptr;
+bool g_top_pass = false;
 float g_vp[16], g_eye[3];
 // The values of the actor being drawn (ActorMeshRenderer::Item::live), for its dynamic modifiers.
 const de::LiveFloat *g_item_live = nullptr;
@@ -834,8 +837,13 @@ void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase,
                   const void *owner = nullptr) {
 	std::vector<const MeshBatch *> list;
 	for (auto &b : batches) {
-		if (phase >= 0 && b.late != (phase == 1)) continue;
-		if (g_sink && b.late) {
+		if (g_top_sink && b.top) {
+			if (phase == 1) continue;
+		} else if (phase >= 0 && b.late != (phase == 1)) {
+			continue;
+		}
+		std::vector<DeferredDraw> *sink = g_top_sink && b.top ? g_top_sink : g_sink && b.late ? g_sink : nullptr;
+		if (sink) {
 			// A blended first pass joins the transparent layer, drawn later in its sorted order
 			// with the state it would have had now.
 			float model[16];
@@ -850,7 +858,11 @@ void draw_batches(GLuint prog, const std::vector<MeshBatch> &batches, int phase,
 			                                 : std::array<float, 3>{(b.bmin[0] + b.bmax[0]) / 2, (b.bmin[1] + b.bmax[1]) / 2, (b.bmin[2] + b.bmax[2]) / 2};
 			const MeshBatch *pb = &b;
 			de::LiveFloat live = g_item_live ? *g_item_live : de::LiveFloat{};
-			g_sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb, live] {
+			if (!at && b.top) {
+				const auto c = origin;
+				for (int k = 0; k < 3; ++k) origin[size_t(k)] = m[size_t(k)] * c[0] + m[size_t(4 + k)] * c[1] + m[size_t(8 + k)] * c[2] + m[size_t(12 + k)];
+			}
+			sink->push_back({pb, origin, [prog, m, vp, eye, where, owner, pb, live] {
 				                   glUseProgram(prog);
 				                   glUniform1f(glGetUniformLocation(prog, "out_scale"), 1);
 				                   glUniform1f(glGetUniformLocation(prog, "fog_density"), 0);
@@ -936,7 +948,9 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 			set_vertex_lights(prog, {(b.bmin[0] + b.bmax[0]) / 2, (b.bmin[1] + b.bmax[1]) / 2, (b.bmin[2] + b.bmax[2]) / 2}, b.position_static,
 			                  b.light_owner);
 		}
-		set_cull(b.two_sided);
+		const bool top = g_top_pass && b.top;
+		if (top) glUniform1i(glGetUniformLocation(prog, "lighting"), 0);
+		set_cull(b.two_sided || top);
 		switch (pass_mode) {
 		case 1: case 3: glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE); break;
 		case 2: glEnable(GL_BLEND); glBlendFunc(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA); break;
@@ -946,6 +960,7 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		bool no_depth_write = b.overlay || pass_mode != 0;
 		glDepthMask(no_depth_write ? GL_FALSE : GL_TRUE);
 		glDepthFunc(b.overlay ? GL_LEQUAL : GL_LESS);
+		if (top) glDisable(GL_DEPTH_TEST), glDepthMask(GL_FALSE);
 		glBindVertexArray(b.vao);
 		glDrawArrays(GL_TRIANGLES, 0, b.count);
 	}
@@ -1291,6 +1306,20 @@ void use_mesh_program(GLuint prog, const float *vp, const float *eye) {
 }  // namespace
 
 void set_transparent_sink(std::vector<DeferredDraw> *sink) { g_sink = sink; }
+void set_top_sink(std::vector<DeferredDraw> *sink) { g_top_sink = sink; }
+
+// DE_CClipVolume::DrawShaders draws layer 10 after the glow, sorted as layers 6 and 8 (DrawLayer: highest
+// static key, 1000 x placement times, minus view z first), with PrepareForShaders' states (2.123 Direct3D
+// 0x10332fd0): no depth test or writes, no culling, no lighting.
+void draw_top_layer(std::vector<DeferredDraw> &draws, const float *view) {
+	auto z = [view](const DeferredDraw &d) { return view[2] * d.origin[0] + view[6] * d.origin[1] + view[10] * d.origin[2] + view[14]; };
+	auto key = [&](const DeferredDraw &d) { return 1000.0f * float(d.placement * d.stages) + z(d); };
+	std::stable_sort(draws.begin(), draws.end(), [&](const DeferredDraw &a, const DeferredDraw &b) { return key(a) > key(b); });
+	g_top_pass = true;
+	for (auto &d : draws) d.draw();
+	g_top_pass = false;
+	draws.clear();
+}
 
 // DE_CEnvironment::ObjProcessReferences (Creature 0x1500b7f0) v5, the last references chunk:
 // [RGBA advanced reference][seven BOOL + image slots: +0x320, +0x338, +0x32c, +0x308, +0x314,
