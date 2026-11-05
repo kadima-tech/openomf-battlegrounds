@@ -173,6 +173,8 @@ public:
 	void step();
 	const std::vector<std::unique_ptr<ParticleInstance>> &instances() const { return instances_; }
 	ModifierControl &control(GameObject *modifier);
+	// The FLOAT values a modifier's references name (World::referent from its copy), as scripts set them.
+	de::LiveFloat live_values(const GameObject *modifier) const;
 	// Enable/DisableParticleSpawning: the instances drawn by this actor.
 	void set_spawning(GameObject *actor, bool on);
 	// A generator instance's own switch (DE_CParticleGeneratorInstance +0x58), by generator and
