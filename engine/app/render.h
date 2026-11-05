@@ -39,6 +39,10 @@ struct DeferredDraw {
 	int stages = 1;
 };
 void set_transparent_sink(std::vector<DeferredDraw> *sink);
+// Layer 10 (DE_CMesh +0x40 flag 0x80 -> placement 7): while a sink is set, those meshes' passes are
+// handed to it; draw_top_layer (`view` the camera's view matrix) draws them after the glow.
+void set_top_sink(std::vector<DeferredDraw> *sink);
+void draw_top_layer(std::vector<DeferredDraw> &draws, const float *view);
 
 // A projector-lit mesh as the light projector passes see it (DE_CD3DRenderMeshElement::
 // AssureProjectedTargetOctree, Direct3D 0x2002e1f0): every face once, in mesh order, and the
@@ -78,6 +82,7 @@ struct MeshBatch {
 	// The mesh is two-sided (DE_CMesh +0x40 flag 0x4000 -> shader flag 0x10): drawn without
 	// culling; every other pass culls D3DCULL_CW (DE_CGenericShader::ActivateAndDrawPatches).
 	bool two_sided = false;
+	bool top = false;  // DE_CMesh +0x40 flag 0x80: layer 10
 	// The owner of the render affector that decides which lights reach it (see SceneLight::reaches).
 	const void *light_owner = nullptr;
 	// Drawn again into the glow layer: the mesh's GlowFactor (with the glow fog) or the

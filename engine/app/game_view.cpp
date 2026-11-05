@@ -546,6 +546,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	// (OPENBG_NO_DEFER=1 draws them in their meshes' passes instead, debugging).
 	std::vector<render::DeferredDraw> transparent;
 	render::set_transparent_sink(getenv("OPENBG_NO_DEFER") ? nullptr : &transparent);
+	std::vector<render::DeferredDraw> top_layer;
+	render::set_top_sink(&top_layer);
 	arena_r.draw(vp, eye);
 	// Actors made at run time (pickups, jets, spawned props), where they are now: shown,
 	// active, and not a fighter's own body.
@@ -643,6 +645,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	if (!capture_camera) world.particles->process_trailers();
 	render::set_transparent_sink(nullptr);
+	render::set_top_sink(nullptr);
 	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, false, &transparent);
 	else for (auto &t : transparent) t.draw();
 	overlay.draw_world(world, vp);
@@ -661,6 +664,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}
+	render::draw_top_layer(top_layer, view);
 	if (!capture_camera) overlay.draw(world, dw, dh);
 }
 
