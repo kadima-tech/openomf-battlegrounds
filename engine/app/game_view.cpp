@@ -710,14 +710,17 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	static const bool no_glow = getenv("OPENBG_NO_GLOW") != nullptr;
 	if (!no_glow && world.glow_enabled) {
 		glow_r.begin();
-		arena_r.draw_glow(vp, eye);
-		// Moved and run-time actors keep their glow passes (DE_CShader::GetShader is per mesh).
-		if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
-		{
+		// Opaque meshes first, black with depth (DE_CClipVolume::DrawLayer into the glow target), then
+		// the glow passes; moved and run-time actors keep theirs (DE_CShader::GetShader is per mesh).
+		for (bool occluders : {true, false}) {
+			render::set_glow_occluders(occluders);
+			arena_r.draw_glow(vp, eye);
+			if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
 			for (auto *fi : fighters) {
 				if (fi->actor->spawned && fi->renderer_loaded && shown(fi->actor)) fi->renderer.draw_glow(vp, eye);
 			}
 		}
+		render::set_glow_occluders(false);
 		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}

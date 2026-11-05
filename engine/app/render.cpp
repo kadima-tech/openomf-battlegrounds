@@ -186,6 +186,7 @@ void main() {
 
 const de::World *g_world = nullptr;  // for the cube images batches name
 GLuint g_specular = 0;               // the environment's "HighRangeSpecular" cube
+bool g_glow_occluders = false;      // the glow target's black depth pass (see set_glow_occluders)
 bool g_specular_pass = false;        // drawing the specular glow passes: bind the specular cubes
 
 // An Image\CubeEnvironment as a GL cube map (faces Top, Front, Bottom, Left, Right, Back).
@@ -961,6 +962,11 @@ void draw_batch_list(GLuint prog, const std::vector<const MeshBatch *> &batches,
 		glDepthMask(no_depth_write ? GL_FALSE : GL_TRUE);
 		glDepthFunc(b.overlay ? GL_LEQUAL : GL_LESS);
 		if (top) glDisable(GL_DEPTH_TEST), glDepthMask(GL_FALSE);
+		if (g_glow_occluders) {
+			glEnable(GL_BLEND), glBlendFunc(GL_ZERO, GL_ZERO);
+			glDepthMask(GL_TRUE), glDepthFunc(GL_LEQUAL);
+			set_cull(true);
+		}
 		glBindVertexArray(b.vao);
 		glDrawArrays(GL_TRIANGLES, 0, b.count);
 	}
@@ -1307,6 +1313,7 @@ void use_mesh_program(GLuint prog, const float *vp, const float *eye) {
 
 void set_transparent_sink(std::vector<DeferredDraw> *sink) { g_sink = sink; }
 void set_top_sink(std::vector<DeferredDraw> *sink) { g_top_sink = sink; }
+void set_glow_occluders(bool on) { g_glow_occluders = on; }
 
 // DE_CClipVolume::DrawShaders draws layer 10 after the glow, sorted as layers 6 and 8 (DrawLayer: highest
 // static key, 1000 x placement times, minus view z first), with PrepareForShaders' states (2.123 Direct3D
@@ -1487,6 +1494,14 @@ void ArenaRenderer::draw(const float *vp, const float *eye) {
 // The glow-layer passes of `batches` (see ArenaRenderer::draw_glow); a specular one only when the
 // arena has a specular cube (CubeSpecularEnvironmentImage).
 static void draw_glow_batches(GLuint prog_, const std::vector<MeshBatch> &batches_, const std::array<float, 3> *at, const void *owner = nullptr) {
+	if (g_glow_occluders) {
+		std::vector<const MeshBatch *> opaque;
+		for (auto &b : batches_) {
+			if (!b.late && !b.overlay && !b.top && (b.stages == 0 || b.mode[0] == 0)) opaque.push_back(&b);
+		}
+		draw_batch_list(prog_, opaque, -1, at, owner);
+		return;
+	}
 	std::vector<MeshBatch> one(1);
 	for (auto &b : batches_) {
 		if (b.glow <= 0 && (b.specular <= 0 || !g_specular)) continue;
@@ -1926,6 +1941,7 @@ void FighterRenderer::draw_glow(const float *vp, const float *eye) {
 	use_mesh_program(prog_, vp, eye);
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
 	draw_glow_batches(prog_, batches_, &last_at_, light_owner_);
+	for (auto &at : attachments_) draw_glow_batches(prog_, at.batches, &last_at_, light_owner_);
 }
 
 // Painted once: an image is filtered only on its first decode (AssureUpdatedImage while +0x9c is 1).
