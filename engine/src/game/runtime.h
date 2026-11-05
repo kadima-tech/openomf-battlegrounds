@@ -332,7 +332,11 @@ std::array<float, 3> focal_point(const GameObject &o);
 // in its parent's inactive list (DE_CActor::ObjSetParent / SetInnactive, Core 0x7008afb0 /
 // 0x700903e0): it and its branch are out of the scene. A root added to the scene is in it whatever
 // its own flag.
-inline bool parked(const GameObject &o) { return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags)); }
+// An actor under a Folder has no actor parent (DE_CActor::ObjSetParent 0x7008afb0) and a Folder
+// prepares nothing, so it stays out of the scene unless added itself.
+inline bool parked(const GameObject &o) {
+	return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
+}
 inline bool in_scene(const GameObject &o) {
 	const GameObject *r = &o;
 	for (; r->parent; r = r->parent) {
