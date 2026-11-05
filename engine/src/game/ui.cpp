@@ -1790,6 +1790,7 @@ std::string DescriptionSelector::pilot_text(AppManager &app, const de::ObjectRef
 	}
 	if (bio.empty()) bio = "BIO UNNAVAILABLE";
 	auto res = passive_references(app.world.data(), d);
+	if (!res.empty()) app.world.global_object(res[0]);  // the stats robots load the pilot object (its TimeAdd)
 	std::optional<Pilot> pl = res.empty() ? std::nullopt : read_pilot(*res[0].file, res[0].info(), 0);
 	if (!pl) return bio;
 	static const char *stat_names[22] = {"Light Attacks", "Heavy Attacks", "Punches", "Kicks", "Special Moves", "Melee Attacks",
@@ -1839,6 +1840,7 @@ void DescriptionSelector::draw(AppManager &app, std::vector<DrawItem> &out) {
 			out.push_back(im);
 		}
 		auto res = passive_references(app.world.data(), d);
+		if (!res.empty()) app.world.global_object(res[0]);
 		std::optional<Pilot> pl = res.empty() ? std::nullopt : read_pilot(*res[0].file, res[0].info(), 0);
 		// Beside the photo (its row, 0.1..0.65), from 0.6 across: down to 0.73 of the row four
 		// DE_CPilotStatsRobot rows (OMF 0x350510b0: the stat's icon tinted (0.5, 1, 1) on the left

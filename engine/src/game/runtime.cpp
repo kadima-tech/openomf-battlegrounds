@@ -447,7 +447,16 @@ GameObject *World::create_child(GameObject *parent, const std::string &name, con
 		parent->children.push_back(&g);
 	}
 	by_handle_[g.handle] = &g;
+	count_pilot(g);
 	return &g;
+}
+
+// DE_CPilot::ObjInitContents (OMF 2.123 0x1074bb50): every pilot object made, data or copy,
+// adds 7647.25 to a static and keeps it (+0x7cc); a copy's contents never carry it.
+void World::count_pilot(GameObject &g) {
+	if (g.class_path.rfind("Actor\\Creature\\Pilot", 0) != 0) return;
+	pilot_time_add_ = float(double(pilot_time_add_) + 7647.25);
+	g.pilot_time_add = pilot_time_add_;
 }
 
 GameObject *World::copy_tree(const GameObject &o, bool construct) {
@@ -495,6 +504,7 @@ GameObject *World::copy_node(const GameObject &o) {
 	g.data_encompasser_read = false;
 	g.temporal_registered = false;
 	by_handle_[g.handle] = &g;
+	count_pilot(g);
 	return &g;
 }
 
@@ -819,6 +829,7 @@ GameObject &World::make_object(const de::ObjectsFile *f, uint32_t i) {
 	}
 	by_handle_[g.handle] = &g;
 	by_source_[{f, i}] = &g;
+	count_pilot(g);
 	return g;
 }
 

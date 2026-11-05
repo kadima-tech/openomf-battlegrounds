@@ -132,7 +132,7 @@ registration in the DLLs either, but their methods are in Session.ModuleDLL and 
 
 | What | Kind | Notes |
 |---|---|---|
-| Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. The stats are read on the clocks the original uses (FINDINGS 367); the `GetStat*` natives leave out the per-pilot time offset (+0x7c8, 3.4917 ms per pilot object initialised before), which only shifts the stats' phase. |
+| Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. The stats are read on the clocks the original uses (FINDINGS 367); the `GetStat*` natives add each pilot object's TimeAdd (7647.25 ms per pilot object made, FINDINGS 371), counted over the pilot loads and copies ours makes: pilot GUIDs the original's launcher or earlier screens resolved first are not known, so its count can start higher. |
 | VMC2 trailing bytes | Ported | `DE_CClass::LoadVMCode` seeks to the chunk end after the final instances: the 1–3 bytes there are never read by the original either. |
 
 ## Patch level

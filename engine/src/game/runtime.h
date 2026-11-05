@@ -154,6 +154,7 @@ struct GameObject {
 	bool user_controlled = false;  // reads World::input; otherwise driven by AI commands
 	bool autoplayed = false;       // OPENBG_AUTOPLAY: AI-driven, but still the user's to the scripts
 	const Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
+	float pilot_time_add = 0;       // a pilot object's +0x7cc (2.123): the static TimeAdd when it was made
 	const std::map<std::string, std::vector<struct InputRequirement>> *inputs = nullptr;  // kind 24 bank
 
 	// AI commands (DE_CCommand: navigation / look-at / attack) and the fighter script's hooks
@@ -1015,6 +1016,8 @@ private:
 	std::vector<uint32_t> to_clean_;  // handles
 	uint32_t frame_ = 0, frame_ms_ = kFrameMs, scene_ms_ = 0, input_ticks_ = 0;
 	uint64_t reference_seq_ = 0;  // orders copies and replacements
+	float pilot_time_add_ = 0;    // DE_CPilot::ObjInitContents' static TimeAdd
+	void count_pilot(GameObject &g);
 	GameObject *copy_node(const GameObject &o);
 	std::map<const GameObject *, SceneClock> clocks_;
 	const GameObject *clock_ = nullptr;  // the scene scene_ms_ is the time of

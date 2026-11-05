@@ -1214,9 +1214,11 @@ void register_ai_natives(World &w) {
 		{"EmotionCalmDown", 0x748}, {"EmotionAnger", 0x768}, {"EmotionFear", 0x788}, {"EmotionValor", 0x7a8}};
 	for (auto &[n, off] : ai_stats) {
 		uint32_t o = off;
+		// *GetValueCaller (2.123 0x10749100..): scene time + the pilot object's TimeAdd + the phase.
 		reg(std::string("CPilot::float GetStat") + n + "()", [o](const NativeContext &c) {
 			const Pilot *p = pilot_of(c.self());
-			c.ret_f32(p ? p->stat(o, time_ms(c.world)) : 1.0f);
+			float add = c.self() ? c.self()->pilot_time_add : 0;
+			c.ret_f32(p ? p->stat(o, time_ms(c.world) + add) : 1.0f);
 		});
 	}
 
