@@ -37,7 +37,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   `--launch Training` starts a match at once (`--host "Last Man Standing"` as a joinable session, whose Choose Cast lists the
   Available Arenas), `--choose Elizabeth,Jaguar` has its screens pick those, and
   `--headless N` runs without a window and lists the natives still missing. `--screenshot out.png --frames N` with
-  `MOUSE="0.5,0.93@50;down@52;up@54"` (fractions of the 4:3 menu area) scripts the mouse.
+  `MOUSE="0.5,0.93@50;down@52;up@54"` (fractions of the 4:3 menu area) scripts the mouse, and `HOLD` (as in `openbg-fight`) the user's buttons.
   Screenshot and headless runs depend only on their inputs (data, `MOUSE`, `HOLD`, flags and switches):
   they pass 20 ms a frame, keep `rand()`'s start value (`OPENBG_SEED=n` picks one; normal play seeds it
   with the time, as the original does) and read `SystemTime()` as 20 ms a frame (normal play: the wall
