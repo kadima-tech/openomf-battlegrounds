@@ -224,6 +224,13 @@ void register_transform_natives(World &w) {
 		auto f = focal_point(*t), p = o->world().t;
 		point_z(o, {f[0] - p[0], f[1] - p[1], f[2] - p[2]});
 	});
+	// PointZVectorCaller (Core 0x7008ef00) -> DE_CActor::PointZ(point): Z towards a world point.
+	reg("CActor::PointZ(class CVector)", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o || !c.arg<uint32_t>(0)) return;
+		auto f = read_vec(c.mem(), c.arg<uint32_t>(0)), p = o->world().t;
+		point_z(o, {f[0] - p[0], f[1] - p[1], f[2] - p[2]});
+	});
 
 	// --- AnimationStreamPlayer paths (moving arena props, the cars, the environment camera) -----
 	reg("CAnimationStreamPlayer::SetTime(class CActor,float)", [](const NativeContext &c) {

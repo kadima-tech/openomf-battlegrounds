@@ -539,8 +539,21 @@ void register_script_natives(World &w) {
 		uint32_t t = c.arg<uint32_t>(1);
 		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].text = t ? c.world.read_string(c.mem().get<uint32_t>(t)) : std::string();
 	});
+	// DE_CObject::SetObjectReferenceValue (Core 0x7003c930): appends an object not yet in the list.
 	reg("CObject::SetObjectReferenceValue(string,class CObject)", [holder](const NativeContext &c) {
-		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].objects.push_back(c.arg<uint32_t>(1));
+		GameObject *o = holder(c);
+		uint32_t t = c.arg<uint32_t>(1);
+		if (!o || !t) return;
+		World::ObjectValue *v = c.world.object_value(o, c.arg_string(0));
+		if (!v) v = &c.world.values[o][c.arg_string(0)];
+		if (std::find(v->objects.begin(), v->objects.end(), t) == v->objects.end()) v->objects.push_back(t);
+	});
+	// DE_CObject::RemoveObjectReferenceValue (Core 0x7003ca50): drops the object at that index.
+	reg("CObject::RemoveObjectReferenceValue(string,int)", [](const NativeContext &c) {
+		World::ObjectValue *v = c.world.object_value(c.self(), c.arg_string(0));
+		int i = c.arg<int32_t>(1);
+		if (!v || i < 0 || size_t(i) >= v->objects.size()) return;
+		v->objects.erase(std::find(v->objects.begin(), v->objects.end(), v->objects[size_t(i)]));
 	});
 	reg("CObject::ClearAllObjectReferenceValues(string)", [holder](const NativeContext &c) {
 		if (GameObject *o = holder(c)) c.world.values[o][c.arg_string(0)].objects.clear();
