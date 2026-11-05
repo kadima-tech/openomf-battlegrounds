@@ -894,10 +894,8 @@ GameObject *find_in_branch(GameObject *o, const de::ObjectRef &r) {
 // DE_COMF2Fighter::IsStandingState (0x35029ad0): the running state inherits "Ground()".
 bool standing_state(GameObject &o) {
 	if (!o.brain || !o.brain->exec) return false;
-	for (auto *m = o.brain->exec->current_state(); m; m = m->parent) {
-		if (m->cm->name == "Ground()") return true;
-	}
-	return false;
+	auto *m = o.brain->exec->current_state();
+	return m && m->inherits("Ground()");
 }
 
 void call_hooks(World &w, const std::vector<std::pair<Brain *, uint32_t>> &hooks, const std::vector<uint8_t> &a) {

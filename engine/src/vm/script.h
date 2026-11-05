@@ -29,6 +29,9 @@ struct ScriptMethod {
 	uint32_t return_size() const { return cm->counts[3]; } // +0x44
 	bool is_instant() const { return cm->flags[0]; }        // +0x84
 	bool is_state() const { return cm->flags[3]; }          // +0x90
+	// DE_CClassCompiledMethod::DoesInherit (Core 0x7013d4f0): by name, following `inherit` (+0x78),
+	// else the nearest enclosing state.
+	bool inherits(const std::string &name) const;
 };
 
 struct ScriptClass {

@@ -495,6 +495,7 @@ GameObject *World::copy_node(const GameObject &o) {
 	g.detached = false;
 	g.data_encompasser = nullptr;
 	g.data_encompasser_read = false;
+	g.temporal_registered = false;
 	by_handle_[g.handle] = &g;
 	return &g;
 }
