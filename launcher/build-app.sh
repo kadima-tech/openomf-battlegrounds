@@ -51,6 +51,7 @@ if [ "${1:-}" != "--ui-only" ]; then
     indeo="$build/runtime/_deps/openindeo-src"
     if [ ! -d "$indeo" ]; then indeo="$repo/../openindeo"; fi
     cp "$indeo/LICENSE" "$resources/licenses/openindeo.txt"
+    cp "$build/runtime/_deps/enet-src/LICENSE" "$resources/licenses/enet.txt"
 fi
 
 # Bundle a relocatable Python and decoder before signing. Player setup is offline.

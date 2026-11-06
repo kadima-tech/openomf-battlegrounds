@@ -41,6 +41,7 @@ public:
 	uint8_t format() const { return format_; }
 	const ObjectInfo &master() const { return master_; }
 	const std::vector<ObjectInfo> &objects() const { return objects_; }
+	const std::vector<uint8_t> &raw() const { return file_.data(); }
 	// Agent DE_CGUIDPool: GUIDs of objects in other files that this file references.
 	const std::vector<Guid> &guid_pool() const { return guid_pool_; }
 

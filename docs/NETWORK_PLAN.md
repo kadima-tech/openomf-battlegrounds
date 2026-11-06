@@ -1,7 +1,7 @@
 # Network play: plan
 
 Goal: online and LAN play that **feels exactly like the original**, on a **modern, open-source network
-stack** (no GameSpy, no proprietary services). Status: agreed 2026-11-06, phases 0-1 under way. Points marked **(decide)** were settled as recommended (section 6).
+stack** (no GameSpy, no proprietary services). Status: agreed 2026-11-06; phases 0-2 done (LAN and direct IP play). Points marked **(decide)** were settled as recommended (section 6).
 
 ## 1. How the original works (summary of the research)
 
@@ -159,6 +159,13 @@ Each phase ends with something testable, merged and pushed.
 2. **LAN and direct IP, two players.** Transport, protocol, handshake, the client status machine,
    loading sync, remote Choose Pilot / Choose Creature, and the Host and Join screens (Join is "not
    ported yet" today). Last Man Standing, one against one.
+   Done 2026-11-06 (FINDINGS 413-416): ENet 1.3.18 transport with the delay simulator, our hello
+   (protocol, engine version, data hash, password), the status machine with roster, remote Choose
+   Pilot / Choose Creature, pre-load at 101 / 103, load authorization, ID requests and clock sync, the
+   Join Game session browser (LAN query every 500 ms, typed address) and Host Game on
+   `Network\Winsock\Listener Port`; `tools/net-lan/run.sh` plays a two-process match. Approximations
+   in PLACEHOLDERS ("Waiting on networking"); not yet: reconnect, remote objects, `AdjustSameState`'s nudge.
+
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and
    bans, disconnect and reconnect, and the dedicated server.
 4. **Internet.** The lobby server, server browser, NAT hole punching, relay fallback and encryption on.

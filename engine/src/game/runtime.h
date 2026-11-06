@@ -588,6 +588,7 @@ public:
 		// The master's global time (+0x1f8) PreciseTime took since the scene last passed.
 		double master_given = 0;
 		uint32_t last_global = 0;  // +0x15c: the global time the scene last passed at
+		uint32_t initial = 0;      // a network client's: the server's scene time its Genesis starts at
 	};
 	// The scene of a session (null: what is in no session's).
 	SceneClock &scene_clock(const GameObject *session);
@@ -598,6 +599,8 @@ public:
 	// DE_CScene::Genesis (Core 0x70070900) for a session's scene: its time starts (at 0) and so
 	// does a temporal master made before.
 	void scene_genesis(const GameObject *session);
+	// SetInitialSceneTime (Core 0x7006fa10) at `ms`: the time and every set restart there.
+	void set_initial_scene_time(const GameObject *session, uint32_t ms);
 	void forget_clock(const GameObject *session);
 	// DE_CScene::TemporalUpdate (Core 0x70070710) and PassTime (2.123 0x20073f30): `real_ms` of real
 	// time passes on `session`'s scene.

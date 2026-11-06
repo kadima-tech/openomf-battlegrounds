@@ -77,7 +77,7 @@ jobs:
           python3 launcher/build_state.py --check dist/.launcher-build-state
           cmp LICENSE "$app/Contents/Resources/licenses/openomf-battlegrounds.txt"
           cmp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/licenses/THIRD_PARTY_NOTICES.md"
-          for notice in SDL2.txt unshield.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt Python.txt; do
+          for notice in SDL2.txt unshield.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt enet.txt Python.txt; do
             test -s "$app/Contents/Resources/licenses/$notice"
           done
           codesign --verify --deep --strict --verbose=2 "$app"

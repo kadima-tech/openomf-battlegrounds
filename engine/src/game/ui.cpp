@@ -17,6 +17,7 @@
 #include "de/mesh.h"
 #include "de/scene.h"
 #include "game/descriptions.h"
+#include "game/netgame.h"
 #include "game/music.h"
 #include "game/observer.h"
 #include "game/replay.h"
@@ -2300,6 +2301,152 @@ void AppManager::apply_settings() {
 	world.ai_difficulty = int(f("AI Difficulty", 0));
 }
 
+// DE_CSessionBrowser (Core ObjInitContents 0x701dfd20, SetupControls 0x701e0320, its robot's
+// ProcessButtonClickEvent 0x701e2bb0): a "Session Browser" list (Server, Ping, Players,
+// Description) over the known sessions, Join and Cancel. The original filled it from GameSpy and
+// its LAN query; ours asks the LAN every 500 ms on the game port and, in the strip under the list
+// where the GameSpy query control was, takes an address typed in (host or host:port).
+class SessionBrowser : public UIManager {
+public:
+	SessionBrowser() : UIManager("Join Game", "MatchBrowser") {}
+
+	bool begin(AppManager &app) override {
+		UIManager::begin(app);
+		sessions_.clear();
+		discovery_ = std::make_unique<net::Discovery>();
+		last_query_ = 0;
+		return true;
+	}
+	void setup_controls(AppManager &app) override {
+		Gui &g = *gui;
+		join_ = button(app, "Join", "NEXT");
+		join_->enabled = false, join_->read_only = true;
+		cancel_ = button(app, "Cancel", "BACK");
+		Ctl *frame = g.place(marker(app, "ListWindow"));
+		frame->set_frame(2, true);
+		frame->set_fill(theme::kWindowBack);
+		list_ = frame->add<List>();
+		list_->title = "Session Browser";
+		list_->columns = {{"Server", 0.45f}, {"Ping", 0.12f}, {"Players", 0.13f}, {"Description", -1}};
+		list_->on_select = [this](int i) { select(i); };
+		list_->on_double = [this, &app](int) { click(app, *join_); };
+		Ctl *window = g.place(marker(app, "Window"));
+		window->set_frame(2, true);
+		window->set_fill(theme::kWindowBack);
+		Ctl *row = window->add<Ctl>()->scale(0.03f, 0.1f, 0.97f, 0.3f);
+		auto *label = row->add<Text>("Address:", g.vy(16), theme::kText, 0);
+		label->scale(0, 0, 0.25f, 1);
+		address_ = row->add<Edit>(app.registry_string("Network\\Last Address"), 64);
+		address_->scale(0.25f, 0, 1, 1);
+		address_->on_enter = [this, &app] { ask_typed(app); };
+		auto *add = window->add<Button>("Find", Button::Push);
+		add->scale(0.6f, 0.4f, 0.97f, 0.6f);
+		add->on_click = [this, &app] { ask_typed(app); };
+		status_ = window->add<Text>("Searching the local network...", g.vy(14), theme::kText, 0);
+		status_->scale(0.03f, 0.7f, 0.97f, 0.9f);
+		refresh();
+		g.set_focus(list_);
+	}
+	void update(AppManager &app) override {
+		if (!discovery_ || !discovery_->ok()) return;
+		const uint32_t now = net::now_ms();
+		if (now - last_query_ >= 500) {
+			last_query_ = now;
+			discovery_->query_broadcast(port(app));
+			if (typed_) discovery_->query(*typed_);
+		}
+		bool changed = false;
+		net::Discovery::Reply r;
+		while (discovery_->receive(r)) {
+			NetServerInfo info;
+			if (!decode_server_info(r.info, info)) continue;
+			net::Address at = r.from;
+			if (info.port) at.port = info.port;
+			auto it = std::find_if(sessions_.begin(), sessions_.end(), [&](const Entry &e) { return e.at == at || (info.instance && e.info.instance == info.instance); });
+			if (it == sessions_.end()) sessions_.push_back({at, info, r.ping_ms}), changed = true;
+			else if (it->ping != r.ping_ms || it->info.players != info.players) it->info = info, it->ping = r.ping_ms, changed = true;
+		}
+		if (changed) refresh();
+	}
+	void click(AppManager &app, Control &c) override {
+		if (&c == cancel_) {
+			backed_out = true;
+			app.set_last();
+			return;
+		}
+		if (&c != join_ || !c.enabled || selected_ < 0 || size_t(selected_) >= sessions_.size()) return;
+		const Entry e = sessions_[size_t(selected_)];
+		std::string why = refusal(app, e.info);
+		if (!why.empty()) return app.notify("Unable To Join", why);
+		auto go = [this, &app, e](const std::string &password) {
+			std::string error;
+			if (!app.join_server || !app.join_server(e.at.text(), password, &error)) return app.notify("Unable To Join", error.empty() ? "The game could not join." : error);
+			complete(app);
+		};
+		if (!e.info.password) return go("");
+		gui->get_string("Enter Password", "", [&app, go](bool ok, const std::string &pw) {
+			if (!ok || pw.empty()) return app.notify("Password Required", "This server requires a password to join.");
+			go(pw);
+		});
+	}
+
+private:
+	struct Entry {
+		net::Address at;
+		NetServerInfo info;
+		uint32_t ping = 0;
+	};
+	static uint16_t port(AppManager &app) {
+		int p = atoi(app.registry_string("Network\\Winsock\\Listener Port").c_str());
+		return p > 0 && p < 65536 ? uint16_t(p) : net::kDefaultPort;
+	}
+	std::string refusal(AppManager &app, const NetServerInfo &i) {
+		if (i.protocol != kNetProtocol || i.version != net_engine_version()) return "The server runs version " + i.version + "; this game is " + net_engine_version() + ".";
+		if (!hash_) hash_ = net_data_hash(app.world.data());
+		if (i.data_hash != *hash_) return "The server's game data differs from yours.";
+		if (i.max_players && i.players >= i.max_players) return "The server is full.";
+		return {};
+	}
+	void ask_typed(AppManager &app) {
+		net::Address a;
+		std::string error;
+		if (!net::resolve(address_->str, port(app), a, &error)) {
+			status_->str = (error);
+			return;
+		}
+		typed_ = a;
+		app.set_registry_string("Network\\Last Address", address_->str);
+		status_->str = ("Asking " + a.text() + "...");
+		if (discovery_) discovery_->query(a);
+	}
+	void refresh() {
+		std::vector<List::Row> rows;
+		for (auto &e : sessions_) {
+			std::string players = std::to_string(e.info.players) + "/" + std::to_string(e.info.max_players);
+			std::string desc = e.info.session_name + (e.info.password ? " (password)" : "") + (e.info.playing ? "" : " - setting up");
+			rows.push_back({{e.info.server_name.empty() ? e.at.text() : e.info.server_name, std::to_string(e.ping), players, desc}});
+		}
+		int keep = selected_;
+		list_->set_rows(rows);
+		if (keep >= 0 && size_t(keep) < rows.size()) list_->select(keep, false);
+		if (status_) status_->str = (sessions_.empty() ? "Searching the local network..." : std::to_string(sessions_.size()) + (sessions_.size() == 1 ? " session found." : " sessions found."));
+	}
+	void select(int i) {
+		selected_ = i >= 0 && size_t(i) < sessions_.size() ? i : -1;
+		if (join_) join_->enabled = selected_ >= 0, join_->read_only = !join_->enabled;
+	}
+	std::unique_ptr<net::Discovery> discovery_;
+	std::optional<net::Address> typed_;
+	std::optional<std::array<uint8_t, 16>> hash_;
+	std::vector<Entry> sessions_;
+	uint32_t last_query_ = 0;
+	int selected_ = -1;
+	Control *join_ = nullptr, *cancel_ = nullptr;
+	List *list_ = nullptr;
+	Edit *address_ = nullptr;
+	Text *status_ = nullptr;
+};
+
 UIPtr AppManager::recordings_menu() {
 	if (!recordings_menu_) {
 		auto r = std::make_shared<RecordingList>();
@@ -2568,7 +2715,10 @@ void AppManager::menu_select(int id) {
 		set_next(sel, true);
 		return;
 	}
-	if (id == 10) not_ported("Join Game");
+	if (id == 10) {
+		if (!join_server) return not_ported("Join Game");
+		set_next(std::make_shared<SessionBrowser>(), true);
+	}
 }
 
 void AppManager::notify(const std::string &title, const std::string &text) { notifications.push_back({title, text}); }

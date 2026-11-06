@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "game/netplay.h"
+#include "game/netplay.h"
 #include "game/runtime.h"
 
 namespace game {
@@ -27,6 +28,7 @@ void register_creature_natives(World &w) {
 			if (!o) return;
 			uint32_t t = c.arg<uint32_t>(0), rate = c.world.creature_rate(o);
 			o->creation_time = rate ? t - t % rate : t;
+			if (rate && o->temporal_registered) net_align_creature_time(c.world, *o);
 		});
 	}
 	reg("CCreature::int CreationTime()", [](const NativeContext &c) {

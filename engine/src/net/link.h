@@ -1,6 +1,6 @@
 // The byte link between two machines of a network session: a reliable ordered channel (session
 // and UI messages, the original's "guaranteed" packets) and an unreliable one (game states, which
-// the state managers' scheduler re-sends). The ENet transport implements Endpoint later; the
+// the state managers' scheduler re-sends). The ENet transport (net/enet_link.h) implements it; the
 // loopback link below connects two sessions in one process with a simulated delay, jitter and loss.
 #pragma once
 

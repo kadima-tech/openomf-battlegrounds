@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -23,6 +24,8 @@ namespace game {
 class World;
 struct GameObject;
 struct SessionState;
+struct SessionClient;
+class NetSession;
 
 enum class NetRole : uint8_t { None, Server, Client };
 
@@ -37,7 +40,14 @@ struct NetCounters {
 struct NetConfig {
 	int budget = 16000;  // Network\Winsock\Maximum Outgoing Bytes: the credit refills in a second
 	float node_quality = 1;  // the node's ping-based quality and +0x54 (the loopback has no drops)
+	// The client status machine and session flow (FINDINGS 403): roster, remote pages, pre-load at
+	// statuses 101 / 103, load authorization, ID requests. Off, both machines build the same match
+	// and states flow at once (openbg-net).
+	bool flow = false;
 };
+
+// The machine's network session, while there is one.
+NetSession *net_session(World &w);
 
 // --- The state managers' network side (replay.cpp) ------------------------------------------
 
@@ -87,6 +97,9 @@ void net_sent(World &w, const GameObject *owner, uint32_t time);
 // The flags RegisterLastState* put on the state the owner's manager made last.
 enum class LastState { NoInterrupt, NoReplicate, TimeCritical, Correction, RequiredCorrection };
 void register_last_state(World &w, GameObject *owner, LastState what);
+// Online, a tick-based creature's time follows the scene clock both machines share (see
+// PLACEHOLDERS): one created or given its creation time late on a client is not behind the server's.
+void net_align_creature_time(World &w, GameObject &o);
 // DE_CStandardSessionSlot::SetupCreatureControl's creature +0x1f8.
 bool locally_controlled(World &w, const GameObject *creature);
 void set_locally_controlled(World &w, GameObject *creature, bool on);
@@ -118,15 +131,37 @@ public:
 		std::vector<std::pair<uint32_t, uint32_t>> acks;  // 0x12 to send: server ID, raw time
 		uint32_t acks_since = 0;
 		uint32_t keep_alive_min = 0;
+		// Server, with the flow: the client and its last reported status (com interface +0x1c;
+		// 2000 a forced one not yet confirmed), the roster it was sent, pre-load and authorization.
+		SessionClient *client = nullptr;
+		int status = 1000;
+		std::string roster;
+		int preloaded_status = 0;
+		uint32_t authorized_at = 0;
+		std::vector<uint32_t> id_queue;  // +0xc4: IDs asked for (0x15), named by the next 0x0d
+		uint32_t last_heard = 0;
 	};
 	NetSession(World &w, NetRole role, NetConfig cfg = {});
 	~NetSession();
 	Peer &add_peer(net::Endpoint *link, GameObject *creature = nullptr);
+	void remove_peer(net::Endpoint *link);
+	Peer *peer_of(net::Endpoint *link);
+	// ForceClientsToLoad: status 101 to every client (0x0f).
+	void force_clients_to_load();
+	// LaunchRemoteUIManager on a remote client: the page opens there (0x03).
+	void launch_remote_ui(SessionClient &c, GameObject *ui);
+	// A client's copy of a server page completed: the choice goes back (0x04).
+	void remote_ui_complete(GameObject *ui);
+	SessionState *session = nullptr;  // the network session (the top-level one)
+	uint32_t own_id = 0;              // a client's ID in the roster
+	std::function<void(const std::string &title, const std::string &text)> notify;
+	uint64_t id_requests = 0, deletes = 0, rosters = 0;
 	// Once per frame, after World::tick: receive, keep the lag and clock, send.
 	void update();
 	// The frame's time for World::tick on a client: the real time plus the clock's slew.
 	uint32_t frame_ms(uint32_t real_ms);
 	NetRole role() const { return role_; }
+	bool flow() const { return cfg_.flow; }
 	std::deque<Peer> &peers() { return peers_; }
 	uint64_t bytes_sent() const;
 	uint64_t states_sent = 0, packets_sent = 0, clock_jumps = 0, clock_rejects = 0, correction_requests = 0;
@@ -139,6 +174,16 @@ private:
 	void send_states(Peer &p, uint32_t now);
 	void send_acks(Peer &p, uint32_t now, bool force);
 	void announce(Peer &p);
+	void preload(Peer &p);
+	void send_roster(Peer &p, const std::string &signature);
+	void server_flow(uint32_t now);
+	void client_flow(uint32_t now);
+	void report(int status);
+	void send_clock(uint32_t now);
+	void receive_roster(const std::vector<uint8_t> &d, size_t pos);
+	void receive_remote_ui(const std::vector<uint8_t> &d, size_t pos);
+	std::string roster_signature();
+	GameObject *clock_object(const Peer &p) const;
 	void send(Peer &p, net::Channel ch, std::vector<uint8_t> data);
 	float quality() const;
 	World &w_;
@@ -149,6 +194,14 @@ private:
 	uint32_t class_visit_[5] = {0, 0, 0, 0, 0};
 	uint8_t sync_seq_ = 0;
 	int32_t sync_limit_ = 1000;  // the clock's accept limit (+0x64)
+	int reported_ = 0;           // a client's last status report (0x17)
+	bool clock_synced_ = false;
+	uint32_t last_clock_ = 0;
+	uint32_t last_requests_ = 0;
+	std::map<uint32_t, GameObject *> remote_ui_;  // a client's copies of server pages, by their server ID
+	std::map<uint32_t, uint32_t> linked_at_;      // a client's linked IDs: when, until a state is heard
+	std::map<std::string, uint32_t> asked_;       // a client's ID requests (0x15): when last
+	uint32_t next_client_id_ = 1;
 };
 
 }  // namespace game

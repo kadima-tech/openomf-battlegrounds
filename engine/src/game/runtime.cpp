@@ -1,4 +1,5 @@
 #include "game/runtime.h"
+#include "game/netplay.h"
 #include "game/impulses.h"
 
 #include "de/platform.h"
@@ -1492,6 +1493,7 @@ void World::register_creature(GameObject *o) {
 		// creation time gives.
 		uint32_t now = clock_ms(clock_key(o));
 		if (o->creation_time && o->creation_time < now) o->creature_ticks = (now - o->creation_time) / rate;
+		net_align_creature_time(*this, *o);
 		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's
 		// order, joins this one's list (+0x334), and this one joins theirs.
 		if (o->fighter && !o->fighter_prepared) {
@@ -1736,7 +1738,16 @@ void World::scene_genesis(const GameObject *session) {
 	c.last_global = global_ms();
 	const GameObject *was = clock_;
 	use_clock(session);
-	scene_ms_ = 0;
+	scene_ms_ = c.initial;
+	reset_clock();
+	use_clock(was);
+}
+
+void World::set_initial_scene_time(const GameObject *session, uint32_t ms) {
+	if (!scene_clock(session).started) return;
+	const GameObject *was = clock_;
+	use_clock(session);
+	scene_ms_ = ms;
 	reset_clock();
 	use_clock(was);
 }
