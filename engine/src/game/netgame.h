@@ -44,6 +44,7 @@ struct NetServerInfo {
 	int players = 0, max_players = 0;
 	bool password = false, playing = false;
 	uint16_t port = 0;
+	uint32_t instance = 0;  // tells one host's answers apart from another's (broadcast and loopback both reach it)
 };
 std::vector<uint8_t> encode_server_info(const NetServerInfo &i);
 bool decode_server_info(const std::vector<uint8_t> &d, NetServerInfo &out);
@@ -83,6 +84,7 @@ private:
 	net::EnetPeer *server_ = nullptr;
 	std::map<net::EnetPeer *, SessionClient *> accepted_;
 	std::array<uint8_t, 16> hash_{};
+	uint32_t instance_ = 0;
 };
 
 }  // namespace game

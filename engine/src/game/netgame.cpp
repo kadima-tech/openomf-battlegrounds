@@ -138,6 +138,7 @@ std::vector<uint8_t> encode_server_info(const NetServerInfo &i) {
 	o.u8(uint8_t(std::clamp(i.max_players, 0, 255)));
 	o.u8(uint8_t((i.password ? 1 : 0) | (i.playing ? 2 : 0)));
 	o.u16(i.port);
+	o.u32(i.instance);
 	return o.d;
 }
 
@@ -157,6 +158,7 @@ bool decode_server_info(const std::vector<uint8_t> &d, NetServerInfo &out) {
 	out.password = flags & 1;
 	out.playing = flags & 2;
 	out.port = in.u16();
+	out.instance = in.u32();
 	return in.ok;
 }
 
@@ -192,6 +194,7 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 	hash_ = net_data_hash(w_.data());
 	hosted_ = &s;
 	s.net_status = 1;
+	instance_ = net::now_ms() ^ uint32_t(uintptr_t(this)) ^ (uint32_t(o.port) << 16);
 	NetConfig cfg;
 	cfg.flow = true;
 	cfg.budget = o.budget;
@@ -215,6 +218,7 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 		i.password = !opt_.password.empty();
 		i.playing = hosted_ && hosted_->begun;
 		i.port = host_ ? host_->port() : 0;
+		i.instance = instance_;
 		return encode_server_info(i);
 	};
 	state_ = State::Hosting;

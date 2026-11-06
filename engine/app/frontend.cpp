@@ -263,6 +263,12 @@ int main(int argc, char **argv) {
 			if (port > 0 && port < 65536) o.port = uint16_t(port);
 			return o;
 		};
+		app.join_server = [&](const std::string &address, const std::string &password, std::string *error) {
+			game::NetOptions o = net_options();
+			o.password = password;
+			netgame.close();
+			return netgame.join(address, o, error);
+		};
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
 		auto persistent = [&](const char *name) {

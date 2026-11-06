@@ -241,6 +241,8 @@ public:
 	bool snapshot_requested = false;
 	// DE_CSessionRecord::Replay: play the recording saved at `path`.
 	std::function<bool(const std::string &path)> launch_replay;
+	// Join Game's Join: connect to a server ("host:port"); false with `error` set.
+	std::function<bool(const std::string &address, const std::string &password, std::string *error)> join_server;
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 
