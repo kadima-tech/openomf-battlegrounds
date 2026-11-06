@@ -145,6 +145,7 @@ VMClass VMClass::parse(const std::vector<uint8_t> &vmc2, size_t behavior_count) 
 	if (c.remaining() >= 4) {
 		uint32_t n = c.u32();
 		for (uint32_t i = 0; i < n && c.remaining() > 0; ++i) {
+			size_t class_pos = c.pos();
 			FinalInstance f;
 			f.class_index = c.squeezed();
 			const std::string name = f.class_index < v.classes.size() ? v.classes[f.class_index].name : "";
@@ -163,15 +164,136 @@ VMClass VMClass::parse(const std::vector<uint8_t> &vmc2, size_t behavior_count) 
 				c.bytes(c.squeezed());
 			} else {
 				v.unknown_final_class = name.empty() ? "#" + std::to_string(f.class_index) : name;
+				v.finals_count = n;
+				c.seek(class_pos);
 				break;
 			}
 			f.data.assign(c.data().begin() + long(start), c.data().begin() + long(c.pos()));
 			v.finals.push_back(std::move(f));
 		}
 	}
+	if (!v.finals_count && c.remaining() > 0) {
+		v.member_size = c.squeezed();
+	}
 	auto rest = c.bytes(c.remaining());
 	v.tail.assign(rest.begin(), rest.end());
 	return v;
+}
+
+namespace {
+
+using de::ContentsWriter;
+
+void put_text(ContentsWriter &w, const std::string &s) {
+	w.u32(uint32_t(s.size() + 1));
+	w.bytes(s.data(), s.size());
+	w.u8(0);
+}
+
+void put_instance(ContentsWriter &w, const ClassInstance &i) {
+	w.squeezed(i.class_index);
+	w.u32(i.value);
+	w.boolean(i.flag);
+	w.squeezed(i.count);
+	if (i.count) {
+		w.boolean(i.class2.has_value());
+		if (i.class2) w.squeezed(*i.class2);
+	}
+}
+
+void put_replicated(ContentsWriter &w, const std::vector<CompiledMethod::Replicated> &rs) {
+	w.squeezed(uint32_t(rs.size()));
+	for (auto &r : rs) {
+		w.squeezed(r.type);
+		w.squeezed(r.a);
+		w.squeezed(r.b);
+	}
+}
+
+// DE_CClassCompiledMethod::SaveVMCode (0x7013d920).
+void put_method(ContentsWriter &w, const std::optional<CompiledMethod> &om) {
+	size_t at = w.begin_sized();
+	w.boolean(om.has_value());
+	if (om) {
+		const CompiledMethod &m = *om;
+		put_text(w, m.name);
+		w.block(m.code);
+		for (bool f : m.flags) w.boolean(f);
+		if (m.flags[2]) w.squeezed(m.v34.value_or(0));
+		if (m.flags[3]) {
+			w.squeezed(uint32_t(m.base_methods.size()));
+			for (uint32_t b : m.base_methods) w.squeezed(b);
+		}
+		w.squeezed(uint32_t(m.instances.size()));
+		for (auto &i : m.instances) put_instance(w, i);
+		w.u32(uint32_t(m.interfaces.size()));
+		for (auto &i : m.interfaces) {
+			w.u32(i.a);
+			w.i32(i.b);
+			w.boolean(i.c);
+		}
+		for (uint32_t n : m.counts) w.squeezed(n);
+		put_text(w, m.signature);
+		w.i32(m.v78);
+		put_replicated(w, m.replicated);
+	}
+	w.end_chunk(at);
+}
+
+// DE_CClassBehaviorReference::SaveVMCode (0x70136e60).
+void put_behavior(ContentsWriter &w, const BehaviorCode &b) {
+	size_t at = w.begin_sized();
+	w.squeezed(uint32_t(b.instances.size()));
+	for (auto &i : b.instances) put_instance(w, i);
+	w.squeezed(uint32_t(b.methods.size()));
+	for (auto &m : b.methods) put_method(w, m);
+	for (size_t i = 0; i < b.methods.size(); ++i) {
+		auto link = i < b.base_links.size() ? b.base_links[i] : std::nullopt;
+		w.boolean(link.has_value());
+		if (link) w.squeezed(*link);
+	}
+	put_replicated(w, b.replicated);
+	w.end_chunk(at);
+}
+
+}  // namespace
+
+std::vector<uint8_t> VMClass::write() const {
+	ContentsWriter w;
+	size_t at = w.begin_chunk(13);
+	w.block(change_info);
+	w.i32(int32_t(classes.size()));
+	for (auto &k : classes) {
+		put_text(w, k.name);
+		w.squeezed(k.layout_pos);
+	}
+	w.i32(int32_t(intrinsics.size()));
+	for (auto &i : intrinsics) {
+		w.squeezed(i.class_index);
+		put_text(w, i.signature);
+	}
+	w.i32(int32_t(ref_members.size()));
+	for (uint32_t r : ref_members) w.squeezed(r);
+	for (auto &b : behaviors) put_behavior(w, b);
+	w.i32(int32_t(global_refs.size()));
+	for (auto &g : global_refs) {
+		w.u32(g.kind);
+		put_text(w, g.name);
+	}
+	w.u32(uint32_t(member_interfaces.size()));
+	for (auto &[id, block] : member_interfaces) {
+		w.u32(id);
+		w.i32(block);
+	}
+	w.u32(finals_count.value_or(uint32_t(finals.size())));
+	for (auto &f : finals) {
+		w.squeezed(f.class_index);
+		w.bytes(f.data);
+	}
+	if (member_size) w.squeezed(*member_size);
+	w.bytes(tail);
+	w.end_chunk(at);
+	return w.take();
 }
 
 std::vector<de::Reference> class_behavior_refs(const std::vector<uint8_t> &references) {

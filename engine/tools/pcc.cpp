@@ -1,9 +1,12 @@
 // pcc: compile a Class from its behaviors' sources (vm/compiler.h) and print the result next to
 // the shipped VMC2, if any, for comparison.
 //
-//   pcc <Data dir> <file stem> <Class> [nth class of that name]
+//   pcc <Data dir> <file stem> <Class> [nth class of that name] [-o <VMC2 payload out>]
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <string>
 
 #include "de/objects_file.h"
 #include "de/platform.h"
@@ -50,6 +53,11 @@ int main(int argc, char **argv) {
 	de::World w(argv[1]);
 	const de::ObjectsFile *f = w.file(argv[2]);
 	if (!f) return 1;
+	const char *out = nullptr;
+	if (argc > 5 && !strcmp(argv[argc - 2], "-o")) {
+		out = argv[argc - 1];
+		argc -= 2;
+	}
 	int which = argc > 4 ? atoi(argv[4]) : 0, seen = 0;
 	for (uint32_t i = 0; i < f->objects().size(); ++i) {
 		auto &o = f->objects()[i];
@@ -59,6 +67,10 @@ int main(int argc, char **argv) {
 			vm::VMClass c = vm::compile_class(w, {f, i}, &notes);
 			for (auto &n : notes) fprintf(stderr, "note: %s\n", n.c_str());
 			print(c, "compiled");
+			if (out) {
+				auto bytes = c.write();
+				std::ofstream(out, std::ios::binary).write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+			}
 		} catch (const std::exception &e) {
 			fprintf(stderr, "error: %s\n", e.what());
 			return 1;

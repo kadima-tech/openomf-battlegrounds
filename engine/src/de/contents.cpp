@@ -121,6 +121,17 @@ void ContentsWriter::string(const std::string &s) {
 	u32(uint32_t(s.size() + 1));
 	bytes(s.data(), s.size() + 1);
 }
+void ContentsWriter::squeezed(uint32_t v) {
+	if (v < 0xFE) {
+		u8(uint8_t(v));
+	} else if (v < 0xFFFF) {
+		u8(0xFE);
+		u16(uint16_t(v));
+	} else {
+		u8(0xFF);
+		u32(v);
+	}
+}
 void ContentsWriter::guid_pool(const std::vector<Guid> &pool) {
 	u8(1);
 	u16(uint16_t(pool.size()));

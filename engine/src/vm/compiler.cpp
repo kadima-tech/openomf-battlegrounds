@@ -40,6 +40,15 @@ std::vector<de::ObjectRef> referenced_behaviors(const de::World &data, const de:
 	return out;
 }
 
+std::vector<uint8_t> change_information(const de::World &data, const std::vector<de::ObjectRef> &attached) {
+	de::ContentsWriter w;
+	for (const de::ObjectRef &b : attached) {
+		w.i32(b.info().value84);
+		for (const de::ObjectRef &t : referenced_behaviors(data, b)) w.i32(t.info().value84);
+	}
+	return w.take();
+}
+
 std::vector<de::ObjectRef> behavior_globals(const de::World &data, const de::ObjectRef &behavior) {
 	std::vector<de::ObjectRef> out;
 	try {
@@ -149,6 +158,7 @@ Sig parse_sig(const std::string &s) {
 struct NativeApi {
 	std::map<std::string, std::vector<Sig>> by_class;  // full class name -> intrinsics
 	std::map<std::string, std::string> full_of;        // short -> full class name
+	std::map<std::string, uint32_t> layout_pos;        // full class name -> LastImbeddedVariablePos
 };
 
 const NativeApi &native_api(const de::World &data) {
@@ -172,7 +182,10 @@ const NativeApi &native_api(const de::World &data) {
 			} catch (const std::exception &) {
 				continue;
 			}
-			for (auto &cr : c.classes) api.full_of.emplace(short_name(cr.name), cr.name);
+			for (auto &cr : c.classes) {
+				api.full_of.emplace(short_name(cr.name), cr.name);
+				api.layout_pos.emplace(cr.name, cr.layout_pos);
+			}
 			for (auto &in : c.intrinsics) {
 				const std::string &cls = c.classes[in.class_index].name;
 				if (seen[cls].insert(in.signature).second) api.by_class[cls].push_back(parse_sig(in.signature));
@@ -441,6 +454,7 @@ struct FinalInst {
 	std::string cls;  // full class name
 	std::vector<uint8_t> data;
 	int index = -1;   // in the class finals table once used
+	std::vector<std::string> init_intrinsics;  // the initialiser calls' signatures
 };
 
 struct BehaviorInfo {
@@ -477,6 +491,7 @@ public:
 			attached_.push_back(b);
 		}
 		visible_ = visible_behaviors(data_, attached_);
+		code_.change_info = change_information(data_, attached_);
 		for (auto &b : visible_) infos_.push_back(read_behavior(b));
 		for (size_t i = 0; i < infos_.size(); ++i) {
 			auto refs = behavior_globals(data_, visible_[i]);
@@ -490,14 +505,26 @@ public:
 		// the last behavior to the first.
 		for (size_t i = infos_.size(); i-- > 0;) declarations(i, i < attached_.size());
 		declare_methods();
+		for (auto &m : methods_) local_classes(m.body);
+		for (auto &[fi, by_string] : pending_finals_) {
+			class_index(fi->cls);
+			if (by_string) intrinsic(fi->cls, "(opp =)(string)");
+			for (auto &sig : fi->init_intrinsics) intrinsic(fi->cls, sig);
+			final_index(*fi);
+		}
 		assign_pool_and_slots();
 		code_.behaviors.resize(attached_.size());
 		for (size_t b = 0; b < attached_.size(); ++b) {
 			for (auto &mi : members_instances_[b]) code_.behaviors[b].instances.push_back(mi);
 		}
 		for (size_t m = 0; m < methods_.size(); ++m) compile_method(m);
+		for (size_t i = 0; i < ref_member_classes_.size(); ++i) code_.ref_members[i] = class_index(ref_member_classes_[i]);
 		code_.classes.clear();
-		for (auto &c : classes_) code_.classes.push_back({c, 0});
+		for (auto &c : classes_) {
+			auto lp = api_.layout_pos.find(c);
+			code_.classes.push_back({c, lp != api_.layout_pos.end() ? lp->second : 0});
+		}
+		code_.member_size = member_end_;
 		for (auto &f : finals_order_) code_.finals.push_back({class_index_const(f->cls), f->data});
 		return std::move(code_);
 	}
@@ -517,6 +544,8 @@ private:
 	std::map<std::string, Value> finals_;
 	std::map<std::string, FinalInst> final_insts_;
 	std::vector<FinalInst *> finals_order_;
+	std::vector<std::pair<FinalInst *, bool>> pending_finals_;
+	std::vector<std::string> ref_member_classes_;  // classed by SaveVMCode (0x70134070), after the code
 	std::map<std::string, Member> members_;
 	uint32_t member_end_ = 0;
 	std::map<size_t, std::vector<ClassInstance>> members_instances_;
@@ -805,7 +834,9 @@ private:
 						fi.cls = t->name;
 						if (dc.init && dc.init->kind == Expr::String) fi.data = string_instance(fi.cls, dc.init->text);
 						else fi.data = default_instance(fi.cls);
-						final_insts_.emplace(dc.name, std::move(fi));
+						bool by_string = dc.init && dc.init->kind == Expr::String;
+						auto ins = final_insts_.emplace(dc.name, std::move(fi));
+						if (ins.second) pending_finals_.push_back({&ins.first->second, by_string});
 						continue;
 					}
 					if (!attached) continue;
@@ -817,7 +848,8 @@ private:
 					if (m.type.k == Type::Obj && !m.iface && !m.instance && !is_value_class(m.type.name)) {
 						m.ref = true;
 						m.offset = uint32_t(code_.ref_members.size());
-						code_.ref_members.push_back(class_index(m.type.name));
+						code_.ref_members.push_back(0);
+						ref_member_classes_.push_back(m.type.name);
 						members_.emplace(m.name, m);
 						continue;
 					}
@@ -890,6 +922,15 @@ private:
 			args.push_back(v->type.k == Type::Float ? v->f : double(v->i));
 		}
 		const std::string &m = e.a->text;
+		if (auto api = api_.by_class.find(fi.cls); api != api_.by_class.end()) {
+			for (auto &sig : api->second) {
+				if (sig.name == m && sig.params.size() == args.size()) {
+					if (fi.index >= 0) intrinsic(fi.cls, sig.full);
+					else fi.init_intrinsics.push_back(sig.full);
+					break;
+				}
+			}
+		}
 		std::vector<float> f(fi.data.size() / 4);
 		memcpy(f.data(), fi.data.data(), f.size() * 4);
 		if ((fi.cls == "CObject::CVector" || fi.cls == "CObject::CColorRGBA") && m == "Set" && args.size() == f.size()) {
@@ -988,6 +1029,33 @@ private:
 		}
 	}
 
+	// The original's parse registers the classes a body names (declarations and casts) before
+	// the finals and the code.
+	void local_classes(const std::vector<pc::StmtPtr> &body) {
+		auto name = [&](const std::string &type) {
+			auto t = type_named(type);
+			if (t && t->k == Type::Obj && !is_behavior(t->name)) class_index(t->name);
+		};
+		std::function<void(const pc::Expr &)> expr = [&](const pc::Expr &e) {
+			if (e.kind == pc::Expr::Cast) name(e.text);
+			for (auto *p : {&e.a, &e.b, &e.c})
+				if (*p) expr(**p);
+			for (auto &x : e.args) expr(*x);
+		};
+		std::function<void(const pc::Stmt &)> walk = [&](const pc::Stmt &st) {
+			if (st.kind == Stmt::DeclS && !st.decl->interface && !st.decl->param && !st.decl->rparam && !st.decl->final_) name(st.decl->type);
+			if (st.decl)
+				for (auto &dc : st.decl->names)
+					if (dc.init) expr(*dc.init);
+			for (auto *p : {&st.e, &st.cond, &st.step})
+				if (*p) expr(**p);
+			for (auto *p : {&st.init, &st.body, &st.other})
+				if (*p) walk(**p);
+			for (auto &x : st.list) walk(*x);
+		};
+		for (auto &st : body) walk(*st);
+	}
+
 	uint32_t class_index(const std::string &full) {
 		auto it = std::find(classes_.begin(), classes_.end(), full);
 		if (it != classes_.end()) return uint32_t(it - classes_.begin());
@@ -1050,6 +1118,8 @@ private:
 						l.value.type = *t;
 					}
 					l.type = l.value.type;
+					l.offset = c_->top;
+					c_->top += 4;
 					c_->locals.emplace(dc.name, l);
 					continue;
 				}
