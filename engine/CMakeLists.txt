@@ -105,6 +105,10 @@ add_library(vm STATIC
 )
 target_link_libraries(vm PUBLIC de)
 
+# The byte link between the machines of a network session (src/net/link.h).
+add_library(net STATIC src/net/link.cpp)
+target_include_directories(net PUBLIC src)
+
 # Game runtime: native objects and intrinsics for compiled scripts.
 add_library(game STATIC
 	src/game/runtime.cpp
@@ -128,8 +132,9 @@ add_library(game STATIC
 	src/game/ui.cpp
 	src/game/controls.cpp
 	src/game/descriptions.cpp
+	src/game/netplay.cpp
 )
-target_link_libraries(game PUBLIC vm de)
+target_link_libraries(game PUBLIC vm de net)
 
 add_executable(deobj-dump tools/deobj_dump.cpp)
 find_package(ZLIB REQUIRED)
@@ -171,12 +176,15 @@ target_link_libraries(openbg-brain PRIVATE vm)
 add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg-fight PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
+add_executable(openbg-net app/net_harness.cpp app/game_view.cpp app/scene_lights.cpp
+	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
+target_link_libraries(openbg-net PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg)
+	foreach(program deobj-dump de-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()

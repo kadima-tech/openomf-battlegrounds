@@ -15,6 +15,7 @@
 
 #include "de/contents.h"
 #include "de/platform.h"
+#include "game/netplay.h"
 #include "game/runtime.h"
 #include "game/session.h"
 #include "game/simple_physics.h"
@@ -93,7 +94,15 @@ struct LocalState {
 	std::vector<uint8_t> bytes;
 	std::vector<std::pair<size_t, uint32_t>> refs;
 	size_t phys_at = 0, phys_end = 0;
+	// Network play (CStandardState +0x28 / +0x2c): flags, authority and significance; a received
+	// state's bytes reference objects by manager ID (`wire`) instead of handle.
+	uint32_t flags = 0;
+	uint8_t authority = 0, significance = 0;
+	bool wire = false;
+	uint64_t serial = 0;
 };
+// CStandardState +0x28.
+constexpr uint32_t kNoInterrupt = 2, kNoReplicate = 4, kTimeCritical = 8, kCorrection = 0x10;
 constexpr size_t kLocalRef = 7;  // v1 chunk, size 5, kind 3, u32 handle
 
 struct StateManager {
@@ -112,6 +121,18 @@ struct StateManager {
 	bool local = false;        // kept for its own states only, outside any session
 	std::vector<LocalState> history;                               // +0x3c, the owner's own states
 	std::vector<std::pair<uint32_t, std::vector<uint8_t>>> lagged;  // +0x3c, while replaying
+	// Network play (DE_CStandardStateManager): +0x3c holds the received states too.
+	bool net = false;
+	bool up = false, down = true;  // +0x84 / +0x88: replicated from the controlling client / from the server
+	bool discard_check = false;    // +0xa8
+	uint8_t authority = 1, significance = 1;  // +0xe0 / +0xe4
+	bool resend = false;           // +0xac
+	uint32_t required = 0;         // +0xb0: a required correction's time
+	uint32_t lag = 0, lag_window = 0;  // +0x98 / +0x9c, owner units
+	std::optional<LocalState> held;    // +0xd8
+	uint32_t held_at = 0;              // +0xdc
+	uint64_t last = 0;                 // +0x94: the state Register*State made
+	uint32_t server_id = 0;
 };
 
 // A tick-based creature's clock in a replay (DE_CCreature +0x1d4 is GameObject::creature_ticks).
@@ -137,6 +158,14 @@ struct ReplayWorld {
 	int reticking = 0;
 	// DE_CCreature +0x1ec: SetInstanceNumber's suffix, by handle.
 	std::map<uint32_t, std::pair<const GameObject *, std::string>> instance_numbers;
+	// Network play: this machine's side of the session (`session`), the IDs the server issued.
+	NetRole net = NetRole::None;
+	uint32_t next_id = 0;
+	uint64_t serial = 0;
+	NetCounters counters;
+	float lag_ms = 10;
+	std::map<const GameObject *, bool> control;  // SetupCreatureControl's choices, by creature
+	std::map<uint32_t, std::string> links;       // a client's server IDs not matched to a manager yet
 };
 
 std::map<const World *, ReplayWorld> g_worlds;
@@ -166,11 +195,16 @@ bool has_state_manager(const GameObject &o) { return state_manager_object(o) != 
 // +0x88, +0x8c, +0xbc, +0xc0, +0xa8 and +0xd0, defaults 0, 1, 1, 0, 1, 0, 0): the session takes a
 // manager with any of the first three set (DE_CStateManager::ObjPrepare 0x701b1920), and its
 // record only with +0x8c.
+// DE_CStandardStateManager's own chunk (ObjProcessContents 0x701ae0f0, v1): the default authority
+// and significance (+0xe0 / +0xe4, default 1), +0xec and +0xe8.
 struct ManagerFlags {
 	bool joins = true, record = true, keep_clock = false;  // keep_clock: +0xd0
+	bool up = false, down = true, discard_check = false;
+	uint8_t authority = 1, significance = 1;
 };
 ManagerFlags manager_flags(const GameObject &o) {
-	bool up = false, down = true, record = true, d0 = false;
+	bool up = false, down = true, record = true, d0 = false, a8 = false;
+	uint32_t authority = 1, significance = 1;
 	GameObject *m = state_manager_object(o);
 	if (m && m->file) {
 		try {
@@ -182,14 +216,20 @@ ManagerFlags manager_flags(const GameObject &o) {
 				down = c.boolean();
 				if (ch.version == 2) {
 					record = c.boolean();
-					c.boolean(), c.boolean(), c.boolean();
+					c.boolean(), c.boolean();
+					a8 = c.boolean();
 					d0 = c.boolean();
 				}
+			}
+			c.seek(ch.end);
+			if (c.remaining() > 2) {
+				de::Chunk sc = de::begin_chunk(c);
+				if (sc.version == 1) authority = c.u32(), significance = c.u32();
 			}
 		} catch (const std::exception &) {
 		}
 	}
-	return {up || down || record, record, d0};
+	return {up || down || record, record, d0, up, down, a8, uint8_t(std::min(authority, 3u)), uint8_t(std::min(significance, 3u))};
 }
 
 // DE_CCreature::LocalTime (Creature 0x15008300): a tick-based creature's ticks, else the scene's.
@@ -311,6 +351,8 @@ void set_window(World &w, StateManager &sm) {
 	if (uint32_t rate = sm.owner->is("Actor\\Creature") ? w.creature_rate(sm.owner) : 0) sm.window = uint32_t(1000.0f / float(rate));
 }
 
+void set_net_lag(World &w, StateManager &sm);
+
 // DE_CSession::Add + DE_CSessionRecord::Add (Core 0x701f9520 / 0x70203610); a manager that kept
 // states outside the session keeps them.
 StateManager &join(World &w, GameObject &o) {
@@ -331,6 +373,13 @@ StateManager &join(World &w, GameObject &o) {
 	if (!sm.connected) return sm;
 	sm.id = build_id(w, o);
 	sm.joined = ++R.joins;
+	if (R.net != NetRole::None) {
+		sm.net = true;
+		sm.up = flags.up, sm.down = flags.down, sm.discard_check = flags.discard_check;
+		sm.authority = flags.authority, sm.significance = flags.significance;
+		if (R.net == NetRole::Server) sm.server_id = ++R.next_id;
+		set_net_lag(w, sm);
+	}
 	// An empty ID matches the first empty-ID record, so all such managers share one.
 	if (auto &rec = R.record; rec && flags.record) {
 		sm.record = rec->find(sm.id);
@@ -876,23 +925,9 @@ void unpack_state(World &w, Packer &p, GameObject &o, uint32_t t) {
 	}
 }
 
-// DE_CStateManagerRecord::Record (Core 0x70203fa0): a state at the same time as the last replaces
-// it; the record's first manager's owner repacks it (DE_CCreature::RepackState, Creature
-// 0x15015380): the bytes as they are, references as the newest manager ID of their object now,
-// a fighter's physics through RepackState. With that owner gone, nothing is recorded.
-void record_state(World &w, StateRecord &rec, const LocalState &ls) {
-	auto &R = rw(w);
-	if (!rec.states.empty() && rec.states.back().first == ls.time) rec.states.pop_back();
-	auto &joined = R.joined[&rec];
-	StateManager *first = nullptr;
-	if (!joined.empty()) {
-		auto it = R.managers.find(joined[0]);
-		if (it != R.managers.end() && w.object(joined[0]) == it->second.owner) first = &it->second;
-	}
-	if (!first) {
-		w.log.push_back("Object is dead while a state is still being recorded.");
-		return;
-	}
+// DE_CCreature::RepackState (Creature 0x15015380): the bytes as they are, references as the newest
+// manager ID of their object now, a fighter's physics through RepackState.
+std::vector<uint8_t> repack_state(World &w, const LocalState &ls, bool got_hit) {
 	Packer out, src;
 	src.data = ls.bytes;
 	size_t pos = 0;
@@ -908,11 +943,29 @@ void record_state(World &w, StateRecord &rec, const LocalState &ls) {
 	if (ls.phys_end > ls.phys_at) {
 		copy_to(ls.phys_at);
 		src.pos = ls.phys_at;
-		repack_physics(w, src, out, first->owner->fighter && first->got_hit);
+		repack_physics(w, src, out, got_hit);
 		pos = ls.phys_end;
 	}
 	copy_to(ls.bytes.size());
-	rec.states.emplace_back(ls.time, std::move(out.data));
+	return std::move(out.data);
+}
+
+// DE_CStateManagerRecord::Record (Core 0x70203fa0): a state at the same time as the last replaces
+// it; the record's first manager's owner repacks it. With that owner gone, nothing is recorded.
+void record_state(World &w, StateRecord &rec, const LocalState &ls) {
+	auto &R = rw(w);
+	if (!rec.states.empty() && rec.states.back().first == ls.time) rec.states.pop_back();
+	auto &joined = R.joined[&rec];
+	StateManager *first = nullptr;
+	if (!joined.empty()) {
+		auto it = R.managers.find(joined[0]);
+		if (it != R.managers.end() && w.object(joined[0]) == it->second.owner) first = &it->second;
+	}
+	if (!first) {
+		w.log.push_back("Object is dead while a state is still being recorded.");
+		return;
+	}
+	rec.states.emplace_back(ls.time, repack_state(w, ls, first->owner->fighter && first->got_hit));
 }
 
 // DE_CStateManager::CleanOldStates (Core 0x701b1c90): all of them, or those older than the
@@ -1193,6 +1246,7 @@ void update_for_replay(World &, StateManager &sm, uint32_t t) {
 }
 
 void retick(World &w, GameObject &o, uint32_t at_ms) {
+	if (rw(w).net != NetRole::None) ++rw(w).counters.rollback_ticks;
 	++rw(w).reticking;
 	w.retick(o, at_ms);
 	--rw(w).reticking;
@@ -1292,6 +1346,8 @@ void set_time(World &w, GameObject &o, uint32_t ms) {
 
 // The recorded or replayed session's: under it, or in its scene; outside both, anyone's.
 bool in_session(World &w, const GameObject *o) {
+	// Online every session's managers replicate: the match sub-session's as much as the master's.
+	if (rw(w).net != NetRole::None) return true;
 	GameObject *own = rw(w).session ? rw(w).session->obj : nullptr;
 	const GameObject *root = o;
 	for (const GameObject *a = o; a; root = a, a = a->parent) {
@@ -1529,9 +1585,412 @@ bool start_replay(World &w, const std::shared_ptr<SessionRecord> &rec) {
 	return true;
 }
 
+
+namespace {
+
+// --- Network play: DE_CStandardStateManager's network side ------------------------------------
+
+// +0xb8: a tick-based creature's rate (its states are stamped in ticks), else 1 ms.
+uint32_t owner_unit(World &w, const StateManager &sm) {
+	uint32_t r = sm.owner->is("Actor\\Creature") ? w.creature_rate(sm.owner) : 0;
+	return r ? r : 1;
+}
+
+// DE_CStateManager::SetCurrentLag (Core 0x701b1ff0): the lag (+0x98) and the lag window (+0x9c) in
+// owner units. The window's rule is an assumption (PLACEHOLDERS): twice the lag plus +0x68's 50 ms.
+void set_net_lag(World &w, StateManager &sm) {
+	float u = float(owner_unit(w, sm)), lag = rw(w).lag_ms;
+	sm.lag = uint32_t(lag / u);
+	sm.lag_window = uint32_t((2 * lag + 50) / u);
+}
+
+// The state method of the owner's behaviour executor in packed bytes: its innermost state frame.
+const vm::ScriptMethod *packed_state_method(World &w, GameObject &o, const std::vector<uint8_t> &bytes) {
+	auto bs = brains_of(w, o);
+	if (!o.brain || bs.empty() || bs[0] != o.brain) return nullptr;
+	Brain &b = *o.brain;
+	Packer p;
+	p.data = bytes;
+	auto skip = [&](const std::vector<Replicated> &list) {
+		for (const Replicated &r : list) {
+			if (r.type == 0) p.pos = std::min(p.data.size(), p.pos + r.b);
+			else if (r.type == 2) p.rbytes();
+			else if (r.type == 3 || r.type == 4) p.pos = p.chunk_end();
+		}
+	};
+	for (const auto &bc : b.cls.code.behaviors) skip(bc.replicated);
+	const vm::ScriptMethod *state = nullptr;
+	for (;;) {
+		uint8_t flag = p.r8();
+		uint32_t width = (flag >> 1) & 3;
+		if (width == 3) break;
+		uint32_t mi = width == 0 ? p.r8() : width == 1 ? p.r16() : p.r32();
+		if (flag & 8) p.r16();
+		else p.r8();
+		const vm::ScriptMethod *m = b.cls.method(mi);
+		if (!m) break;
+		if (m->is_state()) state = m;
+		skip(m->cm->replicated);
+		if (!(flag & 1) || p.pos >= p.data.size()) break;
+	}
+	return state;
+}
+
+// DE_COMF2Fighter::CanStateInterrupt between the fighter's running state and a state's.
+bool interruptible(World &w, GameObject &o, const std::vector<uint8_t> &bytes) {
+	if (!o.fighter || !o.brain || !o.brain->exec) return false;
+	const vm::ScriptMethod *now = o.brain->exec->current_state(), *next = packed_state_method(w, o, bytes);
+	return now && next && can_state_interrupt(o, now->cm->signature, next->cm->signature);
+}
+
+bool same_data(World &w, const LocalState &a, const LocalState &b) {
+	auto bytes = [&](const LocalState &s) { return s.wire ? s.bytes : repack_state(w, s, false); };
+	return bytes(a) == bytes(b);
+}
+
+// AddLaggedStateDestIndex (Core 0x701ae2b0; 2.123 0x201b4e10 asks CanStateInterrupt, FINDINGS 216):
+// where a state of time `t` goes in the history, or -1. A newer state of at least its authority
+// blocks it (a correction only by newer corrections); a no-interrupt state in the way blocks a
+// state that is not no-interrupt itself or has less authority, unless the owner lets it interrupt.
+int dest_index(World &w, StateManager &sm, uint32_t t, int authority, bool no_interrupt, bool correction, bool may_interrupt) {
+	bool server = rw(w).net == NetRole::Server;
+	auto &h = sm.history;
+	bool guard = !sm.replay;
+	if (guard) {
+		if (!server) guard = !no_interrupt;
+		else guard = h.empty() || std::abs(int64_t(t) - int64_t(h.back().time)) <= int64_t(sm.lag_window);
+	}
+	bool blocking = false;
+	int i = int(h.size()) - 1;
+	for (; i >= 0; --i) {
+		const LocalState &s = h[size_t(i)];
+		if ((s.flags & kNoInterrupt) && !may_interrupt) blocking = true;
+		if (s.time <= t) {
+			if (guard && blocking && !sm.replay && (authority < s.authority || !no_interrupt)) return -1;
+			if (s.time != t) ++i;
+			break;
+		}
+		if ((authority <= s.authority && (!correction || (s.flags & kCorrection)) && !sm.replay) || (guard && blocking && !no_interrupt)) return -1;
+	}
+	if (i < 1) i = 0;
+	if (guard && server && !may_interrupt) {
+		for (size_t k = size_t(i); k < h.size(); ++k) {
+			if (h[k].time > t && (h[k].flags & kNoInterrupt)) return -1;
+		}
+	}
+	return i;
+}
+
+// The protected AddLaggedState (Core 0x701aec10): the same data at the same time only raises the
+// held state's authority and significance; otherwise the newer states go, and the session update's
+// fixup restores the state (and the sender passes it on).
+void insert_lagged(World &w, StateManager &sm, LocalState st, int index, bool correction) {
+	auto &R = rw(w);
+	sm.resend = false;
+	auto &h = sm.history;
+	if (index < int(h.size())) {
+		LocalState &e = h[size_t(index)];
+		if (e.time == st.time && !correction && same_data(w, e, st)) {
+			e.authority = std::max(e.authority, st.authority);
+			e.significance = std::max(e.significance, st.significance);
+			++R.counters.same;
+			return;
+		}
+		h.erase(h.begin() + index, h.end());
+	}
+	sm.need_fixup = true;
+	st.serial = ++R.serial;
+	h.push_back(std::move(st));
+	++R.counters.inserted;
+	if (correction) ++R.counters.corrections_in;
+	if (++sm.adds > 40) {
+		clean_old_states(w, sm, false);
+		sm.adds = 0;
+	}
+}
+
+// CheckForDiscardState (Core 0x701ae410): not ported yet (phase 0); nothing is discarded.
+bool check_for_discard(World &, StateManager &, const LocalState &, bool) { return false; }
+
+// AddLaggedState (Core 0x701ae760) for a received state. The server clamps it to its own time and
+// adds one authority; a client marks it NoReplicate. One that cannot go in waits as the held state
+// (+0xd8) when the manager checks discards, unless it is time-critical.
+void add_lagged_network_state(World &w, StateManager &sm, const NetState &in) {
+	auto &R = rw(w);
+	const bool server = R.net == NetRole::Server;
+	++R.counters.received;
+	if (server && sm.required && !sm.replay) {
+		++R.counters.rejected;
+		return;
+	}
+	uint32_t now = local_time(w, *sm.owner);
+	sm.held.reset();
+	LocalState st;
+	st.time = server && now < in.time ? now : in.time;
+	st.bytes = in.bytes;
+	st.wire = true;
+	const bool no_interrupt = in.flags & kNoInterrupt, time_critical = in.flags & kTimeCritical, correction = in.flags & kCorrection;
+	st.flags = (no_interrupt ? kNoInterrupt : 0) | (time_critical ? kTimeCritical : 0) | (correction ? kCorrection : 0) | (server ? 0 : kNoReplicate);
+	st.authority = in.authority > 3 ? sm.authority : in.authority;
+	st.significance = in.significance > 3 ? sm.significance : in.significance;
+	if (server && st.authority < 3) ++st.authority;
+	if (sm.discard_check && check_for_discard(w, sm, st, correction)) {
+		if (server && !sm.history.empty()) {
+			auto &n = sm.history.back();
+			n.authority = std::max<uint8_t>(n.authority, 2);
+			n.significance = std::max<uint8_t>(n.significance, 2);
+		}
+		++R.counters.discarded;
+		return;
+	}
+	int index = dest_index(w, sm, st.time, st.authority, no_interrupt, correction, interruptible(w, *sm.owner, st.bytes));
+	if (getenv("OPENBG_DEBUG_NETSTATES"))
+		fprintf(stderr, "[net %s %u] %s state %u (now %u) authority %u flags %x: index %d of %zu\n", server ? "server" : "client", w.frame(), sm.owner->name.c_str(), st.time, now,
+		        st.authority, st.flags, index, sm.history.size());
+	if (index != -1) {
+		insert_lagged(w, sm, std::move(st), index, correction);
+		return;
+	}
+	++R.counters.rejected;
+	if (!sm.discard_check) return;
+	if (time_critical) {
+		if (server) sm.resend = true;
+		return;
+	}
+	if ((!sm.history.empty() && sm.history.back().time < st.time) || !server) {
+		sm.held_at = st.time;
+		sm.held = std::move(st);
+		++R.counters.held;
+	}
+}
+
+// DE_CStandardStateManager::Update (Core 0x701af1a0): the held state goes in at the owner's present
+// once it may; past twice the lag a client forces it in at its own time, the server asks for a resend.
+void update_held(World &w, StateManager &sm) {
+	if (!sm.held) return;
+	uint32_t now = local_time(w, *sm.owner);
+	bool force = sm.held_at + sm.lag * 2 < now;
+	if (force) {
+		if (rw(w).net == NetRole::Server) sm.resend = true;
+		else if (int i = dest_index(w, sm, sm.held->time, 3, true, true, true); i != -1) {
+			LocalState st = std::move(*sm.held);
+			sm.held.reset();
+			++rw(w).counters.held_forced;
+			insert_lagged(w, sm, std::move(st), i, false);
+			return;
+		}
+		sm.held.reset();
+		return;
+	}
+	int i = dest_index(w, sm, now, sm.held->authority, sm.held->flags & kNoInterrupt, sm.held->flags & kCorrection, true);
+	if (i == -1) return;
+	LocalState st = std::move(*sm.held);
+	sm.held.reset();
+	st.time = now;
+	insert_lagged(w, sm, std::move(st), i, false);
+}
+
+// Under a creature whose control the session chose (SetupCreatureControl), or the side's default:
+// the server controls what no client does.
+bool controlled_here(World &w, const GameObject *o) {
+	auto &R = rw(w);
+	for (; o; o = o->parent) {
+		auto it = R.control.find(o);
+		if (it != R.control.end()) return it->second;
+	}
+	return R.net != NetRole::Client;
+}
+
+void join_session_managers(World &w) {
+	auto consider = [&](GameObject *o) {
+		if (!o->is("StateManager") && !in_gui(*o) && has_state_manager(*o) && in_session(w, o)) join(w, *o);
+	};
+	for (GameObject *o : w.scene_objects()) consider(o);
+	// Pilots and other objects that run scripts outside the scene.
+	for (Brain *b : w.brains()) {
+		if (b->owner && w.object(b->owner->handle) == b->owner) consider(b->owner);
+	}
+	std::function<void(GameObject *)> walk = [&](GameObject *o) {
+		consider(o);
+		for (GameObject *c : o->children) walk(c);
+	};
+	for (auto &s : w.sessions) {
+		if (s->obj && w.object(s->obj->handle)) walk(s->obj);
+	}
+}
+
+void net_update(World &w) {
+	auto &R = rw(w);
+	if (w.sessions.empty()) return;
+	for (auto it = R.managers.begin(); it != R.managers.end();) {
+		if (w.object(it->first) != it->second.owner) it = R.managers.erase(it);
+		else ++it;
+	}
+	join_session_managers(w);
+	for (auto it = R.links.begin(); it != R.links.end();) {
+		bool found = false;
+		for (auto &[h, sm] : R.managers) {
+			if (sm.net && sm.id == it->second) sm.server_id = it->first, found = true;
+		}
+		it = found ? R.links.erase(it) : std::next(it);
+	}
+	// IsMaster: a creature's executors run their `master` code only where it is controlled.
+	for (Brain *b : w.brains()) {
+		if (b->owner && b->owner->is("Actor\\Creature")) b->inst.controlled = controlled_here(w, b->owner);
+	}
+	const GameObject *clock = w.session ? w.session->obj : nullptr;
+	for (auto &[h, sm] : R.managers) {
+		if (sm.net && w.clock_key(sm.owner) == clock) update_held(w, sm);
+	}
+}
+
+// DE_CSession::Update's fixups: a manager that took a lagged state restores its newest, which puts
+// the owner back to that time and re-simulates it up to now.
+void net_fixups(World &w) {
+	auto &R = rw(w);
+	const GameObject *clock = w.session ? w.session->obj : nullptr;
+	std::vector<uint32_t> owners;
+	for (auto &[h, sm] : R.managers) {
+		if (sm.net && sm.need_fixup && w.clock_key(sm.owner) == clock) owners.push_back(h);
+	}
+	for (uint32_t h : owners) {
+		auto it = R.managers.find(h);
+		if (it == R.managers.end() || w.object(h) != it->second.owner) continue;
+		StateManager &sm = it->second;
+		sm.need_fixup = false;
+		if (sm.history.empty()) continue;
+		++R.counters.rollbacks;
+		const LocalState &st = sm.history.back();
+		restore(w, sm, {st.time, st.bytes});
+	}
+}
+
+}  // namespace
+
+void net_managers_begin(World &w, NetRole role, SessionState *s) {
+	auto &R = rw(w);
+	R.net = role;
+	R.session = s;
+}
+
+void net_managers_end(World &w) {
+	auto &R = rw(w);
+	R.net = NetRole::None;
+	R.control.clear();
+	R.links.clear();
+	forget(w);
+}
+
+NetRole net_role(World &w) { return rw(w).net; }
+NetCounters &net_counters(World &w) { return rw(w).counters; }
+
+std::vector<NetManager> net_managers(World &w) {
+	std::vector<NetManager> out;
+	for (auto &[h, sm] : rw(w).managers) {
+		if (sm.net && sm.connected && w.object(h) == sm.owner) out.push_back({sm.owner, sm.id, sm.server_id, sm.up, sm.down});
+	}
+	return out;
+}
+
+bool net_link(World &w, uint32_t server_id, const std::string &id) {
+	auto &R = rw(w);
+	StateManager *best = nullptr;
+	for (auto &[h, sm] : R.managers) {
+		if (sm.net && sm.id == id && (!best || sm.joined > best->joined)) best = &sm;
+	}
+	if (!best) {
+		R.links[server_id] = id;
+		return false;
+	}
+	best->server_id = server_id;
+	return true;
+}
+
+GameObject *net_owner(World &w, uint32_t server_id) {
+	for (auto &[h, sm] : rw(w).managers) {
+		if (sm.net && sm.server_id == server_id && w.object(h) == sm.owner) return sm.owner;
+	}
+	return nullptr;
+}
+
+uint32_t net_server_id(World &w, const GameObject *owner) {
+	StateManager *sm = manager_of(w, owner);
+	return sm && sm->net ? sm->server_id : 0;
+}
+
+bool net_newest_state(World &w, const GameObject *owner, NetState &out) {
+	StateManager *sm = manager_of(w, owner);
+	if (!sm || !sm->net) return false;
+	for (auto it = sm->history.rbegin(); it != sm->history.rend(); ++it) {
+		if (it->flags & kNoReplicate) continue;
+		out.time = it->time;
+		out.authority = it->authority;
+		out.significance = it->significance;
+		out.flags = it->flags;
+		out.serial = it->serial;
+		out.bytes = it->wire ? it->bytes : repack_state(w, *it, sm->owner->fighter && sm->got_hit);
+		return true;
+	}
+	return false;
+}
+
+void net_receive_state(World &w, GameObject *owner, const NetState &st) {
+	StateManager *sm = manager_of(w, owner);
+	if (sm && sm->net) add_lagged_network_state(w, *sm, st);
+}
+
+void net_set_lag(World &w, float lag_ms) {
+	auto &R = rw(w);
+	R.lag_ms = lag_ms;
+	for (auto &[h, sm] : R.managers) {
+		if (sm.net) set_net_lag(w, sm);
+	}
+}
+
+// RegisterLastState* (Creature 0x150156d0 - 0x150157d0): on the state Register*State made last.
+// A correction on the server takes authority 3 and significance 2; a required one (the server's,
+// of a creature it does not control) significance 3 and holds the client's states off (+0xb0).
+void register_last_state(World &w, GameObject *owner, LastState what) {
+	auto &R = rw(w);
+	StateManager *sm = manager_of(w, owner);
+	if (!sm || !sm->net || !sm->last) return;
+	LocalState *st = nullptr;
+	for (auto &s : sm->history) {
+		if (s.serial == sm->last) st = &s;
+	}
+	if (!st) return;
+	const bool server = R.net == NetRole::Server;
+	switch (what) {
+	case LastState::NoInterrupt: st->flags |= kNoInterrupt; break;
+	case LastState::NoReplicate: st->flags |= kNoReplicate; break;
+	case LastState::TimeCritical: st->flags |= kTimeCritical; break;
+	case LastState::Correction:
+		st->flags |= kCorrection;
+		if (server) st->authority = 3, st->significance = 2;
+		break;
+	case LastState::RequiredCorrection:
+		if (!server || locally_controlled(w, owner)) break;
+		st->flags |= kCorrection;
+		st->authority = 3, st->significance = 3;
+		sm->required = st->time;
+		break;
+	}
+}
+
+bool locally_controlled(World &w, const GameObject *creature) {
+	return rw(w).net == NetRole::None ? !replaying(w) : controlled_here(w, creature);
+}
+
+void set_locally_controlled(World &w, GameObject *creature, bool on) {
+	if (creature) rw(w).control[creature] = on;
+}
+
 void replay_update(World &w) {
 	auto &R = rw(w);
-	if (!R.record) return;
+	if (!R.record) {
+		if (R.net != NetRole::None) net_update(w);
+		return;
+	}
 	if (!R.session || std::none_of(w.sessions.begin(), w.sessions.end(), [&](auto &s) { return s.get() == R.session && !s->ended; })) {
 		forget(w);
 		return;
@@ -1590,6 +2049,10 @@ void replay_update(World &w) {
 
 void replay_after_pass(World &w) {
 	auto &R = rw(w);
+	if (R.net != NetRole::None && !R.record) {
+		net_fixups(w);
+		return;
+	}
 	if (!R.record || R.record->recording || !R.session) return;
 	uint32_t now = uint32_t(w.scene_ms());
 	// DE_CScene::PassTime back (Core 0x70070040): its TimeRewound event deletes the run-time actors
@@ -1610,14 +2073,25 @@ void replay_after_pass(World &w) {
 	}
 }
 
-void register_state(World &w, GameObject *owner, bool got_hit) {
+void register_state(World &w, GameObject *owner, bool got_hit, int authority, int significance) {
 	auto &R = rw(w);
 	if (!owner) return;
 	// RegisterExecutorState (Creature 0x15015650) uses only the creature's own manager (+0x204).
 	GameObject *o = owner;
 	if (!has_state_manager(*o) || in_gui(*o)) return;
-	StateManager &sm = R.record && R.record->recording && in_session(w, o) ? join(w, *o) : own_manager(w, *o);
+	bool joins = (R.record && R.record->recording) || R.net != NetRole::None;
+	StateManager &sm = joins && in_session(w, o) ? join(w, *o) : own_manager(w, *o);
 	if (sm.replay) return;
+	// CreateCurrentState (Core 0x701aeea0): none while a fixup is pending (vtable +0x134, taken as
+	// NeedFixup); 4 takes the manager's default; the server's states gain one authority.
+	if (sm.net) {
+		if (sm.need_fixup) return;
+		if (authority == 4) authority = sm.authority;
+		if (significance == 4) significance = sm.significance;
+		if (o->is("Actor\\Creature") && locally_controlled(w, o) && authority < 2) authority = 2;
+		if (R.net == NetRole::Server && authority < 3) ++authority;
+		++R.counters.registered;
+	}
 	// CreateCurrentState (Core 0x701aeea0) at the owner's local time (RegisterExecutorState,
 	// Creature 0x15015650), recording or not; the state is recorded when it ages out of the history.
 	Packer p;
@@ -1627,6 +2101,10 @@ void register_state(World &w, GameObject *owner, bool got_hit) {
 	pack_state(w, p, *o, sm, ls.phys_at, ls.phys_end);
 	ls.bytes = std::move(p.data);
 	ls.refs = std::move(p.refs);
+	if (sm.net) {
+		ls.authority = uint8_t(authority & 3), ls.significance = uint8_t(significance & 3);
+		ls.serial = sm.last = ++R.serial;
+	}
 	add_current_state(w, sm, std::move(ls));
 	// RegisterGetHitState (OMF 0x350296b0) flags the fighter after registering.
 	sm.got_hit |= got_hit;
@@ -1761,7 +2239,7 @@ bool replaying(World &w) {
 	return R.record && !R.record->recording;
 }
 
-SessionState *replay_session(World &w) { return rw(w).record ? rw(w).session : nullptr; }
+SessionState *replay_session(World &w) { return rw(w).record || rw(w).net != NetRole::None ? rw(w).session : nullptr; }
 
 uint32_t replay_end_ms(World &w) {
 	auto &R = rw(w);

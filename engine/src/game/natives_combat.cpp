@@ -17,6 +17,7 @@
 #include <tuple>
 
 #include "de/image.h"
+#include "game/netplay.h"
 #include "game/replay.h"
 #include "game/forces.h"
 #include "game/particles.h"
@@ -676,7 +677,11 @@ void register_combat_natives(World &w) {
 		c.ret_bool(block_test(c, vec_at(c, info_of(c) + kTransferedMomentum), uint16_t(c.arg<uint32_t>(1))));
 	});
 	reg("CObject::CAttackInfo::bool IsNoEvade()", [=](const NativeContext &c) { c.ret_bool(c.mem().get<uint8_t>(info_of(c) + kFlags) & 0x10); });
-	reg("CObject::CAttackInfo::bool IsNoReplicate()", [](const NativeContext &c) { c.ret_bool(false); });
+	// The attack type's no-replicate bit; single player keeps the stand-in answer (PLACEHOLDERS).
+	reg("CObject::CAttackInfo::bool IsNoReplicate()", [=](const NativeContext &c) {
+		uint32_t a = info_of(c);
+		c.ret_bool(net_role(c.world) != NetRole::None && a && (c.world.memory().get<uint32_t>(a + kAttackType) & kTypeNoReplicate));
+	});
 	// IsPopupCaller: reaction 100/101, or a reel direction rising more than 0.04.
 	reg("CObject::CAttackInfo::bool IsPopup()", [=](const NativeContext &c) {
 		uint32_t a = info_of(c);
