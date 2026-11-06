@@ -73,6 +73,7 @@ add_library(de STATIC
 	src/de/lzrw3a.cpp
 	src/de/md5.cpp
 	src/de/objects_file.cpp
+	src/de/objects_model.cpp
 	src/de/pcode.cpp
 	src/de/image.cpp
 	src/de/avi.cpp
@@ -105,6 +106,10 @@ add_library(vm STATIC
 )
 target_link_libraries(vm PUBLIC de)
 
+# The byte link between the machines of a network session (src/net/link.h).
+add_library(net STATIC src/net/link.cpp)
+target_include_directories(net PUBLIC src)
+
 # Game runtime: native objects and intrinsics for compiled scripts.
 add_library(game STATIC
 	src/game/runtime.cpp
@@ -128,8 +133,9 @@ add_library(game STATIC
 	src/game/ui.cpp
 	src/game/controls.cpp
 	src/game/descriptions.cpp
+	src/game/netplay.cpp
 )
-target_link_libraries(game PUBLIC vm de)
+target_link_libraries(game PUBLIC vm de net)
 
 add_executable(deobj-dump tools/deobj_dump.cpp)
 find_package(ZLIB REQUIRED)
@@ -149,6 +155,18 @@ add_test(NAME de-tests COMMAND de-tests "${OPENBG_DATA_DIR}")
 # Walks all 728 MB of shipped data (~20 s); exclude with: ctest -LE full
 add_test(NAME de-all-files COMMAND de-tests "${OPENBG_DATA_DIR}" --all)
 set_tests_properties(de-all-files PROPERTIES LABELS full)
+# tools/deobjects-editor's JSON form, written and read back by the engine's reader.
+set(DEOBJECTS_EDITOR ${CMAKE_CURRENT_SOURCE_DIR}/../tools/deobjects-editor/src)
+add_library(deobjects-convert STATIC ${DEOBJECTS_EDITOR}/json.cpp ${DEOBJECTS_EDITOR}/schema.cpp
+	${DEOBJECTS_EDITOR}/convert.cpp)
+target_include_directories(deobjects-convert PUBLIC ${DEOBJECTS_EDITOR})
+target_link_libraries(deobjects-convert PUBLIC de)
+add_executable(deobjects-data-tests tests/deobjects_tests.cpp)
+target_link_libraries(deobjects-data-tests PRIVATE game deobjects-convert)
+add_test(NAME deobjects-edit-reload COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}")
+# Unpacks and packs every file of the Data folder (~10 s); each must come back byte for byte.
+add_test(NAME deobjects-round-trip COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}" --all)
+set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 
 # Native viewer (SDL2 + OpenGL 4.1 core).
 if(NOT TARGET SDL2::SDL2)
@@ -174,12 +192,15 @@ target_link_libraries(openbg-brain PRIVATE vm)
 add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg-fight PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
+add_executable(openbg-net app/net_harness.cpp app/game_view.cpp app/scene_lights.cpp
+	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
+target_link_libraries(openbg-net PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg)
+	foreach(program deobj-dump de-tests deobjects-data-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()

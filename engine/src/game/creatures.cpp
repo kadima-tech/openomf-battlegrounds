@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 
+#include "game/netplay.h"
 #include "game/runtime.h"
 
 namespace game {
@@ -67,8 +68,8 @@ void register_creature_natives(World &w) {
 	// in the engine or the scripts reads it back.
 	reg("CCreature::SetOrigional(class CCreature)", [](const NativeContext &) {});
 	reg("COMF2Projectile::SetOrigional(class COMF2Projectile)", [](const NativeContext &) {});
-	// Marks the creature's last state for replication (+0x204 state +0x28 |= 8).
-	reg("CCreature::RegisterLastStateTimeCritical()", [](const NativeContext &) {});
+	// RegisterLastStateTimeCritical (Creature 0x15015790): +0x204's last state +0x28 |= 8.
+	reg("CCreature::RegisterLastStateTimeCritical()", [](const NativeContext &c) { register_last_state(c.world, c.self(), LastState::TimeCritical); });
 	reg("CCreature::AppendCreatureID(class CActor)", [](const NativeContext &) {});  // replication identity
 	reg("CCreature::AppendCreatureID(class CCreature)", [](const NativeContext &) {});
 	// RegisterCreatureStateChangedPCHook (Creature 0x15019ce0): from the end, a slot whose instance is

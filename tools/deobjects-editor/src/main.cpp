@@ -22,7 +22,7 @@
 
 #include "convert.h"
 #include "json.h"
-#include "model.h"
+#include "de/objects_model.h"
 #include "schema.h"
 
 namespace fs = std::filesystem;
@@ -179,26 +179,21 @@ int cmd_show(const fs::path &file, const std::string &spec, const deo::GuidNames
 
 // Builds the JSON form in memory and packs it again: the result must equal `original`.
 bool round_trip(const deo::File &f, const Bytes &original, std::string *why) {
-	std::map<std::string, Bytes> blobs;
-	auto save = [&](size_t object, const std::string &tag, const Bytes &data) {
-		std::string key = std::to_string(object) + "." + tag;
-		blobs[key] = data;
-		return key;
-	};
-	auto load = [&](const std::string &key) { return blobs.at(key); };
-	std::vector<std::string> paths;
-	std::vector<json::Value> objects;
-	for (size_t i = 0; i < f.objects.size(); ++i) {
-		// Through text, as the files on disk would be.
-		objects.push_back(json::Value::parse(deo::object_to_json(f, i, save).dump()));
-		paths.push_back(std::to_string(i));
-	}
-	json::Value index = json::Value::parse(deo::index_to_json(f, paths).dump());
-	Bytes again = deo::file_from_json(index, objects, load, nullptr).write();
+	deo::File g = deo::repack(f);
+	Bytes again = g.write();
 	if (again == original) return true;
+	for (size_t i = 0; i < f.objects.size() && i < g.objects.size(); ++i) {
+		const deo::Object &a = f.objects[i], &b = g.objects[i];
+		const char *what = a.contents != b.contents ? "contents" : a.references != b.references ? "references"
+		                 : a.hierarchy != b.hierarchy ? "hierarchy" : nullptr;
+		if (what) {
+			*why = "object " + std::to_string(i) + " (" + name_of(a) + ") " + what + " differ; ";
+			break;
+		}
+	}
 	size_t at = 0;
 	while (at < again.size() && at < original.size() && again[at] == original[at]) ++at;
-	*why = "first difference at byte " + std::to_string(at) + " (sizes " + std::to_string(original.size()) + " and " +
+	*why += "first difference at byte " + std::to_string(at) + " (sizes " + std::to_string(original.size()) + " and " +
 	       std::to_string(again.size()) + ")";
 	return false;
 }

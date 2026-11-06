@@ -274,9 +274,10 @@ int main(int argc, char **argv) {
 			auto &ss = game::start_session(world, {res[0]});
 			ss.master_description = world.global_object(desc);
 			ss.single_player = single_player;
-			// DE_CSession::SetAsServer (Core 0x701f8110): a joinable session takes Network\Max Clients, others 20.
+			// DE_CSession::SetAsServer (Core 0x701f8110): a joinable session takes Network\Max Clients, others 20;
+			// DE_CNetworkServiceFactory::PostInit (0x701ab300) assures it as 16 when unset (ours also when not positive).
 			int max_clients = atoi(app.registry_string("Network\\Max Clients").c_str());
-			ss.max_player_clients = !single_player && max_clients > 0 ? max_clients : 20;
+			ss.max_player_clients = single_player ? 20 : max_clients > 0 ? max_clients : 16;
 			game::SessionState *sp = &ss;
 			auto begin = [&world, &app, sp] {
 				for (auto &s : world.sessions) {

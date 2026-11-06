@@ -34,17 +34,20 @@ float distance(const std::array<float, 3> &a, const std::array<float, 3> &b) {
 }  // namespace
 
 namespace {
-uint32_t g_holdrand = 1;
+uint32_t g_process_holdrand = 1;
+uint32_t *g_holdrand = &g_process_holdrand;
 }  // namespace
 
 int crt_rand() {
-	g_holdrand = g_holdrand * 214013u + 2531011u;
-	return int((g_holdrand >> 16) & 0x7fff);
+	*g_holdrand = *g_holdrand * 214013u + 2531011u;
+	return int((*g_holdrand >> 16) & 0x7fff);
 }
 
-void crt_srand(uint32_t seed) { g_holdrand = seed; }
+void crt_srand(uint32_t seed) { *g_holdrand = seed; }
 
-uint32_t crt_rand_state() { return g_holdrand; }
+uint32_t crt_rand_state() { return *g_holdrand; }
+
+void use_rand_state(uint32_t *state) { g_holdrand = state ? state : &g_process_holdrand; }
 
 float random01(World &w) {
 	(void)w;

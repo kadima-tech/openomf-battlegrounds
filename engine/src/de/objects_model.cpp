@@ -1,4 +1,4 @@
-#include "model.h"
+#include "de/objects_model.h"
 
 #include <cstdio>
 #include <cstring>
@@ -264,6 +264,7 @@ size_t data_size(const Object &o, const Bytes &stored) {
 // What write() stores as the contents block.
 Bytes stored_contents(const Object &o) {
 	if (!o.compressed()) return o.contents;
+	if (o.packed_as_is) return o.packed;
 	if (!o.packed.empty()) {
 		try {
 			if (decompress(o.packed) == o.contents) return o.packed;
@@ -332,7 +333,7 @@ File File::read(const Bytes &data, bool header_only) {
 	}
 
 	if (header_only) {
-		for (Info &info : infos) f.objects.push_back(Object{std::move(info), {}, {}, {}, {}, {}});
+		for (Info &info : infos) f.objects.push_back(Object{std::move(info), {}, {}, false, {}, {}, {}});
 		return f;
 	}
 

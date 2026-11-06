@@ -12,6 +12,7 @@
 
 #include "game/replay.h"
 #include "game/forces.h"
+#include "game/netplay.h"
 #include "game/particles.h"
 #include "game/runtime.h"
 #include "game/session.h"
@@ -420,18 +421,20 @@ void register_core_natives(World &w) {
 	});
 	// Scene time is in milliseconds (scripts wait e.g. 200 between navigation commands); 60 frames/s.
 	reg("CScene::dword Time()", [](const NativeContext &c) { c.ret_u32(scene_time(c)); });
-	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CSession::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CActor::bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
+	reg("CSession::bool IsSinglePlayer()", [](const NativeContext &c) { c.ret_bool(net_role(c.world) == NetRole::None); });
+	reg("CSession::bool IsServer()", [](const NativeContext &c) { c.ret_bool(net_role(c.world) != NetRole::Client); });
+	reg("CActor::bool IsServer()", [](const NativeContext &c) { c.ret_bool(net_role(c.world) != NetRole::Client); });
 	// +0x1f8: SetupCreatureControl leaves it clear in a replay (Session 0x4501a9b0).
-	reg("CCreature::bool IsLocallyControlled()", [](const NativeContext &c) { c.ret_bool(!replaying(c.world)); });
-	// IsLowAuthoritySimulationCaller (Creature): false on the server.
+	reg("CCreature::bool IsLocallyControlled()", [](const NativeContext &c) { c.ret_bool(locally_controlled(c.world, c.self())); });
 	// InvalidateOrientationCaller: marks cached world orientations stale; ours are computed on use.
 	reg("CCreature::InvalidateOrientation()", [](const NativeContext &) {});
-	reg("CCreature::bool IsLowAuthoritySimulation()", [](const NativeContext &c) { c.ret_bool(false); });
+	// IsLowAuthoritySimulation (Creature 0x150157f0): a client's creature it does not control.
+	reg("CCreature::bool IsLowAuthoritySimulation()", [](const NativeContext &c) {
+		c.ret_bool(net_role(c.world) == NetRole::Client && !locally_controlled(c.world, c.self()));
+	});
 	// SetInstanceNumberCaller appends the number to the creature's ID suffix (+0x1ec).
 	reg("CCreature::SetInstanceNumber(int)", [](const NativeContext &c) {
-		if (auto *o = c.self()) set_instance_number(*o, c.arg<int32_t>(0));
+		if (auto *o = c.self()) set_instance_number(c.world, *o, c.arg<int32_t>(0));
 	});
 	reg("CCreature::bool IsUserControlled()", [](const NativeContext &c) {
 		auto *o = c.self();
@@ -686,9 +689,9 @@ void register_core_natives(World &w) {
 	});
 	auto local_momentum = [](const GameObject &o) { return o.local.inverse_rotate(o.momentum); };
 	auto set_local_momentum = [](GameObject &o, std::array<float, 3> m) { o.momentum = o.local.rotate(m); };
-	reg("COMF2Fighter::class CVector MomentumLocal()", [=](const NativeContext &c) {
+	reg("COMF2Fighter::class CVector MomentumLocal()", [=, vec = std::make_shared<uint32_t>(0)](const NativeContext &c) {
 		auto *o = c.self();
-		static uint32_t v = 0;  // MomentumLocalCaller returns a static vector
+		uint32_t &v = *vec;  // MomentumLocalCaller returns a static vector
 		if (!v) v = c.mem().alloc(12);
 		write_vec(c.mem(), v, o ? local_momentum(*o) : std::array<float, 3>{0, 0, 0});
 		c.ret_u32(v);
@@ -1143,16 +1146,42 @@ void register_core_natives(World &w) {
 	// --- Registrations and hooks the scripts set up; accepted and ignored for now ---------------
 	// Register*State (DE_CCreature::RegisterExecutorState, Creature 0x15015650): a state for the
 	// session record; the RegisterLastState* flags only concern network replication.
-	for (const char *k : {"CCreature::RegisterStandardState()", "CCreature::RegisterHighSignificanceState()",
-	                      "CCreature::RegisterLowSignificanceState()", "CCreature::RegisterMediumSignificanceState()",
-	                      "CCreature::RegisterGuaranteedSignificanceState()", "COMF2Fighter::RegisterGetHitState()",
-	                      "COMF2Fighter::RegisterStandardAttack()", "COMF2Fighter::RegisterRecoveryState()"}) {
-		bool got_hit = !strcmp(k, "COMF2Fighter::RegisterGetHitState()");
-		reg(k, [got_hit](const NativeContext &c) { register_state(c.world, c.self(), got_hit); });
+	// Their authority and significance (vtable +0x1d4; 4 the manager's default) matter only online.
+	const std::pair<const char *, int> significances[] = {
+	    {"CCreature::RegisterStandardState()", 4}, {"CCreature::RegisterLowSignificanceState()", 0},
+	    {"CCreature::RegisterMediumSignificanceState()", 1}, {"CCreature::RegisterHighSignificanceState()", 2},
+	    {"CCreature::RegisterGuaranteedSignificanceState()", 3}, {"COMF2Fighter::RegisterStandardAttack()", 2}};
+	for (auto [k, sig] : significances) {
+		reg(k, [sig](const NativeContext &c) { register_state(c.world, c.self(), false, 4, sig); });
 	}
-	for (const char *k : {"CCreature::RegisterLastStateNoReplicate()", "CCreature::RegisterLastStateAsRequiredCorrection()",
-	                      "CCreature::RegisterLastStateNoInterrupt()", "CCreature::RegisterLastStateAsCorrection()",
-	                      "COMF2Fighter::ResetCurrentHitList()", "CScene::PreCacheObject(class CObject)"}) {
+	// RegisterGetHitState (OMF 0x350296b0): a client's prediction (authority 2), the server's a
+	// correction (3); no interrupt, time-critical.
+	reg("COMF2Fighter::RegisterGetHitState()", [](const NativeContext &c) {
+		bool server = net_role(c.world) != NetRole::Client;
+		register_state(c.world, c.self(), true, server ? 3 : 2, 2);
+		if (server) register_last_state(c.world, c.self(), LastState::Correction);
+		// A client hit by a fighter it controls asks the server for its version of the victim (0x19;
+		// the attacker's "mid-attack" test, brain +0x2c, is left out).
+		GameObject *by = c.self() ? c.self()->last_hit_by : nullptr;
+		if (!server && net_role(c.world) == NetRole::Client && by && by->fighter && locally_controlled(c.world, by)) net_request_correction(c.world, c.self());
+		register_last_state(c.world, c.self(), LastState::NoInterrupt);
+		register_last_state(c.world, c.self(), LastState::TimeCritical);
+	});
+	// RegisterRecoveryState (OMF 0x35029800): no interrupt on a client; time-critical.
+	reg("COMF2Fighter::RegisterRecoveryState()", [](const NativeContext &c) {
+		register_state(c.world, c.self(), false, 2, 2);
+		if (net_role(c.world) == NetRole::Client) register_last_state(c.world, c.self(), LastState::NoInterrupt);
+		register_last_state(c.world, c.self(), LastState::TimeCritical);
+	});
+	const std::pair<const char *, LastState> lasts[] = {
+	    {"CCreature::RegisterLastStateNoReplicate()", LastState::NoReplicate},
+	    {"CCreature::RegisterLastStateAsRequiredCorrection()", LastState::RequiredCorrection},
+	    {"CCreature::RegisterLastStateNoInterrupt()", LastState::NoInterrupt},
+	    {"CCreature::RegisterLastStateAsCorrection()", LastState::Correction}};
+	for (auto [k, what] : lasts) {
+		reg(k, [what](const NativeContext &c) { register_last_state(c.world, c.self(), what); });
+	}
+	for (const char *k : {"COMF2Fighter::ResetCurrentHitList()", "CScene::PreCacheObject(class CObject)"}) {
 		stub(k);
 	}
 }
