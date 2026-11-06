@@ -7,7 +7,8 @@
 // actors the buttons, driven by the UI managers in game/ui.h.
 //
 // --launch <match> starts that match's session at once (--host <match>: as a joinable session,
-// whose Choose Cast lists the Available Arenas); --choose Elizabeth,Jaguar makes the UIs
+// whose Choose Cast lists the Available Arenas, served on the network; --join host[:port] joins one,
+// --port the port to host on or join at); --choose Elizabeth,Jaguar makes the UIs
 // it launches pick those (testing), and Choose Cast take the modifiers and starting match named
 // there ("Turbo Speed", "Intensity") and the defaults for the rest; --headless N runs N frames
 // without a window and lists the natives still missing.
@@ -29,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "de/contents.h"
@@ -38,6 +40,7 @@
 #include "game/runtime.h"
 #include "game/session.h"
 #include "game/descriptions.h"
+#include "game/netgame.h"
 #include "game/ui.h"
 #include "audio.h"
 #include "game_view.h"
@@ -122,6 +125,7 @@ void print_state(game::World &world, int fr) {
 
 int main(int argc, char **argv) {
 	de::init_platform();
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 	if (argc < 2) {
 		fprintf(stderr, "usage: %s <Data dir> [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
@@ -134,12 +138,16 @@ int main(int argc, char **argv) {
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
 	bool headless = false;
 	int frames = 60;
+	std::string join;  // --join: the server to join at once
+	int port = 0;      // --port
 	for (int i = 2; i < argc; ++i) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
 		else if (!strcmp(argv[i], "--host") && i + 1 < argc) launch = argv[++i], host = true;
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
+		else if (!strcmp(argv[i], "--join") && i + 1 < argc) join = argv[++i];
+		else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
@@ -236,6 +244,23 @@ int main(int argc, char **argv) {
 		}
 		app.apply_settings();
 		auto saved_registry = world.registry, traced_registry = world.registry;
+		// Network play (docs/NETWORK_PLAN.md): hosting a joinable session, or joining one.
+		game::NetGame netgame(world);
+		netgame.notify = [&app](const std::string &title, const std::string &text) {
+			fprintf(stderr, "net: %s: %s\n", title.c_str(), text.c_str());
+			app.notify(title, text);
+		};
+		netgame.on_joined = [&app] { app.close_stack(); };
+		netgame.on_closed = [&world, &app] {
+			game::destroy_all_sessions(world);
+			app.close_stack();
+			app.set_next(app.main_menu(), true);
+		};
+		auto net_options = [&] {
+			game::NetOptions o = game::net_options(world.registry);
+			if (port > 0 && port < 65536) o.port = uint16_t(port);
+			return o;
+		};
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
 		auto persistent = [&](const char *name) {
@@ -287,6 +312,10 @@ int main(int argc, char **argv) {
 				game::begin_session(world);
 				app.set_registry_bool("SinglePlayerPlayed", true);
 			};
+			if (!single_player) {
+				std::string error;
+				if (!netgame.host(ss, net_options(), &error)) app.notify("Unable To Host", error);
+			}
 			if (app.satisfy_master_requirements(ss, begin)) begin();
 			return sp;
 		};
@@ -361,6 +390,12 @@ int main(int argc, char **argv) {
 				return 1;
 			}
 			app.launch_session(d, !host);
+		} else if (!join.empty()) {
+			std::string error;
+			if (!netgame.join(join, net_options(), &error)) {
+				fprintf(stderr, "cannot join %s: %s\n", join.c_str(), error.c_str());
+				return 1;
+			}
 		} else if (!replay_path.empty()) {
 			if (!game::start_replay(world, game::load_recording(replay_path))) {
 				fprintf(stderr, "cannot replay %s\n", replay_path.c_str());
@@ -505,7 +540,22 @@ int main(int argc, char **argv) {
 			double audio_carry = 0;
 			de::Transform ear;
 			ear.t = {0.5f, 0.375f, 0.866f};
+			// A network game runs at the wall clock's pace, as the other machine does.
+			const bool paced = netgame.state() != game::NetGame::State::Idle;
+			const auto t0 = std::chrono::steady_clock::now();
+			if (paced) world.system_clock = [t0] { return uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()); };
+			uint32_t last_ms = 0;
 			for (int fr = 0; fr < frames; ++fr) {
+				uint32_t step = game::World::kFrameMs;
+				if (paced) {
+					uint32_t now = world.system_ms();
+					while (now - last_ms < game::World::kFrameMs) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+						now = world.system_ms();
+					}
+					step = std::min<uint32_t>(now - last_ms, 2000);
+					last_ms = now;
+				}
 				for (auto &m : mouse_script) {
 					if (m.frame == fr && m.kind == 3) app.key(13);
 					if (m.frame == fr && m.kind == 4) app.key(27);
@@ -518,8 +568,31 @@ int main(int argc, char **argv) {
 				world.tick_gui(0, game::World::kFrameMs);
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
 				world.autopaused = app.autopaused();
-				world.tick(game::World::kFrameMs);
+				world.tick(netgame.frame_ms(step));
+				netgame.update();
 				test_switches(fr);
+				// OPENBG_NET_TRACE=<file>: each frame the session scene's time and every slot's fighter
+				// (place, health, state), for tools/net-lan/compare.py to set two machines side by side.
+				static FILE *trace = getenv("OPENBG_NET_TRACE") ? fopen(getenv("OPENBG_NET_TRACE"), "w") : nullptr;
+				if (trace && world.session && world.session->begun) {
+					game::SessionState *ss = world.session.get();
+					fprintf(trace, "%d %u %d", fr, world.scene_ms_of(ss->obj), ss->net_status);
+					for (auto &sl : ss->slots) {
+						game::GameObject *f = sl->creature;
+						if (!f || !f->spawned) continue;
+						float h = -1;
+						for (game::GameObject *ch : f->children) {
+							std::vector<uint8_t> args(4);
+							if (ch->brain && ch->brain->cls.name == "PFighterStats" && ch->brain->call(world, "float NormalizedHealth()", args)) memcpy(&h, args.data(), 4);
+						}
+						auto *m = f->brain && f->brain->exec ? f->brain->exec->current_state() : nullptr;
+						std::string st = m ? m->cm->signature : "-";
+						if (size_t c = st.rfind(':'); c != std::string::npos) st = st.substr(c + 1);
+						for (char &ch : st) ch = ch == ' ' ? '_' : ch;
+						fprintf(trace, " | %d %s %.2f %.2f %.2f %.3f %s", sl->index, f->name.c_str(), f->local.t[0], f->local.t[1], f->local.t[2], h, st.c_str());
+					}
+					fputc('\n', trace);
+				}
 				offline->play_requests(world, view.player ? view.ear() : ear);
 				if (recording) {
 					offline->update_music(world);
@@ -534,6 +607,16 @@ int main(int argc, char **argv) {
 					shown[obj] = t.text;
 				}
 				world.sound_requests.clear();
+			}
+			if (game::NetSession *n = netgame.session()) {
+				auto &c = game::net_counters(world);
+				const double secs = std::max(1.0, frames * game::World::kFrameMs / 1000.0);
+				printf("net summary: received %llu inserted %llu same %llu rejected %llu held %llu forced %llu corrections %llu rollbacks %llu (%llu ticks) registered %llu, sent %llu states in %llu packets, %.0f B/s, clock jumps %llu, ID requests %llu, deletes %llu, rosters %llu\n",
+				       (unsigned long long)c.received, (unsigned long long)c.inserted, (unsigned long long)c.same, (unsigned long long)c.rejected,
+				       (unsigned long long)c.held, (unsigned long long)c.held_forced, (unsigned long long)c.corrections_in, (unsigned long long)c.rollbacks,
+				       (unsigned long long)c.rollback_ticks, (unsigned long long)c.registered, (unsigned long long)n->states_sent, (unsigned long long)n->packets_sent,
+				       n->bytes_sent() / secs, (unsigned long long)n->clock_jumps, (unsigned long long)n->id_requests, (unsigned long long)n->deletes, (unsigned long long)n->rosters);
+				for (auto &p : n->peers()) printf("net summary: peer ping %.0f ms, lag %.0f ms, status %d\n", p.ping, n->lag_ms, p.status);
 			}
 			for (auto &l : world.log) printf("log: %s\n", l.c_str());
 			std::vector<std::pair<uint64_t, std::string>> miss;
@@ -706,7 +789,8 @@ int main(int argc, char **argv) {
 				picker->scene_paused = false;
 			}
 			world.autopaused = app.autopaused();
-			world.tick(frame_ms);
+			world.tick(netgame.frame_ms(frame_ms));
+			netgame.update();
 			++fr;
 			static const int state_every = getenv("OPENBG_DEBUG_STATE") ? std::max(1, atoi(getenv("OPENBG_DEBUG_STATE"))) : 0;
 			if (state_every && fr % state_every == 0) print_state(world, fr);

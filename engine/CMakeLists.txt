@@ -110,7 +110,8 @@ target_link_libraries(vm PUBLIC de)
 include(FetchContent)
 FetchContent_Declare(enet
 	URL https://codeload.github.com/lsalzman/enet/tar.gz/2662c0de09e36f2a2030ccc2c528a3e4c9e8138a
-	URL_HASH SHA256=37381831c5ccbb41c3c71e867203fee847670f67717f297f930290d18985ad5f)
+	URL_HASH SHA256=37381831c5ccbb41c3c71e867203fee847670f67717f297f930290d18985ad5f
+	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(enet)
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 target_compile_options(enet PRIVATE -w)
@@ -147,8 +148,16 @@ add_library(game STATIC
 	src/game/controls.cpp
 	src/game/descriptions.cpp
 	src/game/netplay.cpp
+	src/game/netgame.cpp
 )
 target_link_libraries(game PUBLIC vm de net)
+# The engine version the network handshake compares (the launcher's release version when it builds).
+if(DEFINED OPENBG_VERSION)
+	set(OPENBG_ENGINE_VERSION "${OPENBG_VERSION}")
+else()
+	set(OPENBG_ENGINE_VERSION "dev")
+endif()
+set_source_files_properties(src/game/netgame.cpp PROPERTIES COMPILE_DEFINITIONS "OPENBG_ENGINE_VERSION=\"${OPENBG_ENGINE_VERSION}\"")
 
 add_executable(deobj-dump tools/deobj_dump.cpp)
 find_package(ZLIB REQUIRED)

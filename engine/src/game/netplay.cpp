@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "game/replay.h"
@@ -17,6 +18,16 @@ namespace {
 // keep the original numbers (docs/NETWORK_PLAN.md section 7.2).
 enum Header : uint8_t { kSession = 0, kClock = 2, kTransportPing = 0x0f, kTransportPong = 0x0e };
 enum Msg : uint16_t {
+	kRoster = 0x01,     // {count, {client ID, name, slot + 1, flags}}, the receiver's ID: ClientAndSlotUpdate
+	kRemoteUI = 0x03,   // {page ID, choose fighter, title, autoselect, pool}: LaunchRemoteUIManager
+	kRemoteDone = 0x04, // {page ID, chosen, model}: RemoteUIManagerComplete
+	kStatus = 0x0f,     // u32 status: ForceStatusChange
+	kLoad = 0x10,       // load authorized: AuthorizeLoading
+	kResend = 0x13,     // server ID: re-send its newest state
+	kUnknownId = 0x14,  // server ID: the client deletes the owner
+	kIdRequest = 0x15,  // ID string: RequestIDFromServer
+	kDelete = 0x16,     // ID string: the client deletes that object
+	kReport = 0x17,     // squeezed status: the client's report
 	kLink = 0x0d,       // {count, {server ID, ID string}}: AddFromServer
 	kPreload = 0x0e,    // BOOL-ended {server ID, ID string, time, flags, newest state}
 	kStates = 0x11,     // {server ID, time, flags, state}..., 0
@@ -38,6 +49,10 @@ struct Writer {
 		}
 	}
 	void bytes(const void *p, size_t n) { d.insert(d.end(), (const uint8_t *)p, (const uint8_t *)p + n); }
+	void str(const std::string &s) {
+		squeezed(uint32_t(s.size()));
+		bytes(s.data(), s.size());
+	}
 };
 
 struct Reader {
@@ -71,7 +86,24 @@ struct Reader {
 		pos += n;
 		return v;
 	}
+	std::string str() {
+		auto b = take(squeezed());
+		return std::string(b.begin(), b.end());
+	}
 };
+
+std::map<const World *, NetSession *> g_sessions;
+
+// GH_SLOT_QUERRY_USER_CHOICES_COMPLETE (Session 0x4500e770): sent to the client and its slot; the
+// pickers clear INT1 while the player is still choosing.
+bool choices_complete(World &w, SessionClient &c) {
+	if (!c.slot) return false;
+	uint32_t e = new_event(w, "SlotQuerryUserChoicesComplete");
+	w.memory().set<int32_t>(e + 4, 1);
+	w.send_event(c.obj, e);
+	w.send_event(c.slot->obj, e);
+	return w.memory().get<int32_t>(e + 4) != 0;
+}
 
 // The flags byte (ReplicateSessionStateManagerStates): authority, significance, NoInterrupt (0x10),
 // TimeCritical (0x20), Correction (0x40).
@@ -104,9 +136,289 @@ Writer message(Msg m) {
 
 NetSession::NetSession(World &w, NetRole role, NetConfig cfg) : w_(w), role_(role), cfg_(cfg) {
 	net_managers_begin(w, role, w.session.get());
+	session = master_session(w.session.get());
+	g_sessions[&w] = this;
 }
 
-NetSession::~NetSession() { net_managers_end(w_); }
+NetSession::~NetSession() {
+	net_managers_end(w_);
+	if (auto it = g_sessions.find(&w_); it != g_sessions.end() && it->second == this) g_sessions.erase(it);
+}
+
+NetSession *net_session(World &w) {
+	auto it = g_sessions.find(&w);
+	return it == g_sessions.end() ? nullptr : it->second;
+}
+
+void NetSession::remove_peer(net::Endpoint *link) {
+	for (auto it = peers_.begin(); it != peers_.end(); ++it) {
+		if (it->link == link) {
+			peers_.erase(it);
+			return;
+		}
+	}
+}
+
+NetSession::Peer *NetSession::peer_of(net::Endpoint *link) {
+	for (auto &p : peers_) {
+		if (p.link == link) return &p;
+	}
+	return nullptr;
+}
+
+GameObject *NetSession::clock_object(const Peer &p) const { return p.creature ? p.creature : session ? session->obj : nullptr; }
+
+void NetSession::force_clients_to_load() {
+	for (auto &p : peers_) {
+		if (!p.client) continue;
+		Writer wr = message(kStatus);
+		wr.u32(101);
+		send(p, net::Channel::Reliable, std::move(wr.d));
+		p.status = 2000;
+	}
+}
+
+void NetSession::launch_remote_ui(SessionClient &c, GameObject *ui) {
+	if (!session || !ui) return;
+	auto it = session->ui.find(ui);
+	if (it == session->ui.end()) return;
+	auto &u = it->second;
+	for (auto &p : peers_) {
+		if (p.client != &c) continue;
+		Writer wr = message(kRemoteUI);
+		wr.squeezed(ui->handle);
+		wr.u8(u.choose_fighter);
+		wr.str(u.description);
+		wr.str(u.autoselect);
+		wr.squeezed(uint32_t(u.pool.size()));
+		for (auto &g : u.pool) wr.bytes(g.bytes, 16);
+		send(p, net::Channel::Reliable, std::move(wr.d));
+	}
+}
+
+void NetSession::remote_ui_complete(GameObject *ui) {
+	if (!session || peers_.empty()) return;
+	auto it = session->ui.find(ui);
+	if (it == session->ui.end() || !it->second.remote_id) return;
+	Writer wr = message(kRemoteDone);
+	wr.squeezed(it->second.remote_id);
+	wr.bytes(it->second.chosen.data(), 16);
+	wr.bytes(it->second.model.data(), 16);
+	send(peers_[0], net::Channel::Reliable, std::move(wr.d));
+	remote_ui_.erase(it->second.remote_id);
+}
+
+// ClientAndSlotUpdate: every client's ID, name and slot (the original's slot info is the slot's
+// own state, which the slot modifiers' states carry here).
+std::string NetSession::roster_signature() {
+	std::string sig;
+	if (!session) return sig;
+	for (auto &c : session->clients) {
+		if (!c->net_id) continue;
+		sig += std::to_string(c->net_id) + ':' + c->player_name + ':' + std::to_string(c->slot ? c->slot->index : -1) + ';';
+	}
+	return sig;
+}
+
+void NetSession::send_roster(Peer &p, const std::string &signature) {
+	Writer wr = message(kRoster);
+	uint32_t n = 0;
+	for (auto &c : session->clients) n += c->net_id != 0;
+	wr.squeezed(n);
+	for (auto &c : session->clients) {
+		if (!c->net_id) continue;
+		wr.squeezed(c->net_id);
+		wr.str(c->player_name);
+		wr.squeezed(c->slot ? uint32_t(c->slot->index + 1) : 0);
+		wr.u8(uint8_t((c->local && c->user) ? 1 : 0));
+	}
+	wr.squeezed(p.client ? p.client->net_id : 0);
+	send(p, net::Channel::Reliable, std::move(wr.d));
+	p.roster = signature;
+	++rosters;
+}
+
+void NetSession::receive_roster(const std::vector<uint8_t> &d, size_t pos) {
+	Reader r{d};
+	r.pos = pos;
+	struct Entry {
+		uint32_t id;
+		std::string name;
+		int slot;
+	};
+	std::vector<Entry> entries;
+	uint32_t n = r.squeezed();
+	for (uint32_t i = 0; i < n && r.ok; ++i) {
+		Entry e;
+		e.id = r.squeezed();
+		e.name = r.str();
+		e.slot = int(r.squeezed()) - 1;
+		r.u8();
+		entries.push_back(e);
+	}
+	uint32_t me = r.squeezed();
+	if (!r.ok || !session) return;
+	own_id = me;
+	auto keep = w_.session;
+	for (auto &sp : w_.sessions) {
+		if (sp.get() == session) w_.session = sp;
+	}
+	for (size_t i = session->clients.size(); i-- > 0;) {
+		SessionClient &c = *session->clients[i];
+		if (std::none_of(entries.begin(), entries.end(), [&](const Entry &e) { return e.id == c.net_id; })) drop_client(w_, *session, c);
+	}
+	for (auto &e : entries) {
+		SessionClient *c = nullptr;
+		for (auto &cl : session->clients) {
+			if (cl->net_id == e.id) c = cl.get();
+		}
+		const bool mine = e.id == me;
+		if (!c) {
+			c = &add_client_to(w_, *session, mine, e.name);
+			c->net_id = e.id;
+			c->local = mine;
+		}
+		c->player_name = e.name;
+		if (e.slot >= 0 && size_t(e.slot) < session->slots.size()) {
+			SessionSlot &sl = *session->slots[size_t(e.slot)];
+			// SetupCreatureControl: a client's own slot is the one it controls.
+			sl.local = mine;
+			if (sl.client != c) connect_client(w_, *session, *c, sl);
+		}
+	}
+	w_.session = keep;
+	if (session->net_status == 100) session->net_status = 101;
+}
+
+void NetSession::receive_remote_ui(const std::vector<uint8_t> &d, size_t pos) {
+	Reader r{d};
+	r.pos = pos;
+	uint32_t id = r.squeezed();
+	bool fighter = r.u8() != 0;
+	std::string title = r.str(), autoselect = r.str();
+	uint32_t n = r.squeezed();
+	std::vector<de::Guid> pool;
+	for (uint32_t i = 0; i < n && r.ok; ++i) {
+		de::Guid g;
+		auto b = r.take(16);
+		if (b.size() == 16) memcpy(g.bytes, b.data(), 16);
+		pool.push_back(g);
+	}
+	if (!r.ok || !session) return;
+	GameObject *ui = remote_ui_[id];
+	if (!ui || !w_.object(ui->handle)) {
+		ui = w_.create_child(nullptr, "RemoteUIManager", fighter ? "UIManager\\GenericDescriptionSelector\\ChooseFighter" : "UIManager\\GenericDescriptionSelector");
+		remote_ui_[id] = ui;
+	}
+	auto &u = session->ui[ui];
+	u.description = title;
+	u.autoselect = autoselect;
+	u.pool = pool;
+	u.choose_fighter = fighter;
+	u.remote_id = id;
+	u.shown = true;
+	auto keep = w_.session;
+	for (auto &sp : w_.sessions) {
+		if (sp.get() == session) w_.session = sp;
+	}
+	if (w_.launch_ui) w_.launch_ui(ui);
+	else w_.log.push_back("session: no UI to show the server's \"" + title + "\"");
+	w_.session = keep;
+}
+
+// UpdateStateManagersRequiredForPreLoad (Session 0x4500b9b0): every pre-load manager's newest state.
+void NetSession::preload(Peer &p) {
+	Writer pre = message(kPreload);
+	for (auto &m : net_managers(w_)) {
+		NetState st;
+		if (!m.server_id || !m.preload || !net_newest_state(w_, m.owner, st)) continue;
+		p.preloaded[m.owner] = st.serial;
+		pre.u8(1);
+		pre.squeezed(m.server_id);
+		pre.str(m.id);
+		pre.squeezed(st.time);
+		pre.u8(uint8_t((st.authority & 3) | ((st.significance & 3) << 2)));
+		pre.u32(uint32_t(st.bytes.size()));
+		pre.bytes(st.bytes.data(), st.bytes.size());
+	}
+	pre.u8(0);
+	send(p, net::Channel::Reliable, std::move(pre.d));
+}
+
+// DE_CStandardSession::Update (Session 0x4500e770) on a server: its own session proceeds to 102 by
+// itself and to 103 once its local player's choices are made (at once with none); each remote
+// client by its reported status gets the roster (100), the pre-load (101, 103) or, once its slot's
+// choices are made, the load authorization (102, at most once a second).
+void NetSession::server_flow(uint32_t now) {
+	SessionState *m = session;
+	if (!m) return;
+	for (auto &c : m->clients) {
+		if (!c->net_id) c->net_id = next_client_id_++;
+	}
+	int &st = m->net_status;
+	if (st == 1 || st == 2) st = 100;
+	else if (st == 100) st = 101;
+	else if (st == 101) st = 102;
+	else if (st == 102) {
+		SessionClient *local = nullptr;
+		for (auto &c : m->clients) {
+			if (c->local && c->user) local = c.get();
+		}
+		if (!local || choices_complete(w_, *local)) st = 103;
+	}
+	const std::string sig = roster_signature();
+	for (auto &p : peers_) {
+		if (!p.client) continue;
+		p.creature = p.client->slot ? p.client->slot->creature : nullptr;
+		if (p.status == 100 || (p.status > 100 && p.status != 2000)) {
+			if (p.roster != sig) send_roster(p, sig);
+		}
+		if ((p.status == 101 || p.status == 103) && p.preloaded_status != p.status) {
+			preload(p);
+			p.preloaded_status = p.status;
+		}
+		if (p.status != 101 && p.status != 103) p.preloaded_status = 0;
+		if (p.status == 102 && now - p.authorized_at >= 1000 && choices_complete(w_, *p.client)) {
+			send(p, net::Channel::Reliable, std::move(message(kLoad).d));
+			p.authorized_at = now;
+		}
+	}
+}
+
+// A client reports each status change (0x17) and asks for the IDs of its unlinked managers (0x15),
+// and for the newest state of a linked one it has heard nothing of in 5 s (0x13).
+void NetSession::client_flow(uint32_t now) {
+	SessionState *m = session;
+	if (!m || peers_.empty()) return;
+	Peer &p = peers_[0];
+	if (m->net_status != reported_) {
+		Writer wr = message(kReport);
+		wr.squeezed(uint32_t(m->net_status));
+		send(p, net::Channel::Reliable, std::move(wr.d));
+		reported_ = m->net_status;
+		printf("net: status %s (%d)\n", net_status_description(m->net_status), m->net_status);
+	}
+	p.creature = nullptr;
+	for (auto &c : m->clients) {
+		if (c->net_id == own_id && c->slot) p.creature = c->slot->creature;
+	}
+	if (m->net_status != 1000 || now - last_requests_ < 1000) return;
+	last_requests_ = now;
+	for (auto &mg : net_managers(w_)) {
+		if (mg.server_id || mg.id.empty()) continue;
+		Writer wr = message(kIdRequest);
+		wr.str(mg.id);
+		send(p, net::Channel::Unreliable, std::move(wr.d));
+		++id_requests;
+	}
+	for (auto &[id, at] : linked_at_) {
+		if (now - at < 5000) continue;
+		at = now;
+		Writer wr = message(kResend);
+		wr.squeezed(id);
+		send(p, net::Channel::Unreliable, std::move(wr.d));
+	}
+}
 
 NetSession::Peer &NetSession::add_peer(net::Endpoint *link, GameObject *creature) {
 	Peer &p = peers_.emplace_back();
@@ -142,6 +454,21 @@ float NetSession::quality() const { return std::max(0.01f, (1 - (1 - credit) * (
 // to each client, and sends the newest state of those its pre-load needs (the client's status
 // machine is phase 2: here whenever that state changes).
 void NetSession::announce(Peer &p) {
+	if (cfg_.flow) {
+		if (p.id_queue.empty()) return;
+		Writer links = message(kLink);
+		links.squeezed(uint32_t(p.id_queue.size()));
+		auto managers = net_managers(w_);
+		for (uint32_t id : p.id_queue) {
+			auto it = std::find_if(managers.begin(), managers.end(), [id](const NetManager &m) { return m.server_id == id; });
+			links.squeezed(id);
+			links.str(it == managers.end() ? std::string() : it->id);
+			p.linked[id] = true;
+		}
+		p.id_queue.clear();
+		send(p, net::Channel::Reliable, std::move(links.d));
+		return;
+	}
 	Writer links = message(kLink), pre = message(kPreload);
 	bool any_pre = false;
 	auto managers = net_managers(w_);
@@ -195,6 +522,7 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 	Reader r{packet.data};
 	const uint32_t now = w_.global_ms();
 	uint8_t header = r.u8();
+	p.last_heard = now;
 	if (header == kTransportPing) {
 		Writer wr;
 		wr.u8(kTransportPong);
@@ -214,14 +542,16 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			Writer wr;
 			wr.u8(kClock);
 			wr.u32(sent);
-			wr.u32(p.creature ? w_.precise_ms_of(p.creature) : 0);
+			GameObject *clock = clock_object(p);
+			wr.u32(clock ? w_.precise_ms_of(clock) : 0);
 			wr.u8(seq);
 			send(p, net::Channel::Unreliable, std::move(wr.d));
 			return;
 		}
 		uint32_t sent = r.u32(), server_scene = r.u32();
 		uint8_t seq = r.u8();
-		if (!r.ok || seq != sync_seq_ || !p.creature) return;
+		GameObject *clock = clock_object(p);
+		if (!r.ok || seq != sync_seq_ || !clock) return;
 		int32_t rtt = int32_t(now - sent);
 		if (rtt < 0) return;
 		// The accept limit (+0x64): over it the sample goes and the limit grows by 25; under two
@@ -232,9 +562,9 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			return;
 		}
 		if (1.5f * float(rtt) < float(sync_limit_)) sync_limit_ = int32_t(50 + 1.5f * float(rtt));
-		double scale = w_.scene_clock(w_.clock_key(p.creature)).scale;
+		double scale = w_.scene_clock(w_.clock_key(clock)).scale;
 		int64_t target = int64_t(server_scene) + int64_t(double(rtt) * 0.5 * scale);
-		int64_t here = int64_t(w_.scene_ms_of(p.creature)) + slew_pending;
+		int64_t here = int64_t(w_.scene_ms_of(clock)) + slew_pending;
 		double d = double(target - here);
 		if (std::fabs(d) <= 1000) {
 			if (std::fabs(d) < 120) {
@@ -242,21 +572,118 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 				if (std::fabs(d) < 40) d *= 0.5;
 				if (std::fabs(d) < 10) d *= 0.5;
 			}
+			slew_pending += int32_t(d);
 		} else {
 			++clock_jumps;
+			// SetInitialSceneTime: a joining client's scene starts at the server's time.
+			if (cfg_.flow && target > 0) {
+				w_.set_initial_scene_time(w_.clock_key(clock), uint32_t(target));
+				slew_pending = 0;
+			} else {
+				slew_pending += int32_t(d);
+			}
 		}
-		slew_pending += int32_t(d);
 		return;
 	}
 	if (header != kSession) return;
 	uint16_t msg = uint16_t(r.u8() | (r.u8() << 8));
+	const bool server = role_ == NetRole::Server;
+	// A server ignores the state traffic of a client that is not Sequenced.
+	if (cfg_.flow && server && p.status != 1000 && (msg == kStates || msg == kAcks || msg == kCorrection || msg == kResend)) return;
 	switch (msg) {
+	case kRoster:
+		if (!server) receive_roster(packet.data, r.pos);
+		break;
+	case kRemoteUI:
+		if (!server) receive_remote_ui(packet.data, r.pos);
+		break;
+	case kRemoteDone: {
+		uint32_t id = r.squeezed();
+		auto chosen = r.take(16), model = r.take(16);
+		GameObject *ui = w_.object(id);
+		if (!r.ok || !server || !ui || !session || !session->ui.count(ui)) break;
+		de::Guid c, mg;
+		memcpy(c.bytes, chosen.data(), 16);
+		memcpy(mg.bytes, model.data(), 16);
+		bool has_model = std::any_of(model.begin(), model.end(), [](uint8_t b) { return b != 0; });
+		complete_ui(w_, ui, c, has_model ? &mg : nullptr);
+		break;
+	}
+	case kStatus: {
+		uint32_t st = r.u32();
+		if (!r.ok || !session) break;
+		if (server) w_.log.push_back("Client attempted to force server status");
+		else session->net_status = int(st);
+		break;
+	}
+	case kLoad:
+		if (!server && session && session->net_status == 102) session->net_status = 103;
+		break;
+	case kReport: {
+		uint32_t st = r.squeezed();
+		if (!r.ok || !server) break;
+		if (p.status != int(st)) printf("net: %s reports %s (%u)\n", p.client ? p.client->player_name.c_str() : "?", net_status_description(int(st)), st);
+		p.status = int(st);
+		if (st == 100) p.roster.clear();
+		break;
+	}
+	case kIdRequest: {
+		std::string id = r.str();
+		if (!r.ok || !server) break;
+		uint32_t found = 0;
+		for (auto &m : net_managers(w_)) {
+			if (m.id == id && m.server_id) found = m.server_id;
+		}
+		if (found) {
+			if (std::find(p.id_queue.begin(), p.id_queue.end(), found) == p.id_queue.end()) p.id_queue.push_back(found);
+		} else {
+			Writer wr = message(kDelete);
+			wr.str(id);
+			send(p, net::Channel::Unreliable, std::move(wr.d));
+		}
+		break;
+	}
+	case kDelete: {
+		std::string id = r.str();
+		if (!r.ok || server) break;
+		for (auto &m : net_managers(w_)) {
+			if (m.id == id && !m.server_id) {
+				w_.clean_later(m.owner);
+				++deletes;
+				w_.log.push_back("net: the server knows no " + m.owner->name + "; deleted");
+			}
+		}
+		break;
+	}
+	case kResend: {
+		uint32_t id = r.squeezed();
+		if (!r.ok || !server) break;
+		if (GameObject *owner = net_owner(w_, id)) {
+			auto &rec = p.records[owner];
+			rec.force = true, rec.acked = -1, rec.index = 0;
+		} else {
+			Writer wr = message(kUnknownId);
+			wr.squeezed(id);
+			send(p, net::Channel::Unreliable, std::move(wr.d));
+		}
+		break;
+	}
+	case kUnknownId: {
+		uint32_t id = r.squeezed();
+		if (!r.ok || server) break;
+		if (GameObject *owner = net_owner(w_, id)) {
+			w_.clean_later(owner);
+			++deletes;
+		}
+		linked_at_.erase(id);
+		break;
+	}
 	case kLink: {
 		uint32_t n = r.squeezed();
 		for (uint32_t i = 0; i < n && r.ok; ++i) {
 			uint32_t id = r.squeezed();
 			auto b = r.take(r.squeezed());
-			if (r.ok && role_ == NetRole::Client) net_link(w_, id, std::string(b.begin(), b.end()));
+			if (r.ok && role_ == NetRole::Client && net_link(w_, id, std::string(b.begin(), b.end())) && cfg_.flow) linked_at_[id] = now;
 		}
 		break;
 	}
@@ -271,7 +698,9 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			if (!r.ok || role_ != NetRole::Client) break;
 			net_link(w_, id, std::string(b.begin(), b.end()));
 			if (GameObject *owner = net_owner(w_, id)) net_receive_state(w_, owner, st, lag_ms);
+			else w_.log.push_back("net: pre-load manager not set up: " + std::string(b.begin(), b.end()));
 		}
+		if (role_ == NetRole::Client && session && session->net_status == 101) session->net_status = 102;
 		break;
 	case kStates:
 		for (;;) {
@@ -283,6 +712,7 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			st.bytes = r.take(r.u32());
 			if (!r.ok) break;
 			GameObject *owner = net_owner(w_, id);
+			linked_at_.erase(id);
 			// The server takes from a client only the states of the creature it controls.
 			if (!owner || (role_ == NetRole::Server && owner != p.creature)) continue;
 			NetTake took = net_receive_state(w_, owner, st, lag_ms);
@@ -444,17 +874,23 @@ void NetSession::update() {
 				net_set_lag(w_, lag, p.creature);
 			}
 		}
-		if (role_ == NetRole::Client && !peers_.empty() && peers_[0].creature) {
+		if (role_ == NetRole::Client && !peers_.empty() && clock_object(peers_[0]) && (peers_[0].creature || cfg_.flow)) {
 			Writer wr;
 			wr.u8(kClock);
 			wr.u32(now);
 			wr.u8(++sync_seq_);
-			wr.squeezed(1000);
+			wr.squeezed(session ? uint32_t(session->net_status) : 1000);
 			send(peers_[0], net::Channel::Unreliable, std::move(wr.d));
 		}
 	}
+	if (cfg_.flow) {
+		if (role_ == NetRole::Server) server_flow(now);
+		else client_flow(now);
+	}
 	for (auto &p : peers_) {
 		if (role_ == NetRole::Server) announce(p);
+		// States flow only while the client is Sequenced.
+		if (cfg_.flow && (role_ == NetRole::Server ? p.status != 1000 : !session || session->net_status != 1000)) continue;
 		send_states(p, now);
 		send_acks(p, now, false);
 	}

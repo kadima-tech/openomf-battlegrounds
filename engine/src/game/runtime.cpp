@@ -1741,6 +1741,15 @@ void World::scene_genesis(const GameObject *session) {
 	use_clock(was);
 }
 
+void World::set_initial_scene_time(const GameObject *session, uint32_t ms) {
+	if (!scene_clock(session).started) return;
+	const GameObject *was = clock_;
+	use_clock(session);
+	scene_ms_ = ms;
+	reset_clock();
+	use_clock(was);
+}
+
 void World::forget_clock(const GameObject *session) {
 	if (!session) return;
 	if (clock_ == session) use_clock(nullptr);

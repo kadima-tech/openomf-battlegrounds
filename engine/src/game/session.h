@@ -35,6 +35,7 @@ struct SessionClient {
 	std::string player_name, description;
 	SessionSlot *slot = nullptr;
 	GameObject *ui_manager = nullptr;  // the UI manager launched on it, if any
+	uint32_t net_id = 0;               // the server's number for it (the roster's client ID)
 };
 
 struct SessionSlot {
@@ -77,6 +78,7 @@ struct SessionState {
 	GameObject *camera = nullptr;
 	int max_player_clients = 2;
 	bool begun = false;
+	int net_status = 1000;  // +0x12c, the client status machine (FINDINGS 403): 1000 Sequenced
 	bool scene_started = false;  // its scene's Genesis (OwnEnvironment): DE_CScene +0xf0 clear
 	bool watchers_active = false;  // ActivateSceneWatchers: its scene has the audio player (+0x1b8)
 	std::vector<ScriptHook> slot_connect_hooks, slot_disconnect_hooks;
@@ -91,6 +93,7 @@ struct SessionState {
 		std::array<uint8_t, 16> model{};  // ChosenModel (zero: the fighter's default)
 		bool pending = false;
 		bool shown = false;             // launched and not yet completed
+		uint32_t remote_id = 0;         // a client's copy of a page the server launched (0x03): its ID there
 	};
 	std::map<const GameObject *, UiManager> ui;
 	std::map<std::string, de::Guid> ui_choices;  // "Choose Environment" -> description GUID
@@ -148,6 +151,16 @@ void scene_delta_tick(World &w, const GameObject *session, float ms);
 void render_tick(World &w, float ms);
 // DE_CSession::NewClient + Activate: a local client (the user's, or a computer player's).
 SessionClient &add_client(World &w, bool user, const std::string &name);
+SessionClient &add_client_to(World &w, SessionState &s, bool user, const std::string &name);
+// DE_CStandardSessionSlot::Attach: the client takes the slot (its connect hooks and SessionSlotNewClient).
+void connect_client(World &w, SessionState &s, SessionClient &c, SessionSlot &slot);
+// DE_CSession::ClientDisconnected and SymbiotSlotClientDisconnect (FINDINGS 407): the slot sends
+// itself SessionSlotResetAll, runs the disconnect hooks, and the client goes.
+void drop_client(World &w, SessionState &s, SessionClient &c);
+// DE_CStandardSession::StatusDescription (Session 0x4500fbf0).
+const char *net_status_description(int status);
+// The top-level session `s` belongs to (whose status the machine keeps).
+SessionState *master_session(SessionState *s);
 // The front end chose `chosen` in a launched UI manager: it completes on the next update, and
 // every node's UIManagerComplete hook hears about it.
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model = nullptr);

@@ -798,7 +798,7 @@ SessionState &start_session(World &w, const std::vector<de::ObjectRef> &modifier
 
 void begin_session(World &w) { begin(w, *w.session); }
 
-static SessionClient &add_client_to(World &w, SessionState &s, bool user, const std::string &name) {
+SessionClient &add_client_to(World &w, SessionState &s, bool user, const std::string &name) {
 	auto &c = *s.clients.emplace_back(std::make_unique<SessionClient>());
 	c.obj = w.create_child(s.obj, "Client" + std::to_string(s.clients.size()), "Client\\Standard");
 	c.user = user;
@@ -821,6 +821,11 @@ void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Gui
 	memcpy(u.chosen.data(), chosen.bytes, 16);
 	if (model) memcpy(u.model.data(), model->bytes, 16);
 	u.shown = false;
+	// A client's copy of a server page answers the server (0x04); its own scripts never see it.
+	if (u.remote_id) {
+		if (NetSession *n = net_session(w)) n->remote_ui_complete(ui);
+		return;
+	}
 	u.pending = true;
 }
 
@@ -844,6 +849,10 @@ static std::map<const World *, std::weak_ptr<SessionState>> g_begun;  // by mach
 
 // One session's update (DE_CStandardSession::Update).
 static void update_one(World &w, SessionState &s) {
+	// DE_CStandardSession::Update runs DE_CSession::Update past Awaiting Pre Load Sequencing.
+	if (net_role(w) == NetRole::Client) {
+		if (SessionState *m = master_session(&s); m && m->net_status < 102) return;
+	}
 	// A preset UI choice completes: every node's UIManagerComplete hook hears about it (each
 	// checks whether the manager is its own).
 	for (auto &[ui, u] : s.ui) {
@@ -867,19 +876,60 @@ static void update_one(World &w, SessionState &s) {
 	}
 	// DE_CStandardSession::Update (Session 0x4500e770): after DE_CSession::Update (the modifiers),
 	// connect each active client without a slot to the next connectable one.
+	// On a client the server's roster (0x01) connects them.
+	if (net_role(w) == NetRole::Client && net_session(w) && net_session(w)->flow()) return;
 	for (auto &c : s.clients) {
 		if (!c->active || c->slot) continue;
 		for (auto &sl : s.slots) {
 			if (sl->connectable && !sl->client && sl->begun) {
-				sl->client = c.get();
-				c->slot = sl.get();
-				for (auto &h : s.slot_connect_hooks) call_hook(w, h, sl->obj->handle, true);
-				uint32_t e = new_event(w, "SessionSlotNewClient");
-				w.send_event(sl->obj, e);
+				connect_client(w, s, *c, *sl);
 				break;
 			}
 		}
 	}
+}
+
+void connect_client(World &w, SessionState &s, SessionClient &c, SessionSlot &sl) {
+	if (c.slot) c.slot->client = nullptr;
+	sl.client = &c;
+	c.slot = &sl;
+	for (auto &h : s.slot_connect_hooks) call_hook(w, h, sl.obj->handle, true);
+	uint32_t e = new_event(w, "SessionSlotNewClient");
+	w.send_event(sl.obj, e);
+}
+
+void drop_client(World &w, SessionState &s, SessionClient &c) {
+	if (SessionSlot *sl = c.slot) {
+		w.send_event(sl->obj, new_event(w, "SessionSlotResetAll"));
+		for (auto &h : s.slot_disconnect_hooks) call_hook(w, h, sl->obj->handle, true);
+		sl->client = nullptr;
+		c.slot = nullptr;
+	}
+	GameObject *o = c.obj;
+	for (size_t i = 0; i < s.clients.size(); ++i) {
+		if (s.clients[i].get() == &c) {
+			s.clients.erase(s.clients.begin() + long(i));
+			break;
+		}
+	}
+	w.clean_later(o);
+}
+
+const char *net_status_description(int status) {
+	switch (status) {
+	case 2: return "Awaiting Join Granted";
+	case 100: return "Awaiting Client and Slot Update";
+	case 101: return "Awaiting Pre Load Sequencing";
+	case 102: return "Awaiting Load Authorization";
+	case 103: return "Loading";
+	case 1000: return "Sequenced";
+	default: return "Unknown Status";
+	}
+}
+
+SessionState *master_session(SessionState *s) {
+	while (s && s->owner) s = s->owner;
+	return s;
 }
 
 // DE_CScene::PassTime (2.123 0x20073f30) after the temporal sets: the scene's delta-tick hooks
@@ -1258,17 +1308,33 @@ void register_session_natives(World &w) {
 		SessionState *s = S(c);
 		c.ret_bool(s ? s->replaying : replaying(c.world));
 	});
-	reg("CSession::bool IsLocal()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CSession::bool IsReadyToLoad()", [](const NativeContext &c) { c.ret_bool(true); });
-	reg("CSession::bool IsFullySequenced()", [](const NativeContext &c) { c.ret_bool(true); });
+	// DE_CSession::IsLocal (Core 0x701f5bd0): a network session's info is not local, host's or client's.
+	reg("CSession::bool IsLocal()", [](const NativeContext &c) { c.ret_bool(net_role(c.world) == NetRole::None); });
+	// DE_CStandardSession::IsReadyToLoad (Session 0x4500f810): Loading or later; a server's only while
+	// no page halts loading (none of ours does). IsFullySequenced (Core 0x70010e10): Sequenced.
+	reg("CSession::bool IsReadyToLoad()", [S](const NativeContext &c) {
+		SessionState *m = master_session(S(c));
+		c.ret_bool(net_role(c.world) == NetRole::None || !m || m->net_status >= 103);
+	});
+	reg("CSession::bool IsFullySequenced()", [S](const NativeContext &c) {
+		SessionState *m = master_session(S(c));
+		c.ret_bool(net_role(c.world) == NetRole::None || !m || m->net_status == 1000);
+	});
 	// AreMasterRequirementsSatisfiedCaller (Core 2.123 0x201ff790): false while the session's Choose
 	// Cast page is active and not auto-selecting.
 	reg("CSession::bool AreMasterRequirementsSatisfied()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		c.ret_bool(!s || (!s->settings_active && master_requirements_met(c.world, *s)));
 	});
-	reg("CSession::string StatusDescription()", [](const NativeContext &c) { c.ret_u32(c.world.string("")); });
-	stub("CSession::LoadingComplete()");
+	reg("CSession::string StatusDescription()", [S](const NativeContext &c) {
+		SessionState *m = master_session(S(c));
+		c.ret_u32(c.world.string(net_role(c.world) == NetRole::None || !m ? "" : net_status_description(m->net_status)));
+	});
+	// DE_CStandardSession::LoadingComplete (Session 0x4500f7e0): Loading proceeds to Sequenced.
+	reg("CSession::LoadingComplete()", [S](const NativeContext &c) {
+		SessionState *m = master_session(S(c));
+		if (net_role(c.world) != NetRole::None && m && m->net_status == 103) m->net_status = 1000;
+	});
 	// EndAndDieCaller (Core 0x701f7d90): DeleteThisLater, then DE_CSession::End (0x701f9400):
 	// every client destroyed, the modifiers, scene and environment deleted; DE_CStandardSession::End
 	// also its slots, whose owned creatures go with them.
@@ -1366,7 +1432,16 @@ void register_session_natives(World &w) {
 		int i = c.arg<int32_t>(0);
 		c.ret_object(s && i >= 0 && size_t(i) < s->clients.size() ? s->clients[size_t(i)]->obj : nullptr);
 	});
-	stub("CStandardSession::ForceClientsToLoad()");
+	// DE_CStandardSession::ForceClientsToLoad (Session 0x4500fa40): a server sends every client status
+	// 101; its own session goes back to 101 only with no local client or while replaying.
+	reg("CStandardSession::ForceClientsToLoad()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		if (net_role(c.world) != NetRole::Server || !s) return;
+		if (NetSession *n = net_session(c.world)) n->force_clients_to_load();
+		SessionState *m = master_session(s);
+		bool local = std::any_of(m->clients.begin(), m->clients.end(), [](auto &cl) { return cl->local; });
+		if (!local || m->replaying) m->net_status = 101;
+	});
 	reg("CSession::class CClient ControllingClient()", [user_client](const NativeContext &c) {
 		auto *cl = user_client(c);
 		c.ret_object(cl ? cl->obj : nullptr);
@@ -1496,7 +1571,11 @@ void register_session_natives(World &w) {
 		cl->ui_manager = ui;
 		auto &u = S(c)->ui[ui];
 		auto it = S(c)->ui_choices.find(u.description);
-		if (it != S(c)->ui_choices.end()) {
+		NetSession *n = net_role(c.world) == NetRole::Server && !cl->local ? net_session(c.world) : nullptr;
+		if (n) {
+			u.shown = true;
+			n->launch_remote_ui(*cl, ui);
+		} else if (it != S(c)->ui_choices.end()) {
 			memcpy(u.chosen.data(), it->second.bytes, 16);
 			u.pending = true;
 		} else if (c.world.launch_ui) {
