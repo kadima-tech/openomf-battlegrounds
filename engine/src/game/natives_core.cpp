@@ -431,7 +431,7 @@ void register_core_natives(World &w) {
 	reg("CCreature::bool IsLowAuthoritySimulation()", [](const NativeContext &c) { c.ret_bool(false); });
 	// SetInstanceNumberCaller appends the number to the creature's ID suffix (+0x1ec).
 	reg("CCreature::SetInstanceNumber(int)", [](const NativeContext &c) {
-		if (auto *o = c.self()) set_instance_number(*o, c.arg<int32_t>(0));
+		if (auto *o = c.self()) set_instance_number(c.world, *o, c.arg<int32_t>(0));
 	});
 	reg("CCreature::bool IsUserControlled()", [](const NativeContext &c) {
 		auto *o = c.self();
@@ -686,9 +686,9 @@ void register_core_natives(World &w) {
 	});
 	auto local_momentum = [](const GameObject &o) { return o.local.inverse_rotate(o.momentum); };
 	auto set_local_momentum = [](GameObject &o, std::array<float, 3> m) { o.momentum = o.local.rotate(m); };
-	reg("COMF2Fighter::class CVector MomentumLocal()", [=](const NativeContext &c) {
+	reg("COMF2Fighter::class CVector MomentumLocal()", [=, vec = std::make_shared<uint32_t>(0)](const NativeContext &c) {
 		auto *o = c.self();
-		static uint32_t v = 0;  // MomentumLocalCaller returns a static vector
+		uint32_t &v = *vec;  // MomentumLocalCaller returns a static vector
 		if (!v) v = c.mem().alloc(12);
 		write_vec(c.mem(), v, o ? local_momentum(*o) : std::array<float, 3>{0, 0, 0});
 		c.ret_u32(v);

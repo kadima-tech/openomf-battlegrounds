@@ -78,14 +78,21 @@ struct DangerTiming {
 	uint32_t set_at = 0;  // scene time of SetDangerDelay
 };
 
-std::map<uint32_t, AttackState> g_attacks;           // by CAttackInfo block
-std::vector<HitRecord> g_hits;                        // DE_CAttackInfo::m_HitRecords
-std::map<uint32_t, Tester> g_testers;                 // by tester handle
-std::map<uint32_t, std::pair<uint32_t, size_t>> g_collision_infos;  // info handle -> (tester, index)
-std::map<const GameObject *, std::vector<std::string>> g_hit_names;  // fighter +0x490
-std::map<const GameObject *, DangerTiming> g_danger_timing;
-uint32_t g_next_attack_id = 1;
-std::map<uint32_t, std::vector<uint8_t>> g_cdata;  // a CData's bytes, by its block
+// Per machine: DE_CAttackInfo::m_HitRecords and the other tables are process globals in the original.
+struct CombatState {
+	std::map<uint32_t, AttackState> attacks;           // by CAttackInfo block
+	std::vector<HitRecord> hits;                        // DE_CAttackInfo::m_HitRecords
+	std::map<uint32_t, Tester> testers;                 // by tester handle
+	std::map<uint32_t, std::pair<uint32_t, size_t>> collision_infos;  // info handle -> (tester, index)
+	std::map<const GameObject *, std::vector<std::string>> hit_names;  // fighter +0x490
+	std::map<const GameObject *, DangerTiming> danger_timing;
+	uint32_t next_attack_id = 1;
+	std::map<uint32_t, std::vector<uint8_t>> cdata;  // a CData's bytes, by its block
+};
+CombatState &combat(World &w) {
+	if (!w.combat) w.combat = std::make_shared<CombatState>();
+	return *static_cast<CombatState *>(w.combat.get());
+}
 
 float length(const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
@@ -179,13 +186,13 @@ void run_tester(World &w, Tester &t) {
 // and (unless m_MaxNumberOfHits allows more) one hit per attack name until the victim resets
 // its hit list.
 bool add_potential_victim(World &w, uint32_t info, AttackState &a, GameObject *victim) {
-	for (auto &h : g_hits) {
+	for (auto &h : combat(w).hits) {
 		if (h.id == a.id && h.owner == a.owner && h.victim == victim) {
 			return false;
 		}
 	}
 	if (victim->fighter) {
-		auto &names = g_hit_names[victim];
+		auto &names = combat(w).hit_names[victim];
 		int32_t max_hits = w.memory().get<int32_t>(info + kMaxNumberOfHits);
 		if (max_hits == 0) {
 			if (std::find(names.begin(), names.end(), a.name) != names.end()) {
@@ -209,9 +216,9 @@ bool add_potential_victim(World &w, uint32_t info, AttackState &a, GameObject *v
 			names.push_back(a.name);
 		}
 	}
-	g_hits.insert(g_hits.begin(), {a.id, a.owner, victim});
-	if (g_hits.size() > 256) {
-		g_hits.pop_back();
+	combat(w).hits.insert(combat(w).hits.begin(), {a.id, a.owner, victim});
+	if (combat(w).hits.size() > 256) {
+		combat(w).hits.pop_back();
 	}
 	return true;
 }
@@ -330,15 +337,15 @@ GameObject *danger_property(GameObject &a) {
 
 }  // namespace
 
-std::vector<uint8_t> &cdata_bytes(uint32_t block) { return g_cdata[block]; }
+std::vector<uint8_t> &cdata_bytes(World &w, uint32_t block) { return combat(w).cdata[block]; }
 
 // DE_CCollisionTester::Tick: an active tester tests every scene tick and sends its notify methods
 // a collision event when something touched.
 // DE_CCollisionTester's temporal tick (16 ms, CCollisionTester::Activate): test, hand the
 // contacts to the attached force, then the notify methods.
 void tick_collision_tester(World &w, uint32_t h) {
-	auto it = g_testers.find(h);
-	if (it == g_testers.end() || !it->second.active || (it->second.notify.empty() && !it->second.force)) return;
+	auto it = combat(w).testers.find(h);
+	if (it == combat(w).testers.end() || !it->second.active || (it->second.notify.empty() && !it->second.force)) return;
 	Tester &t = it->second;
 	run_tester(w, t);
 	if (t.results.empty()) return;
@@ -501,21 +508,21 @@ void register_combat_natives(World &w) {
 
 	// --- CAttackInfo ------------------------------------------------------------------------------
 	reg("CObject::CAttackInfo::SetOwner(class CActor)", [=](const NativeContext &c) {
-		g_attacks[info_of(c)].owner = c.arg_object(0);
+		combat(c.world).attacks[info_of(c)].owner = c.arg_object(0);
 	});
 	reg("CObject::CAttackInfo::class CActor Owner()", [=](const NativeContext &c) {
-		auto it = g_attacks.find(info_of(c));
-		c.ret_object(it == g_attacks.end() ? nullptr : it->second.owner);
+		auto it = combat(c.world).attacks.find(info_of(c));
+		c.ret_object(it == combat(c.world).attacks.end() ? nullptr : it->second.owner);
 	});
 	// DE_CAttackInfo::Prepare (0x35016a80): new attack id; name from the preparing method.
 	auto prepare = [=](const NativeContext &c, uint32_t arg) {
 		uint32_t a = info_of(c);
-		AttackState &st = g_attacks[a];
+		AttackState &st = combat(c.world).attacks[a];
 		c.mem().set<float>(a + kMomentumAdjust, -99999.0f);
 		c.mem().set<float>(a + kGuideToLastHit, 1.0f);
 		c.mem().set<uint8_t>(a + kFlags, 0);
 		c.mem().set<int32_t>(a + kMaxNumberOfHits, 0);
-		st.id = g_next_attack_id++;
+		st.id = combat(c.world).next_attack_id++;
 		auto *m = c.ex.current_method();
 		st.name = std::to_string(m ? m->index : 0) + std::to_string(st.owner ? st.owner->handle : 0) +
 		          (arg ? std::to_string(arg) : std::string());
@@ -525,9 +532,9 @@ void register_combat_natives(World &w) {
 	reg("CObject::CAttackInfo::Prepare(dword)", [=](const NativeContext &c) { prepare(c, c.arg<uint32_t>(0)); });
 	reg("CObject::CAttackInfo::class CActor TestForConnectedAttack(class CCollisionTester)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c);
-		AttackState &st = g_attacks[a];
-		auto it = g_testers.find(c.arg<uint32_t>(0));
-		if (it == g_testers.end()) {
+		AttackState &st = combat(c.world).attacks[a];
+		auto it = combat(c.world).testers.find(c.arg<uint32_t>(0));
+		if (it == combat(c.world).testers.end()) {
 			c.ret_u32(0);
 			return;
 		}
@@ -550,7 +557,7 @@ void register_combat_natives(World &w) {
 	reg("CObject::CAttackInfo::bool AddPotentialVictim(class CActor)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c);
 		auto *v = c.arg_object(0);
-		c.ret_bool(v && add_potential_victim(c.world, a, g_attacks[a], v));
+		c.ret_bool(v && add_potential_victim(c.world, a, combat(c.world).attacks[a], v));
 	});
 	// AddPotentialVictimFromHitStreamCaller (OMF 0x350127e0): the stream's hit count goes into
 	// m_MaxNumberOfHits (+0xc0), then AddPotentialVictim.
@@ -558,12 +565,12 @@ void register_combat_natives(World &w) {
 		uint32_t a = info_of(c);
 		auto *v = c.arg_object(0);
 		if (a) c.world.memory().set<int32_t>(a + kMaxNumberOfHits, c.arg<int32_t>(1));
-		c.ret_bool(v && add_potential_victim(c.world, a, g_attacks[a], v));
+		c.ret_bool(v && add_potential_victim(c.world, a, combat(c.world).attacks[a], v));
 	});
-	auto connected_victim = [](uint32_t a) -> GameObject * {
-		auto it = g_attacks.find(a);
-		if (it == g_attacks.end()) return nullptr;
-		for (auto &h : g_hits) {
+	auto connected_victim = [&w](uint32_t a) -> GameObject * {
+		auto it = combat(w).attacks.find(a);
+		if (it == combat(w).attacks.end()) return nullptr;
+		for (auto &h : combat(w).hits) {
 			if (h.id == it->second.id && h.owner == it->second.owner) return h.victim;
 		}
 		return nullptr;
@@ -571,26 +578,26 @@ void register_combat_natives(World &w) {
 	reg("CObject::CAttackInfo::bool AttackConnected()", [=](const NativeContext &c) { c.ret_bool(connected_victim(info_of(c)) != nullptr); });
 	reg("CObject::CAttackInfo::class CActor AttackConnectedVictim()", [=](const NativeContext &c) { c.ret_object(connected_victim(info_of(c))); });
 	reg("CObject::CAttackInfo::bool AttackConnectedWithEnemy()", [=](const NativeContext &c) {
-		auto it = g_attacks.find(info_of(c));
+		auto it = combat(c.world).attacks.find(info_of(c));
 		GameObject *v = connected_victim(info_of(c));
-		c.ret_bool(v && it != g_attacks.end() && v != it->second.owner && v->fighter);
+		c.ret_bool(v && it != combat(c.world).attacks.end() && v != it->second.owner && v->fighter);
 	});
 	reg("CObject::CAttackInfo::ClearHit(class CActor)", [=](const NativeContext &c) {
-		auto it = g_attacks.find(info_of(c));
+		auto it = combat(c.world).attacks.find(info_of(c));
 		auto *v = c.arg_object(0);
-		if (it == g_attacks.end() || !v) return;
-		auto &names = g_hit_names[v];
+		if (it == combat(c.world).attacks.end() || !v) return;
+		auto &names = combat(c.world).hit_names[v];
 		names.erase(std::remove(names.begin(), names.end(), it->second.name), names.end());
 	});
 	// DE_CAttackInfo::CloseHitStream(n) (0x350168a0): every fighter victim gets this attack's hit
 	// names 0..n-1, so the rest of a multi-hit stream misses it until it resets its hit list.
 	reg("CObject::CAttackInfo::CloseHitStream(dword)", [=](const NativeContext &c) {
-		auto it = g_attacks.find(info_of(c));
-		if (it == g_attacks.end()) return;
+		auto it = combat(c.world).attacks.find(info_of(c));
+		if (it == combat(c.world).attacks.end()) return;
 		int32_t n = c.arg<int32_t>(0);
 		for (GameObject *v : it->second.victims) {
 			if (!v || !v->fighter) continue;
-			auto &names = g_hit_names[v];
+			auto &names = combat(c.world).hit_names[v];
 			for (int32_t i = 0; i < n; ++i) {
 				std::string name = it->second.name + std::to_string(i);
 				if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
@@ -598,7 +605,7 @@ void register_combat_natives(World &w) {
 		}
 	});
 	reg("COMF2Fighter::ResetCurrentHitList()", [](const NativeContext &c) {
-		if (auto *o = c.self()) g_hit_names[o].clear();
+		if (auto *o = c.self()) combat(c.world).hit_names[o].clear();
 	});
 	// Flag bits at +0xc4 (Set*/Is*Caller).
 	const std::vector<std::pair<const char *, uint8_t>> flags = {{"Melee", 8}, {"Super", 4}, {"ForceComboHit", 0x20}};
@@ -639,15 +646,15 @@ void register_combat_natives(World &w) {
 	// blocked flag and returns it.
 	auto block_test = [=](const NativeContext &c, std::array<float, 3> dir, uint16_t zones) {
 		uint32_t a = info_of(c);
-		auto it = g_attacks.find(a);
-		bool blocked = fighter_blocks(c.world, c.arg_object(0), it == g_attacks.end() ? nullptr : it->second.owner, dir, zones);
+		auto it = combat(c.world).attacks.find(a);
+		bool blocked = fighter_blocks(c.world, c.arg_object(0), it == combat(c.world).attacks.end() ? nullptr : it->second.owner, dir, zones);
 		uint32_t f = a + kFlags;
 		c.mem().set<uint8_t>(f, uint8_t((c.mem().get<uint8_t>(f) & ~1u) | (blocked ? 1 : 0)));
 		return blocked;
 	};
 	auto owner_of = [=](const NativeContext &c) -> GameObject * {
-		auto it = g_attacks.find(info_of(c));
-		return it == g_attacks.end() ? nullptr : it->second.owner;
+		auto it = combat(c.world).attacks.find(info_of(c));
+		return it == combat(c.world).attacks.end() ? nullptr : it->second.owner;
 	};
 	reg("CObject::CAttackInfo::bool TestForFighterBlock(class CObject,word)", [=](const NativeContext &c) {
 		GameObject *o = owner_of(c);
@@ -712,28 +719,28 @@ void register_combat_natives(World &w) {
 	// --- Collision testers -----------------------------------------------------------------------
 	reg("CScene::class CCollisionTester NewCollisionTester()", [](const NativeContext &c) {
 		uint32_t h = c.mem().alloc(16);
-		g_testers[h];
+		combat(c.world).testers[h];
 		c.ret_u32(h);
 	});
-	reg("CCollisionTester::SetGroupFilter(dword)", [](const NativeContext &c) { g_testers[c.self_handle()].groups = c.arg<uint32_t>(0); });
+	reg("CCollisionTester::SetGroupFilter(dword)", [](const NativeContext &c) { combat(c.world).testers[c.self_handle()].groups = c.arg<uint32_t>(0); });
 	reg("CCollisionTester::NeedTouchPoint()", [](const NativeContext &) {});
 	reg("CCollisionTester::AddSourceBranch(class CActor)", [](const NativeContext &c) {
-		if (auto *a = c.arg_object(0)) g_testers[c.self_handle()].sources.push_back(a);
+		if (auto *a = c.arg_object(0)) combat(c.world).testers[c.self_handle()].sources.push_back(a);
 	});
 	// DE_CCollisionTester::AddSource (Core 0x7006a090): that affector alone, not its branch.
 	reg("CCollisionTester::AddSource(class CAffector)", [](const NativeContext &c) {
-		if (auto *a = c.arg_object(0)) g_testers[c.self_handle()].singles.push_back(a);
+		if (auto *a = c.arg_object(0)) combat(c.world).testers[c.self_handle()].singles.push_back(a);
 	});
 	reg("CCollisionTester::AddNotify(class CClassExecutorInstance,Method(class CCollisionEvent))", [](const NativeContext &c) {
-		g_testers[c.self_handle()].notify.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
+		combat(c.world).testers[c.self_handle()].notify.push_back({c.world.brain_of(c.ex), c.arg<uint32_t>(1)});
 	});
 	reg("CCollisionTester::Activate()", [](const NativeContext &c) {
-		g_testers[c.self_handle()].active = true;
+		combat(c.world).testers[c.self_handle()].active = true;
 		c.world.activate_tester(c.self_handle(), c.owner());
 	});
-	reg("CCollisionTester::SetAttachedForce(class CForce)", [](const NativeContext &c) { g_testers[c.self_handle()].force = c.arg_object(0); });
+	reg("CCollisionTester::SetAttachedForce(class CForce)", [](const NativeContext &c) { combat(c.world).testers[c.self_handle()].force = c.arg_object(0); });
 	reg("CCollisionTester::NeedSurfaceNormal()", [](const NativeContext &) {});
-	reg("CCollisionTester::Deactivate()", [](const NativeContext &c) { g_testers[c.self_handle()].active = false; });
+	reg("CCollisionTester::Deactivate()", [](const NativeContext &c) { combat(c.world).testers[c.self_handle()].active = false; });
 	// SetupArenaSurfaceHitCaller (OMF): an arena-surface-hit event (type 0xb at +0x1c) carrying
 	// the results (+0x44) and the power (+0x48). The projectiles hand it to the surface's owner
 	// with ProcessEvent; nothing in the DLLs or scripts handles type 0xb.
@@ -746,7 +753,7 @@ void register_combat_natives(World &w) {
 	});
 	// CCollisionEvent (the active tester's results, handed to its notify methods).
 	auto event_tester = [](const NativeContext &c) -> Tester * {
-		for (auto &[h, t] : g_testers) {
+		for (auto &[h, t] : combat(c.world).testers) {
 			if (t.event && t.event == c.self_handle()) return &t;
 		}
 		return nullptr;
@@ -763,10 +770,10 @@ void register_combat_natives(World &w) {
 	// AddTestAffectorsCaller (Core): the other tester's affectors are tested by this one too.
 	reg("CCollisionTester::AddTestAffectors(class CCollisionTester)", [](const NativeContext &c) {
 		uint32_t o = c.arg<uint32_t>(0);
-		if (!o || !g_testers.count(o)) return;
-		Tester &t = g_testers[c.self_handle()];
-		for (GameObject *b : g_testers[o].sources) t.sources.push_back(b);
-		for (GameObject *a : g_testers[o].singles) t.singles.push_back(a);
+		if (!o || !combat(c.world).testers.count(o)) return;
+		Tester &t = combat(c.world).testers[c.self_handle()];
+		for (GameObject *b : combat(c.world).testers[o].sources) t.sources.push_back(b);
+		for (GameObject *a : combat(c.world).testers[o].singles) t.singles.push_back(a);
 	});
 	// NeedPushBackNormal / NeedSurfaceNormal only ask for what every test here computes anyway.
 	reg("CCollisionTester::NeedPushBackNormal()", [](const NativeContext &) {});
@@ -779,14 +786,14 @@ void register_combat_natives(World &w) {
 		}
 		if (!t->results_handle) {
 			t->results_handle = c.mem().alloc(16);
-			for (auto &[h, tt] : g_testers) {
+			for (auto &[h, tt] : combat(c.world).testers) {
 				if (&tt == t) c.mem().set<uint32_t>(t->results_handle, h);
 			}
 		}
 		c.ret_u32(t->results_handle);
 	});
 	reg("CCollisionTester::bool Test()", [](const NativeContext &c) {
-		Tester &t = g_testers[c.self_handle()];
+		Tester &t = combat(c.world).testers[c.self_handle()];
 		run_tester(c.world, t);
 		static const bool debug = getenv("OPENBG_DEBUG_TESTER") != nullptr;
 		if (debug) {
@@ -801,7 +808,7 @@ void register_combat_natives(World &w) {
 		c.ret_bool(!t.results.empty());
 	});
 	reg("CCollisionTester::class CCollisionResults Results()", [](const NativeContext &c) {
-		Tester &t = g_testers[c.self_handle()];
+		Tester &t = combat(c.world).testers[c.self_handle()];
 		if (!t.results_handle) {
 			t.results_handle = c.mem().alloc(16);
 			c.mem().set<uint32_t>(t.results_handle, c.self_handle());
@@ -811,8 +818,8 @@ void register_combat_natives(World &w) {
 	auto tester_of_results = [](const NativeContext &c) -> Tester * {
 		uint32_t r = c.self_handle();
 		if (!r) return nullptr;
-		auto it = g_testers.find(c.mem().get<uint32_t>(r));
-		return it == g_testers.end() ? nullptr : &it->second;
+		auto it = combat(c.world).testers.find(c.mem().get<uint32_t>(r));
+		return it == combat(c.world).testers.end() ? nullptr : &it->second;
 	};
 	// ApplyForceCollisionResultsCaller (Core 0x7007abb0) -> DE_CCollisionResults::ApplyForce
 	// (0x7007bde0): a collision event carrying the force to collision i's touched affector (its
@@ -847,14 +854,14 @@ void register_combat_natives(World &w) {
 			return;
 		}
 		uint32_t h = c.mem().alloc(32);
-		g_collision_infos[h] = {c.mem().get<uint32_t>(c.self_handle()), size_t(i)};
+		combat(c.world).collision_infos[h] = {c.mem().get<uint32_t>(c.self_handle()), size_t(i)};
 		c.ret_u32(h);
 	});
 	auto collision_of = [](const NativeContext &c) -> Collision * {
-		auto it = g_collision_infos.find(c.self_handle());
-		if (it == g_collision_infos.end()) return nullptr;
-		auto t = g_testers.find(it->second.first);
-		if (t == g_testers.end() || it->second.second >= t->second.results.size()) return nullptr;
+		auto it = combat(c.world).collision_infos.find(c.self_handle());
+		if (it == combat(c.world).collision_infos.end()) return nullptr;
+		auto t = combat(c.world).testers.find(it->second.first);
+		if (t == combat(c.world).testers.end() || it->second.second >= t->second.results.size()) return nullptr;
 		return &t->second.results[it->second.second];
 	};
 	reg("CAffector::CCollisionResults::CSingleCollisionInfo::class CActor OwnerActor()", [=](const NativeContext &c) {
@@ -907,7 +914,7 @@ void register_combat_natives(World &w) {
 		static std::map<const GameObject *, uint32_t> keys;
 		uint32_t &key = keys[p];
 		if (!key) key = c.mem().alloc(4);
-		Tester &t = g_testers[key];
+		Tester &t = combat(c.world).testers[key];
 		t.results.clear();
 		for (auto &ct : c.world.simple_physics->state(*p).contacts) {
 			Collision col;
@@ -951,11 +958,11 @@ void register_combat_natives(World &w) {
 	auto own_results = [](const NativeContext &c, uint32_t results) -> Tester * {
 		if (!results) return nullptr;
 		uint32_t key = c.mem().get<uint32_t>(results);
-		if (!key || !g_testers.count(key)) {
+		if (!key || !combat(c.world).testers.count(key)) {
 			key = c.mem().alloc(4);
 			c.mem().set<uint32_t>(results, key);
 		}
-		return &g_testers[key];
+		return &combat(c.world).testers[key];
 	};
 	reg("CAffector::CCollisionResults::SetGroupsToTest(dword)", [=](const NativeContext &c) {
 		if (Tester *t = own_results(c, c.self_handle())) t->groups = c.arg<uint32_t>(0);
@@ -1208,10 +1215,10 @@ void register_combat_natives(World &w) {
 	// to a point given in the attacker's frame within `ms`, plus lift against gravity.
 	reg("CObject::CAttackInfo::SetupKnockToDestination(class CActor,class CVector,float,float)", [](const NativeContext &c) {
 		uint32_t a = c.self_handle();
-		auto it = g_attacks.find(a);
+		auto it = combat(c.world).attacks.find(a);
 		auto *victim = c.arg_object(0);
 		float ms = c.arg<float>(2);
-		if (it == g_attacks.end() || !it->second.owner || !victim || ms == 0) return;
+		if (it == combat(c.world).attacks.end() || !it->second.owner || !victim || ms == 0) return;
 		auto dest = it->second.owner->world().apply(read_vec(c.mem(), c.arg<uint32_t>(1)));
 		auto vp = victim->world().t;
 		std::array<float, 3> m{(dest[0] - vp[0]) / ms * 16, (dest[1] - vp[1]) / ms * 16, (dest[2] - vp[2]) / ms * 16};
@@ -1362,7 +1369,7 @@ void register_combat_natives(World &w) {
 	reg("CObject::CAttackInfo::PackForGetHitEffect(class CData)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c), d = c.arg<uint32_t>(0);
 		if (!a || !d) return;
-		auto &b = g_cdata[d];
+		auto &b = combat(c.world).cdata[d];
 		b.clear();
 		auto raw = [&](const void *p, size_t n) { b.insert(b.end(), (const uint8_t *)p, (const uint8_t *)p + n); };
 		auto squeezed = [&](uint32_t v) {
@@ -1380,8 +1387,8 @@ void register_combat_natives(World &w) {
 	});
 	reg("CObject::CAttackInfo::UnpackForGetHitEffect(class CData)", [=](const NativeContext &c) {
 		uint32_t a = info_of(c), d = c.arg<uint32_t>(0);
-		auto it = g_cdata.find(d);
-		if (!a || it == g_cdata.end()) return;
+		auto it = combat(c.world).cdata.find(d);
+		if (!a || it == combat(c.world).cdata.end()) return;
 		const auto &b = it->second;
 		size_t pos = 0;
 		auto take = [&](void *p, size_t n) {
@@ -1455,14 +1462,14 @@ void register_combat_natives(World &w) {
 	reg("CDanger::SetDangerLevel(float)", [](const NativeContext &c) { if (auto *o = c.self()) o->danger_level = c.arg<float>(0); });
 	reg("CDanger::float DangerLevel()", [](const NativeContext &c) { auto *o = c.self(); c.ret_f32(o ? o->danger_level : 0); });
 	reg("CDanger::SetDangerDelay(float)", [](const NativeContext &c) {
-		if (auto *o = c.self()) g_danger_timing[o] = {c.arg<float>(0), uint32_t(c.world.scene_ms())};
+		if (auto *o = c.self()) combat(c.world).danger_timing[o] = {c.arg<float>(0), uint32_t(c.world.scene_ms())};
 	});
 	// DE_CDanger::DangerDelay: the delay still to run since it was set (ms), never negative.
 	reg("CDanger::float DangerDelay(class CActor)", [](const NativeContext &c) {
 		auto *o = c.self();
-		auto it = o ? g_danger_timing.find(o) : g_danger_timing.end();
+		auto it = o ? combat(c.world).danger_timing.find(o) : combat(c.world).danger_timing.end();
 		float left = 0;
-		if (it != g_danger_timing.end()) {
+		if (it != combat(c.world).danger_timing.end()) {
 			left = std::max(0.0f, it->second.delay_ms - float(uint32_t(c.world.scene_ms()) - it->second.set_at));
 		}
 		c.ret_f32(left);

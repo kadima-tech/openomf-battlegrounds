@@ -135,6 +135,8 @@ struct ReplayWorld {
 	std::map<uint32_t, Clock> clocks;  // by creature handle
 	std::vector<uint32_t> deferred;    // DE_CScene +0x98: creatures whose SetTime waits
 	int reticking = 0;
+	// DE_CCreature +0x1ec: SetInstanceNumber's suffix, by handle.
+	std::map<uint32_t, std::pair<const GameObject *, std::string>> instance_numbers;
 };
 
 std::map<const World *, ReplayWorld> g_worlds;
@@ -151,8 +153,6 @@ de::Guid record_guid(bool repeatable) {
 	return g;
 }
 ReplayWorld &rw(World &w) { return g_worlds[&w]; }
-// DE_CCreature +0x1ec: SetInstanceNumber's suffix, by handle.
-std::map<uint32_t, std::pair<const GameObject *, std::string>> g_instance_numbers;
 
 GameObject *state_manager_object(const GameObject &o) {
 	for (GameObject *c : o.children) {
@@ -282,8 +282,9 @@ std::string build_id(World &w, GameObject &o) {
 		CreatureFlags f = creature_flags(o);
 		if (f.id & 0x40) id += path_of(w, &o) + '\0';
 		else if (f.id & 8) id += o.name + '\0';
-		auto it = g_instance_numbers.find(o.handle);
-		if (it != g_instance_numbers.end() && it->second.first == &o) id += it->second.second;
+		auto &numbers = rw(w).instance_numbers;
+		auto it = numbers.find(o.handle);
+		if (it != numbers.end() && it->second.first == &o) id += it->second.second;
 		if (f.id & 4) id.append(reinterpret_cast<const char *>(guid_of(o).bytes), 16);
 		if (f.id & 2) id.append(reinterpret_cast<const char *>(&o.creation_time), 4);
 		return id;
@@ -452,7 +453,7 @@ void add_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 	case Value::Vector: v.raw(m.ptr(inst, 12), 12); break;
 	case Value::Coordinates: v.raw(m.ptr(inst, 36), 36); break;
 	case Value::Data: {  // DataGenerateContentsCaller (Core 0x7014b5f0)
-		const auto &b = cdata_bytes(inst);
+		const auto &b = cdata_bytes(w, inst);
 		v.squeezed(uint32_t(b.size()));
 		v.raw(b.data(), b.size());
 		break;
@@ -480,7 +481,7 @@ void extract_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 		m.set<uint32_t>(inst + 4, n);
 		break;
 	}
-	case Value::Data: cdata_bytes(inst) = v.rn(v.rsqueezed()); break;
+	case Value::Data: cdata_bytes(w, inst) = v.rn(v.rsqueezed()); break;
 	case Value::Guid:
 	case Value::Vector:
 	case Value::Coordinates: v.take(m.ptr(inst, uint32_t(v.data.size())), v.data.size()); break;
@@ -1736,8 +1737,8 @@ void replay_temporal_update(World &w, const GameObject *session) {
 
 // SetInstanceNumberCaller (Creature 0x15014100): the number's digits join the ID suffix, which
 // keeps one NUL at its end.
-void set_instance_number(GameObject &o, int32_t n) {
-	auto &[who, s] = g_instance_numbers[o.handle];
+void set_instance_number(World &w, GameObject &o, int32_t n) {
+	auto &[who, s] = rw(w).instance_numbers[o.handle];
 	if (who != &o) who = &o, s.clear();
 	if (!s.empty()) s.pop_back();
 	s += std::to_string(n) + '\0';

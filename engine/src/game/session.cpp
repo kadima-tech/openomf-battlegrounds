@@ -839,7 +839,7 @@ void render_tick(World &w, float ms) {
 }
 
 // A session begun during the frame's updates becomes the current one after them.
-static std::weak_ptr<SessionState> g_begun;
+static std::map<const World *, std::weak_ptr<SessionState>> g_begun;  // by machine
 
 // One session's update (DE_CStandardSession::Update).
 static void update_one(World &w, SessionState &s) {
@@ -949,9 +949,9 @@ void update_session(World &w) {
 	}
 	if (!replay_seen) replay_update(w);
 	if (std::find(w.sessions.begin(), w.sessions.end(), current) != w.sessions.end() || !current) w.session = current;
-	if (auto b = g_begun.lock()) {
+	if (auto b = g_begun[&w].lock()) {
 		if (std::find(w.sessions.begin(), w.sessions.end(), b) != w.sessions.end()) w.session = b;
-		g_begun.reset();
+		g_begun[&w].reset();
 	}
 	if (w.session && std::find(w.sessions.begin(), w.sessions.end(), w.session) == w.sessions.end()) w.session = w.sessions.empty() ? nullptr : w.sessions.back();
 }
@@ -1328,7 +1328,7 @@ void register_session_natives(World &w) {
 		c.world.session = sp;
 		begin(c.world, *s);
 		c.world.session = keep;
-		g_begun = sp;
+		g_begun[&c.world] = sp;
 	});
 	reg("CObject::class CSession SubSessionOwner()", [S](const NativeContext &c) {
 		SessionState *s = S(c);

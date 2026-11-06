@@ -84,7 +84,7 @@ void register_state(World &w, GameObject *owner, bool got_hit = false);
 // The pre-destruction of `o` (and its branch): their managers' histories go into the record.
 void replay_destroying(World &w, GameObject &o);
 // CCreature::SetInstanceNumber: part of the creature's ID.
-void set_instance_number(GameObject &o, int32_t n);
+void set_instance_number(World &w, GameObject &o, int32_t n);
 // DE_CStateManager +0x78: driven by a record (IsSimulating / IsStateAlterable false).
 bool replay_driven(World &w, const GameObject *o);
 // DE_CCreature::Tick at its start: true when the creature skips its physics and brain this tick
