@@ -1,4 +1,5 @@
-// A lossless in-memory model of a "Diversions Entertainment Objects File2" (.DEObjects).
+// A lossless in-memory model of a "Diversions Entertainment Objects File2" (.DEObjects), shared
+// by tools/deobjects-editor and the engine's write_objects_file.
 //
 // Every byte of a shipped file is kept: fields the editor understands are decoded, anything
 // after them is carried as raw "rest" bytes. Writing lays the file out the way the original
@@ -67,6 +68,8 @@ struct Object {
 	// For compressed objects: the original stored block. Written back as it is while it still
 	// decompresses to `contents`; otherwise new contents are stored with method 0 (no packing).
 	Bytes packed;
+	// Write `packed` as it is, without checking it against `contents`.
+	bool packed_as_is = false;
 	Bytes references;
 	Bytes hierarchy;
 	std::vector<Ex> ex;

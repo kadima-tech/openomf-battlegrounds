@@ -13,7 +13,7 @@
 
 #include "convert.h"
 #include "json.h"
-#include "model.h"
+#include "de/objects_model.h"
 
 namespace fs = std::filesystem;
 using deo::Bytes;
@@ -284,6 +284,51 @@ void test_edits() {
 	CHECK(g.objects[3].contents == f.objects[3].contents);
 }
 
+// Reference tags as AddReference (Core 0x700574b0) picks them, and wider forms kept as found.
+void test_reference_forms() {
+	deo::File f = sample();
+	while (f.objects.size() < 210) {
+		deo::Object o;
+		o.info = info(("Filler" + std::to_string(f.objects.size())).c_str(), "Something\\Unknown", 90);
+		f.objects.push_back(o);
+	}
+	deo::Writer w;
+	size_t at = w.begin_chunk(1);
+	w.bytes(Bytes{1, 0x01, 0x00, 0x00, 1, 0xFF, 1, 0x01, 0xCD, 0x00, 1, 0xFE, 1, 0x03, 0x01, 0x00, 1, 0x02, 0x01, 0});
+	w.end_chunk(at);
+	f.objects[4].hierarchy = w.data();
+	// The same bytes in a chunk with no schema are only a guess at lists: kept as hex.
+	f.objects[4].references = w.data();
+	Bytes data = f.write();
+	deo::File g = deo::File::read(data);
+	Unpacked u = unpack(g);
+	CHECK(u.objects[4].at("references").items()[0].has("hex"));
+	const json::Value &list = chunk_fields(u.objects[4], "hierarchy", 0).at("children");
+	CHECK(list.items().size() == 6);
+	CHECK(list.items()[0].as_string() == "#0/u16 The Test Pit");
+	CHECK(list.items()[1].as_string() == "#205/tag Filler205");
+	CHECK(list.items()[2].as_string() == "#205 Filler205");
+	CHECK(list.items()[3].as_string() == "#204 Filler204");
+	CHECK(list.items()[4].as_string().rfind("^1/u16 ", 0) == 0);
+	CHECK(list.items()[5].as_string().rfind("^1 ", 0) == 0);
+	CHECK(pack(u).write() == data);
+	CHECK(deo::repack(g).write() == data);
+	// Edited references are written in AddReference's form unless a form is given.
+	json::Value &children = u.objects[4]["hierarchy"].items()[0]["fields"]["children"];
+	children.items()[0] = json::Value("#205");
+	children.items()[1] = json::Value("#3/u16");
+	Bytes refs = pack(u).objects[4].hierarchy;
+	CHECK((Bytes(refs.begin() + 3, refs.begin() + 10) == Bytes{0x01, 0xCD, 0x00, 1, 0x01, 0x03, 0x00}));
+	children.items()[0] = json::Value("#206/tag");
+	bool threw = false;
+	try {
+		pack(u);
+	} catch (const deo::Error &) {
+		threw = true;
+	}
+	CHECK(threw);
+}
+
 void test_errors() {
 	deo::File f = deo::File::read(sample().write());
 	auto expect_error = [&](auto edit, const char *needle) {
@@ -375,6 +420,7 @@ int main(int argc, char **argv) {
 	test_json_round_trip();
 	test_decoded_fields();
 	test_edits();
+	test_reference_forms();
 	test_errors();
 	if (argc > 1 && verify_folder(argv[1]) == 0) ++g_failures;
 	if (g_failures) {
