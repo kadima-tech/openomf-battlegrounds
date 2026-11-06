@@ -18,7 +18,8 @@ public:
 	PilotDocument(Editor &e, const ed::Guid &g) : guid_(g) {
 		const Options &o = e.options();
 		tab_ = std::clamp(o.pilot_tab, 0, 4);
-		robot_ = o.preview == "robot";
+		robot_ = o.preview == "robot" || (o.preview.empty() && tab_ == 3);
+		paint_seen_ = tab_ == 3;
 	}
 	~PilotDocument() override { delete_texture(photo_); }
 	std::string title(Editor &e) const override {

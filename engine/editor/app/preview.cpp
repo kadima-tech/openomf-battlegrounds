@@ -95,8 +95,9 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts.size() * sizeof(fighter::Vertex)), verts.data(), GL_DYNAMIC_DRAW);
 	float proj[16], view[16], mvp[16];
 	const float fov = 32.0f, aspect = float(w) / float(h);
-	float distance = height * 0.62f / std::tan(fov * 0.5f * 3.14159265f / 180.0f);
-	distance = std::fmax(distance, model_.radius * 1.4f / std::fmin(aspect, 1.0f));
+	float half = std::fmin(fov * 0.5f * 3.14159265f / 180.0f, std::atan(std::tan(fov * 0.5f * 3.14159265f / 180.0f) * aspect));
+	float distance = model_.radius * 0.95f / std::sin(half);
+	(void)height;
 	glu::perspective(proj, fov, aspect, model_.radius * 0.05f, model_.radius * 20.0f);
 	const float pitch = 0.10f;
 	float eye[3] = {centre[0] + distance * std::sin(yaw) * std::cos(pitch), centre[1] + distance * std::sin(pitch),

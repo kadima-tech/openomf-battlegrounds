@@ -130,7 +130,7 @@ void Editor::log(LogLine::Level level, const std::string &text) {
 	log_.push_back({level, now_text(), text});
 	if (log_.size() > 5000) log_.erase(log_.begin(), log_.begin() + 1000);
 	if (level != LogLine::Game) status_ = text;
-	if (opt_.screenshot && level != LogLine::Game) fprintf(stderr, "%s\n", text.c_str());
+	if (opt_.screenshot) fprintf(stderr, "%s\n", text.c_str());
 }
 
 void Editor::set_base(const fs::path &dir) {
@@ -213,6 +213,8 @@ void Editor::apply_startup() {
 		}
 	}
 	if (opt_.level) active_ = 0;
+	if (opt_.save) save();
+	if (opt_.launch) launch_game();
 	settled_ = project_->file();
 	settled_revision_ = project_->revision();
 	validate_now();

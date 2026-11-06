@@ -3,7 +3,7 @@
 //   openbg-editor [--data <Data dir>] [<add-on.DEObjects>]
 //                 [--new-pilot Base:Name] [--open-pilot Name] [--tab 0-4] [--preview photo|robot]
 //                 [--photo image.png] [--content Pilots|HARs|Arenas|Tournaments] [--base-content]
-//                 [--select <object name>] [--level]
+//                 [--select <object name>] [--level] [--save] [--launch-game]
 //                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]]
 //
 // The add-on is created when it does not exist. --screenshot draws N frames (default 8) in a hidden
@@ -45,6 +45,8 @@ int main(int argc, char **argv) {
 		else if (arg("--content")) opt.content = argv[++i];
 		else if (!strcmp(argv[i], "--base-content")) opt.base_content = true;
 		else if (!strcmp(argv[i], "--level")) opt.level = true;
+		else if (!strcmp(argv[i], "--save")) opt.save = true;
+		else if (!strcmp(argv[i], "--launch-game")) opt.launch = true;
 		else if (arg("--select")) opt.select = argv[++i];
 		else if (arg("--screenshot")) shot = argv[++i];
 		else if (arg("--frames")) frames = atoi(argv[++i]);

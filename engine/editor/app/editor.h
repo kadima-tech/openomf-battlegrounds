@@ -30,7 +30,9 @@ struct Options {
 	std::string content;      // Content Browser folder: Pilots, HARs, Arenas, Tournaments
 	bool base_content = false;  // show the base game's folder
 	bool screenshot = false;
-	bool level = false;       // start on the level editor tab
+	bool level = false;
+	bool save = false;
+	bool launch = false;      // Launch Game once the start-up actions ran        // save once the start-up actions ran       // start on the level editor tab
 	std::string select;       // Outliner selection by object name
 };
 
