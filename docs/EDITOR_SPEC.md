@@ -234,7 +234,8 @@ on any compile error**.
 
 ## 8. Decisions and open questions
 Decided (2026-11-06):
-- **Both engines.** Add-ons must load and work in OpenBG **and** the original 2.123 game, so the editor
+- **Both engines** (deferred 2026-11-06: no machine to test the original on yet; OpenBG first, the
+  compatibility checks stay in the validator as warnings). Add-ons must load and work in OpenBG **and** the original 2.123 game, so the editor
   writes VMC2 bytecode for every script it touches and enforces the original's loader rules
   (§6 items 3-4; the rules and the validator checklist are in §7).
 - **Lossless writing** is a hard requirement (§6 item 1).
