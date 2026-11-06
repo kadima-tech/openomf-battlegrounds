@@ -378,6 +378,8 @@ void PilotDocument::traits(Editor &e) {
 	}
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ui::px(8), ui::px(4)));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::px(8), ui::px(4)));
+	ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, ui::px(5));
+	ImGui::PushStyleColor(ImGuiCol_SliderGrab, vec(kAccent, 0.9f));
 	if (ImGui::BeginTable("traits", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX)) {
 		ImGui::TableSetupColumn("Trait", ImGuiTableColumnFlags_WidthStretch, 1.3f);
 		ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthStretch, 1.6f);
@@ -417,7 +419,8 @@ void PilotDocument::traits(Editor &e) {
 		}
 		ImGui::EndTable();
 	}
-	ImGui::PopStyleVar(2);
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar(3);
 }
 
 void PilotDocument::paint() {

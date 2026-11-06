@@ -49,7 +49,8 @@ if [ "${1:-}" != "--ui-only" ]; then
             exit 1
         fi
     done
-    cmake --build "$runtime" --target openbg unshield -j "$(nproc)"
+    # openbg-editor is compiled to check it builds; it is not part of the app.
+    cmake --build "$runtime" --target openbg unshield openbg-editor -j "$(nproc)"
     install -m 755 "$runtime/engine/openbg" "$resources/bin/openbg"
     install -m 755 "$runtime/_deps/unshield-build/src/unshield" "$resources/bin/unshield"
     strip "$resources/bin/openbg" "$resources/bin/unshield"

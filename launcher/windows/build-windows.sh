@@ -40,7 +40,8 @@ if [ "$native" = 0 ]; then
     cmake_args+=(-DCMAKE_TOOLCHAIN_FILE="$here/mingw-w64-x86_64.cmake")
 fi
 cmake "${cmake_args[@]}" ${OPENBG_CMAKE_ARGS:-}
-cmake --build "$build/runtime" --target openbg unshield Battlegrounds test-readiness test-launcher -j "$jobs"
+# openbg-editor is compiled to check it builds; it is not part of the app.
+cmake --build "$build/runtime" --target openbg unshield openbg-editor Battlegrounds test-readiness test-launcher -j "$jobs"
 
 rm -rf "$app"
 mkdir -p "$resources/bin" "$resources/assets" "$resources/licenses" "$resources/patches"

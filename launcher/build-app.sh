@@ -33,7 +33,8 @@ if [ "${1:-}" != "--ui-only" ]; then
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
         -DZLIB_LIBRARY="$sdk/usr/lib/libz.tbd" -DZLIB_INCLUDE_DIR="$sdk/usr/include"
-    cmake --build "$build/runtime" --target openbg unshield -j "$(sysctl -n hw.ncpu)"
+    # openbg-editor is compiled to check it builds; it is not part of the app.
+    cmake --build "$build/runtime" --target openbg unshield openbg-editor -j "$(sysctl -n hw.ncpu)"
     cp "$build/runtime/engine/openbg" "$resources/bin/openbg"
     cp "$build/runtime/_deps/unshield-build/src/unshield" "$resources/bin/unshield"
     # Refuse to produce an app that secretly relies on a developer's package manager.

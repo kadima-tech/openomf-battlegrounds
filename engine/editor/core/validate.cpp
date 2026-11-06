@@ -187,6 +187,13 @@ std::vector<Issue> validate(const Project &p) {
 			continue;
 		}
 		bool playable = true;
+		if (d.name.empty()) s.add(Issue::Error, 11, int(pi), "A pilot has no name"), playable = false;
+		for (const BaseObject *b : base.of_class("Description\\Pilot")) {
+			if (!d.name.empty() && b->name == d.name) {
+				s.add(Issue::Warning, 11, po.description, d.name + " has the name of a base game pilot; both will be listed");
+				break;
+			}
+		}
 		if (!d.listed) s.add(Issue::Warning, 11, po.description, d.name + " is not listed, so Choose Pilot will not show it"), playable = false;
 		if (d.locked) s.add(Issue::Warning, 11, po.description, d.name + " is locked by default"), playable = false;
 		bool cast = false;
