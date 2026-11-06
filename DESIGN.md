@@ -129,3 +129,14 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   replay the view is the observer camera, which cuts between the arena's vantage points, orbits and
   follows the fighters, its field of view easing with the framing (Manual Observer in the VCR panel
   flies it from the keys and mouse at 60°).
+
+## Content editor (planned)
+
+The DEObjects editor (`docs/EDITOR_SPEC.md`, mockups linked there) is a desktop tool styled like Unreal
+Engine 5, not like the game's menus:
+- **Colours:** dark charcoal ground #191a21, panels #1d1e26 with #33343f borders, inputs #16171d. A
+  violet accent: selection #3a3566, active document tab #2e2a52, tab underline #5a4fc0, checkboxes
+  #6b5ce7. Play is green, warnings and STRETCH features are amber, OK states are green text.
+- **Type:** Inter for UI (14 px forms, 12-13 px panels), JetBrains Mono for code and numbers.
+- **Layout:** every panel is a dockable tab. Asset editors are document tabs under the menu bar. There
+  is a status bar at the bottom. Forms are label / field rows on a two-column grid.

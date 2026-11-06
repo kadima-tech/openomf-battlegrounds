@@ -177,14 +177,29 @@ No design document is public. These come from the official site's FAQ (2002-2003
 6. **Importer scope.** glTF model, skin and animation import against the fixed rig is the largest
    single item.
 
-## 7. Open questions
-1. Must add-ons also work in the **original** game, or only in openbg? This affects the VMC2 writer
-   and overrides.
-2. Keep ImGui's tool look (as mocked up), or theme it closer to the game's own GUI?
-3. Mod distribution: just the `.DEObjects` plus an optional manifest (name, author, version,
+## 7. Decisions and open questions
+Decided (2026-11-06):
+- **Both engines.** Add-ons must load and work in OpenBG **and** the original 2.123 game, so the editor
+  writes VMC2 bytecode for every script it touches and enforces the original's loader rules
+  (§6 items 3-4; the compatibility rules are being established).
+- **Lossless writing** is a hard requirement (§6 item 1).
+- **Platforms:** macOS (arm64 and x86_64), Linux and Windows, from the same CMake build as the engine.
+- **Visual direction:** like Unreal Engine 5. Dark charcoal panels (#191a21 ground, #1d1e26 panels,
+  #33343f borders), a **violet accent** (#3a3566 selected rows, #2e2a52 active document tab, #5a4fc0
+  tab underline, #6b5ce7 checkboxes), green Play, amber for warnings and STRETCH, Inter for UI and
+  JetBrains Mono for code. Title "DEObjects Editor — <project>". Asset editors are document tabs; a
+  status bar shows the add-on and "DE v2.123". In the pilot editor, a large in-engine preview sits on
+  the left and tabbed forms (General / Attributes / AI Traits / Paint / Casts & Flags) on the right. The
+  tournament editor is a tree of matches, a match form, and the generated `BSubSession` script with
+  Quotes as a tab.
+
+Open:
+1. Mod distribution: just the `.DEObjects` plus an optional manifest (name, author, version,
    dependencies), or a mod browser later, tied to the lobby server?
-4. Which stretch goal comes first after v1: the tournament economy, or the announced-but-cut features
+2. Which stretch goal comes first after v1: the tournament economy, or the announced-but-cut features
    (paint jobs, logos, the Pharaoh's Fire arena)?
+3. Testing in the original game needs a real Windows install of 2.123 (we don't run the protected
+   exe). Who runs those checks: the user, or a tester?
 
 ## 8. Milestones
 1. **Writer foundations:** a lossless round trip on all 65 files, the new schemas and an add-on file
