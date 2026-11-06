@@ -588,6 +588,7 @@ public:
 		// The master's global time (+0x1f8) PreciseTime took since the scene last passed.
 		double master_given = 0;
 		uint32_t last_global = 0;  // +0x15c: the global time the scene last passed at
+		uint32_t initial = 0;      // a network client's: the server's scene time its Genesis starts at
 	};
 	// The scene of a session (null: what is in no session's).
 	SceneClock &scene_clock(const GameObject *session);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "game/replay.h"
@@ -175,6 +176,7 @@ void NetSession::force_clients_to_load() {
 		wr.u32(101);
 		send(p, net::Channel::Reliable, std::move(wr.d));
 		p.status = 2000;
+		p.preloaded_status = 0;
 	}
 }
 
@@ -287,7 +289,7 @@ void NetSession::receive_roster(const std::vector<uint8_t> &d, size_t pos) {
 		}
 	}
 	w_.session = keep;
-	if (session->net_status == 100) session->net_status = 101;
+	if (session->net_status == 100) report(101);
 }
 
 void NetSession::receive_remote_ui(const std::vector<uint8_t> &d, size_t pos) {
@@ -385,32 +387,43 @@ void NetSession::server_flow(uint32_t now) {
 	}
 }
 
+// A client reports every status it takes, at once: a forced one too, which the server awaits.
+void NetSession::report(int status) {
+	if (!session || peers_.empty()) return;
+	session->net_status = status;
+	Writer wr = message(kReport);
+	wr.squeezed(uint32_t(status));
+	send(peers_[0], net::Channel::Reliable, std::move(wr.d));
+	reported_ = status;
+	printf("net: status %s (%d)\n", net_status_description(status), status);
+}
+
 // A client reports each status change (0x17) and asks for the IDs of its unlinked managers (0x15),
 // and for the newest state of a linked one it has heard nothing of in 5 s (0x13).
 void NetSession::client_flow(uint32_t now) {
 	SessionState *m = session;
 	if (!m || peers_.empty()) return;
 	Peer &p = peers_[0];
-	if (m->net_status != reported_) {
-		Writer wr = message(kReport);
-		wr.squeezed(uint32_t(m->net_status));
-		send(p, net::Channel::Reliable, std::move(wr.d));
-		reported_ = m->net_status;
-		printf("net: status %s (%d)\n", net_status_description(m->net_status), m->net_status);
-	}
+	if (m->net_status != reported_) report(m->net_status);
 	p.creature = nullptr;
 	for (auto &c : m->clients) {
 		if (c->net_id == own_id && c->slot) p.creature = c->slot->creature;
 	}
-	if (m->net_status != 1000 || now - last_requests_ < 1000) return;
-	last_requests_ = now;
+	if (m->net_status != 1000) return;
+	// A manager is asked for as the sender meets it, then at most once a second.
 	for (auto &mg : net_managers(w_)) {
 		if (mg.server_id || mg.id.empty()) continue;
+		auto [it, fresh] = asked_.try_emplace(mg.id, now);
+		if (!fresh && now - it->second < 1000) continue;
+		it->second = now;
+		if (getenv("OPENBG_DEBUG_NETSTATES")) printf("[net %u] asks for %s's ID\n", w_.frame(), mg.owner->name.c_str());
 		Writer wr = message(kIdRequest);
 		wr.str(mg.id);
 		send(p, net::Channel::Unreliable, std::move(wr.d));
 		++id_requests;
 	}
+	if (now - last_requests_ < 1000) return;
+	last_requests_ = now;
 	for (auto &[id, at] : linked_at_) {
 		if (now - at < 5000) continue;
 		at = now;
@@ -464,6 +477,11 @@ void NetSession::announce(Peer &p) {
 			links.squeezed(id);
 			links.str(it == managers.end() ? std::string() : it->id);
 			p.linked[id] = true;
+			// What went before the client knew the ID was dropped there: its newest state goes again.
+			if (it != managers.end()) {
+				auto &rec = p.records[it->owner];
+				rec.acked = -1, rec.index = 0, rec.ever_acked = false;
+			}
 		}
 		p.id_queue.clear();
 		send(p, net::Channel::Reliable, std::move(links.d));
@@ -562,8 +580,15 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			return;
 		}
 		if (1.5f * float(rtt) < float(sync_limit_)) sync_limit_ = int32_t(50 + 1.5f * float(rtt));
-		double scale = w_.scene_clock(w_.clock_key(clock)).scale;
+		auto &sc = w_.scene_clock(w_.clock_key(clock));
+		double scale = sc.scale;
 		int64_t target = int64_t(server_scene) + int64_t(double(rtt) * 0.5 * scale);
+		// Before its Genesis the client's scene takes the server's time to start at.
+		clock_synced_ = true;
+		if (cfg_.flow && !sc.started) {
+			sc.initial = uint32_t(std::max<int64_t>(0, target));
+			return;
+		}
 		int64_t here = int64_t(w_.scene_ms_of(clock)) + slew_pending;
 		double d = double(target - here);
 		if (std::fabs(d) <= 1000) {
@@ -575,6 +600,7 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			slew_pending += int32_t(d);
 		} else {
 			++clock_jumps;
+			if (cfg_.flow) printf("net: scene clock set from %lld to %lld ms\n", (long long)here, (long long)target);
 			// SetInitialSceneTime: a joining client's scene starts at the server's time.
 			if (cfg_.flow && target > 0) {
 				w_.set_initial_scene_time(w_.clock_key(clock), uint32_t(target));
@@ -613,17 +639,18 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 		uint32_t st = r.u32();
 		if (!r.ok || !session) break;
 		if (server) w_.log.push_back("Client attempted to force server status");
-		else session->net_status = int(st);
+		else report(int(st));
 		break;
 	}
 	case kLoad:
-		if (!server && session && session->net_status == 102) session->net_status = 103;
+		if (!server && session && session->net_status == 102) report(103);
 		break;
 	case kReport: {
 		uint32_t st = r.squeezed();
 		if (!r.ok || !server) break;
 		if (p.status != int(st)) printf("net: %s reports %s (%u)\n", p.client ? p.client->player_name.c_str() : "?", net_status_description(int(st)), st);
 		p.status = int(st);
+		p.preloaded_status = 0;
 		if (st == 100) p.roster.clear();
 		break;
 	}
@@ -684,6 +711,7 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			uint32_t id = r.squeezed();
 			auto b = r.take(r.squeezed());
 			if (r.ok && role_ == NetRole::Client && net_link(w_, id, std::string(b.begin(), b.end())) && cfg_.flow) linked_at_[id] = now;
+			if (getenv("OPENBG_DEBUG_NETSTATES")) printf("[net %u] link %u %s\n", w_.frame(), id, net_owner(w_, id) ? net_owner(w_, id)->name.c_str() : "(none)");
 		}
 		break;
 	}
@@ -700,7 +728,7 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			if (GameObject *owner = net_owner(w_, id)) net_receive_state(w_, owner, st, lag_ms);
 			else w_.log.push_back("net: pre-load manager not set up: " + std::string(b.begin(), b.end()));
 		}
-		if (role_ == NetRole::Client && session && session->net_status == 101) session->net_status = 102;
+		if (role_ == NetRole::Client && session && session->net_status == 101) report(102);
 		break;
 	case kStates:
 		for (;;) {
@@ -802,6 +830,8 @@ void NetSession::send_states(Peer &p, uint32_t now) {
 			if (now - rec.last_send >= keep) due.push_back({m.owner, m.server_id, std::move(st), m.urgency});
 			continue;
 		}
+		if (getenv("OPENBG_DEBUG_NETSTATES") && m.owner->fighter && w_.frame() % 25 == 0)
+			printf("[net %u] %s newest %u a%u s%u f%x index %d acked %lld\n", w_.frame(), m.owner->name.c_str(), st.time, st.authority, st.significance, st.flags, rec.index, (long long)rec.acked);
 		if (st.authority < 2 && !correction) {
 			if (rec.index < 7) ++rec.index;
 			rec.last_send = now;
@@ -847,6 +877,16 @@ void NetSession::send_states(Peer &p, uint32_t now) {
 	send(p, net::Channel::Unreliable, std::move(wr.d));
 }
 
+void NetSession::send_clock(uint32_t now) {
+	Writer wr;
+	wr.u8(kClock);
+	wr.u32(now);
+	wr.u8(++sync_seq_);
+	wr.squeezed(session ? uint32_t(session->net_status) : 1000);
+	send(peers_[0], net::Channel::Unreliable, std::move(wr.d));
+	last_clock_ = now;
+}
+
 void NetSession::update() {
 	const uint32_t now = w_.global_ms();
 	credit = std::min(1.0f, credit + 0.001f * float(now - last_frame_));
@@ -874,14 +914,11 @@ void NetSession::update() {
 				net_set_lag(w_, lag, p.creature);
 			}
 		}
-		if (role_ == NetRole::Client && !peers_.empty() && clock_object(peers_[0]) && (peers_[0].creature || cfg_.flow)) {
-			Writer wr;
-			wr.u8(kClock);
-			wr.u32(now);
-			wr.u8(++sync_seq_);
-			wr.squeezed(session ? uint32_t(session->net_status) : 1000);
-			send(peers_[0], net::Channel::Unreliable, std::move(wr.d));
-		}
+		if (role_ == NetRole::Client && !peers_.empty() && clock_object(peers_[0]) && (peers_[0].creature || cfg_.flow)) send_clock(now);
+	} else if (cfg_.flow && role_ == NetRole::Client && !clock_synced_ && now - last_clock_ >= 200 && !peers_.empty()) {
+		// Until a first sample is taken a joining client asks every 200 ms, so that its scene
+		// starts at the server's time before the fighters load.
+		send_clock(now);
 	}
 	if (cfg_.flow) {
 		if (role_ == NetRole::Server) server_flow(now);

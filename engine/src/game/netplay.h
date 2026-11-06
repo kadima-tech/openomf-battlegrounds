@@ -175,6 +175,8 @@ private:
 	void send_roster(Peer &p, const std::string &signature);
 	void server_flow(uint32_t now);
 	void client_flow(uint32_t now);
+	void report(int status);
+	void send_clock(uint32_t now);
 	void receive_roster(const std::vector<uint8_t> &d, size_t pos);
 	void receive_remote_ui(const std::vector<uint8_t> &d, size_t pos);
 	std::string roster_signature();
@@ -190,9 +192,12 @@ private:
 	uint8_t sync_seq_ = 0;
 	int32_t sync_limit_ = 1000;  // the clock's accept limit (+0x64)
 	int reported_ = 0;           // a client's last status report (0x17)
+	bool clock_synced_ = false;
+	uint32_t last_clock_ = 0;
 	uint32_t last_requests_ = 0;
 	std::map<uint32_t, GameObject *> remote_ui_;  // a client's copies of server pages, by their server ID
 	std::map<uint32_t, uint32_t> linked_at_;      // a client's linked IDs: when, until a state is heard
+	std::map<std::string, uint32_t> asked_;       // a client's ID requests (0x15): when last
 	uint32_t next_client_id_ = 1;
 };
 

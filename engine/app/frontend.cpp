@@ -243,6 +243,8 @@ int main(int argc, char **argv) {
 			}
 		}
 		app.apply_settings();
+		// OPENBG_ALL_AI=1: every fighter, the user's too, is its pilot's AI's (as openbg-net's), for whole network matches.
+		world.all_ai = getenv("OPENBG_ALL_AI") != nullptr;
 		auto saved_registry = world.registry, traced_registry = world.registry;
 		// Network play (docs/NETWORK_PLAN.md): hosting a joinable session, or joining one.
 		game::NetGame netgame(world);
@@ -571,12 +573,13 @@ int main(int argc, char **argv) {
 				world.tick(netgame.frame_ms(step));
 				netgame.update();
 				test_switches(fr);
-				// OPENBG_NET_TRACE=<file>: each frame the session scene's time and every slot's fighter
-				// (place, health, state), for tools/net-lan/compare.py to set two machines side by side.
+				// OPENBG_NET_TRACE=<file>: each frame the session scene's time, the wall clock and every slot's
+				// fighter (place, health, state), for tools/net-lan/compare.py to set two machines side by side.
 				static FILE *trace = getenv("OPENBG_NET_TRACE") ? fopen(getenv("OPENBG_NET_TRACE"), "w") : nullptr;
 				if (trace && world.session && world.session->begun) {
 					game::SessionState *ss = world.session.get();
-					fprintf(trace, "%d %u %d", fr, world.scene_ms_of(ss->obj), ss->net_status);
+					const long long wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+					fprintf(trace, "%d %u %d %lld", fr, world.scene_ms_of(ss->obj), ss->net_status, wall);
 					for (auto &sl : ss->slots) {
 						game::GameObject *f = sl->creature;
 						if (!f || !f->spawned) continue;
@@ -589,7 +592,8 @@ int main(int argc, char **argv) {
 						std::string st = m ? m->cm->signature : "-";
 						if (size_t c = st.rfind(':'); c != std::string::npos) st = st.substr(c + 1);
 						for (char &ch : st) ch = ch == ' ' ? '_' : ch;
-						fprintf(trace, " | %d %s %.2f %.2f %.2f %.3f %s", sl->index, f->name.c_str(), f->local.t[0], f->local.t[1], f->local.t[2], h, st.c_str());
+						fprintf(trace, " | %d %s %.2f %.2f %.2f %.3f %s %u", sl->index, f->name.c_str(), f->local.t[0], f->local.t[1], f->local.t[2], h, st.c_str(),
+						        f->creation_time + uint32_t(f->creature_ticks * game::World::kTickMs));
 					}
 					fputc('\n', trace);
 				}

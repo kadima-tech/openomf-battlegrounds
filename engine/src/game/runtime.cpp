@@ -1736,7 +1736,7 @@ void World::scene_genesis(const GameObject *session) {
 	c.last_global = global_ms();
 	const GameObject *was = clock_;
 	use_clock(session);
-	scene_ms_ = 0;
+	scene_ms_ = c.initial;
 	reset_clock();
 	use_clock(was);
 }
