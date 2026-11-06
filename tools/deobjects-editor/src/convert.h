@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "json.h"
-#include "model.h"
+#include "de/objects_model.h"
 
 namespace deo {
 
@@ -32,6 +32,9 @@ json::Value object_to_json(const File &f, size_t index, const SaveBlob &save, co
 // not stop packing (a reference whose name no longer matches its index) go to *warnings.
 File file_from_json(const json::Value &index, const std::vector<json::Value> &objects, const LoadBlob &load,
                     std::vector<std::string> *warnings);
+
+// Unpacks `f` to JSON text in memory and packs it again, as unpack then pack would.
+File repack(const File &f);
 
 // A file name for an object's JSON: "0004 The Desert.json", safe on Windows and macOS.
 std::string object_file_name(const File &f, size_t index);

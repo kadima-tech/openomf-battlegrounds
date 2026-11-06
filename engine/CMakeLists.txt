@@ -73,6 +73,7 @@ add_library(de STATIC
 	src/de/lzrw3a.cpp
 	src/de/md5.cpp
 	src/de/objects_file.cpp
+	src/de/objects_model.cpp
 	src/de/pcode.cpp
 	src/de/image.cpp
 	src/de/avi.cpp
@@ -157,6 +158,18 @@ set_tests_properties(de-all-files PROPERTIES LABELS full)
 add_executable(vmc2-tests tests/vmc2_tests.cpp)
 target_link_libraries(vmc2-tests PRIVATE vm)
 add_test(NAME vmc2-writer COMMAND vmc2-tests "${OPENBG_DATA_DIR}")
+# tools/deobjects-editor's JSON form, written and read back by the engine's reader.
+set(DEOBJECTS_EDITOR ${CMAKE_CURRENT_SOURCE_DIR}/../tools/deobjects-editor/src)
+add_library(deobjects-convert STATIC ${DEOBJECTS_EDITOR}/json.cpp ${DEOBJECTS_EDITOR}/schema.cpp
+	${DEOBJECTS_EDITOR}/convert.cpp)
+target_include_directories(deobjects-convert PUBLIC ${DEOBJECTS_EDITOR})
+target_link_libraries(deobjects-convert PUBLIC de)
+add_executable(deobjects-data-tests tests/deobjects_tests.cpp)
+target_link_libraries(deobjects-data-tests PRIVATE game deobjects-convert)
+add_test(NAME deobjects-edit-reload COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}")
+# Unpacks and packs every file of the Data folder (~10 s); each must come back byte for byte.
+add_test(NAME deobjects-round-trip COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}" --all)
+set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 
 # Native viewer (SDL2 + OpenGL 4.1 core).
 if(NOT TARGET SDL2::SDL2)
@@ -187,7 +200,7 @@ add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests vmc2-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
+	foreach(program deobj-dump de-tests vmc2-tests deobjects-data-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()
