@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
 	de::init_platform();
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <Data dir> [--screenshot out.png --frames N]\n", argv[0]);
+		fprintf(stderr, "usage: %s <Data dir> [--addon file.DEObjects] [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
 	}
 	std::string data = argv[1];
@@ -158,6 +158,17 @@ int main(int argc, char **argv) {
 				if (q == std::string::npos) break;
 				p = q + 1;
 			}
+		}
+		else if (!strcmp(argv[i], "--addon") && i + 1 < argc) {
+			// An extra add-on .DEObjects, loaded as if it were in the Data folder (OPENBG_ADDONS).
+			std::string list = getenv("OPENBG_ADDONS") ? getenv("OPENBG_ADDONS") : "";
+#ifdef _WIN32
+			list += (list.empty() ? "" : ";") + std::string(argv[++i]);
+			_putenv_s("OPENBG_ADDONS", list.c_str());
+#else
+			list += (list.empty() ? "" : ":") + std::string(argv[++i]);
+			setenv("OPENBG_ADDONS", list.c_str(), 1);
+#endif
 		}
 		else if (!strcmp(argv[i], "--headless")) {
 			headless = true;
@@ -519,7 +530,7 @@ int main(int argc, char **argv) {
 			if (memory_every && fr % memory_every == 0) fprintf(stderr, "[memory %d] script arena %u MB, %zu objects\n", fr, world.memory().used() >> 20, world.scene_objects().size());
 			// OPENBG_DEBUG_TREE=<name>@<frame> prints the scene branches under objects of that name then.
 			if (const char *dt = getenv("OPENBG_DEBUG_TREE"); dt && strchr(dt, '@') && atoi(strchr(dt, '@') + 1) == fr) {
-				std::string name(dt, strchr(dt, '@'));
+				std::string name(dt, size_t(strchr(dt, '@') - dt));
 				std::function<void(game::GameObject *, int)> dump = [&](game::GameObject *o, int depth) {
 					auto t = o->world().t;
 					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2]);

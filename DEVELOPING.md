@@ -113,3 +113,40 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `deobj-dump scripts <file.DEObjects> <dir>` extracts a data file's script source (into your local copy only; it is the game's).
+
+## The content editor
+
+`openbg-editor` (`engine/editor`, spec in [docs/EDITOR_SPEC.md](docs/EDITOR_SPEC.md)) edits a
+**project**: one add-on `.DEObjects` file that adds objects with fresh GUIDs. The base `Data`
+folder is only read. It is built with the engine (`cmake --build engine/build --target openbg-editor`);
+CMake fetches Dear ImGui (docking branch, pinned tag), and the fonts are built in from
+`engine/third_party/fonts`.
+
+```sh
+engine/build/openbg-editor --data source/patched/v2123/Data ~/Mods/MyMod.DEObjects
+```
+
+Without `--data` it asks for the Data folder; without a project it shows a start page (New / Open
+Add-on). Settings, recent projects and the dock layout live in `<user data>/openbg/editor`
+(`layout.ini`; Tools > Reset Layout restores the default).
+
+- **This iteration:** the shell (menus, document tabs, toolbar, Place / Viewport / Outliner / Details,
+  Content Browser, Output Log, Validation, Script Console, status bar) and the **pilot editor**:
+  Content > New Pilot copies a base pilot (its description, bio and photo) with fresh GUIDs, listed and
+  unlocked; the tabs edit name, sex, photo (PNG or BMP import, cropped and stored as an uncompressed
+  256 x 256 `Image\Standard`), bio, listed / locked flags, casts, the four attributes, the 31 AI
+  traits and the three paint colours. The preview shows the photo, or the robot posed and painted in
+  the pilot's colours (the viewer's fighter code, `app/fighter_model.*`). Ctrl+S saves, Ctrl+Z undoes.
+  Arena, HAR and tournament editing, Play and Simulate are shown but not active yet.
+- **Validate** (F7) runs the §7 checks that apply; rules only the original 2.123 enforces are warnings.
+- **Launch Game** (F5) writes the add-on to `<user data>/openbg/editor/launch/` and starts `openbg`
+  (next to the editor, or `OPENBG_GAME`) with `<Data> --addon <file>`; its output goes to the Output Log.
+  `openbg --addon file.DEObjects` (repeatable) and `OPENBG_ADDONS` (paths separated by `:`, `;` on
+  Windows; read by every program's `de::World`) load add-on files as if they were in `Data`.
+- **Scripted runs** for screenshots and checks: `--new-pilot Lucas:Jetta`, `--open-pilot Jetta`,
+  `--tab 0-4`, `--preview photo|robot`, `--photo file.png`, `--content Pilots`, `--base-content`,
+  `--select <object>`, `--level`, `--save`, `--launch-game`, and `--screenshot out.png [--frames N]
+  [--size WxH] [--scale S]` (a hidden window, 1600x1000 points at 2 pixels per point by default).
+- `editor-tests` (ctest `editor-pilot`) checks new pilot -> edit every field -> photo import -> save
+  -> reopen, then reads the add-on with the engine's own readers (`read_pilot`, descriptions, photo).
+

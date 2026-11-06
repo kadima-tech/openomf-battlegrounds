@@ -39,6 +39,17 @@ libraries, and the X11/Wayland and audio client libraries SDL2 opens at runtime 
 supplied by the player's distribution and are not bundled. The SDL2 and C++ runtime code
 linked into the Linux engine retains the notices above and GCC's runtime library exception.
 
+## Components in the content editor (openbg-editor)
+
+The editor is a development tool built from source and not part of the app downloads.
+
+| Component | Upstream / version | License |
+| --- | --- | --- |
+| Dear ImGui (docking branch) | [ocornut/imgui](https://github.com/ocornut/imgui), `v1.92.5-docking`, fetched by CMake | MIT |
+| Inter | [rsms/inter](https://github.com/rsms/inter), 4.1 (Regular, SemiBold); `engine/third_party/fonts/Inter-LICENSE.txt` | SIL Open Font License 1.1 |
+| JetBrains Mono | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono), 2.304 (Regular); `engine/third_party/fonts/JetBrainsMono-LICENSE.txt` | SIL Open Font License 1.1 |
+| Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 0.469.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |
+
 ## Original game and update data
 
 *One Must Fall: Battlegrounds* was developed by Diversions Entertainment. The

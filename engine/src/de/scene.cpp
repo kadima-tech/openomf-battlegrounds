@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <tuple>
 #include <fstream>
@@ -200,6 +201,23 @@ void World::add(const std::string &stem, std::vector<uint8_t> data, bool overrid
 	files_[stem] = std::move(f);
 }
 
+std::vector<std::filesystem::path> addon_paths() {
+	std::vector<std::filesystem::path> out;
+	const char *list = getenv("OPENBG_ADDONS");
+#ifdef _WIN32
+	const char sep = ';';
+#else
+	const char sep = ':';
+#endif
+	for (std::string s = list ? list : ""; !s.empty();) {
+		size_t q = s.find(sep);
+		std::string item = s.substr(0, q);
+		if (!item.empty()) out.emplace_back(item);
+		s = q == std::string::npos ? "" : s.substr(q + 1);
+	}
+	return out;
+}
+
 World::World(const std::filesystem::path &dir) : dir_(dir) {
 	// The file agents in NTFS's order (names upper-cased; FINDINGS 192), whatever this file
 	// system lists: DE_CTransferAgent::FindMasterObject(GUID) asks the last agent first.
@@ -209,6 +227,11 @@ World::World(const std::filesystem::path &dir) : dir_(dir) {
 		std::string upper = e.path().filename().string();
 		for (char &ch : upper) ch = char(toupper(uint8_t(ch)));
 		paths.emplace_back(upper, e.path());
+	}
+	for (const auto &p : addon_paths()) {
+		std::string upper = p.filename().string();
+		for (char &ch : upper) ch = char(toupper(uint8_t(ch)));
+		paths.emplace_back(upper, p);
 	}
 	std::sort(paths.begin(), paths.end());
 	for (auto &[upper, p] : paths) add(p.stem().string(), read_file(p), true);

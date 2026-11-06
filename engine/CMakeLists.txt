@@ -195,6 +195,15 @@ add_test(NAME deobjects-edit-reload COMMAND deobjects-data-tests "${OPENBG_DATA_
 add_test(NAME deobjects-round-trip COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}" --all)
 set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 
+# The content editor's data model (docs/EDITOR_SPEC.md): add-on projects, pilots, validation.
+add_library(editor-core STATIC editor/core/addon.cpp editor/core/pilot.cpp editor/core/image_io.cpp
+	editor/core/validate.cpp)
+target_include_directories(editor-core PUBLIC editor/core)
+target_link_libraries(editor-core PUBLIC de ZLIB::ZLIB)
+add_executable(editor-tests tests/editor_tests.cpp)
+target_link_libraries(editor-tests PRIVATE editor-core game)
+add_test(NAME editor-pilot COMMAND editor-tests "${OPENBG_DATA_DIR}")
+
 # Native viewer (SDL2 + OpenGL 4.1 core).
 if(NOT TARGET SDL2::SDL2)
 	find_package(SDL2 REQUIRED)
@@ -208,7 +217,7 @@ set(OPENBG_SDL_LIBS SDL2::SDL2)
 if(WIN32 AND TARGET SDL2::SDL2main)
 	set(OPENBG_SDL_LIBS SDL2::SDL2main SDL2::SDL2)
 endif()
-add_executable(openbg-viewer app/viewer.cpp)
+add_executable(openbg-viewer app/viewer.cpp app/fighter_model.cpp)
 target_link_libraries(openbg-viewer PRIVATE de ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 add_executable(openbg-arena app/arena.cpp app/render.cpp app/glow.cpp)
 target_link_libraries(openbg-arena PRIVATE de ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
@@ -225,9 +234,49 @@ target_link_libraries(openbg-net PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::
 add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
+# The content editor (openbg-editor): Dear ImGui's docking branch (MIT) on SDL2 + OpenGL 4.1, with
+# Inter, JetBrains Mono (SIL OFL 1.1) and Lucide icons (ISC) from third_party/fonts built in.
+include(FetchContent)
+FetchContent_Declare(imgui
+	URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.5-docking.tar.gz
+	URL_HASH SHA256=c816c20e8c75f3e15ae867350e79925502d1a6a85938bb1a73b8927e5f31f9cb
+	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(imgui)
+add_library(imgui STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
+	${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+	${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp)
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imgui_SOURCE_DIR}/misc/cpp)
+target_link_libraries(imgui PUBLIC SDL2::SDL2 ${CMAKE_DL_LIBS})
+target_compile_options(imgui PRIVATE -w)
+target_compile_definitions(imgui PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
+if(WIN32)
+	target_link_libraries(imgui PUBLIC imm32)
+endif()
+set(EDITOR_FONTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts)
+set(EDITOR_FONT_FILES
+	font_inter_regular=${EDITOR_FONTS}/Inter-Regular.ttf
+	font_inter_semibold=${EDITOR_FONTS}/Inter-SemiBold.ttf
+	font_jetbrains_mono=${EDITOR_FONTS}/JetBrainsMono-Regular.ttf
+	font_lucide=${EDITOR_FONTS}/lucide.ttf)
+string(REPLACE ";" "|" EDITOR_FONT_LIST "${EDITOR_FONT_FILES}")
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp
+	COMMAND ${CMAKE_COMMAND} -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp "-DFILES=${EDITOR_FONT_LIST}"
+		-P ${CMAKE_CURRENT_SOURCE_DIR}/editor/embed.cmake
+	DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/editor/embed.cmake ${EDITOR_FONTS}/Inter-Regular.ttf ${EDITOR_FONTS}/Inter-SemiBold.ttf
+		${EDITOR_FONTS}/JetBrainsMono-Regular.ttf ${EDITOR_FONTS}/lucide.ttf
+	COMMENT "Embedding the editor's fonts" VERBATIM)
+add_executable(openbg-editor editor/app/main.cpp editor/app/editor.cpp editor/app/pilot_doc.cpp editor/app/widgets.cpp
+	editor/app/theme.cpp editor/app/preview.cpp editor/app/launch.cpp editor/app/file_dialog.cpp app/fighter_model.cpp
+	${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp)
+target_include_directories(openbg-editor PRIVATE app)
+target_link_libraries(openbg-editor PRIVATE editor-core imgui ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
+if(WIN32)
+	set_target_properties(openbg-editor PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
+	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests editor-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()

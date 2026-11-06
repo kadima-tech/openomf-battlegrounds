@@ -132,13 +132,34 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
   follows the fighters, its field of view easing with the framing (Manual Observer in the VCR panel
   flies it from the keys and mouse at 60°).
 
-## Content editor (planned)
+## Content editor
 
-The DEObjects editor (`docs/EDITOR_SPEC.md`, mockups linked there) is a desktop tool styled like Unreal
-Engine 5, not like the game's menus:
-- **Colours:** dark charcoal ground #191a21, panels #1d1e26 with #33343f borders, inputs #16171d. A
-  violet accent: selection #3a3566, active document tab #2e2a52, tab underline #5a4fc0, checkboxes
-  #6b5ce7. Play is green, warnings and STRETCH features are amber, OK states are green text.
-- **Type:** Inter for UI (14 px forms, 12-13 px panels), JetBrains Mono for code and numbers.
-- **Layout:** every panel is a dockable tab. Asset editors are document tabs under the menu bar. There
-  is a status bar at the bottom. Forms are label / field rows on a two-column grid.
+The DEObjects editor (`openbg-editor`, `docs/EDITOR_SPEC.md`) is a desktop tool styled like Unreal
+Engine 5, not like the game's menus. `engine/editor/app/theme.{h,cpp}` holds the palette, the sizes
+and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn controls are in
+`widgets.cpp`.
+- **Colours:** chrome (menu, document tab strip, status bar) #141519, ground #191a21, panels #1d1e26
+  with #33343f borders and #2c2d38 dividers, panel headers and toolbars #1f2028, inputs #16171d with
+  #3b3d4b borders, buttons #2c2d38. Text #e8e8f0, labels #c3c5d3, secondary #a9acbd, muted #9295a6.
+  A violet accent: selection #3a3566, active document tab #2e2a52 (its colour runs along the bottom of
+  the tab strip), form tab underline #5a4fc0, checkboxes and sliders #6b5ce7, logo #8b7cf6. Play and
+  the NEW badge are green #2f8f4e; warnings amber #ffc98a, OK green text #8fe3a8, errors #ff8f8f.
+- **Type:** Inter (Regular, SemiBold) 14 px for UI and forms, 13 px for status and logs, 24 px
+  SemiBold for document headings; JetBrains Mono for GUIDs, logs and the console; Lucide icons merged
+  into Inter (no emoji). Fonts are rasterised at the framebuffer scale, so Retina is sharp; on Windows
+  and Linux the display's content scale multiplies sizes and fonts.
+- **Shape:** 5 px rounded inputs and buttons, 6-8 px rounded panels and tiles, 26 px tree rows,
+  generous padding (10-20 px). Forms are label / field rows with a 180 px label column.
+- **Layout:** menu bar with the violet logo; document tabs (Level Editor, then one per open asset,
+  each closable); a toolbar (Save All, Content, Validate, Place, green Play, Simulate, Launch Game,
+  Play Mode on the right); the level editor's dockable panels (Place left, Viewport centre, Outliner
+  over Details right, Content Browser / Output Log / Validation / Script Console docked below); a
+  status bar ("Ready" left, "<add-on> (Add-on) | DE v2.123" right). Content Browser tiles are 170 x 166
+  with the name below, a NEW badge on add-on content and a violet border when selected; the first tile
+  is a dashed "+ New ..." tile.
+- **Asset editors:** the pilot editor puts a tall in-engine preview (photo, or the robot in the
+  pilot's paint) with a "Preview (in-engine)" footer on the left, and on the right the heading, tabs
+  (General / Attributes / AI Traits / Paint / Casts & Flags) over a violet underline, and a footer of
+  validation chips.
+- **Not yet active** features (arena, HAR and tournament editing, Play, Simulate) keep their place in
+  the layout, greyed or with an empty state that says they arrive in a later iteration.
