@@ -80,11 +80,16 @@ struct VMClass {
 		std::vector<uint8_t> data;
 	};
 	std::vector<FinalInstance> finals;
-	std::string unknown_final_class;  // set if a final's class layout is not known
-	std::vector<uint8_t> tail;        // anything after the finals
+	std::string unknown_final_class;      // set if a final's class layout is not known
+	std::optional<uint32_t> finals_count;  // the stored count, when the walk stopped early
+	// DE_CClass +0x30, set by Compile (0x7013b7f0): the attached behaviors' member variables' size.
+	std::optional<uint32_t> member_size;
+	std::vector<uint8_t> tail;  // anything after (from the unknown final on, if the walk stopped)
 
 	// behavior_count comes from the Class object's references (behaviors attached to it).
 	static VMClass parse(const std::vector<uint8_t> &vmc2, size_t behavior_count);
+	// DE_CClass::SaveVMCode (Core 0x70134070): the VMC2 payload parse() reads.
+	std::vector<uint8_t> write() const;
 };
 
 // DE_CClass::ObjProcessReferences (0x70135df0): DE_CObject chunk, then a BOOL-terminated

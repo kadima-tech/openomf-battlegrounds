@@ -83,11 +83,15 @@ public:
 	// A DE_CDataBlock::Set(char*) string: with its NUL, or empty for "".
 	void string(const std::string &s);
 	void guid(const Guid &g) { bytes(g.bytes, 16); }
+	// AddSqueezed (Core 0x70019100): <0xFE byte, <0xFFFF 0xFE + u16, else 0xFF + u32.
+	void squeezed(uint32_t v);
 	// DE_CGUIDPool::GenerateContents (Core 0x7001f320): u8 1, u16 count, the GUIDs.
 	void guid_pool(const std::vector<Guid> &pool);
 	// A versioned chunk: the version now, the size inserted by end_chunk (u8, or 0xFF + i32).
 	size_t begin_chunk(uint8_t version);
 	void end_chunk(size_t at);
+	// A size-only chunk (no version byte): end_chunk(at) inserts the size.
+	size_t begin_sized() const { return data_.size(); }
 
 private:
 	std::vector<uint8_t> data_;

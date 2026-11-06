@@ -21,6 +21,10 @@ namespace vm {
 // reference, depth first, each once.
 std::vector<de::ObjectRef> visible_behaviors(const de::World &data, const std::vector<de::ObjectRef> &attached);
 std::vector<de::ObjectRef> referenced_behaviors(const de::World &data, const de::ObjectRef &behavior);
+// DE_CClassBehaviorReference::AppendChangeInformation (Core 0x701384f0): the object-info
+// +0x84 revision of each attached behavior and of the behaviors it references. LoadVMCode
+// (0x70134530) ignores VMC2 whose change information differs from the loaded behaviors'.
+std::vector<uint8_t> change_information(const de::World &data, const std::vector<de::ObjectRef> &attached);
 std::vector<de::ObjectRef> behavior_globals(const de::World &data, const de::ObjectRef &behavior);
 
 // A behavior's compiled methods (by element index) in the order VMC2 lists them, the order
