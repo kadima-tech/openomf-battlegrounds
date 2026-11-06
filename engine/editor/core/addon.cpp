@@ -493,16 +493,15 @@ std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uin
 		made.push_back(std::move(o));
 	}
 	for (auto &o : made) file_.objects.push_back(std::move(o));
-	dirty_ = true;
+	touch();
 	std::vector<uint32_t> out;
 	for (uint32_t r : roots) out.push_back(local.at(r));
 	return out;
 }
 
-std::vector<uint32_t> Project::children(uint32_t object) const {
+std::vector<uint32_t> hierarchy_children(const deo::Object &o) {
 	std::vector<uint32_t> out;
-	if (object >= file_.objects.size()) return out;
-	Chunks h = split_chunks(file_.objects[object].hierarchy);
+	Chunks h = split_chunks(o.hierarchy);
 	if (h.chunks.empty()) return out;
 	RawChunk dummy;
 	map_reference_chunk("Object", 0, h.chunks[0], dummy, [&](const Ref &r) {
@@ -510,6 +509,11 @@ std::vector<uint32_t> Project::children(uint32_t object) const {
 		return r;
 	});
 	return out;
+}
+
+std::vector<uint32_t> Project::children(uint32_t object) const {
+	if (object >= file_.objects.size()) return {};
+	return hierarchy_children(file_.objects[object]);
 }
 
 }  // namespace ed

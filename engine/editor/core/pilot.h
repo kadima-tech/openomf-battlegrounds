@@ -63,6 +63,10 @@ void import_photo(Project &p, const PilotObjects &o, int width, int height, cons
                   const std::string &source_name);
 // The photo as RGBA, or empty.
 std::vector<uint8_t> photo_rgba(const Project &p, const PilotObjects &o, int *width, int *height);
+// An Image\Standard's full-size pixels as RGBA, or empty.
+std::vector<uint8_t> image_rgba(const deo::Object &image, int *width, int *height);
+// A base pilot's photo (the first image among its children), or empty.
+std::vector<uint8_t> base_pilot_photo(const BaseData &base, const BaseObject &pilot, int *width, int *height);
 
 // The base game's pilot descriptions, by name, for "copy from".
 std::vector<std::string> base_pilot_names(const BaseData &base);

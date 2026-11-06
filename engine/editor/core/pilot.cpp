@@ -432,16 +432,19 @@ void import_photo(Project &p, const PilotObjects &o, int width, int height, cons
 	p.touch();
 }
 
-std::vector<uint8_t> photo_rgba(const Project &p, const PilotObjects &o, int *width, int *height) {
+std::vector<uint8_t> image_rgba(const deo::Object &img, int *width, int *height) {
 	*width = *height = 0;
-	if (o.photo < 0) return {};
-	const deo::Object &img = p.file().objects[size_t(o.photo)];
 	Chunks ic = split_chunks(img.contents);
 	if (ic.chunks.empty()) return {};
-	deo::Reader r(ic.chunks[0].body);
-	r.block();
-	r.u32();
-	int32_t w = int32_t(r.u32()), h = int32_t(r.u32());
+	int32_t w = 0, h = 0;
+	try {
+		deo::Reader r(ic.chunks[0].body);
+		r.block();
+		r.u32();
+		w = int32_t(r.u32()), h = int32_t(r.u32());
+	} catch (const deo::Error &) {
+		return {};
+	}
 	if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return {};
 	for (auto &e : img.ex) {
 		if (e.key.size() != 2 || e.key[0] != 0 || e.key[1] != 0 || e.data.empty()) continue;
@@ -468,6 +471,21 @@ std::vector<uint8_t> photo_rgba(const Project &p, const PilotObjects &o, int *wi
 		} catch (const std::exception &) {
 			return {};
 		}
+	}
+	return {};
+}
+
+std::vector<uint8_t> photo_rgba(const Project &p, const PilotObjects &o, int *width, int *height) {
+	*width = *height = 0;
+	if (o.photo < 0) return {};
+	return image_rgba(p.file().objects[size_t(o.photo)], width, height);
+}
+
+std::vector<uint8_t> base_pilot_photo(const BaseData &base, const BaseObject &pilot, int *width, int *height) {
+	*width = *height = 0;
+	const deo::File &f = base.model(pilot.file);
+	for (uint32_t c : hierarchy_children(f.objects.at(pilot.index))) {
+		if (c < f.objects.size() && f.objects[c].info.class_text().rfind("Image", 0) == 0) return image_rgba(f.objects[c], width, height);
 	}
 	return {};
 }

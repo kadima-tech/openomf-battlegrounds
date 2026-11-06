@@ -97,7 +97,12 @@ public:
 	deo::File &file() { return file_; }
 	const deo::File &file() const { return file_; }
 	bool dirty() const { return dirty_; }
-	void touch() { dirty_ = true; }
+	// Bumped by every change, so views can tell when to re-read.
+	uint64_t revision() const { return revision_; }
+	void touch() {
+		dirty_ = true;
+		++revision_;
+	}
 
 	// The GUID pool index for an object in another file, added when missing.
 	uint32_t pool_index(const Guid &g);
@@ -121,7 +126,11 @@ private:
 	std::filesystem::path path_;
 	deo::File file_;
 	bool dirty_ = false;
+	uint64_t revision_ = 1;
 };
+
+// The local children an object's hierarchy block lists.
+std::vector<uint32_t> hierarchy_children(const deo::Object &o);
 
 // Rewrites the references in one chunk of a references block for `class_path`, mapping every
 // reference through `map`. Returns false when the chunk's layout is not known.
