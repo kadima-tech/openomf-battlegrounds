@@ -745,7 +745,7 @@ private:
 		st->server = edit(g, column, "Server Name", app.registry_string("Network\\Server Name"), 20, 0.35f);
 		check(g, column, "LAN Only", &st->lan);
 		st->port = edit(g, column, "Listener Port", std::to_string(reg_int(app, "Network\\Winsock\\Listener Port", 0)), -1, 0.5f, true);
-		st->max = edit(g, column, "Max Players", std::to_string(reg_int(app, "Network\\Max Clients", 0)), -1, 0.5f, true);
+		st->max = edit(g, column, "Max Players", std::to_string(reg_int(app, "Network\\Max Clients", 16)), -1, 0.5f, true);
 		st->password = edit(g, column, "Server Password", app.registry_string("Network\\Server Password"), 15, 0.5f);
 		st->admin = edit(g, column, "Admin Password", app.registry_string("Network\\Remote Admin Password"), 15, 0.5f);
 		combo(g, column, "Connection", {"Custom", "28k Dialup", "56k Dialup", "ISDN", "Cable", "T1 or LAN"}, &st->connection, 0.5f);
