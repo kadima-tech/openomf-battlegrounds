@@ -268,3 +268,16 @@ Open:
 5. **HAR variant editor** (stats, inputs, hitboxes, paint import).
 6. **Arena variant editor** (description, spawns, pickups, lights, prefabs).
 7. **Importers** (glTF), then the stretch goals.
+
+Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "The content editor"):
+- **1 (done for pilots):** the writer is lossless on all 65 files; `engine/editor/core` builds add-ons
+  (deep copy with fresh GUIDs, references remapped to the copies or the GUID pool) and decodes the
+  pilot, pilot description (with its cached stats, name and colours) and string value layouts.
+- **2 (partly):** the docking shell with menus, document tabs, toolbar, Place, Viewport, Outliner,
+  Details, Content Browser (add-on and read-only base game), Output Log, Validation, Script Console
+  (editor commands), status bar, saved per-user layout, undo / redo, and Launch Game
+  (`openbg --addon`). Not yet: arena viewports (the viewport is an empty grid), Play / Simulate.
+- **3 (done):** new pilot -> edit -> photo import -> save -> reopen, and the pilot shows in the game's
+  Choose Pilot with its photo, stats, colours and bio. Validation runs §7 rules 1-8, 11 and 12, the
+  original-only ones as warnings; rules 9-10 wait for script editing.
+
