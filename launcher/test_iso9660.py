@@ -1,6 +1,8 @@
-"""ISO 9660 reading used by Windows setup; synthetic images, no game disc needed."""
+"""ISO 9660 reading used by Linux and Windows setup; synthetic images, no game disc needed."""
 from pathlib import Path, PurePosixPath, PureWindowsPath
+import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -155,6 +157,53 @@ class ISO9660Tests(unittest.TestCase):
             disc = install.extract_setup(image, work, log)
         self.assertEqual(install.disc_setup(disc).name, "SETUP")
 
+
+    def test_linux_setup_reads_the_image_without_bsdtar(self):
+        image = self.image(ImageBuilder(joliet=True).build(disc_tree()))
+        work = self.root / "work"
+        work.mkdir()
+        with open(self.root / "install.log", "w") as log, patch.object(install.sys, "platform", "linux"), \
+                patch.object(install.subprocess, "check_output", side_effect=AssertionError("bsdtar used")):
+            disc = install.extract_setup(image, work, log)
+        self.assertEqual(install.disc_setup(disc).name, "Setup")
+
+    @unittest.skipUnless(shutil.which("xorriso"), "xorriso is not installed")
+    def test_image_written_by_xorriso(self):
+        tree = self.root / "tree/Setup"
+        tree.mkdir(parents=True)
+        (tree / "setup.ini").write_text("ProductGUID=" + install.PRODUCT_GUID)
+        for name in ("data1.cab", "data1.hdr", "data2.cab"):
+            (tree / name).write_bytes(name.encode() * 5000)
+        image = self.root / "xorriso.iso"
+        subprocess.run(["xorriso", "-as", "mkisofs", "-J", "-quiet", "-o", str(image), str(tree.parent)], check=True)
+        setup = extract_directory(image, "Setup", self.root / "out")
+        self.assertEqual((setup / "data2.cab").read_bytes(), b"data2.cab" * 5000)
+        self.assertEqual(install.disc_setup(self.root / "out"), setup)
+
+
+def case_sensitive(folder: Path) -> bool:
+    probe = folder / "Case-Probe"
+    probe.touch()
+    return not (folder / "case-probe").exists()
+
+
+class ManifestCaseTests(unittest.TestCase):
+    def test_extracted_names_are_renamed_to_manifest_case(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "game"
+            root.mkdir()
+            if not case_sensitive(Path(temporary)):
+                self.skipTest("names that differ only by case are the same file here (macOS, Windows)")
+            (root / "DATA").mkdir()
+            (root / "DATA/omfbggui.deobjects").write_bytes(b"menu")
+            (root / "Engine").mkdir()
+            (root / "Engine/Core.ModuleDLL").write_bytes(b"core")
+            manifest = {"files": [{"path": "Data/OMFBGGUI.DEObjects"}, {"path": "Engine/Core.ModuleDLL"},
+                                  {"path": "Data/Missing.DEObjects"}]}
+            install.match_manifest_case(root, manifest)
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ["Data", "Engine"])
+            self.assertEqual([p.name for p in (root / "Data").iterdir()], ["OMFBGGUI.DEObjects"])
+            self.assertEqual((root / "Data/OMFBGGUI.DEObjects").read_bytes(), b"menu")
 
 class LockTests(unittest.TestCase):
     def test_second_installer_is_refused_until_the_first_finishes(self):

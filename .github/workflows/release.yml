@@ -37,6 +37,13 @@ jobs:
       version: ${{ needs.version.outputs.version }}
       label: ${{ github.ref_name }}
 
+  build-linux:
+    needs: version
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      label: ${{ github.ref_name }}
+
   build-windows:
     needs: version
     uses: ./.github/workflows/build-windows.yml
@@ -46,7 +53,7 @@ jobs:
 
   release:
     name: Publish formal release
-    needs: [build, build-windows]
+    needs: [build, build-linux, build-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -66,10 +73,11 @@ jobs:
         working-directory: downloads
         run: |
           set -euo pipefail
-          # macOS arm64 and x86_64, Windows x64
+          # macOS arm64 and x86_64, Windows x64; Linux x86_64 and aarch64
           test "$(find . -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
-          test "$(find . -maxdepth 1 -name '*.zip.sha256' | wc -l)" -eq 3
-          sha256sum --check ./*.zip.sha256
+          test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.sha256' | wc -l)" -eq 5
+          sha256sum --check ./*.sha256
 
       - name: Create release for the existing tag
         env:
@@ -77,6 +85,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" downloads/*.zip downloads/*.zip.sha256 \
+          gh release create "$RELEASE_TAG" downloads/*.zip downloads/*.tar.gz downloads/*.sha256 \
             --verify-tag --title "Battlegrounds $RELEASE_TAG" --generate-notes \
             --notes-file .github/release-notes.md

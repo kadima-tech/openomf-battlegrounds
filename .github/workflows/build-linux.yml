@@ -1,0 +1,166 @@
+name: Build Linux downloads
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Numeric app version (major.minor.patch)
+        required: true
+        type: string
+      label:
+        description: Version or dev identifier used in download filenames
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }}
+    # The oldest supported runner sets the minimum glibc players need (2.35).
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # SDL2 compiles in only the display/audio back ends whose headers exist;
+          # build-linux.sh refuses to package an engine without X11, Wayland or sound.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config zlib1g-dev libgtk-3-dev \
+            libgl-dev libegl-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libasound2-dev libpulse-dev libdbus-1-dev libudev-dev \
+            xvfb xauth xorriso
+
+      - name: Check build tools and architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          cmake --version
+          cc --version
+          pkg-config --modversion gtk+-3.0
+
+      - name: Test installer, readiness and launcher model
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r launcher/requirements.txt
+          python3 -m unittest discover -s launcher -p 'test_*.py' -v
+          mkdir -p launcher/build
+          # shellcheck disable=SC2046
+          cc -std=gnu11 -Wall -Wextra $(pkg-config --cflags gtk+-3.0 gio-unix-2.0) \
+            launcher/test-linux-launcher.c -o launcher/build/test-linux-launcher \
+            $(pkg-config --libs gtk+-3.0 gio-unix-2.0)
+          launcher/build/test-linux-launcher
+
+      - name: Build standalone app
+        env:
+          OPENBG_VERSION: ${{ inputs.version }}
+          OPENBG_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: launcher/build-linux.sh
+
+      - name: Verify and archive app
+        env:
+          DOWNLOAD_LABEL: ${{ inputs.label }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          [[ "$DOWNLOAD_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          app=dist/Battlegrounds
+          python3 launcher/build_state.py --check dist/.launcher-build-state
+          cmp LICENSE "$app/resources/licenses/openomf-battlegrounds.txt"
+          cmp THIRD_PARTY_NOTICES.md "$app/resources/licenses/THIRD_PARTY_NOTICES.md"
+          for notice in SDL2.txt unshield.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt Python.txt; do
+            test -s "$app/resources/licenses/$notice"
+          done
+          for binary in Battlegrounds resources/bin/{openbg,unshield,worker} resources/python/bin/python3; do
+            test -x "$app/$binary"
+          done
+          "$app/resources/python/bin/python3" -I --version
+          "$app/resources/bin/unshield" -V
+          # Relocation, architecture and offline setup checks, with network access denied.
+          # Ubuntu 24.04+ restricts the user namespaces this uses; 22.04 allows them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          python3 launcher/check-bundle.py "$app/resources"
+          # The launcher window must open on a clean desktop session.
+          xvfb-run -a "$app/Battlegrounds" --screenshot "$RUNNER_TEMP/launcher.png"
+          test -s "$RUNNER_TEMP/launcher.png"
+          archive="Battlegrounds-$DOWNLOAD_LABEL-linux-$EXPECTED_ARCH.tar.gz"
+          # tar preserves executable bits; the folder runs from wherever it is unpacked.
+          tar -C dist -czf "dist/$archive" Battlegrounds
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+
+      - name: Upload download and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Battlegrounds-linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  fedora:
+    # Downloads come from the Ubuntu job. This keeps both documented source builds
+    # working with Fedora's newer GCC, CMake and sdl2-compat.
+    name: Fedora source build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: fedora:latest
+      # check-bundle.py needs a user namespace to deny network access.
+      options: --privileged
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build dependencies
+        # The package lists in README.md and launcher/README.md#linux.
+        run: |
+          dnf -y install git gcc-c++ libstdc++-static cmake pkgconf-pkg-config python3 curl \
+            gtk3-devel zlib-devel mesa-libGL-devel mesa-libEGL-devel libX11-devel libXext-devel \
+            libXrandr-devel libXcursor-devel libXi-devel libXScrnSaver-devel libXinerama-devel \
+            libxkbcommon-devel wayland-devel wayland-protocols-devel alsa-lib-devel \
+            pulseaudio-libs-devel dbus-devel systemd-devel SDL2-devel unshield binutils util-linux
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check build tools
+        run: |
+          cat /etc/fedora-release
+          cmake --version
+          c++ --version
+
+      - name: Build engine against system SDL2
+        run: |
+          cmake -S engine -B engine/build
+          cmake --build engine/build -j "$(nproc)"
+
+      - name: Build and check standalone app
+        env:
+          OPENBG_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          launcher/build-linux.sh
+          python3 launcher/check-bundle.py dist/Battlegrounds/resources

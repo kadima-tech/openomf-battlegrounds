@@ -1,11 +1,12 @@
 # Battlegrounds launcher
 
-The launcher is a native SwiftUI macOS app (macOS 13+, Apple silicon or Intel) and
-a native Win32 app for Windows 10 and 11 (x64; see [Windows](#windows-10-and-11)).
-Both share the setup backend (`install.py`, `patching.py`, `iso9660.py`), the
-manifests and the bundled update. Its service-bay design uses graphite, amber and
-an original robot schematic. The artwork was generated with the built-in imagegen
-tool; no disc assets are needed to display setup.
+The launcher is a native SwiftUI macOS app (macOS 13+, Apple silicon or Intel), a
+native Win32 app for Windows 10 and 11 (x64; see [Windows](#windows-10-and-11)) and
+a GTK 3 app for Linux (x86_64 or aarch64; see [Linux](#linux)). All three share the
+setup backend (`install.py`, `patching.py`, `iso9660.py`), the manifests and the
+bundled update. Its service-bay design uses graphite, amber and an original robot
+schematic. The artwork was generated with the built-in imagegen tool; no disc assets
+are needed to display setup.
 
 ## Run from this checkout
 
@@ -116,9 +117,11 @@ following [Apple's instructions](https://support.apple.com/en-us/102445).
 ### CI builds and releases
 
 GitHub Actions builds the same standalone app on native Apple silicon and Intel
-macOS runners, and the Windows app on a Windows runner (`build-windows.yml`).
-Each download is a `Battlegrounds-<label>-macos-<arch>.zip` or
-`Battlegrounds-<label>-windows-x64.zip` with a matching `.zip.sha256` checksum.
+macOS runners, the Windows app on a Windows runner (`build-windows.yml`), and the
+Linux app on native x86_64 and aarch64 Ubuntu 22.04 runners (`build-linux.yml`,
+which also builds from source on Fedora). Each download is a
+`Battlegrounds-<label>-macos-<arch>.zip`, `Battlegrounds-<label>-windows-x64.zip` or
+`Battlegrounds-<label>-linux-<arch>.tar.gz` with a matching `.sha256` checksum.
 Every platform must build and pass the installer/native readiness tests, offline
 relocation checks, signature (macOS), dependency and architecture checks before a
 release is published. The engine's data-dependent CTest suite requires the
@@ -131,7 +134,7 @@ original disc files and is not run in CI.
   Actions artifacts, without publishing a release.
 - **Release:** push a stable `vMAJOR.MINOR.PATCH` tag, such as `v0.1.0`, to run
   **Tagged release**. It builds the tagged code and creates a formal GitHub
-  release with all three ZIPs, checksums and generated release notes. Other `v*`
+  release with the three ZIPs, two Linux archives, checksums and generated release notes. Other `v*`
   tags fail validation. An existing published release is never overwritten.
 
 For example, after committing the version you want to release:
@@ -146,7 +149,8 @@ needed. Keep GitHub Actions enabled for the repository and allow the publishing
 jobs' `contents: write` permission. Actions artifacts expire after 14 days;
 release assets remain available on the repository's Releases page.
 
-The shared `build-macos.yml` workflow calls `launcher/build-app.sh`. It stamps
+The shared `build-linux.yml` workflow calls `launcher/build-linux.sh` and writes
+the version to `resources/VERSION`. The shared `build-macos.yml` workflow calls `launcher/build-app.sh`. It stamps
 `CFBundleShortVersionString` from the release tag (`0.0.0` for dev builds) and
 `CFBundleVersion` from the workflow run number and attempt before signing.
 Local builds retain `0.1.0` / `1` by default; override them with
@@ -190,6 +194,99 @@ CI runs `launcher/check-bundle.py` on both architectures after building. It move
 the bundled tools to a path with spaces, starts them with a fresh home and
 untrusted Python environment variables, and denies network access with the macOS
 sandbox. Real-disc end-to-end testing needs your own game disc.
+
+On Linux, the Python tests are the same; the launcher model and readiness checks are:
+
+```sh
+mkdir -p launcher/build
+cc -std=gnu11 -Wall -Wextra $(pkg-config --cflags gtk+-3.0 gio-unix-2.0) \
+  launcher/test-linux-launcher.c -o launcher/build/test-linux-launcher \
+  $(pkg-config --libs gtk+-3.0 gio-unix-2.0)
+launcher/build/test-linux-launcher
+launcher/build-linux.sh
+python3 launcher/check-bundle.py dist/Battlegrounds/resources
+xvfb-run -a dist/Battlegrounds/Battlegrounds --screenshot /tmp/launcher.png
+```
+
+`test_readiness.py` covers the Python readiness check the Linux launcher uses,
+including the cache shared with `install.py`; `test_iso9660.py` covers ISO
+extraction. On Linux, `check-bundle.py` denies network access with a new
+user/network namespace (`unshare`); Ubuntu 24.04 and newer need
+`sysctl kernel.apparmor_restrict_unprivileged_userns=0` for that. It also runs
+setup from a synthetic disc image up to cabinet extraction.
+
+## Linux
+
+The Linux launcher (`linux-launcher.c`) is a small GTK 3 program with the same
+service-bay design, setup consent, stages and errors as the macOS app. It runs
+the same `worker`, `bootstrap.sh` and `install.py`, and asks `readiness.py` on
+the bundled Python whether a verified installation exists. Players need GTK 3
+and OpenGL 4.1 drivers (any current desktop has both) on glibc 2.35 or newer;
+everything else ships in the download.
+
+Differences from macOS:
+
+- **Discs.** A mounted CD is detected when the mount table changes: any
+  `iso9660`/`udf` mount, or anything under `/media`, `/run/media` or `/mnt`.
+  Desktops mount inserted CDs automatically; GNOME's Disk Image Mounter and
+  `udisksctl loop-setup -f Battlegrounds.iso` make a mounted ISO work as a disc.
+- **ISO images** are read by the bundled `iso9660.py` (ISO 9660 with Joliet
+  names) instead of `bsdtar`, so neither `bsdtar` nor loop mounting is needed.
+  Extracted names are matched case-insensitively to the recorded file list.
+- **Files.** In a source checkout everything goes into `source/launcher/` as on
+  macOS. A downloaded app in a writable folder uses the adjacent
+  `Battlegrounds Files/` folder. Under `/usr` or `/opt`, or in a read-only
+  folder, files go into `$XDG_DATA_HOME/openbg` (normally `~/.local/share/openbg`).
+  The engine keeps its preferences (`registry.txt`) and `Recordings/` in that
+  same XDG folder; snapshots go to `~/Pictures`. `OPENBG_HOME`,
+  `OPENBG_PROJECT_ROOT` and `OPENBG_GAME_ARGS` work as on macOS.
+- **Command line.** `Battlegrounds path/to/game.iso` opens setup for that image
+  (still asking for confirmation), `--create-desktop-entry` adds the launcher to
+  the application menu, `--preview` shows setup without installing, and
+  `--screenshot PATH` saves the setup window and exits. Without a display, a
+  verified game still starts, and the launcher prints the terminal setup command
+  (the `worker`/`bootstrap.sh` command under [Validation](#validation)).
+
+### Run from this checkout
+
+```sh
+./launch.sh
+```
+
+`launch.command` does the same on Linux. Building needs CMake 3.20+, a C/C++20
+compiler, Python 3, GTK 3 development files and the headers SDL2 needs for its
+display and audio back ends. On Debian or Ubuntu:
+
+```sh
+sudo apt install build-essential cmake pkg-config python3 curl zlib1g-dev libgtk-3-dev \
+  libgl-dev libegl-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+  libxss-dev libxinerama-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+  libasound2-dev libpulse-dev libdbus-1-dev libudev-dev
+```
+
+On Fedora, install `gcc-c++ libstdc++-static cmake pkgconf-pkg-config python3 curl
+gtk3-devel zlib-devel mesa-libGL-devel
+mesa-libEGL-devel libX11-devel libXext-devel libXrandr-devel libXcursor-devel
+libXi-devel libXScrnSaver-devel libXinerama-devel libxkbcommon-devel
+wayland-devel wayland-protocols-devel alsa-lib-devel pulseaudio-libs-devel
+dbus-devel systemd-devel`. `build-linux.sh` stops if SDL2 would be built without
+X11, Wayland, GLX/EGL, PulseAudio or ALSA support.
+
+### Package for players
+
+```sh
+launcher/build-linux.sh
+tar -C dist -czf Battlegrounds-linux-$(uname -m).tar.gz Battlegrounds
+```
+
+`launcher/build-app.sh` calls `build-linux.sh` on Linux. The result is
+`dist/Battlegrounds/`: the `Battlegrounds` launcher plus `resources/` with the
+engine, `unshield`, `worker`, setup scripts, cumulative update, CPython 3.12.12,
+bsdiff4 and the license files. The engine and `unshield` link SDL2 and the C++
+runtime statically; the build fails if they need any shared library other than
+glibc, zlib and libGL. SDL2 opens X11 or Wayland and PulseAudio (which PipeWire
+desktops provide) or ALSA at runtime. Build on the oldest distribution you want to support: the binaries need
+that distribution's glibc or newer. Releases are built on Ubuntu 22.04.
 
 ## Cumulative update provenance
 

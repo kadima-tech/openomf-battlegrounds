@@ -64,10 +64,11 @@ static int packaged_setup(const fs::path &app, const fs::path &image, const fs::
 	} while (0)
 	CHECK_SETUP(!model.busy && !model.worker, "Setup must finish");
 	CHECK_SETUP(reading, "Setup must report reading the disc");
-	CHECK_SETUP(model.error && model.error->find(L"unshield") != std::wstring::npos, "The extractor's failure must be reported");
+	CHECK_SETUP(model.error && model.error->find(L"could not be unpacked") != std::wstring::npos, "The extractor's failure must be reported");
 	CHECK_SETUP(!model.ready && !fs::exists(home / L"game"), "A failed setup must not publish a game");
 	auto log = read_file(home / L"install.log");
 	CHECK_SETUP(log && log->find("read ISO 9660 image") != std::string::npos, "Setup must read the image itself");
+	CHECK_SETUP(log && log->find("unshield.exe") != std::string::npos, "The setup log must name the failed extractor");
 	// unshield finds the cabinet's other volumes by splitting its path at the last "/".
 	CHECK_SETUP(log->find("/disc/SETUP/DATA1.CAB") != std::string::npos, "The extractor must get a forward-slash cabinet path");
 	// ...and creates output folders from the start of the path, where a bare "C:" fails.

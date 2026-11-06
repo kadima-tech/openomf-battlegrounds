@@ -5,8 +5,8 @@ if(WIN32)
     enable_language(RC)
 endif()
 
-# Both libraries are linked statically. End users need no Homebrew packages (macOS) or DLLs
-# beyond those every Windows 10/11 installation has.
+# Both libraries are linked statically. End users need no Homebrew packages (macOS), distro
+# packages (Linux) or DLLs beyond those every Windows 10/11 installation has.
 
 # macOS takes zlib from its SDK. Windows has none, so a pinned zlib is built and linked statically;
 # ZLIB_* are preset so find_package(ZLIB) in the engine and unshield resolve to it.
@@ -19,6 +19,15 @@ if(WIN32)
     add_library(ZLIB::ZLIB ALIAS zlibstatic)
     set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE STRING "" FORCE)
     set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
+endif()
+
+# Linux players need no particular C++ runtime: link it statically. SDL2 still
+# loads X11/Wayland, audio servers and libGL from the desktop at runtime.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	add_link_options(-static-libstdc++ -static-libgcc)
+	# GCC 16 reports libgcc_s as an implicit C library, so CMake would name it on
+	# C++ links that contain C objects (SDL2, openindeo) and undo -static-libgcc.
+	list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES gcc_s gcc_s_asneeded)
 endif()
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -37,7 +46,7 @@ FetchContent_Declare(unshield
     URL https://codeload.github.com/twogood/unshield/tar.gz/refs/tags/1.5.1
     URL_HASH SHA256=34cd97ff1e6f764436d71676e3d6842dc7bd8e2dd5014068da5c560fe4661f60)
 # unshield's bundled MD5 code uses K&R declarations, which C23 (GCC 15+'s default, as in MSYS2)
-# rejects. Build it as C17, what Apple clang defaults to.
+# rejects. Build it as C17, what Apple clang defaults to (Fedora 42+ also has GCC 15+).
 set(CMAKE_C_STANDARD 17)
 if(WIN32)
     # iconv only serves unshield's -e (filename encoding) option, which setup does not use.

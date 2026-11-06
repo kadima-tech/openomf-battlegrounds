@@ -17,6 +17,7 @@
 #include "de/platform.h"
 #include "de/scene.h"
 #include "gl_util.h"
+#include "gl_window.h"
 #include "glow.h"
 #include "render.h"
 
@@ -66,11 +67,10 @@ int main(int argc, char **argv) {
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 		const int W = 1280, H = 720;
-		SDL_Window *win = SDL_CreateWindow((std::string("One Must Fall: Battlegrounds — ") + argv[2]).c_str(),
-		                                   SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
-		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
-		SDL_GLContext ctx = SDL_GL_CreateContext(win);
-		if (!ctx) throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
+		SDL_GLContext ctx = nullptr;
+		SDL_Window *win = glu::create_gl_window((std::string("One Must Fall: Battlegrounds — ") + argv[2]).c_str(),
+		                                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
+		                                        SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN), &ctx);
 		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		render::g_live_values = [&](const de::ObjectRef &r) -> std::optional<float> {

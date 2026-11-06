@@ -175,6 +175,9 @@ set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 if(NOT TARGET SDL2::SDL2)
 	find_package(SDL2 REQUIRED)
 endif()
+# On Linux, link libGL.so.1: every OpenGL driver stack provides it, while GLVND's
+# libOpenGL.so.0 is a separate package some distributions do not install.
+set(OpenGL_GL_PREFERENCE LEGACY)
 find_package(OpenGL REQUIRED)
 # SDL's main() wrapper turns the Windows command line into UTF-8 arguments.
 set(OPENBG_SDL_LIBS SDL2::SDL2)

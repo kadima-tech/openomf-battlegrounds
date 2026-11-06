@@ -46,6 +46,23 @@ Homebrew dependencies. On Windows the result is the **`dist\Battlegrounds`** fol
 See [launcher/README.md](launcher/README.md) for packaging, storage locations and
 validation. The manual build/install instructions below remain available for development.
 
+## Launcher (Linux)
+
+Download the `x86_64` or `aarch64` `.tar.gz` from
+[Releases](https://github.com/kadima-tech/openomf-battlegrounds/releases), unpack it
+anywhere and run **`Battlegrounds/Battlegrounds`**. It needs a desktop with GTK 3
+and OpenGL 4.1 (Mesa or a vendor driver) on glibc 2.35 or newer: Ubuntu 22.04,
+Debian 12, Fedora 36 or later, and their derivatives. X11 and Wayland both work.
+The download includes the engine, setup tools and Python runtime; no packages are
+installed. Run `Battlegrounds/Battlegrounds --create-desktop-entry` to add it to
+your application menu.
+
+Setup works as on macOS: choose or drop your ISO, or mount the game CD (it is
+detected automatically), confirm **Start setup**, and the launcher extracts the
+game, applies the bundled update offline and starts it. From a source checkout,
+run **`./launch.sh`** to build and open the launcher; see
+[launcher/README.md](launcher/README.md#linux) for the build packages.
+
 ## You need the game
 
 You need your own copy of *One Must Fall: Battlegrounds*, either the original English
@@ -54,12 +71,19 @@ update; a complete game installation is not included.
 
 ## Building
 
-openomf-battlegrounds builds on **macOS** (Apple silicon or Intel) and **Windows 10/11** (x64, see
-[below](#building-on-windows)). The engine also compiles on Linux. On macOS you need CMake 3.20 or
-newer, a C++20 compiler (Xcode's command-line tools), and a few packages from Homebrew:
+openomf-battlegrounds builds on **macOS** (Apple silicon or Intel), **Linux** (x86_64 or aarch64;
+Ubuntu, Debian and Fedora are tested) and **Windows 10/11** (x64, see
+[below](#building-on-windows)). On macOS and Linux you need CMake 3.20 or newer, a C++20 compiler
+and SDL2. On macOS, use Xcode's command-line tools and Homebrew:
 
 ```sh
 brew install cmake sdl2 unshield
+```
+
+On Debian or Ubuntu (Fedora: `cmake gcc-c++ SDL2-devel mesa-libGL-devel zlib-devel unshield bsdtar python3`):
+
+```sh
+sudo apt install cmake g++ libsdl2-dev libgl-dev zlib1g-dev unshield libarchive-tools python3
 ```
 
 Then build:
@@ -115,7 +139,8 @@ The launcher installs directly from your disc/ISO using its bundled cumulative u
 with no network access. The steps below are for developers reproducing the original
 version trees for analysis; they are not needed to use the app.
 
-**1. Unpack the disc.** Copy your ISO into `source/` and extract its installer:
+**1. Unpack the disc.** Copy your ISO into `source/` and extract its installer (`bsdtar` is in
+Debian/Ubuntu's `libarchive-tools` package):
 
 ```sh
 mkdir -p source/iso
@@ -193,8 +218,8 @@ using [SECURITY.md](SECURITY.md).
 This project's original code and documentation are available under the
 [MIT license](LICENSE), including its warranty disclaimer and limitation of liability.
 The downloads include this license and the dependency notices in
-`Battlegrounds.app/Contents/Resources/licenses/` (macOS) or `Battlegrounds\resources\licenses\`
-(Windows).
+`Battlegrounds.app/Contents/Resources/licenses/` (macOS), `Battlegrounds\resources\licenses\`
+(Windows) or `Battlegrounds/resources/licenses/` (Linux).
 
 Third-party components retain their own terms; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The original game and its update

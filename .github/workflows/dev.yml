@@ -21,6 +21,12 @@ jobs:
       version: '0.0.0'
       label: dev-${{ github.run_id }}-${{ github.run_attempt }}
 
+  build-linux:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      version: '0.0.0'
+      label: dev-${{ github.run_id }}-${{ github.run_attempt }}
+
   build-windows:
     uses: ./.github/workflows/build-windows.yml
     with:
@@ -29,7 +35,7 @@ jobs:
 
   prerelease:
     name: Publish dev prerelease
-    needs: [build, build-windows]
+    needs: [build, build-linux, build-windows]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -50,10 +56,11 @@ jobs:
         working-directory: downloads
         run: |
           set -euo pipefail
-          # macOS arm64 and x86_64, Windows x64
+          # macOS arm64 and x86_64, Windows x64; Linux x86_64 and aarch64
           test "$(find . -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
-          test "$(find . -maxdepth 1 -name '*.zip.sha256' | wc -l)" -eq 3
-          sha256sum --check ./*.zip.sha256
+          test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.sha256' | wc -l)" -eq 5
+          sha256sum --check ./*.sha256
 
       - name: Create prerelease at the built commit
         env:
@@ -62,7 +69,7 @@ jobs:
           BUILD_COMMIT: ${{ github.sha }}
           DEV_TAG: dev-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          gh release create "$DEV_TAG" downloads/*.zip downloads/*.zip.sha256 \
+          gh release create "$DEV_TAG" downloads/*.zip downloads/*.tar.gz downloads/*.sha256 \
             --target "$BUILD_COMMIT" --title "Dev build $DEV_TAG" \
             --prerelease --latest=false --generate-notes \
             --notes-file .github/release-notes.md

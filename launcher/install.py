@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import signal
 import stat
@@ -75,7 +75,26 @@ def record_verified(root: Path, manifest: dict, destination: Path) -> None:
 
 
 def child_named(root: Path, name: str) -> Path:
+    if not root.is_dir():
+        return root / name
     return next((p for p in root.iterdir() if p.name.casefold() == name.casefold()), root / name)
+
+
+def match_manifest_case(root: Path, manifest: dict) -> None:
+    """Rename extracted entries whose names differ from the manifest only by case.
+
+    A no-op on macOS's and Windows' case-insensitive volumes; on Linux it keeps the verified
+    tree identical to the recorded file list whatever case the cabinet used.
+    """
+    for item in manifest["files"]:
+        current = root
+        for part in PurePosixPath(item["path"]).parts:
+            wanted = current / part
+            if not wanted.exists() and current.is_dir():
+                found = child_named(current, part)
+                if found.exists() and not found.is_symlink():
+                    found.rename(wanted)
+            current = wanted
 
 
 def disc_setup(root: Path) -> Path:
@@ -194,8 +213,9 @@ def extract_setup(source: Path, work: Path, log) -> Path:
     """Copy the disc image's Setup folder into the private work folder."""
     disc = work / "disc"
     disc.mkdir()
+    # macOS has bsdtar at a fixed path; Linux distributions may not install it.
     bsdtar = Path("/usr/bin/bsdtar")
-    if not WINDOWS and bsdtar.is_file():
+    if not WINDOWS and sys.platform == "darwin" and bsdtar.is_file():
         listing = subprocess.check_output([str(bsdtar), "-tf", str(source)], text=True)
         entry = next((x for x in listing.splitlines() if x.strip("./").lower() == "setup"), None)
         if not entry:
@@ -233,8 +253,14 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 emit("files", "active", "Unpacking the original game files…")
                 unpacked = work / "unpacked"
                 command, folder = unshield_command(resources, work, unpacked, child_named(setup, "data1.cab"))
-                run(command, log, **(dict(cwd=folder) if folder else {}))
-                game = unpacked / "App_Executables"
+                try:
+                    run(command, log, **(dict(cwd=folder) if folder else {}))
+                except subprocess.CalledProcessError:
+                    raise ValueError("The game disc could not be unpacked. Check the disc or ISO image and retry; "
+                                     "details are in the setup log.") from None
+                game = child_named(unpacked, "App_Executables")
+                manifest = json.loads((resources / "game-files.json").read_text(encoding="utf-8"))
+                match_manifest_case(game, manifest)
                 if not (game / "Data/OMFBGGUI.DEObjects").is_file():
                     raise ValueError("This disc edition is not supported. Use the original English 2.090 CD.")
                 emit("files", "done", "Original game files extracted")
@@ -244,7 +270,6 @@ def install(source: Path, home: Path, resources: Path, project: Path | None = No
                 log.write("Bundled cumulative update applied · 2.090 → 2.123\n")
                 emit("patches", "done", "Bundled update applied · 2.123")
                 emit("runtime", "active", "Verifying every game file…")
-                manifest = json.loads((resources / "game-files.json").read_text(encoding="utf-8"))
                 verify(game, manifest)
                 publish(game, home / "game")
                 try:

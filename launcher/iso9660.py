@@ -1,6 +1,6 @@
 """Read one directory out of an ISO 9660 disc image, without mounting it or external tools.
 
-Windows has no bsdtar at a fixed path, so setup reads the image itself. Only what a 2003
+Windows and many Linux desktops have no bsdtar, so setup reads the image itself. Only what a 2003
 retail CD uses is supported: the primary volume descriptor, or a Joliet supplementary one
 for its original file names, with single-extent, non-interleaved files. Anything else is
 rejected rather than guessed at. Names are compared case-insensitively.

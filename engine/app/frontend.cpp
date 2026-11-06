@@ -42,6 +42,7 @@
 #include "audio.h"
 #include "game_view.h"
 #include "gl_util.h"
+#include "gl_window.h"
 #include "overlay.h"
 #include "particles_gl.h"
 #include "render.h"
@@ -563,14 +564,14 @@ int main(int argc, char **argv) {
 		// Preferences\Renderer\Resolution X / Y (the Video panel's; the next start) and Full Screen.
 		const int W = shot ? 1024 : std::max(320, app.render_started.res_x), H = shot ? 768 : std::max(240, app.render_started.res_y);
 		bool fullscreen = !shot && app.registry_bool("Preferences\\Renderer\\Full Screen");
-		SDL_Window *win = SDL_CreateWindow("One Must Fall: Battlegrounds", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
-		                                   SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE |
-		                                       (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
+		SDL_GLContext ctx = nullptr;
+		SDL_Window *win = glu::create_gl_window("One Must Fall: Battlegrounds", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
+		                                        SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE |
+		                                            (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN),
+		                                        &ctx);
+		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		app.key_name = [](int sc) { return std::string(SDL_GetScancodeName(SDL_Scancode(sc))); };
 		SDL_StartTextInput();
-		SDL_GLContext ctx = SDL_GL_CreateContext(win);
-		if (!ctx) throw std::runtime_error(std::string("OpenGL 4.1 is required: ") + SDL_GetError());
-		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
 		SDL_GL_SetSwapInterval(1);
 		if (shot) glu::offscreen(W, H);
 		view.init_gl();
@@ -931,6 +932,9 @@ int main(int argc, char **argv) {
 				char name[96];
 				time_t now = time(nullptr);
 				strftime(name, sizeof name, "OMFBG Snapshot %Y-%m-%d %H-%M-%S.png", localtime(&now));
+				// Minimal Linux desktops may have no Pictures folder yet.
+				std::error_code ec;
+				std::filesystem::create_directories(de::pictures_dir(), ec);
 				std::string out = (de::pictures_dir() / name).string();
 				glu::write_png(out.c_str(), dw, dh, px);
 				printf("snapshot %s\n", out.c_str());

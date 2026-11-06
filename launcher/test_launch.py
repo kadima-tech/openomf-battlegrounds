@@ -1,10 +1,17 @@
-"""Exercise launch.command with a fake builder; no game or downloads needed."""
+"""Exercise launch.command/launch.sh with a fake builder; no game or downloads needed."""
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+
+MAC = sys.platform == "darwin"
+# The entry point, builder and app executable this platform's launch script uses.
+ENTRY = "launch.command" if MAC else "launch.sh"
+BUILDER = "launcher/build-app.sh" if MAC else "launcher/build-linux.sh"
+EXECUTABLE = "dist/Battlegrounds.app/Contents/MacOS/Battlegrounds" if MAC else "dist/Battlegrounds/Battlegrounds"
 
 
 @unittest.skipIf(os.name == "nt", "launch.command is the macOS entry point; Windows uses launch.cmd")
@@ -14,7 +21,7 @@ class LaunchTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
         source = Path(__file__).resolve().parent.parent
-        for name in ("launch.command", "launcher/build_state.py", "LICENSE", "THIRD_PARTY_NOTICES.md",
+        for name in ("launch.command", "launch.sh", "launcher/build_state.py", "LICENSE", "THIRD_PARTY_NOTICES.md",
                      "re/scripts/directx_tables.py"):
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -22,21 +29,21 @@ class LaunchTests(unittest.TestCase):
         (self.repo / "engine").mkdir()
         self.source = self.repo / "engine/source.cpp"
         self.source.write_text("original source")
-        builder = self.repo / "launcher/build-app.sh"
-        builder.write_text('''#!/bin/bash
+        builder = self.repo / BUILDER
+        builder.write_text(f'''#!/bin/bash
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 echo build >> "$repo/builds.log"
 if [ -f "$repo/fail-build" ]; then exit 1; fi
-mkdir -p "$repo/dist/Battlegrounds.app/Contents/MacOS"
-printf '#!/bin/bash\\necho "Launched: $*"\\n' > "$repo/dist/Battlegrounds.app/Contents/MacOS/Battlegrounds"
-chmod +x "$repo/dist/Battlegrounds.app/Contents/MacOS/Battlegrounds"
+mkdir -p "$(dirname "$repo/{EXECUTABLE}")"
+printf '#!/bin/bash\\necho "Launched: $*"\\n' > "$repo/{EXECUTABLE}"
+chmod +x "$repo/{EXECUTABLE}"
 python3 "$repo/launcher/build_state.py" > "$repo/dist/.launcher-build-state"
 ''')
         builder.chmod(0o755)
 
-    def launch(self, success=True):
-        result = subprocess.run([str(self.repo / "launch.command"), "--preview"],
+    def launch(self, success=True, entry=ENTRY):
+        result = subprocess.run([str(self.repo / entry), "--preview"],
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode == 0, success, result.stderr)
         return result.stdout
@@ -82,6 +89,12 @@ python3 "$repo/launcher/build_state.py" > "$repo/dist/.launcher-build-state"
 
     def test_missing_executable_rebuilds_even_with_matching_state(self):
         self.launch()
-        (self.repo / "dist/Battlegrounds.app/Contents/MacOS/Battlegrounds").unlink()
+        (self.repo / EXECUTABLE).unlink()
         self.launch()
         self.assertEqual(self.count_builds(), 2)
+
+    @unittest.skipIf(MAC, "launch.command builds the macOS app itself")
+    def test_launch_command_uses_the_linux_launcher_elsewhere(self):
+        self.assertIn("Launched: --preview", self.launch(entry="launch.command"))
+        self.launch()
+        self.assertEqual(self.count_builds(), 1)
