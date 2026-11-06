@@ -146,6 +146,13 @@ NetSession::~NetSession() {
 	if (auto it = g_sessions.find(&w_); it != g_sessions.end() && it->second == this) g_sessions.erase(it);
 }
 
+void net_align_creature_time(World &w, GameObject &o) {
+	if (net_role(w) == NetRole::None) return;
+	uint32_t rate = w.creature_rate(&o);
+	uint32_t now = w.scene_ms_of(&o);
+	if (rate && now >= o.creation_time) o.creature_ticks = (now - o.creation_time) / rate;
+}
+
 NetSession *net_session(World &w) {
 	auto it = g_sessions.find(&w);
 	return it == g_sessions.end() ? nullptr : it->second;

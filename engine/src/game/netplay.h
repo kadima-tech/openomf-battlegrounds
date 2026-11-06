@@ -97,6 +97,9 @@ void net_sent(World &w, const GameObject *owner, uint32_t time);
 // The flags RegisterLastState* put on the state the owner's manager made last.
 enum class LastState { NoInterrupt, NoReplicate, TimeCritical, Correction, RequiredCorrection };
 void register_last_state(World &w, GameObject *owner, LastState what);
+// Online, a tick-based creature's time follows the scene clock both machines share (see
+// PLACEHOLDERS): one created or given its creation time late on a client is not behind the server's.
+void net_align_creature_time(World &w, GameObject &o);
 // DE_CStandardSessionSlot::SetupCreatureControl's creature +0x1f8.
 bool locally_controlled(World &w, const GameObject *creature);
 void set_locally_controlled(World &w, GameObject *creature, bool on);
