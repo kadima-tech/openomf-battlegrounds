@@ -487,7 +487,7 @@ int main(int argc, char **argv) {
 			if (memory_every && fr % memory_every == 0) fprintf(stderr, "[memory %d] script arena %u MB, %zu objects\n", fr, world.memory().used() >> 20, world.scene_objects().size());
 			// OPENBG_DEBUG_TREE=<name>@<frame> prints the scene branches under objects of that name then.
 			if (const char *dt = getenv("OPENBG_DEBUG_TREE"); dt && strchr(dt, '@') && atoi(strchr(dt, '@') + 1) == fr) {
-				std::string name(dt, strchr(dt, '@'));
+				std::string name(dt, size_t(strchr(dt, '@') - dt));
 				std::function<void(game::GameObject *, int)> dump = [&](game::GameObject *o, int depth) {
 					auto t = o->world().t;
 					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2]);
