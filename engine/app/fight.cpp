@@ -17,6 +17,7 @@
 // stand-in pilot. Headless mode prints what the brains do, the session's on-screen messages
 // and which natives are still missing. Drag to orbit the camera, scroll to zoom, Esc to quit.
 #include <SDL.h>
+#include <chrono>
 #include <cstdlib>
 
 #include <algorithm>
@@ -575,7 +576,16 @@ int main(int argc, char **argv) {
 				}
 				apply_holds(fr);
 				pilot_tick();
+				static const int memory_every = getenv("OPENBG_DEBUG_MEMORY") ? std::max(1, atoi(getenv("OPENBG_DEBUG_MEMORY"))) : 0;
+				static double tick_ms = 0;
+				const auto tick_start = std::chrono::steady_clock::now();
 				world.tick();
+				tick_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+				if (memory_every && fr % memory_every == 0) {
+					fprintf(stderr, "[memory %d] tick %.2f ms/frame, %s, %s\n", fr, tick_ms / memory_every, world.debug_counts().c_str(),
+					        (offline ? *offline : speakers).debug_counts().c_str());
+					tick_ms = 0;
+				}
 				print_texts(fr);
 				if (getenv("OPENBG_DEBUG_SOUND")) {
 					for (auto &r : world.sound_requests) {
@@ -687,6 +697,8 @@ int main(int argc, char **argv) {
 		bool running = true;
 		int fr = 0;
 		double accum = 0;
+		const int memory_every = getenv("OPENBG_DEBUG_MEMORY") ? std::max(1, atoi(getenv("OPENBG_DEBUG_MEMORY"))) : 0;
+		double frame_cpu_ms[2] = {0, 0};  // tick, draw
 		Uint64 last = SDL_GetPerformanceCounter();
 		while (running) {
 			SDL_Event e;
@@ -740,7 +752,9 @@ int main(int argc, char **argv) {
 					apply_holds(fr);
 				}
 				pilot_tick();
+				const auto tick_start = std::chrono::steady_clock::now();
 				world.tick(frame_ms);
+				frame_cpu_ms[0] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
 				print_texts(fr);
 				++fr;
 			}
@@ -766,7 +780,17 @@ int main(int argc, char **argv) {
 			}
 			int dw = W, dh = H;
 			if (!shot) SDL_GL_GetDrawableSize(win, &dw, &dh);
+			const auto draw_start = std::chrono::steady_clock::now();
 			view.draw(dw, dh, fr, shot != nullptr);
+			if (memory_every) {
+				glFinish();
+				frame_cpu_ms[1] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - draw_start).count();
+				if (fr % memory_every == 0) {
+					fprintf(stderr, "[memory %d] tick %.2f ms, draw %.2f ms a frame, %s, %s\n", fr, frame_cpu_ms[0] / memory_every, frame_cpu_ms[1] / memory_every,
+					        world.debug_counts().c_str(), mixer.debug_counts().c_str());
+					frame_cpu_ms[0] = frame_cpu_ms[1] = 0;
+				}
+			}
 			if (shot) {
 				// The final frame goes to `shot`; SHOTS="150,155,..." also writes <shot>-<frame>.png.
 				bool last_frame = fr >= frames;

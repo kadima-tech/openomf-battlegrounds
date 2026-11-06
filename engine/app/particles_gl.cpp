@@ -443,6 +443,12 @@ void ParticleRenderer::draw(const game::World &world, const float *vp, const flo
 	auto element = [&](const void *id, const game::GameObject *actor, bool particle_renderer, int placement = 0) -> Batches & {
 		auto [it, made] = elements_.try_emplace(id);
 		Element &e = it->second;
+		// A freed instance's address reused by another actor's is a new element.
+		if (!made && particle_renderer && e.actor != actor) {
+			order_.erase(std::remove(order_.begin(), order_.end(), id), order_.end());
+			e = Element{};
+			made = true;
+		}
 		if (made) {
 			float g = 0;
 			if (particle_renderer) {

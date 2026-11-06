@@ -340,6 +340,16 @@ void World::destroy(GameObject *o) {
 		if (b->brain) b->brain->inst.shut_down = true, dead_brains_.push_back(b->brain);
 		gone.insert(b->handle);
 	}
+	// Its creatures', physics' and executors' ObjDestroyContents: RemoveTemporal; the tick hooks let go.
+	auto gone_brain = [&](const Brain *br) { return br && (br->inst.shut_down || (br->owner && gone.count(br->owner->handle))); };
+	for (auto &s : temporal_sets_) {
+		std::erase_if(s.elements, [&](const Temporal &t) {
+			if (t.kind == Temporal::Brain) return gone_brain(t.brain);
+			return (t.kind == Temporal::Creature || t.kind == Temporal::Monitor) && gone.count(t.handle) != 0;
+		});
+	}
+	std::erase_if(render_tick_hooks, [&](const auto &h) { return gone_brain(h.first); });
+	std::erase_if(delta_tick_hooks, [&](const auto &h) { return gone_brain(h.first); });
 	// Its primitives (text, quads, bars) go with it.
 	for (auto it = texts.begin(); it != texts.end();) {
 		if (gone.count(it->first->handle) || (it->second.mesh && gone.count(it->second.mesh->handle))) {
@@ -1915,6 +1925,28 @@ void World::tick_gui(int view, uint32_t ms) {
 	now += left;
 	gui_scene_global[view] = global_ms();
 	gui_passing_ = false;
+}
+
+std::string World::debug_counts() {
+	size_t temporals = 0;
+	for (auto &s : temporal_sets_) temporals += s.elements.size();
+	size_t live_brains = 0;
+	for (auto &b : brains_) live_brains += !b->inst.shut_down;
+	size_t affs = 0, dead_affs = 0;
+	for (auto &o : objects_) {
+		if (o.shape == GameObject::Shape::None) continue;
+		affs += in_scene(o);
+		dead_affs += o.destroyed_seq != 0;
+	}
+	size_t dead_render = 0, dead_delta = 0;
+	for (auto &h : render_tick_hooks) dead_render += h.first->inst.shut_down;
+	for (auto &h : delta_tick_hooks) dead_delta += h.first->inst.shut_down;
+	char buf[640];
+	snprintf(buf, sizeof buf, "objects %zu (live %zu, scene %zu), brains %zu (live %zu, dead %zu), temporals %zu in %zu sets, testers %zu, affectors %zu (destroyed objects with a shape %zu), render hooks %zu (dead %zu), delta hooks %zu (dead %zu), %s",
+	         objects_.size(), by_handle_.size(), scene_objects().size(), brains_.size(), live_brains, dead_brains_.size(), temporals,
+	         temporal_sets_.size(), collision_tester_count(*this), affs, dead_affs, render_tick_hooks.size(), dead_render, delta_tick_hooks.size(), dead_delta,
+	         particles->debug_counts().c_str());
+	return buf;
 }
 
 void World::close_instance(vm::Executor &, uint32_t instance) { instances_closed_.push_back(instance); }
