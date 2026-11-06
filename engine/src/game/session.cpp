@@ -2,6 +2,7 @@
 // what the creature and pilot pickers build fighters and pilots from).
 #include "game/observer.h"
 #include "game/session.h"
+#include "game/netplay.h"
 #include "game/replay.h"
 
 #include <algorithm>
@@ -839,7 +840,7 @@ void render_tick(World &w, float ms) {
 }
 
 // A session begun during the frame's updates becomes the current one after them.
-static std::weak_ptr<SessionState> g_begun;
+static std::map<const World *, std::weak_ptr<SessionState>> g_begun;  // by machine
 
 // One session's update (DE_CStandardSession::Update).
 static void update_one(World &w, SessionState &s) {
@@ -933,7 +934,7 @@ void update_session(World &w) {
 	for (auto &sp : all) {
 		if (sp->ended) continue;
 		w.session = sp;
-		const bool recorded = replay_session(w) == sp.get();
+		const bool recorded = replay_session(w) == sp.get() || net_role(w) != NetRole::None;
 		if (recorded) {
 			// It checks its record and fetches the replayed states before its scene passes.
 			w.use_clock(sp->obj);
@@ -949,9 +950,9 @@ void update_session(World &w) {
 	}
 	if (!replay_seen) replay_update(w);
 	if (std::find(w.sessions.begin(), w.sessions.end(), current) != w.sessions.end() || !current) w.session = current;
-	if (auto b = g_begun.lock()) {
+	if (auto b = g_begun[&w].lock()) {
 		if (std::find(w.sessions.begin(), w.sessions.end(), b) != w.sessions.end()) w.session = b;
-		g_begun.reset();
+		g_begun[&w].reset();
 	}
 	if (w.session && std::find(w.sessions.begin(), w.sessions.end(), w.session) == w.sessions.end()) w.session = w.sessions.empty() ? nullptr : w.sessions.back();
 }
@@ -1019,7 +1020,7 @@ void register_session_natives(World &w) {
 			c.ret_object(s ? s->obj : nullptr);
 		});
 		reg(std::string(cls) + "class CScene Scene()", [](const NativeContext &c) { c.ret_object(c.world.create("Scene", "Scene")); });
-		reg(std::string(cls) + "bool IsServer()", [](const NativeContext &c) { c.ret_bool(true); });
+		reg(std::string(cls) + "bool IsServer()", [](const NativeContext &c) { c.ret_bool(net_role(c.world) != NetRole::Client); });
 		reg(std::string(cls) + "bool IsSimulating()", [](const NativeContext &c) { c.ret_bool(true); });
 		// AddPropertyCaller (Session 0x45014ba0 / 0x45019e60): appended to the property list.
 		reg(std::string(cls) + "AddProperty(class CObject)", [S](const NativeContext &c) {
@@ -1201,6 +1202,9 @@ void register_session_natives(World &w) {
 			// then SetupCreatureControl binds the user's client's device to it.
 			c.world.enter_scene(sl->creature);
 			c.world.set_user_controlled(*sl->creature, sl->client && sl->client->user ? 0 : -1);
+			// SetupCreatureControl (Session 0x4501a9b0): +0x1f8 for a locally controlled slot's
+			// creature whose client, if any, is local.
+			if (net_role(c.world) != NetRole::None) set_locally_controlled(c.world, sl->creature, sl->local && (!sl->client || sl->client->local));
 			if (Brain *b = sl->creature->brain; b && !b->started) {
 				b->started = true;
 				b->exec->pulse();
@@ -1328,7 +1332,7 @@ void register_session_natives(World &w) {
 		c.world.session = sp;
 		begin(c.world, *s);
 		c.world.session = keep;
-		g_begun = sp;
+		g_begun[&c.world] = sp;
 	});
 	reg("CObject::class CSession SubSessionOwner()", [S](const NativeContext &c) {
 		SessionState *s = S(c);

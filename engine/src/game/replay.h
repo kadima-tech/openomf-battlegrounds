@@ -76,15 +76,16 @@ void replay_update(World &w);
 // After the scene's pass: a rewind's run-time actors go, and each manager whose fetch added a
 // state restores its newest (NeedFixup, SetupOwnerForState).
 void replay_after_pass(World &w);
-// The session being recorded or replayed, if any.
+// The session being recorded, replayed or played over the network, if any.
 SessionState *replay_session(World &w);
 // Register*State (CreateCurrentState): the owner's current state joins its manager's history,
 // to be recorded as it ages out; RegisterGetHitState also marks the fighter hit.
-void register_state(World &w, GameObject *owner, bool got_hit = false);
+// `authority` and `significance` (4: the manager's defaults) matter only to network play.
+void register_state(World &w, GameObject *owner, bool got_hit = false, int authority = 4, int significance = 4);
 // The pre-destruction of `o` (and its branch): their managers' histories go into the record.
 void replay_destroying(World &w, GameObject &o);
 // CCreature::SetInstanceNumber: part of the creature's ID.
-void set_instance_number(GameObject &o, int32_t n);
+void set_instance_number(World &w, GameObject &o, int32_t n);
 // DE_CStateManager +0x78: driven by a record (IsSimulating / IsStateAlterable false).
 bool replay_driven(World &w, const GameObject *o);
 // DE_CCreature::Tick at its start: true when the creature skips its physics and brain this tick

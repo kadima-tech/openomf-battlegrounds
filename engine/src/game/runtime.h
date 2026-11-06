@@ -851,6 +851,7 @@ public:
 	std::shared_ptr<class MusicSystem> music;
 	// Simple physics of actors that aren't fighters (pickups, projectiles, force applicators).
 	std::shared_ptr<class SimplePhysicsSystem> simple_physics;
+	std::shared_ptr<void> combat;  // natives_combat.cpp's tables: attack infos, hit records, collision testers
 	// The observer camera's command executors (observer.h).
 	std::shared_ptr<class ObserverSystem> observers;
 	std::shared_ptr<class ImpulseRobot> impulses;  // the global impulse robot (g_GlobalImpulses)
@@ -1090,7 +1091,7 @@ void register_music_natives(World &w);
 const Pilot *pilot_of(GameObject *o);
 void register_simple_physics_natives(World &w);
 // A CData's bytes (DE_CDataBlock), by its block in script memory.
-std::vector<uint8_t> &cdata_bytes(uint32_t block);
+std::vector<uint8_t> &cdata_bytes(World &w, uint32_t block);
 // Active collision testers (natives_combat.cpp), once per tick.
 void tick_collision_tester(World &w, uint32_t handle);
 // MSVCRT rand() on the main thread: one stream that Core, Creature, OMF and Particles all draw
@@ -1098,6 +1099,8 @@ void tick_collision_tester(World &w, uint32_t handle);
 int crt_rand();
 void crt_srand(uint32_t seed);
 uint32_t crt_rand_state();
+// Several machines in one process (the network harness): rand() draws on `state` (null: the process's).
+void use_rand_state(uint32_t *state);
 // MATH::Rand(1): rand() / 32768.
 float random01(World &w);
 

@@ -440,8 +440,8 @@ void register_simple_physics_natives(World &w) {
 	reg("CSimplePhysics::SetAcceleration(class CVector)", [S](const NativeContext &c) {
 		if (auto *s = S(c)) s->accel = read_vec(c.mem(), c.arg<uint32_t>(0));
 	});
-	reg("CSimplePhysics::class CVector Momentum()", [S](const NativeContext &c) {
-		static uint32_t v = 0;
+	reg("CSimplePhysics::class CVector Momentum()", [S, vec = std::make_shared<uint32_t>(0)](const NativeContext &c) {
+		uint32_t &v = *vec;
 		if (!v) v = c.mem().alloc(12);
 		auto *s = S(c);
 		write_vec(c.mem(), v, s ? s->momentum : Vec{0, 0, 0});
