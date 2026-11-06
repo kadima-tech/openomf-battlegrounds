@@ -8,10 +8,11 @@ shared). Status: draft, 2026-11-06.
 ## 1. What the data allows (research summary)
 
 - **Add-on files work.** Both the original and our engine load every `*.DEObjects` in `Data`
-  (FINDINGS 192; ours in name order, and a later file wins a GUID clash). Content is found by class and
-  cast, not by a list: Choose Pilot / Robot / Arena / Match gather every description of their class
-  that is listed, unlocked and in the right cast. So **all edits go into one new add-on file**. The
-  shipped files are never changed, which also keeps the launcher's 2.123 checksum check happy.
+  (FINDINGS 192, 433), with no registration. Content is found by class and cast, not by a list:
+  Choose Pilot / Robot / Arena / Match gather every description of their class that is listed,
+  unlocked and in the right cast. So **all edits go into one new add-on file** that **adds** objects
+  with new GUIDs; it cannot reliably override a base object in the original (§7). The shipped files
+  are never changed, which also keeps the launcher's 2.123 checksum check happy.
 - **Pilot:** an `Actor\Creature\Pilot` with:
   - power / agility / endurance / focus, each 0-100;
   - three paint colours with weights;
@@ -35,9 +36,12 @@ shared). Status: draft, 2026-11-06.
   - **Data:** movement and jump stats, 102 animation sequences, input sequences, hit and attack spheres,
     sounds, effects, paint images, and the 3 LOD meshes with skin weights.
   - **Script:** moves, damage, stun and supers (`BJaguar` alone is 13.7k lines).
-- **Scripts ship as source,** and our compiler matches the shipped bytecode (FINDINGS 132). There is no
-  bytecode (VMC2) writer yet. Both engines compile a class at load when its bytecode is missing, but
-  the original runs nothing if that compile fails (FINDINGS 21, 158).
+- **Scripts ship as source plus VMC2 bytecode.** `vm::VMClass::write()` writes VMC2 exactly as the
+  original saves it (all 255 shipped payloads round-trip, FINDINGS 430), and our compiler emits what
+  the original's loader checks (FINDINGS 431). Its code is not yet byte-identical to the original
+  compiler's (frame sizes, table order; FINDINGS 432), which does not matter for running it. The
+  original compiles a class whose VMC2 is missing or stale, and **quits** if that compile has an
+  error (FINDINGS 436).
 - **Assets:**
   - images and WAVs: decode and encode are easy;
   - meshes and skeletal animation: decode yes, import moderate to hard (per-face UVs, 3 LODs, a named
@@ -168,21 +172,71 @@ No design document is public. These come from the official site's FAQ (2002-2003
 2. **Schemas.** Add the pilot, fighter-stats, input-sequence, behaviour-globals and
    arena-description chunk layouts (their readers already exist in the engine) to the writer, with
    round-trip tests.
-3. **Script output.** "Drop VMC2 and compile at load" works in both engines; a VMC2 writer is needed
-   so a bad compile can't silently break the original game. Decide whether add-ons must run on the
-   original exe at all (§7).
-4. **Override semantics.** "A later file wins a GUID clash" is inferred for the original, not tested.
-   Unknown fields (`value84`, the EX flags, description +0xcc…+0xd4) must be preserved.
+3. **Script output.** Every Class the editor writes carries VMC2 from `vm::compile_class` +
+   `VMClass::write()`, with change information that matches the `value84` of the behaviors it
+   attaches (FINDINGS 431). Without it, or with a stale one, the original compiles the source at load
+   and a compile error quits the game (FINDINGS 436). Settled; see §7.
+4. **Override semantics.** Settled: a GUID clash is not an override in the original (references go to
+   the later file, description lookups to the earlier one, lists show both; FINDINGS 433), so add-ons
+   only add objects with fresh GUIDs. Copied objects keep their `value84`, EX flags and unknown
+   fields byte for byte; new objects get a `value84` of their own, and a script's VMC2 is rebuilt
+   whenever a behavior it attaches changes `value84`.
 5. **Arena consistency.** Navigation, spawns and collision groups must stay consistent, or the AI
    breaks.
 6. **Importer scope.** glTF model, skin and animation import against the fixed rig is the largest
    single item.
 
-## 7. Decisions and open questions
+## 7. Original-game compatibility rules
+
+Established from the 2.123 modules (Core etc.; we do not run or analyse the protected exe), FINDINGS
+430-437. A test add-on built to these rules loads in OpenBG; the user checks it on a real 2.123 install.
+
+**Loading.** Every `*.DEObjects` in `<install>\Data` is an agent, in directory order, with no list,
+index or registry entry to update. All headers are read before any object is built and objects are
+created on demand, so an add-on may reference objects in any other file (SharedObjects, Pilots…)
+whatever its name. A reference to a GUID no loaded file has is silently null.
+
+**GUID clashes.** Both objects load and nothing reports it. A cross-file reference resolves to the
+later file's object (agents are searched last to first), but description lookups by GUID go to the
+earlier file's, and the selector lists show both. So an add-on **adds** objects; it never reuses a
+base GUID to replace something.
+
+**Scripts.** With VMC2 present and current the original runs it as is. "Current" means: chunk
+version 13; the change information equals, for each attached behavior, its `value84` and then the
+`value84` of each behavior it imports; every class name exists in 2.123 with the same layout
+position. Otherwise the original compiles the Behavior sources at load, raises a notice, and **quits
+on any compile error**.
+
+**Validator checklist** (every item is an error unless marked):
+1. Signature `Diversions Entertainment Objects File2`, format byte **2**, agent EX table count 0.
+2. Header chunk v9; agent info v4 with class `TransferAgent\Win\File`, a fresh non-zero GUID, eager
+   flag 0, flags 0; agent contents v1 with the GUID pool listing every external GUID referenced.
+3. Agent name non-empty, unique, and neither a prefix of nor prefixed by another agent's name, the
+   registry's (`DiversionsRegistry`, `PhoenixRegistry`), `OMFBG`, `Pickups`, `SharedObjects` or
+   `COREMeshes` (`FindAgent` matches by prefix).
+4. Every object info v4, a class path the 2.123 factories know, a fresh non-zero GUID unique across
+   the add-on and all 2.123 files, eager flag 0, flags bit 1 only when the contents are compressed.
+5. Compression method 0, 6 or 7 (7 with a correct MD5); never 5 or 8+.
+6. Local references below the object count, pool references below the pool size, and every pool
+   GUID present in the 2.123 data or the add-on (warning: a missing one loads as null).
+7. Hierarchy children are local objects only.
+8. Passive references (description resources, photos) carry the right agent GUID (the add-on's
+   own for its objects) and object GUID.
+9. Every Class has a VMC2 EX entry built by `vm::compile_class` against 2.123 plus the add-on, whose
+   change information matches the current `value84` of the behaviors it attaches and their imports,
+   and whose class names and layout positions are 2.123's. Rebuild it on every behavior change.
+10. Every Behavior's source also compiles without error with our compiler (a stand-in for the
+    original's, which would otherwise quit the game).
+11. Descriptions meant to be playable: `listed` set, `locked_by_default` clear (locks are keyed by
+    GUID in the registry, so a new GUID starts in its default state), and in the casts the screen
+    gathers (`PilotSPLadder`, `MultiplayerPilot`, …).
+12. Warning: list order follows file names (later names come first in the original's lists).
+
+## 8. Decisions and open questions
 Decided (2026-11-06):
 - **Both engines.** Add-ons must load and work in OpenBG **and** the original 2.123 game, so the editor
   writes VMC2 bytecode for every script it touches and enforces the original's loader rules
-  (§6 items 3-4; the compatibility rules are being established).
+  (§6 items 3-4; the rules and the validator checklist are in §7).
 - **Lossless writing** is a hard requirement (§6 item 1).
 - **Platforms:** macOS (arm64 and x86_64), Linux and Windows, from the same CMake build as the engine.
 - **Visual direction:** like Unreal Engine 5. Dark charcoal panels (#191a21 ground, #1d1e26 panels,
@@ -202,7 +256,7 @@ Open:
 3. Testing in the original game needs a real Windows install of 2.123 (we don't run the protected
    exe). Who runs those checks: the user, or a tester?
 
-## 8. Milestones
+## 9. Milestones
 1. **Writer foundations:** a lossless round trip on all 65 files, the new schemas and an add-on file
    builder. Tests in ctest.
 2. **Shell:** the ImGui docking app (layouts, document tabs), Content Browser, Outliner, Details,
