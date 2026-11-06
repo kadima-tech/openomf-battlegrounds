@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <optional>
 
 #include "schema.h"
@@ -116,36 +117,59 @@ struct RefContext {
 	std::vector<std::string> *warnings = nullptr;
 	const GuidNames *names = nullptr;  // other files' objects, for display
 	std::function<std::string(size_t)> pool_guid;
+	bool *wide = nullptr;  // set when a reference is stored in a wider form than AddReference picks
 };
 
+// DE_CTransferAgent::AddReference (0x700574b0) writes a local index as one tag byte 0x32 + index up
+// to 204 and as 0x01 + u16 above that, and a GUID pool index in the smallest of 0x02/0x03/0x04.
+enum class RefForm { Canonical, Tag, U8, U16, U32 };
+
+const char *form_suffix(RefForm f) {
+	switch (f) {
+	case RefForm::Tag: return "/tag";
+	case RefForm::U8: return "/u8";
+	case RefForm::U16: return "/u16";
+	case RefForm::U32: return "/u32";
+	default: return "";
+	}
+}
+
+constexpr uint32_t kMaxTagIndex = 0xCC;
+
 // DE_CTransferAgent::ExtractReference (0x70057690). Shown as "#<index> <name>" for an object in
-// this file, "^<pool index> <guid>" for one in another file, null for none.
+// this file, "^<pool index> <guid>" for one in another file, null for none. An index stored in a
+// wider form than AddReference would choose carries a suffix ("#0/u16 ...") so it is kept.
 std::optional<Value> read_ref(Reader &r, const RefContext &ctx, const File *f) {
 	uint8_t tag = r.u8();
 	bool local;
 	uint32_t index;
+	RefForm form;
 	if (tag >= 0x32) {
-		local = true, index = tag - 0x32u;
+		local = true, index = tag - 0x32u, form = RefForm::Tag;
 	} else if (tag == 1) {
-		local = true, index = r.u16();
+		local = true, index = r.u16(), form = RefForm::U16;
 	} else if (tag == 2) {
-		local = false, index = r.u8();
+		local = false, index = r.u8(), form = RefForm::U8;
 	} else if (tag == 3) {
-		local = false, index = r.u16();
+		local = false, index = r.u16(), form = RefForm::U16;
 	} else if (tag == 4) {
-		local = false, index = r.u32();
+		local = false, index = r.u32(), form = RefForm::U32;
 	} else if (tag == 0) {
 		return Value();
 	} else {
 		return std::nullopt;
 	}
+	RefForm canonical = local ? (index <= kMaxTagIndex ? RefForm::Tag : RefForm::U16)
+	                          : (index <= 0xFF ? RefForm::U8 : index <= 0xFFFF ? RefForm::U16 : RefForm::U32);
+	const char *suffix = form == canonical ? "" : form_suffix(form);
+	if (*suffix && ctx.wide) *ctx.wide = true;
 	if (local) {
 		if (index >= ctx.objects) return std::nullopt;
-		return Value("#" + std::to_string(index) + " " + ctx.name_of(index));
+		return Value("#" + std::to_string(index) + suffix + " " + ctx.name_of(index));
 	}
 	if (index >= ctx.pool) return std::nullopt;
 	std::string g = f->guid_pool[index].str();
-	std::string s = "^" + std::to_string(index) + " " + g;
+	std::string s = "^" + std::to_string(index) + suffix + " " + g;
 	if (ctx.names) {
 		auto it = ctx.names->find(g);
 		if (it != ctx.names->end()) s += " " + it->second;
@@ -165,6 +189,16 @@ void write_ref(Writer &w, const Value &v, const RefContext &ctx) {
 	char *end = nullptr;
 	unsigned long index = strtoul(s.c_str() + 1, &end, 10);
 	if (end == s.c_str() + 1) throw Error("reference \"" + s + "\" has no index");
+	RefForm form = RefForm::Canonical;
+	for (RefForm f : {RefForm::Tag, RefForm::U8, RefForm::U16, RefForm::U32}) {
+		size_t n = strlen(form_suffix(f));
+		if (strncmp(end, form_suffix(f), n) == 0 && (end[n] == 0 || end[n] == ' ')) {
+			form = f;
+			end += n;
+			break;
+		}
+	}
+	if (*end != 0 && *end != ' ') throw Error("reference \"" + s + "\" has an unknown form after its index");
 	std::string rest = end;
 	while (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
 	if (s[0] == '#') {
@@ -173,13 +207,14 @@ void write_ref(Writer &w, const Value &v, const RefContext &ctx) {
 			ctx.warnings->push_back("reference \"" + s + "\" points at object #" + std::to_string(index) + " \"" +
 			                        ctx.name_of(index) + "\"");
 		}
-		if (index <= 0xFF - 0x32) {
+		if (form == RefForm::Canonical) form = index <= kMaxTagIndex ? RefForm::Tag : RefForm::U16;
+		if (form == RefForm::Tag && index <= 0xFF - 0x32) {
 			w.u8(uint8_t(0x32 + index));
-		} else if (index <= 0xFFFF) {
+		} else if (form == RefForm::U16 && index <= 0xFFFF) {
 			w.u8(1);
 			w.u16(uint16_t(index));
 		} else {
-			throw Error("object index too large for a reference");
+			throw Error("reference \"" + s + "\": the index does not fit its form (local references are /tag or /u16)");
 		}
 		return;
 	}
@@ -188,15 +223,18 @@ void write_ref(Writer &w, const Value &v, const RefContext &ctx) {
 		ctx.warnings->push_back("reference \"" + s + "\": GUID pool entry " + std::to_string(index) + " is " +
 		                        ctx.pool_guid(index));
 	}
-	if (index <= 0xFF) {
+	if (form == RefForm::Canonical) form = index <= 0xFF ? RefForm::U8 : index <= 0xFFFF ? RefForm::U16 : RefForm::U32;
+	if (form == RefForm::U8 && index <= 0xFF) {
 		w.u8(2);
 		w.u8(uint8_t(index));
-	} else if (index <= 0xFFFF) {
+	} else if (form == RefForm::U16 && index <= 0xFFFF) {
 		w.u8(3);
 		w.u16(uint16_t(index));
-	} else {
+	} else if (form == RefForm::U32) {
 		w.u8(4);
 		w.u32(uint32_t(index));
+	} else {
+		throw Error("reference \"" + s + "\": the index does not fit its form (pool references are /u8, /u16 or /u32)");
 	}
 }
 
@@ -361,8 +399,12 @@ std::optional<Value> decode_with_schema(const Bytes &data, size_t body, size_t e
 }
 
 // A references/hierarchy chunk with no schema: BOOL-terminated lists of references, the way
-// the engine's reference_lists() reads them.
-std::optional<Value> decode_lists(const Bytes &data, size_t body, size_t end, const RefContext &ctx, const File *f) {
+// the engine's reference_lists() reads them. Only a guess, so a chunk that does not re-encode to
+// the same bytes, or holds a reference AddReference would not have written, stays hex.
+std::optional<Value> decode_lists(const Bytes &data, size_t body, size_t end, const RefContext &outer, const File *f) {
+	bool wide = false;
+	RefContext ctx = outer;
+	ctx.wide = &wide;
 	Reader r(data, body, end);
 	Value lists = Value::array();
 	try {
@@ -374,6 +416,7 @@ std::optional<Value> decode_lists(const Bytes &data, size_t body, size_t end, co
 	} catch (const Error &) {
 		return std::nullopt;
 	}
+	if (wide) return std::nullopt;
 	// Collapse the trailing run of empty lists (often filler zeros).
 	int64_t empty = 0;
 	auto &items = lists.items();
@@ -381,6 +424,16 @@ std::optional<Value> decode_lists(const Bytes &data, size_t body, size_t end, co
 		items.pop_back();
 		++empty;
 	}
+	Writer w;
+	RefContext quiet = ctx;
+	quiet.warnings = nullptr;
+	try {
+		for (const Value &list : items) write_field(w, FieldType::RefList, list, quiet);
+	} catch (const std::exception &) {
+		return std::nullopt;
+	}
+	w.data().resize(w.size() + size_t(empty), 0);
+	if (w.data() != Bytes(data.begin() + long(body), data.begin() + long(end))) return std::nullopt;
 	Value out = Value::object();
 	out["lists"] = std::move(lists);
 	if (empty) out["empty_lists"] = Value(empty);
@@ -688,6 +741,23 @@ File file_from_json(const json::Value &index, const std::vector<json::Value> &ob
 		notes.clear();
 	}
 	return f;
+}
+
+File repack(const File &f) {
+	std::map<std::string, Bytes> blobs;
+	auto save = [&](size_t object, const std::string &tag, const Bytes &data) {
+		std::string key = std::to_string(object) + "." + tag;
+		blobs[key] = data;
+		return key;
+	};
+	std::vector<std::string> paths;
+	std::vector<json::Value> objects;
+	for (size_t i = 0; i < f.objects.size(); ++i) {
+		objects.push_back(json::Value::parse(object_to_json(f, i, save).dump()));
+		paths.push_back(std::to_string(i));
+	}
+	json::Value index = json::Value::parse(index_to_json(f, paths).dump());
+	return file_from_json(index, objects, [&](const std::string &key) { return blobs.at(key); }, nullptr);
 }
 
 std::string object_file_name(const File &f, size_t index) {

@@ -43,8 +43,9 @@ shared). Status: draft, 2026-11-06.
   - meshes and skeletal animation: decode yes, import moderate to hard (per-face UVs, 3 LODs, a named
     15-17 bone rig the scripts refer to);
   - AVI and DirectMusic: reuse what's there.
-- **Existing writer:** `tools/deobjects-editor` unpacks to JSON and packs back, but **the round trip is
-  lossless for only 16 of 65 files**; the rest come out 2-32 bytes short. This must be fixed first.
+- **Existing writer:** `tools/deobjects-editor` unpacks to JSON and packs back, byte for byte for all
+  65 files (and every older version's), and leaves untouched objects byte-identical when others are
+  edited. The writer (`engine/src/de/objects_model.*`) is shared with the engine.
 
 ## 2. Technology (options)
 

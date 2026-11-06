@@ -30,7 +30,7 @@ Everything is little-endian, as on the original x86 build.
 | `block` | `u32` length, then that many bytes (`DE_CDataBlock`) |
 | `string` | a `block` whose bytes include the terminating NUL. The empty string is a zero-length block (`DE_CDataBlock::Set(char*)` 0x70029140). Text is 8-bit (Windows code page 1252 / Latin-1) |
 | `GUID` | 16 bytes, Windows `GUID` layout (the first three groups little-endian) |
-| `squeezed` | a byte `< 0xFE` is the value; `0xFE` is followed by a `u16`; `0xFF` by a `u32` |
+| `squeezed` | a byte `< 0xFE` is the value; `0xFE` is followed by a `u16`; `0xFF` by a `u32`. The writer (`DE_CContents::AddSqueezed` 0x70019100) uses the `u16` form only below `0xFFFF`, so `0xFFFF` itself takes the `u32` form (FINDINGS 422) |
 | `chunk` | `u8` version, a size (a `u8`, or `0xFF` then a `u32`), then that many bytes. The size counts the bytes after the size field |
 
 **Chunks** are how the object system versions its data: each class writes its fields inside one
@@ -127,13 +127,21 @@ When an object's info flags have bit 1 set, its contents block is a compressed s
 
 | Method | Payload |
 |---|---|
-| 0 | stored: a `block` with the plain bytes |
+| 0 | stored: a `block` with the plain bytes. The reader refuses only a negative length or one longer than the rest of the stream |
 | 5 | "DZip". The original engine itself refuses it as obsolete |
 | 6 | `squeezed` plain size, then LZRW3-A data |
 | 7 | MD5 of the plain bytes (16), `squeezed` plain size, LZRW3-A data |
 
 1–3 (an LZSS tree coder) and 4 are not used by shipped data. Image pixel payloads use the same
-stream inside their EX block. The editor writes edited compressed contents back with method 0.
+stream inside their EX block.
+
+`SaveToFile` sets flag bit 1 for objects whose class asks for compression and always compresses
+them with method 7: `DE_CContents::Compress()` (0x7001a8f0) reads the registry value
+`CompressionType` but then calls `Compress(7)` regardless. It never clears the flag. An object
+whose flag is set and whose contents are stored with method 0 therefore loads in the original
+game (`DE_CTransferAgent::New` 0x70055140 runs `Decompress`, whose case 0 is the stored block)
+as in the engine. The editor keeps each object's original compressed stream while its contents
+are unchanged and writes changed contents with method 0, flag left set (FINDINGS 421). (from code)
 
 ## Inside an object
 
@@ -154,9 +162,23 @@ A reference to another object is written by `DE_CTransferAgent::InsertReference`
 | `0x02` + `u8`, `0x03` + `u16`, `0x04` + `u32` | object in another file, by GUID pool index |
 | `0x32`–`0xFF` | object in this file, table index = tag − 0x32 (indexes 0–205) |
 
+The writer (`DE_CTransferAgent::AddReference` 0x700574b0) picks the form from the index: a local
+index up to 204 (0xCC) as the single tag byte, 205 and above as `0x01` + `u16`, so tag `0xFF` is
+never written; a GUID pool index in the smallest of `0x02`/`0x03`/`0x04`. Every reference the
+editor decodes in the shipped files follows this rule (FINDINGS 420). A reader that re-encodes
+references must use exactly this rule (index 205 is the trap); the editor also keeps any other
+form it reads (`"#0/u16 ..."`, see its README) so such a file still round-trips. (verified)
+
 Inside references chunks, references nearly always come as **lists**: each entry is
 `BOOL 1, reference`, and the list ends with `BOOL 0`. A single optional reference is `BOOL 0`, or
 `BOOL 1, reference`.
+
+Not every references chunk is made of such lists, although many decode as lists by accident:
+`DE_CTextureManager::ObjGenerateReferences` (0x70131de0) writes a v2 chunk with an `i32` count
+followed by that many bare references, and `DE_CFaction::ObjGenerateReferences` (OMF 0x35051e10)
+a v1 chunk with an optional reference (the photo), the colour's `CAdvancedReference` references (a
+v1 chunk: `BOOL`, reference) and 0x14 filler bytes. The editor shows a chunk without a schema as
+lists only when the lists re-encode to exactly the same bytes with AddReference's tags. (from code)
 
 A **passive reference** (`DE_CTransferAgent::CPassiveReference`), used inside contents, names an
 object by GUID without loading it: `BOOL set`, then (when set) a size-only chunk of 32 bytes:
@@ -242,6 +264,27 @@ Many more classes are decoded by the engine (meshes, lights, scripts, sounds, mu
 physics, fighters). Their layouts are described next to the code that reads them under
 `engine/src` and in `re/FINDINGS.md`, and can be added to the editor's table
 (`tools/deobjects-editor/src/schema.cpp`) as they are confirmed.
+
+## Writing files back
+
+`deobjects-edit` (unpack to JSON, pack again, no edits) reproduces every shipped file byte for byte:
+the 65 files of 2.123, of the 2.090 disc, of the 2.095, 2.096, 2.097, 2.101 and 2.112 patches, and
+the two `core` files (457 in all). What it takes, besides writing the layout above in order:
+
+- Keep every chunk's size form: a size written as `0xFF` + `u32` although it would fit in a byte is
+  written back the same way.
+- Keep every byte after the known fields of a chunk (object info, agent contents, class chunks).
+- Keep `value84`, the "create eagerly" BOOL and the agent's uninitialised fields as read (they
+  hold debug-heap `0xCD` fill in some files).
+- Keep each compressed object's stream unless its contents changed; LZRW3-A output is not
+  reproduced by recompressing.
+- Decode a field or list only when re-encoding it gives back the same bytes, and write references
+  with AddReference's rule (above).
+
+Untouched objects stay byte-identical when other objects in the file are edited: their contents
+(compressed stream included), references, hierarchy and payloads are unchanged, and only file
+offsets move (the object table's data offsets and the EX entries' payload offsets). The engine's `write_objects_file` (recordings) uses the same
+writer (`engine/src/de/objects_model.cpp`). (verified)
 
 ## Open questions
 

@@ -5,8 +5,10 @@ into a folder of readable JSON, which you edit with any text editor, and packs t
 into a `.DEObjects` file.
 
 - **Lossless.** Unpacking and packing an unchanged folder gives back the original file byte for
-  byte. Every unpack checks this and says so. Anything the editor does not understand is kept as
-  hex and written back untouched.
+  byte. This holds for every shipped file: the 65 files of 2.123, of the 2.090 disc and of each
+  patch in between, and the two `core` files. Every unpack checks it and says so. Anything the
+  editor does not understand is kept as hex and written back untouched, and objects you do not
+  edit stay byte-identical when you edit others.
 - **Decodes what is known.** Fields of documented classes (descriptions, values, menu layout,
   images, cameras) get names; references between objects show the target's index and name. The
   format is described in [docs/DEOBJECTS_FORMAT.md](../../docs/DEOBJECTS_FORMAT.md).
@@ -42,7 +44,10 @@ toolchain the engine uses, see the main [README](../../README.md#building-on-win
 `-G Ninja` to the first command; the program is then `build\deobjects-edit.exe`, statically linked.
 
 Run the tests with `ctest --test-dir tools/deobjects-editor/build -C Release`. To round-trip real
-game files as well, configure with `-DDEOBJECTS_SAMPLES=<folder with .DEObjects files>`.
+game files as well, configure with `-DDEOBJECTS_SAMPLES=<folder with .DEObjects files>`. The
+engine's build has two more tests on the game's `Data` folder (`engine/tests/deobjects_tests.cpp`):
+`deobjects-round-trip` packs every file back, and `deobjects-edit-reload` edits a pilot's stat, a
+description's name and a compressed object, then checks the result with the engine's reader.
 
 ## Using it
 
@@ -120,11 +125,16 @@ An object file looks like this (shortened):
 
 - `contents`, `references` and `hierarchy` are lists of **chunks**, one per class level. A chunk
   is either decoded (`fields`, plus any undecoded `rest` as hex), a list of reference lists
-  (`lists`), or raw `hex`. A block that is not a clean run of chunks is a single `{"hex": ...}`.
+  (`lists`), or raw `hex`. `lists` is a guess for chunks without a schema, shown only when the
+  lists write back to exactly the same bytes; some chunks (a texture manager's, a faction's) are
+  not lists and stay hex. A block that is not a clean run of chunks is a single `{"hex": ...}`.
 - **References** are strings: `"#5 DesertSelectioImage"` is object 5 of this file (the number
   counts; the name is a reminder and you get a warning if it no longer matches), and
   `"^0 96d4773c-..."` is entry 0 of the GUID pool in `deobjects.json`, an object in another
-  file. `null` is no reference.
+  file. `null` is no reference. The game writes an index of this file up to 204 as one byte and
+  from 205 on as three; a reference stored in a wider form than that keeps it with a suffix after
+  the index, `"#0/u16 ..."` (or `/tag`; `^n/u8`, `/u16`, `/u32` for pool entries). You can add a
+  suffix yourself to force a form; without one, the game's own choice is written.
 - **Text** is a JSON string. The game stores 8-bit Latin-1 text, so characters beyond that (such
   as `€` or emoji) are refused. Text that is not plain (embedded NULs, no terminator) is shown as
   `{"hex": ...}`.
@@ -144,21 +154,23 @@ An object file looks like this (shortened):
   after it. To place it in the tree, add it to its parent's `children`.
 - The GUID pool: add entries at the end, then point `^n` references at them.
 
-Packing re-computes every offset, so blocks may grow or shrink. Compressed contents
-that were edited are stored uncompressed (method 0), which the game reads.
+Packing re-computes every offset, so blocks may grow or shrink. A compressed object keeps its
+original compressed bytes (`packed_file` in `blobs/`) while its contents are unchanged. Edited
+contents are stored uncompressed (method 0) with the object still flagged compressed, which both
+the engine and the original game read (`DE_CContents::Decompress` case 0; FINDINGS 421).
 
 ## How it is built
 
 | File | Role |
 |---|---|
-| `src/model.*` | Reads and writes the container, keeping every byte |
+| `engine/src/de/objects_model.*` | Reads and writes the container, keeping every byte; shared with the engine's `write_objects_file` |
 | `src/schema.*` | The table of known class layouts. **Add classes here.** |
 | `src/convert.*` | The model to and from JSON: field decoding, references, payloads |
 | `src/json.*` | A small ordered JSON reader/writer |
 | `src/main.cpp` | The command line |
 | `tests/tests.cpp` | Round-trip, decoding, editing and error tests on a synthetic file |
 
-Decompression reuses the engine's `engine/src/de/{contents,lzrw3a,md5}.cpp`.
+The container model and decompression are the engine's `engine/src/de/{objects_model,contents,lzrw3a,md5}.cpp`.
 
 A schema entry names the fields of one chunk of one class. A wrong guess cannot damage a file: a
 chunk is shown decoded only when its decoded fields encode back to exactly the original bytes;

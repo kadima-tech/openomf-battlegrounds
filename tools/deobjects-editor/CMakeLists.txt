@@ -1,6 +1,6 @@
 # deobjects-edit: unpack .DEObjects files to editable JSON and pack them back.
 # Standalone: builds with any C++20 compiler (MSVC, MinGW, Apple Clang, GCC) and no other
-# libraries. It reuses the engine's decompression code from ../../engine/src/de.
+# libraries. It reuses the engine's container model and decompression code from ../../engine/src/de.
 cmake_minimum_required(VERSION 3.20)
 project(deobjects_editor LANGUAGES CXX)
 
@@ -15,12 +15,12 @@ set(ENGINE_DE ${CMAKE_CURRENT_SOURCE_DIR}/../../engine/src/de)
 
 add_library(deobjects STATIC
 	src/json.cpp
-	src/model.cpp
 	src/schema.cpp
 	src/convert.cpp
 	${ENGINE_DE}/contents.cpp
 	${ENGINE_DE}/lzrw3a.cpp
 	${ENGINE_DE}/md5.cpp
+	${ENGINE_DE}/objects_model.cpp
 )
 target_include_directories(deobjects PUBLIC src ${ENGINE_DE}/..)
 

@@ -8,6 +8,7 @@ on:
       - 'engine/src/de/contents.*'
       - 'engine/src/de/lzrw3a.*'
       - 'engine/src/de/md5.*'
+      - 'engine/src/de/objects_model.*'
       - '.github/workflows/tools.yml'
   pull_request:
     branches: [main]
@@ -16,6 +17,7 @@ on:
       - 'engine/src/de/contents.*'
       - 'engine/src/de/lzrw3a.*'
       - 'engine/src/de/md5.*'
+      - 'engine/src/de/objects_model.*'
       - '.github/workflows/tools.yml'
   workflow_dispatch:
 
