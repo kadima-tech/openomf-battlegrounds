@@ -176,6 +176,7 @@ public:
 	explicit ParticleSystem(World &w) : w_(w) {}
 	// Step every particle effect in the scene to the current scene time.
 	void step();
+	std::string debug_counts() const;
 	const std::vector<std::unique_ptr<ParticleInstance>> &instances() const { return instances_; }
 	ModifierControl &control(GameObject *modifier);
 	// The FLOAT values a modifier's references name (World::referent from its copy), as scripts set them.
@@ -229,6 +230,7 @@ private:
 	std::vector<const de::ParticleRendererDef *> &renderers_of(GameObject *o);
 	ParticleInstance &instance(GameObject *actor, const de::ParticleRendererDef *def);
 	void step(ParticleInstance &in, float now);
+	void forget_destroyed();
 	World &w_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::unique_ptr<de::ParticleRendererDef>> defs_;
 	std::map<const GameObject *, std::vector<const de::ParticleRendererDef *>> actor_renderers_;
