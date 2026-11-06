@@ -1,7 +1,7 @@
 # Network play: plan
 
 Goal: online and LAN play that **feels exactly like the original**, on a **modern, open-source network
-stack** (no GameSpy, no proprietary services). Status: proposal. Decisions marked **(decide)** are open.
+stack** (no GameSpy, no proprietary services). Status: agreed 2026-11-06, phases 0-1 under way. Points marked **(decide)** were settled as recommended (section 6).
 
 ## 1. How the original works (summary of the research)
 
@@ -166,10 +166,10 @@ Each phase ends with something testable, merged and pushed.
 - **CI:** protocol unit tests and the loopback harness on GitHub-hosted runners (the repository is
   public). Data-dependent runs stay local, like today's tests.
 
-## 6. Decisions needed
-1. Transport: ENet + libsodium (recommended), GameNetworkingSockets or QUIC.
-2. Lobby server language (Go recommended) and who hosts the default instance.
-3. Interop with original clients: no (recommended).
-4. Identity: names only at first (recommended), keypair identity later.
-5. Bandwidth: the original's 16 KB/s by default (recommended), or higher by default.
-6. Scope of the first release: LAN plus direct IP (phases 1-2) before the internet lobby (recommended).
+## 6. Decisions (agreed 2026-11-06)
+1. Transport: ENet + libsodium.
+2. Lobby server in Go, in this repo; who hosts the default instance is still open.
+3. No interop with original clients.
+4. Names only at first; keypair identity later.
+5. Bandwidth: the original's 16 KB/s by default, configurable.
+6. First release: LAN plus direct IP (phases 1-2), then the internet lobby.
