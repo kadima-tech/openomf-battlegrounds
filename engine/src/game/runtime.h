@@ -348,6 +348,7 @@ inline bool parked(const GameObject &o) {
 	return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
 }
 inline bool in_scene(const GameObject &o) {
+	if (o.destroyed_seq) return false;
 	const GameObject *r = &o;
 	for (; r->parent; r = r->parent) {
 		if (r->removed || parked(*r)) return false;
@@ -511,6 +512,8 @@ public:
 
 	vm::Memory &memory() { return mem_; }
 	const de::World &data() const { return data_; }
+	// OPENBG_DEBUG_MEMORY: counts of what the world holds (objects, brains, temporals, effects).
+	std::string debug_counts();
 
 	// Instantiate every object of a data file (and resolve its actor components).
 	GameObject *instantiate_file(const std::string &stem);
@@ -1076,6 +1079,10 @@ public:
 	void activate_tester(uint32_t handle, const GameObject *caller) {
 		add_temporal(16, {Temporal::Tester, handle, nullptr}, caller ? clock_key(caller) : clock_);
 	}
+	// DE_CCollisionTester::Deactivate (Core 0x7006a210): DE_CScene::RemoveTemporal.
+	void deactivate_tester(uint32_t handle) {
+		for (auto &s : temporal_sets_) std::erase_if(s.elements, [&](const Temporal &t) { return t.kind == Temporal::Tester && t.handle == handle; });
+	}
 };
 
 void register_core_natives(World &w);
@@ -1097,6 +1104,7 @@ void register_simple_physics_natives(World &w);
 std::vector<uint8_t> &cdata_bytes(World &w, uint32_t block);
 // Active collision testers (natives_combat.cpp), once per tick.
 void tick_collision_tester(World &w, uint32_t handle);
+size_t collision_tester_count(World &w);
 // MSVCRT rand() on the main thread: one stream that Core, Creature, OMF and Particles all draw
 // from (Core MATH::Rand / CenterRand stand on it); DE_GLOBAL::SystemInit seeds it with the time.
 int crt_rand();

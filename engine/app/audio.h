@@ -33,6 +33,7 @@ public:
 	void open_offline(int rate);
 	void pump(int frames);
 	~Mixer();
+	std::string debug_counts();  // OPENBG_DEBUG_MEMORY
 	// Take the frame's sound requests and start them, heard from `listener` (position and axes);
 	// then update_speakers.
 	void play_requests(game::World &world, const de::Transform &listener);

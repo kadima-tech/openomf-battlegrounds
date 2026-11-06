@@ -107,6 +107,18 @@ bool ParticleSystem::live(const de::ParticleRendererDef &def) { return def.gener
 
 ModifierControl &ParticleSystem::control(GameObject *modifier) { return controls_[modifier]; }
 
+std::string ParticleSystem::debug_counts() const {
+	size_t particles = 0, orphaned = 0;
+	for (auto &in : instances_) {
+		particles += in->particles.size();
+		orphaned += in->actor && w_.object(in->actor->handle) != in->actor;
+	}
+	char buf[256];
+	snprintf(buf, sizeof buf, "particle instances %zu (of destroyed actors %zu), particles %zu, controls %zu, lights %zu, sparks %zu, trails %zu, actor lists %zu",
+	         instances_.size(), orphaned, particles, controls_.size(), lights_.size(), sparks_.size(), trails_.size(), actor_renderers_.size());
+	return buf;
+}
+
 const de::ParticleRendererDef *ParticleSystem::renderer(const de::ObjectRef &r) {
 	auto key = std::make_pair(r.file, r.index);
 	auto it = defs_.find(key);
@@ -372,7 +384,21 @@ void ParticleSystem::step_sparks() {
 	}
 }
 
+void ParticleSystem::forget_destroyed() {
+	auto gone = [](const GameObject *o) { return o && o->destroyed_seq; };
+	std::erase_if(instances_, [&](const std::unique_ptr<ParticleInstance> &in) { return gone(in->actor); });
+	std::erase_if(actor_renderers_, [&](const auto &kv) { return gone(kv.first); });
+	std::erase_if(actor_streamers_, [&](const auto &kv) { return gone(kv.first); });
+	std::erase_if(controls_, [&](const auto &kv) { return gone(kv.first); });
+	std::erase_if(actor_spawning_, [&](const auto &kv) { return gone(kv.first); });
+	std::erase_if(generator_spawning_, [&](const auto &kv) { return gone(kv.first.second); });
+	std::erase_if(lights_, [&](const auto &kv) { return gone(kv.first); });
+	std::erase_if(trail_enabled_, [&](const auto &kv) { return gone(kv.first); });
+}
+
 void ParticleSystem::step() {
+	// DE_CParticleGenerator's instances go with their elements' actors.
+	forget_destroyed();
 	for (GameObject *o : w_.scene_objects()) {
 		if (!o->is_actor || !o->file || !shown(o) || !in_scene(*o)) continue;
 		for (auto *def : renderers_of(o)) {

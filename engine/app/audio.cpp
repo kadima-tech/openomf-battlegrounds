@@ -382,6 +382,16 @@ void Mixer::process(game::World &world, Element &e, const de::Transform &listene
 	}
 }
 
+std::string Mixer::debug_counts() {
+	std::lock_guard<std::mutex> g(lock_);
+	size_t orphans = 0, playing = 0;
+	for (auto &e : elements_) orphans += !e.affector, playing += element_playing(e);
+	char buf[160];
+	snprintf(buf, sizeof buf, "voices %zu, speaker elements %zu (playing %zu, without affector %zu), watched %zu", voices_.size(), elements_.size(), playing, orphans,
+	         watched_.size());
+	return buf;
+}
+
 void Mixer::update_speakers(game::World &world, const de::Transform &listener) {
 	sfx_volume_ = world.sfx_volume;
 	software_3d = world.registry_string("Preferences\\Audio\\3D Mode") != "0";

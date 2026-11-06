@@ -527,7 +527,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			static const int memory_every = getenv("OPENBG_DEBUG_MEMORY") ? std::max(1, atoi(getenv("OPENBG_DEBUG_MEMORY"))) : 0;
-			if (memory_every && fr % memory_every == 0) fprintf(stderr, "[memory %d] script arena %u MB, %zu objects\n", fr, world.memory().used() >> 20, world.scene_objects().size());
+			if (memory_every && fr % memory_every == 0) fprintf(stderr, "[memory %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
 			// OPENBG_DEBUG_TREE=<name>@<frame> prints the scene branches under objects of that name then.
 			if (const char *dt = getenv("OPENBG_DEBUG_TREE"); dt && strchr(dt, '@') && atoi(strchr(dt, '@') + 1) == fr) {
 				std::string name(dt, size_t(strchr(dt, '@') - dt));

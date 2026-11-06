@@ -344,6 +344,8 @@ std::vector<uint8_t> &cdata_bytes(World &w, uint32_t block) { return combat(w).c
 // a collision event when something touched.
 // DE_CCollisionTester's temporal tick (16 ms, CCollisionTester::Activate): test, hand the
 // contacts to the attached force, then the notify methods.
+size_t collision_tester_count(World &w) { return combat(w).testers.size(); }
+
 void tick_collision_tester(World &w, uint32_t h) {
 	auto it = combat(w).testers.find(h);
 	if (it == combat(w).testers.end() || !it->second.active || (it->second.notify.empty() && !it->second.force)) return;
@@ -745,7 +747,10 @@ void register_combat_natives(World &w) {
 	});
 	reg("CCollisionTester::SetAttachedForce(class CForce)", [](const NativeContext &c) { combat(c.world).testers[c.self_handle()].force = c.arg_object(0); });
 	reg("CCollisionTester::NeedSurfaceNormal()", [](const NativeContext &) {});
-	reg("CCollisionTester::Deactivate()", [](const NativeContext &c) { combat(c.world).testers[c.self_handle()].active = false; });
+	reg("CCollisionTester::Deactivate()", [](const NativeContext &c) {
+		combat(c.world).testers[c.self_handle()].active = false;
+		c.world.deactivate_tester(c.self_handle());
+	});
 	// SetupArenaSurfaceHitCaller (OMF): an arena-surface-hit event (type 0xb at +0x1c) carrying
 	// the results (+0x44) and the power (+0x48). The projectiles hand it to the surface's owner
 	// with ProcessEvent; nothing in the DLLs or scripts handles type 0xb.
