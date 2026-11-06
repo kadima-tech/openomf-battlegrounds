@@ -137,10 +137,14 @@ static std::optional<de::Guid> environment_description(game::World &world, const
 		}
 	}
 	std::optional<de::Guid> found;
-	for (auto &o : ad->objects()) {
-		if (o.class_path != "Description\\Environment") continue;
-		auto c = ad->object_data(o).contents;
-		if (std::search(c.begin(), c.end(), root.bytes, root.bytes + 16) != c.end()) found = o.guid;
+	// Training's arena carries its own description.
+	for (auto *file : {ad, af}) {
+		for (auto &o : file->objects()) {
+			if (o.class_path != "Description\\Environment") continue;
+			auto c = file->object_data(o).contents;
+			if (std::search(c.begin(), c.end(), root.bytes, root.bytes + 16) != c.end()) found = o.guid;
+		}
+		if (found) break;
 	}
 	return found;
 }

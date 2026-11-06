@@ -139,7 +139,8 @@ struct GameObject {
 	std::vector<de::Transform> pose_now;       // the last validated pose (model space, per channel)
 	std::vector<de::Transform> pose_captured;  // the pose a prelude blends from
 	float anim_turn = 0;  // COMF2Fighter::AnimTurn: the walk/run lean (+0x450, degrees)
-	bool skip_friction = false;  // COMF2Fighter::SkipFriction (physics +0x184): no slowdown on the next floor tick
+	bool skip_friction = false;  // physics +0x184 (SkipFriction, Propel, BeginJumpStandard): no slowdown on the next floor tick
+	std::array<float, 3> surface_momentum{0, 0, 0};  // physics +0xf4: the floor's motion per tick, as friction last saw it
 	// AnimCaptureAsInitial / AnimCaptureAsFinal + AnimActivateEmpty: a move generated at run time,
 	// anim_time blending from the captured initial pose to the captured final one.
 	struct Capture {
@@ -256,7 +257,6 @@ struct GameObject {
 	float gravity_recover = 1.0f;  // physics +0x1a0
 	float traction = 1.0f;         // fighter +0x448
 	bool on_floor = false;         // physics +0x18c
-	bool propelled = false;        // physics +0x184: Propel ran this frame (no surface friction)
 	float turn_rate = 0;           // physics +0x194: degrees/frame (positive turns left)
 	float forward_speed = 0;       // physics +0x198: target speed for Propel
 
@@ -914,6 +914,8 @@ public:
 	// Set by the app: DE_CUIManager::ActiveManager is not null (a UI manager is up), and
 	// DE_CNotification::NewUserInformation (the modal "User Information" dialog).
 	std::function<bool()> ui_manager_active;
+	// DE_CAppManager::IsActive for the page of a session's UI manager object (IsActiveLocally).
+	std::function<bool(const GameObject *ui)> ui_active_locally;
 	std::function<void(const std::string &title, const std::string &text)> notify_user;
 	// CObject::DeleteThis: unlinks the object (and its branch); handles to it go inactive.
 	void destroy(GameObject *o);

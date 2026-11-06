@@ -888,36 +888,64 @@ void register_core_natives(World &w) {
 		yaw.r = {cs, 0, -sn, 0, 1, 0, sn, 0, cs};
 		o.local = de::Transform{yaw.then(de::Transform{o.local.r, {0, 0, 0}}).r, o.local.t};
 	};
-	// Propel (0x35025af0) against a static surface. Momentum not aligned with the wanted
-	// direction is cancelled (by traction x (1 - cos)), up to 0.2 x traction of it is steered onto
-	// that direction, then each local axis eases towards its target by a step of
-	// traction x |target| x (0.1 x normalised share, or 0.04 when the share is under 0.4).
-	auto propel = [=](GameObject &o, float forward, float left) {
+	// AdjustMomentumToTouchingSurfacesForPropulsion (0x350259a0): momentum not going into a floor
+	// contact (push-back normal over 0.75 up) is laid along it; the result keeps the horizontal
+	// direction and takes the laid height, at the laid length.
+	auto adjust_to_surfaces = [](World &w, GameObject &o, std::array<float, 3> m) {
+		std::array<float, 3> a = m;
+		for (auto &c : w.forces->surfaces(o).contacts) {
+			const auto &n = c.normal;
+			if (a[0] * n[0] + a[1] * n[1] + a[2] * n[2] < 0 || n[1] <= 0.75f) continue;
+			float d = a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
+			for (int k = 0; k < 3; ++k) a[size_t(k)] -= n[size_t(k)] * d;
+		}
+		float target = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+		m[1] = a[1];
+		float l = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+		if (l > 0) {
+			for (auto &v : m) v *= target / l;
+		}
+		return m;
+	};
+	// Propel (0x35025af0), relative to the floor's motion (+0xf4). Momentum not aligned with the
+	// wanted direction is cancelled (by traction x (1 - cos)), up to 0.2 x traction of it is
+	// steered onto that direction, then each local axis eases towards its target by a step of
+	// traction x |target| x (0.1 x normalised share, or 0.04 when the share is under 0.4). A
+	// second propel before the next floor tick (+0x184 still set) only eases the axes.
+	auto propel = [=](World &w, GameObject &o, float forward, float left) {
 		auto m = o.local.inverse_rotate(o.momentum);
 		float ax = std::fabs(left), az = std::fabs(forward), len = std::sqrt(ax * ax + az * az);
 		float nx = len > 0 ? ax / len : 0, nz = len > 0 ? az / len : 0;
 		float tr = o.traction;
 		float step_x = (nx >= 0.4f ? nx * tr * 0.1f : tr * 0.04f) * ax;
 		float step_z = (nz >= 0.4f ? nz * tr * 0.1f : tr * 0.04f) * az;
-		std::array<float, 3> d{left < 0 ? -nx : nx, 0, forward < 0 ? -nz : nz};
-		float ml = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
-		std::array<float, 3> u{0, 0, 0};
-		if (ml > 0) {
-			u = {m[0] / ml, m[1] / ml, m[2] / ml};
+		if (o.skip_friction) {
+			m[0] = approach(m[0], left, step_x);
+			m[2] = approach(m[2], forward, step_z);
+		} else {
+			auto surface = o.local.inverse_rotate(o.surface_momentum);
+			for (int k = 0; k < 3; ++k) m[size_t(k)] -= surface[size_t(k)];
+			std::array<float, 3> d{left < 0 ? -nx : nx, 0, forward < 0 ? -nz : nz};
+			float ml = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+			std::array<float, 3> u{0, 0, 0};
+			if (ml > 0) {
+				u = {m[0] / ml, m[1] / ml, m[2] / ml};
+			}
+			float dot = u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
+			float keep = dot <= 0 ? 1 - tr : (dot < 1 ? 1 - (1 - dot) * tr : 1);
+			for (auto &v : m) {
+				v *= keep;
+			}
+			float steer = std::min(std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]), 0.2f) * tr;
+			for (int k = 0; k < 3; ++k) {
+				m[size_t(k)] -= (u[size_t(k)] - d[size_t(k)]) * steer;
+			}
+			m[0] = approach(m[0], left, step_x);
+			m[2] = approach(m[2], forward, step_z);
+			for (int k = 0; k < 3; ++k) m[size_t(k)] += surface[size_t(k)];
+			o.skip_friction = true;
 		}
-		float dot = u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
-		float keep = dot <= 0 ? 1 - tr : (dot < 1 ? 1 - (1 - dot) * tr : 1);
-		for (auto &v : m) {
-			v *= keep;
-		}
-		float steer = std::min(std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]), 0.2f) * tr;
-		for (int k = 0; k < 3; ++k) {
-			m[size_t(k)] -= (u[size_t(k)] - d[size_t(k)]) * steer;
-		}
-		m[0] = approach(m[0], left, step_x);
-		m[2] = approach(m[2], forward, step_z);
-		o.momentum = o.local.rotate(m);
-		o.propelled = true;
+		o.momentum = adjust_to_surfaces(w, o, o.local.rotate(m));
 	};
 	// Set*SpeedMultiplierCaller: +0x4bc scales WalkStandard/RunStandard's propel speed, +0x4c0
 	// TurnLeft's angle (both 1 by default; speed pickups and time effects change them).
@@ -938,7 +966,7 @@ void register_core_natives(World &w) {
 		default: break;
 		}
 		turn_left(*o, turn);
-		propel(*o, speed * o->move_multiplier, 0);
+		propel(c.world, *o, speed * o->move_multiplier, 0);
 	});
 	reg("COMF2Fighter::WalkStandard(byte)", [=](const NativeContext &c) {  // 0x35027ab0
 		auto *o = c.self();
@@ -964,7 +992,7 @@ void register_core_natives(World &w) {
 			turn_left(*o, turn);
 		}
 		if (speed != 0) {
-			propel(*o, speed * o->move_multiplier, 0);  // x the movement multiplier (+0x4bc, 1)
+			propel(c.world, *o, speed * o->move_multiplier, 0);  // x the movement multiplier (+0x4bc, 1)
 		}
 	});
 	// PropelForward/Backward/Left/Right callers -> Propel(forward, left); local +x is the fighter's left.
@@ -976,7 +1004,7 @@ void register_core_natives(World &w) {
 		reg(key, [=](const NativeContext &c) {
 			if (auto *o = c.self()) {
 				float a = c.arg<float>(0);
-				propel(*o, z * a, x * a);
+				propel(c.world, *o, z * a, x * a);
 			}
 		});
 	}
@@ -988,29 +1016,32 @@ void register_core_natives(World &w) {
 	});
 	// BeginJumpStandard (0x350288b0): mode 0 normal (NormalJumpStandard), 1 short, 2 super.
 	// Action 0x13 jumps forward, 0x14 backward, anything else straight up (keeping the forward
-	// momentum). The local forward momentum steps towards the jump's by traction x |target|, then
-	// the up speed is added and the fighter leaves the floor.
-	auto begin_jump = [=](GameObject &o, uint8_t action, int mode) {
+	// momentum). The local forward momentum rises towards the jump's by traction x |target| (never
+	// slowed when already past it), is laid along the floor contacts, then the up speed is added
+	// and the fighter leaves the floor.
+	auto begin_jump = [=](World &w, GameObject &o, uint8_t action, int mode) {
 		const FighterStats &s = o.stats;
 		bool super = mode == 2;
 		float up = super ? s.super_up : s.jump_up, forward = 0;
 		if (action == 0x13) forward = super ? s.super_forward : s.jump_forward;
 		if (action == 0x14) forward = -(super ? s.super_backward : s.jump_backward);
 		auto m = o.local.inverse_rotate(o.momentum);
-		m[2] = approach(m[2], forward, std::fabs(forward) * o.traction);
-		m[1] += up;
-		o.momentum = o.local.rotate(m);
+		float step = std::fabs(forward) * o.traction;
+		if (forward > 0 && m[2] < forward) m[2] = std::min(forward, m[2] + step);
+		if (forward < 0 && m[2] > forward) m[2] = std::max(forward, m[2] - step);
+		o.skip_friction = true;
+		o.momentum = adjust_to_surfaces(w, o, o.local.rotate(m));
+		o.momentum[1] += up;
 		o.on_floor = false;
-		o.propelled = true;
 	};
 	reg("COMF2Fighter::NormalJumpStandard(byte)", [=](const NativeContext &c) {
-		if (auto *o = c.self()) begin_jump(*o, c.arg<uint8_t>(0), 0);
+		if (auto *o = c.self()) begin_jump(c.world, *o, c.arg<uint8_t>(0), 0);
 	});
 	reg("COMF2Fighter::ShortJumpStandard(byte)", [=](const NativeContext &c) {
-		if (auto *o = c.self()) begin_jump(*o, c.arg<uint8_t>(0), 1);
+		if (auto *o = c.self()) begin_jump(c.world, *o, c.arg<uint8_t>(0), 1);
 	});
 	reg("COMF2Fighter::SuperJumpStandard(byte)", [=](const NativeContext &c) {
-		if (auto *o = c.self()) begin_jump(*o, c.arg<uint8_t>(0), 2);
+		if (auto *o = c.self()) begin_jump(c.world, *o, c.arg<uint8_t>(0), 2);
 	});
 	// JumpStandard (0x35027620, vtable +0x1f0; JumpStandard and FallStandard pass (action, 1, 1),
 	// FallFromLaunchStandard (action, 0, 0)): steering in the air. 0xe/0xf turn, 0x11/0x12 drift

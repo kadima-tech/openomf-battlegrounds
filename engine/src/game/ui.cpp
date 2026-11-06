@@ -1630,14 +1630,15 @@ bool DescriptionSelector::begin(AppManager &app) {
 	}
 	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
 	selected_ = entries_.empty() ? -1 : 0;
-	// Begin (0x701e4d40): a pool of one is chosen without showing; backing out passes through.
+	// Begin (2.123 0x201ec460): only a pool of one passes a Back on.
 	if (pool.size() == 1) {
 		choose(app, pool[0]);
-		return false;
-	}
-	if (app.last && app.last->backed_out) {
-		backed_out = true;
-		app.set_last();
+		if (app.last && app.last->backed_out) {
+			backed_out = true;
+			deactivate(app);
+			if (auto it = std::find_if(app.stack.begin(), app.stack.end(), [this](const UIPtr &p) { return p.get() == this; }); it != app.stack.end()) app.stack.erase(it);
+			app.set_last();
+		}
 		return false;
 	}
 	return true;
@@ -2035,6 +2036,7 @@ bool AppManager::is_locked(const de::ObjectRef &d) const {
 
 // DE_CUIManager::Begin (Core 2.123 0x201f2e30) deletes what the last completion made.
 bool UIManager::begin(AppManager &app) {
+	backed_out = false;
 	for (uint32_t h : std::exchange(created, {})) app.world.clean_later(app.world.object(h));
 	begun = true;
 	return true;
@@ -2064,7 +2066,10 @@ void UIManager::activate(AppManager &app) {
 	gui = std::make_unique<Gui>(app);
 	setup_controls(app);
 	for (GameObject *ve : ve_actors_) send(w, ve, "GUILeave");
+	backed_out = false;
+	read_only = false;
 	activated = true;
+	if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] activate %s\n", w.frame(), name.c_str());
 }
 
 // DE_CUIManager::Deactivate (Core 0x701eb6e0).
@@ -2079,11 +2084,15 @@ void UIManager::deactivate(AppManager &app) {
 	ve_actors_.clear();
 	controls.clear();
 	gui.reset();
+	read_only = false;
 	activated = false;
 }
 
+// UIManagerComplete (Core 0x701eb320): the dialog, if there is one, goes ReadOnlyOn (0x700f3fe0).
 void UIManager::complete(AppManager &app) {
+	if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] complete %s\n", app.world.frame(), name.c_str());
 	begun = false;
+	if (activated) read_only = true;
 	app.page_finished = true;
 }
 
@@ -2355,6 +2364,7 @@ void AppManager::drop(const UIPtr &m) {
 
 // DE_CAppManager::SetNextUIManager (Core 0x7019af60).
 void AppManager::set_next(const UIPtr &mgr, bool push) {
+	if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] next %s%s (current %s)\n", world.frame(), mgr ? mgr->name.c_str() : "-", push ? ", pushed" : "", current ? current->name.c_str() : "-");
 	page_finished = false;
 	if (mgr && auto_select_mode) mgr->auto_select = true;
 	if (first_ui_) {
@@ -2372,6 +2382,23 @@ void AppManager::set_next(const UIPtr &mgr, bool push) {
 		if (!mgr) page_finished = true;
 	}
 	next = mgr;
+}
+
+bool AppManager::ui_active(const UIManager *m) {
+	if (!m) return false;
+	if (m == current.get() && (m->begun || transition_busy())) return true;
+	if (m == next.get()) return true;
+	return ui_active(m->child());
+}
+
+UIManager *AppManager::page_of(const GameObject *ui) const {
+	if (!ui) return nullptr;
+	if (current && current->script == ui) return current.get();
+	if (next && next->script == ui) return next.get();
+	for (const UIPtr &p : stack) {
+		if (p->script == ui) return p.get();
+	}
+	return nullptr;
 }
 
 // SetLastUIManager (Core 0x7019b100): Back.
@@ -2555,10 +2582,11 @@ void AppManager::mouse_move(float x, float y) {
 	if (Gui *g = notification_gui()) g->mouse_move(x, y);
 	if (!current || !current->activated) return;
 	UIPtr page = current;
-	bool taken = notifications.empty() && page->gui && page->gui->mouse_move(x, y);
-	if (notifications.empty() && !taken) page->mouse(*this, x, y, 0);
+	const bool open = notifications.empty() && !page->read_only;
+	bool taken = open && page->gui && page->gui->mouse_move(x, y);
+	if (open && !taken) page->mouse(*this, x, y, 0);
 	for (Control &c : page->controls) {
-		bool over = notifications.empty() && !taken && c.contains(x, y);
+		bool over = open && !taken && c.contains(x, y);
 		if (over && !c.hovered && c.enabled) {
 			c.hovered = true;
 			send(world, c.ve, "GUIEnter");
@@ -2592,6 +2620,10 @@ void AppManager::mouse_button(bool down, int clicks) {
 		return;
 	}
 	if (!current || !current->activated) return;
+	if (current->read_only) {
+		pressed_ = nullptr;
+		return;
+	}
 	{
 		UIPtr page = current;
 		if (page->gui && page->gui->mouse_button(down, clicks)) {

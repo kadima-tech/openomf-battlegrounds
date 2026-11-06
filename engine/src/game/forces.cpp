@@ -64,6 +64,10 @@ Vec closest_on_triangle(const Vec &p, const Vec &a, const Vec &b, const Vec &c) 
 // A mesh affector's triangles in its own frame, and their bounding sphere.
 struct MeshShape {
 	std::vector<std::array<Vec, 3>> tris;
+	// Per face: (V1 - V0) x (V2 - V0), the side ReverseResults hands a sphere (-(+0x28)), and the
+	// neighbours DE_CMeshReference::UpdateMeshData (Core 0x70082fc0) keeps (+0x40, -1 for none).
+	std::vector<Vec> normals;
+	std::vector<std::array<int, 3>> neighbours;
 	Vec centre{0, 0, 0};
 	float radius = 0;
 	// DataChannel\\Generic children of type "Byte": element name -> one byte per face
@@ -81,9 +85,35 @@ const MeshShape *mesh_shape(const de::ObjectRef &r) {
 	try {
 		de::Mesh m = de::read_mesh(*r.file, r.info());
 		Vec lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+		std::vector<std::array<uint16_t, 3>> idx;
 		for (auto &f : m.faces) {
 			if (f.v[0] >= m.vertices.size() || f.v[1] >= m.vertices.size() || f.v[2] >= m.vertices.size()) continue;
 			s.tris.push_back({m.vertices[f.v[0]], m.vertices[f.v[1]], m.vertices[f.v[2]]});
+			idx.push_back(f.v);
+			auto &t = s.tris.back();
+			Vec n = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+			float nl = len(n);
+			// CalculateNormals (Core 0x7012fb10) makes a degenerate face's normal +Z.
+			s.normals.push_back(nl > 0 ? mul(n, 1 / nl) : Vec{0, 0, -1});
+		}
+		// A face's neighbour across each edge (V0V1, V1V2, V2V0) is the first other face sharing both
+		// vertices, kept only when their normals are within dot 0.7.
+		std::vector<std::vector<int>> faces_of(m.vertices.size());
+		for (size_t i = 0; i < idx.size(); ++i) {
+			for (uint16_t v : idx[i]) {
+				if (faces_of[v].empty() || faces_of[v].back() != int(i)) faces_of[v].push_back(int(i));
+			}
+		}
+		s.neighbours.resize(idx.size(), {-1, -1, -1});
+		for (size_t i = 0; i < idx.size(); ++i) {
+			for (int e = 0; e < 3; ++e) {
+				const auto &fa = faces_of[idx[i][size_t(e)]], &fb = faces_of[idx[i][size_t((e + 1) % 3)]];
+				for (int j : fa) {
+					if (j == int(i) || std::find(fb.begin(), fb.end(), j) == fb.end()) continue;
+					if (dot(s.normals[i], s.normals[size_t(j)]) > 0.7f) s.neighbours[i][size_t(e)] = j;
+					break;
+				}
+			}
 		}
 		for (auto &v : m.vertices) {
 			for (int k = 0; k < 3; ++k) lo[k] = std::min(lo[k], v[k]), hi[k] = std::max(hi[k], v[k]);
@@ -152,8 +182,13 @@ float lerp(float a, float b, float t) { return (b - a) * t + a; }
 
 }  // namespace
 
-// DE_CMeshAffector::IsTouchingSphere: one collision per face the sphere reaches.
-std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &target) {
+// DE_CMeshReference::IsTouchingSphere (Core 0x700847f0), turned round by ReverseResults: a face
+// within r of the sphere's centre along its normal touches inside its outline (depth r - |z|,
+// pushed back along the face normal on the centre's side) or within r - 0.02 of an edge (pushed
+// back from the nearest edge point). With `physics` (the results DE_CSimplePhysics::ObjPrepare
+// asks for) touched faces that are neighbours push back along their own normals, and the nearest
+// contact comes first.
+std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &target, bool physics) {
 	(void)w;
 	std::vector<Contact> out;
 	if (source.shape != GameObject::Shape::Sphere || target.shape != GameObject::Shape::Mesh) return out;
@@ -163,27 +198,47 @@ std::vector<Contact> touch_faces(World &w, GameObject &source, GameObject &targe
 	de::Transform t = target.world();
 	Vec local = t.inverse_rotate(sub(source.world().t, t.t));
 	if (len(sub(local, m->centre)) > m->radius + r) return out;
+	std::vector<float> nearness;
 	for (size_t i = 0; i < m->tris.size(); ++i) {
 		auto &tri = m->tris[i];
+		const Vec &fn = m->normals[i];
+		float z = dot(sub(local, tri[0]), fn);
+		if (std::fabs(z) > r) continue;
 		Vec q = closest_on_triangle(local, tri[0], tri[1], tri[2]);
-		Vec push = sub(local, q);
-		float dist = len(push);
-		if (dist > r) continue;
-		Vec fn = cross(sub(tri[1], tri[0]), sub(tri[2], tri[0]));
-		float fl = len(fn);
-		fn = fl > 0 ? mul(fn, 1 / fl) : Vec{0, 1, 0};
-		if (dot(fn, push) < 0) fn = mul(fn, -1);
+		Vec in_plane = sub(sub(local, mul(fn, z)), q);
+		float edge = len(in_plane), dist = len(sub(local, q));
 		Contact c;
+		if (edge <= 1e-4f * std::max(1.0f, r)) {
+			c.normal = t.rotate(z > 0 ? fn : mul(fn, -1));
+			c.depth = r - std::fabs(z);
+			nearness.push_back(std::fabs(z));
+		} else {
+			if (r < dist + 0.02f) continue;
+			c.normal = t.rotate(mul(sub(local, q), 1 / dist));
+			c.depth = r - dist;
+			nearness.push_back(std::fabs(z) + edge);
+		}
 		c.source = &source;
 		c.touched = &target;
 		c.point = t.apply(q);
 		c.face_normal = t.rotate(fn);
-		c.normal = dist > 1e-5f ? t.rotate(mul(push, 1 / dist)) : c.face_normal;
 		c.distance = dist;
-		c.depth = r - dist;
 		c.face = int(i);
 		out.push_back(c);
 	}
+	if (!physics || out.empty()) return out;
+	for (size_t i = 1; i < out.size(); ++i) {
+		for (int n : m->neighbours[size_t(out[i].face)]) {
+			for (size_t j = 0; n >= 0 && j < i; ++j) {
+				if (out[j].face != n) continue;
+				out[j].normal = out[j].face_normal;
+				out[i].normal = out[i].face_normal;
+				break;
+			}
+		}
+	}
+	size_t best = size_t(std::min_element(nearness.begin(), nearness.end()) - nearness.begin());
+	std::swap(out[0], out[best]);
 	return out;
 }
 
@@ -299,7 +354,7 @@ std::optional<Contact> touch(World &w, GameObject &source, GameObject &target) {
 	}
 }
 
-std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
+std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups, bool physics) {
 	std::vector<Contact> out;
 	GameObject *self = top_fighter(&source);
 	// Its first test starts the line where it stands (ObjPrepare's +0x13c).
@@ -320,7 +375,7 @@ std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups) {
 			return !faces.empty();
 		}
 		if (target->shape == GameObject::Shape::Mesh && source.shape == GameObject::Shape::Sphere) {
-			auto faces = touch_faces(w, source, *target);
+			auto faces = touch_faces(w, source, *target, physics);
 			if (record) out.insert(out.end(), faces.begin(), faces.end());
 			return !faces.empty();
 		}
@@ -971,7 +1026,7 @@ std::vector<const Contact *> ForceSystem::walls(GameObject &f) {
 // deepest contact's depth.
 bool ForceSystem::collide(GameObject &f, FighterSurfaces &fs, bool probe, bool was) {
 	fs.contacts.clear();
-	auto all = touches(w_, *fs.sphere, fs.groups);
+	auto all = touches(w_, *fs.sphere, fs.groups, true);
 	for (auto &c : all) {
 		if (w_.affector_owner(c.touched) != &f) fs.contacts.push_back(c);
 	}
@@ -1180,8 +1235,10 @@ bool ForceSystem::fighter_tick(GameObject &f) {
 			        f.name.c_str(), fs.floor->name.c_str(), yaw, f.local.t[0], f.local.t[1], f.local.t[2], in[0], in[1], in[2], fyaw, surface[0],
 			        surface[1], surface[2], turn[1]);
 		}
-		w_.surface_friction(f, fs.friction, surface);
-		if (fs.friction * f.traction != 0 && len(turn) > 0) {
+		// ApplySingleSurfaceFriction does nothing more without a floor affector (+0x104).
+		if (fs.floor) w_.surface_friction(f, fs.friction, surface);
+		else if (fs.friction * f.traction != 0) f.surface_momentum = {0, 0, 0};
+		if (fs.floor && fs.friction * f.traction != 0 && len(turn) > 0) {
 			Vec t = f.local.t;
 			f.local = rotation_of(turn).then(f.local);
 			f.local.t = t;
@@ -1189,7 +1246,6 @@ bool ForceSystem::fighter_tick(GameObject &f) {
 		f.skip_friction = false;
 		fs.accel = {0, 0, 0};
 	}
-	f.propelled = false;
 	if (f.gravity < 1) {
 		f.gravity = std::min(1.0f, f.gravity + f.gravity_recover);
 	} else if (f.gravity > 1) {
