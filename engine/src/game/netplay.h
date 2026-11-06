@@ -50,6 +50,8 @@ struct NetConfig {
 NetSession *net_session(World &w);
 // The in-game menu's Change Fighter.
 void net_change_fighter(World &w);
+// A UI manager became active: a client's copy of a server page sends 0x06.
+void net_ui_activated(World &w, GameObject *ui);
 
 // --- The state managers' network side (replay.cpp) ------------------------------------------
 
@@ -158,6 +160,7 @@ public:
 	void reconnect(Peer &p, SessionClient &c, const std::vector<uint32_t> &linked);
 	// The in-game menu's Change Fighter on a client: ClientReselectFighter (0x1d).
 	void reselect_fighter();
+	void send_remote_active(uint32_t id);
 	SessionState *session = nullptr;  // the network session (the top-level one)
 	uint32_t own_id = 0;              // a client's ID in the roster
 	std::function<void(const std::string &title, const std::string &text)> notify;

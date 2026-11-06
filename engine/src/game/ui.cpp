@@ -2071,6 +2071,7 @@ void UIManager::activate(AppManager &app) {
 	backed_out = false;
 	read_only = false;
 	activated = true;
+	if (script) net_ui_activated(w, script);
 	if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] activate %s\n", w.frame(), name.c_str());
 }
 

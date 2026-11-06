@@ -811,6 +811,14 @@ SessionClient &add_client_to(World &w, SessionState &s, bool user, const std::st
 
 SessionClient &add_client(World &w, bool user, const std::string &name) { return add_client_to(w, *w.session, user, name); }
 
+void remote_ui_activated(World &w, SessionState &s, GameObject *ui, SessionClient *c) {
+	std::vector<SessionNode *> nodes;
+	for (auto &[o, n] : s.nodes) {
+		if (!n->slot || (c && n->slot == c->slot)) nodes.push_back(n.get());
+	}
+	for (auto *n : nodes) call_hook(w, n->ui_activate, ui->handle, true);
+}
+
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model) {
 	if (!ui) return;
 	SessionState *s = nullptr;

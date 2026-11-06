@@ -169,6 +169,8 @@ bool session_joinable(World &w, SessionState *s);
 // The front end chose `chosen` in a launched UI manager: it completes on the next update, and
 // every node's UIManagerComplete hook hears about it.
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model = nullptr);
+// RemoteUIManagerActivated (Session 0x45016290): the UIManagerActivate hooks of the session's and the client's slot's modifiers.
+void remote_ui_activated(World &w, SessionState &s, GameObject *ui, SessionClient *c);
 // DE_CTransferAgent::CPassiveReference: every passive reference's object in an object's contents,
 // in order (a description's first is its resource).
 std::vector<de::ObjectRef> passive_references(const de::World &data, const de::ObjectRef &r);

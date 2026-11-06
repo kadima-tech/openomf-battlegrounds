@@ -37,6 +37,7 @@ enum Msg : uint16_t {
 	kClientData = 0x0b, // name, ping, {vote, client ID}...: UpdateClientData
 	kClientInfo = 0x0c, // client ID, name, ping, admin level, votes needed to kick
 	kReselect = 0x1d,   // (none): ClientReselectFighter
+	kRemoteActive = 0x06, // page ID: RemoteUIManagerActivated
 };
 
 struct Writer {
@@ -234,6 +235,21 @@ void NetSession::reconnect(Peer &p, SessionClient &c, const std::vector<uint32_t
 	p.id_queue = linked;
 	p.roster.clear();
 	if (c.ui_manager && w_.object(c.ui_manager->handle) == c.ui_manager) launch_remote_ui(c, c.ui_manager);
+}
+
+// LocalUIManagerActivated (Session 0x45008ad0): a client's copy of a server page tells the server.
+void net_ui_activated(World &w, GameObject *ui) {
+	NetSession *n = net_session(w);
+	if (!n || n->role() != NetRole::Client || !n->session || n->peers().empty()) return;
+	auto it = n->session->ui.find(ui);
+	if (it == n->session->ui.end() || !it->second.remote_id) return;
+	n->send_remote_active(it->second.remote_id);
+}
+
+void NetSession::send_remote_active(uint32_t id) {
+	Writer wr = message(kRemoteActive);
+	wr.squeezed(id);
+	send(peers_[0], net::Channel::Reliable, std::move(wr.d));
 }
 
 void NetSession::reselect_fighter() {
@@ -847,6 +863,11 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			net_acked(w_, owner, t);
 		}
 		break;
+	case kRemoteActive: {
+		GameObject *ui = w_.object(r.squeezed());
+		if (r.ok && server && ui && session && session->ui.count(ui)) remote_ui_activated(w_, *session, ui, p.client);
+		break;
+	}
 	case kReselect:
 		// GH_CLIENT_RESELECT_FIGHTER on the client's slot: its picker starts choosing again.
 		if (server && p.client && p.client->slot) w_.send_event(p.client->slot->obj, new_event(w_, "SessionClientReselectFighter"));
