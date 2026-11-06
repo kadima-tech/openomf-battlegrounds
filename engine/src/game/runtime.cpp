@@ -340,6 +340,12 @@ void World::destroy(GameObject *o) {
 		if (b->brain) b->brain->inst.shut_down = true, dead_brains_.push_back(b->brain);
 		gone.insert(b->handle);
 	}
+	// DE_CStandardSessionSlot +0x30 is a reference: a destroyed creature leaves its slot.
+	for (auto &s : sessions) {
+		for (auto &sl : s->slots) {
+			if (sl->creature && gone.count(sl->creature->handle)) sl->creature = nullptr;
+		}
+	}
 	// Its primitives (text, quads, bars) go with it.
 	for (auto it = texts.begin(); it != texts.end();) {
 		if (gone.count(it->first->handle) || (it->second.mesh && gone.count(it->second.mesh->handle))) {
@@ -1492,6 +1498,8 @@ void World::register_creature(GameObject *o) {
 		// DE_CCreature::ObjPrepare (Creature 0x15016050): one made earlier starts at the tick its
 		// creation time gives.
 		uint32_t now = clock_ms(clock_key(o));
+		// Its creation time, if none was set, is the set's step (AddTemporal); online only (PLACEHOLDERS).
+		if (!o->creation_time && replay_net_format(*this)) o->creation_time = std::max<uint32_t>(1, now / rate * rate);
 		if (o->creation_time && o->creation_time < now) o->creature_ticks = (now - o->creation_time) / rate;
 		net_align_creature_time(*this, *o);
 		// DE_COMF2Fighter::ObjPrepare (OMF): every fighter already in the scene, in the factory's

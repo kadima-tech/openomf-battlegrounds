@@ -2407,6 +2407,8 @@ bool replay_held(World &w, const GameObject &o) {
 	return it != R.clocks.end() && it->second.mode == 2;
 }
 
+bool replay_net_format(World &w) { return net_format(w); }
+
 void replay_set_time(World &w, GameObject &o, uint32_t ms) {
 	if (replaying(w)) {
 		set_time(w, o, ms);

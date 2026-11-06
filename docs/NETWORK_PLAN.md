@@ -169,8 +169,10 @@ Each phase ends with something testable, merged and pushed.
    original makes them (owners' replicated states, replicated arrays, `AppendCreatureID`), the full
    `CheckForDiscardState` with `AdjustSameState`, creature clocks re-timed by the clock's hard set,
    client data (0x0b / 0x0c) and `CClient::Ping`, `IsJoinable`, Change Fighter (0x1d), and recordings of
-   network matches on the server. Still open: reconnect, chat, kick votes, bans and the admin password
-   (0x1a-0x1c), remote page activation and live updates, the slot state (0x0a), the in-session client list.
+   network matches on the server; then reconnect, the network game closing with its session, and
+   creation times at ObjPrepare (FINDINGS 452-454). Still open: chat, kick votes, bans and the admin
+   password (0x1a-0x1c), remote page activation and live updates, the slot state (0x0a), the in-session
+   client list.
 
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and
    bans, disconnect and reconnect, and the dedicated server.

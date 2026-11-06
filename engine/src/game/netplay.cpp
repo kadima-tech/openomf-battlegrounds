@@ -98,6 +98,13 @@ struct Reader {
 
 std::map<const World *, NetSession *> g_sessions;
 
+// DE_CStandardSessionSlot::SlotDataUpdated (Session 0x4501b1c0): GH_SESSION_SLOT_UPDATED, INT1 the slot index.
+void slot_data_updated(World &w, SessionSlot &sl) {
+	uint32_t e = new_event(w, "SessionSlotUpdated");
+	w.memory().set<int32_t>(e + 4, sl.index);
+	w.send_event(sl.obj, e);
+}
+
 // GH_SLOT_QUERRY_USER_CHOICES_COMPLETE (Session 0x4500e770): sent to the client and its slot; the
 // pickers clear INT1 while the player is still choosing.
 bool choices_complete(World &w, SessionClient &c) {
@@ -218,6 +225,15 @@ void net_change_fighter(World &w) {
 			if (cl->local && cl->user && cl->slot) w.send_event(cl->slot->obj, new_event(w, "SessionClientReselectFighter"));
 		}
 	}
+}
+
+// DE_CStandardClient::Reconnect and its com interface's (Session 0x45002670, 0x45001a90; FINDINGS 452).
+void NetSession::reconnect(Peer &p, SessionClient &c, const std::vector<uint32_t> &linked) {
+	p.client = &c;
+	p.status = 1;
+	p.id_queue = linked;
+	p.roster.clear();
+	if (c.ui_manager && w_.object(c.ui_manager->handle) == c.ui_manager) launch_remote_ui(c, c.ui_manager);
 }
 
 void NetSession::reselect_fighter() {
@@ -351,6 +367,8 @@ void NetSession::receive_roster(const std::vector<uint8_t> &d, size_t pos) {
 			if (sl.client != c) connect_client(w_, *session, *c, sl);
 		}
 	}
+	// Message 1 unpacks every slot and calls its SlotDataUpdated.
+	for (auto &sl : session->slots) slot_data_updated(w_, *sl);
 	w_.session = keep;
 	if (session->net_status == 100) report(101);
 }
@@ -846,6 +864,7 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 		if (!name.empty()) p.client->player_name = name;
 		p.client->ping = int32_t(ping);
 		p.client->kick_votes = votes;
+		if (p.client->slot) slot_data_updated(w_, *p.client->slot);
 		break;
 	}
 	case kClientInfo: {
@@ -985,7 +1004,6 @@ void NetSession::send_clock(uint32_t now) {
 
 void NetSession::update() {
 	const uint32_t now = w_.global_ms();
-	if (session && std::none_of(w_.sessions.begin(), w_.sessions.end(), [&](const auto &sp) { return sp.get() == session; })) session = nullptr;
 	credit = std::min(1.0f, credit + 0.001f * float(now - last_frame_));
 	last_frame_ = now;
 	for (auto &p : peers_) {

@@ -113,6 +113,8 @@ void replay_set_time(World &w, GameObject &o, uint32_t ms);
 // deferred.
 void replay_temporal_update(World &w, const GameObject *session);
 bool replaying(World &w);
+// Online, or replaying a network match's recording: what single player leaves out (PLACEHOLDERS).
+bool replay_net_format(World &w);
 // The replay's recorded end (scene ms), 0 when not replaying.
 uint32_t replay_end_ms(World &w);
 void forget_replay_objects(World &w);

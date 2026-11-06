@@ -261,8 +261,15 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 		else if (version != net_engine_version()) reason = "The server runs version " + std::string(net_engine_version()) + ", this game " + version + ".";
 		else if (hash != hash_) reason = "The server's game data differs from yours (" + hash_text(hash_) + " against " + hash_text(hash) + ").";
 		else if (!hosted_ || !hosted_->master_description) reason = "Server Unknown";
-		else if (int(hosted_->clients.size()) >= hosted_->max_player_clients) reason = "The server is full.";
-		else if (!opt_.password.empty() && password != opt_.password) reason = "The password is not correct.";
+		// A known client joining again (FINDINGS 452): same machine and name, old connection still kept.
+		net::EnetPeer *previous = nullptr;
+		if (reason.empty() && hosted_) {
+			for (auto &[old, cl] : accepted_) {
+				if (old != &p && old->address().ip == p.address().ip && cl->player_name == (name.empty() ? "Player" : name)) previous = old;
+			}
+		}
+		if (reason.empty() && !previous && int(hosted_->clients.size()) >= hosted_->max_player_clients) reason = "The server is full.";
+		else if (reason.empty() && !opt_.password.empty() && password != opt_.password) reason = "The password is not correct.";
 		if (!reason.empty()) {
 			Out o = lobby_message(kRefuse);
 			o.str(reason);
@@ -271,13 +278,28 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 			return;
 		}
 		if (name.empty()) name = "Player";
-		SessionClient &c = add_client_to(w_, *hosted_, false, name);
-		c.local = false;
-		c.active = true;
-		accepted_[&p] = &c;
-		auto &peer = net_->add_peer(&p);
-		peer.client = &c;
-		peer.status = 2;
+		if (previous) {
+			// DE_CStandardClient::Reconnect (Session 0x45002670, FINDINGS 452).
+			SessionClient &c = *accepted_[previous];
+			std::vector<uint32_t> linked;
+			if (auto *op = net_->peer_of(previous)) {
+				for (auto &[id, on] : op->linked) linked.push_back(id);
+			}
+			net_->remove_peer(previous);
+			accepted_.erase(previous);
+			host_->disconnect(previous, true);
+			accepted_[&p] = &c;
+			net_->reconnect(net_->add_peer(&p), c, linked);
+			printf("net: %s reconnected from %s\n", name.c_str(), p.address().text().c_str());
+		} else {
+			SessionClient &c = add_client_to(w_, *hosted_, false, name);
+			c.local = false;
+			c.active = true;
+			accepted_[&p] = &c;
+			auto &peer = net_->add_peer(&p);
+			peer.client = &c;
+			peer.status = 2;
+		}
 		Out o = lobby_message(kAccept);
 		o.u32(0);
 		o.str(opt_.server_name);
@@ -294,7 +316,7 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 		o.u32(starting);
 		o.u32(uint32_t(hosted_->max_player_clients));
 		p.send(net::Channel::Reliable, std::move(o.d));
-		printf("net: %s joined from %s\n", name.c_str(), p.address().text().c_str());
+		if (!previous) printf("net: %s joined from %s\n", name.c_str(), p.address().text().c_str());
 		return;
 	}
 	if (state_ == State::Connecting && m == kRefuse) {
@@ -344,6 +366,15 @@ void NetGame::start_client_session(const std::vector<uint8_t> &d, size_t pos) {
 
 void NetGame::update() {
 	if (!host_) return;
+	// The network game lives as long as its session: a match that ends closes it.
+	SessionState *s = hosted_ ? hosted_ : net_ ? net_->session : nullptr;
+	if (s && std::none_of(w_.sessions.begin(), w_.sessions.end(), [&](const auto &sp) { return sp.get() == s; })) {
+		printf("net: the session ended\n");
+		hosted_ = nullptr;
+		if (net_) net_->session = nullptr;
+		close();
+		return;
+	}
 	host_->service();
 	net::EnetHost::Event e;
 	while (host_->poll(e)) {

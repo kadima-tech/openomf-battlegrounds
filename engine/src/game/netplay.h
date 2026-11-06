@@ -154,6 +154,8 @@ public:
 	void launch_remote_ui(SessionClient &c, GameObject *ui);
 	// A client's copy of a server page completed: the choice goes back (0x04).
 	void remote_ui_complete(GameObject *ui);
+	// A known client joined again: Reconnect.
+	void reconnect(Peer &p, SessionClient &c, const std::vector<uint32_t> &linked);
 	// The in-game menu's Change Fighter on a client: ClientReselectFighter (0x1d).
 	void reselect_fighter();
 	SessionState *session = nullptr;  // the network session (the top-level one)

@@ -571,7 +571,7 @@ int main(int argc, char **argv) {
 				fprintf(trace, "%d %u %d %lld", fr, world.scene_ms_of(ss->obj), ss->net_status, wall);
 				for (auto &sl : ss->slots) {
 					game::GameObject *f = sl->creature;
-					if (!f || world.object(f->handle) != f || !f->spawned) continue;
+					if (!f || !f->spawned) continue;
 					float h = -1;
 					for (game::GameObject *ch : f->children) {
 						std::vector<uint8_t> args(4);
