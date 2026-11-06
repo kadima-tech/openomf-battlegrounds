@@ -116,9 +116,6 @@ FetchContent_Declare(enet
 FetchContent_MakeAvailable(enet)
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 target_compile_options(enet PRIVATE -w)
-if(WIN32)
-	target_link_libraries(enet PUBLIC winmm ws2_32)
-endif()
 
 # The byte link between the machines of a network session (src/net/link.h) and its ENet transport.
 add_library(net STATIC src/net/link.cpp src/net/enet_link.cpp)
