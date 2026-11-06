@@ -93,6 +93,23 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   percentile and maximum once both copies have landed). `OPENBG_DEBUG_NET=<frame>` lists both machines' scene roots
   and state managers (server ID, replication flags, control, newest state) then; `OPENBG_DEBUG_NETSTATES=1` traces
   each received state's placement. `OPENBG_SEED` seeds both machines' `rand()`.
+- Network play, phase 2 (`docs/NETWORK_PLAN.md`): `openbg --host "Last Man Standing"` serves the match (its Choose
+  Cast and Choose Environment as usual) on `Network\Winsock\Listener Port` (default 2002; `--port N` overrides), and
+  `openbg --join host[:port]` joins one; in the menus, Host Game does the same and Join Game is the session browser (LAN
+  sessions by broadcast every 500 ms, or a typed address). The transport is ENet (`src/net/enet_link.h`, fetched pinned at
+  1.3.18): a reliable ordered and an unreliable channel, the original's delay simulator (`Network\Winsock\Delay Packet
+  Time` and `Delay Packet Time Added Variation`, ms, applied to sends on that machine), "interrupted" after 6 s of silence and
+  dropped after `Network\Kick Time`. The handshake (`src/game/netgame.cpp`) refuses another protocol, engine version
+  (`OPENBG_VERSION` in release builds, "dev" otherwise) or data hash (printed as `data xxxxxxxx` at start), and a wrong
+  `Network\Server Password` (a joining client sends its own registry value with `--join`). Each machine prints its status
+  changes (`net: status ...`, `net: Guest reports ...`); `OPENBG_DEBUG_NETSTATES=1` also traces ID requests and links.
+  Test switches: `OPENBG_ALL_AI=1` gives every fighter, the user's too, to its pilot's AI; `OPENBG_NET_TRACE=<file>` writes
+  each frame's scene time, wall clock and every slot's fighter (place, health, state, creature time); headless network runs
+  are paced to the wall clock. `tools/net-lan/run.sh <Data> [--ping ms] [--frames N] [--port N] [--out dir]` runs a host
+  and a client as two headless processes with scratch HOMEs on localhost, both picking through the game's pages (the
+  client's opened remotely by the host), plays Last Man Standing with the AI and prints `tools/net-lan/compare.py`'s
+  position and health errors of the client's copies against the server's at the same wall-clock moment, and each
+  fighter's clock offset. `net-tests` (ctest, no game data) checks the transport on localhost.
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `deobj-dump scripts <file.DEObjects> <dir>` extracts a data file's script source (into your local copy only; it is the game's).

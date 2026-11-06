@@ -10,7 +10,10 @@ engine, so the game can be played on modern machines.
 
 > **Status: alpha.** Single-player tournaments, Practice and Training run end to end: the original
 > menus, robot and pilot selection, every robot and arena, the computer opponents, the HUD, sound,
-> music and replays. Expect bugs and rough edges. Online and LAN play are not supported yet.
+> music and replays. LAN and direct-IP play work for two players (Last Man Standing, one against
+> one): Host Game serves the match on UDP port 2002 (Options > Network > Listener Port), and Join
+> Game lists the sessions on your network or takes an address. Internet play through a lobby is not
+> supported yet. Expect bugs and rough edges.
 > [PLACEHOLDERS.md](PLACEHOLDERS.md) lists everything that is still missing or approximated.
 
 The port follows the game's final official patch, **2.123**.
