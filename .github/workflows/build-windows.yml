@@ -86,7 +86,7 @@ jobs:
           "$PYTHON" launcher/build_state.py --check dist/.launcher-build-state-windows
           cmp LICENSE "$app/resources/licenses/openomf-battlegrounds.txt"
           cmp THIRD_PARTY_NOTICES.md "$app/resources/licenses/THIRD_PARTY_NOTICES.md"
-          for notice in SDL2.txt unshield.txt zlib.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt Python.txt; do
+          for notice in SDL2.txt unshield.txt zlib.txt dmusic.md dmusic.txt DDKSynth.txt openindeo.txt enet.txt Python.txt; do
             test -s "$app/resources/licenses/$notice"
           done
           # x64 only, and no DLLs a fresh Windows 10/11 installation lacks.

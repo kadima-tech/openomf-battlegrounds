@@ -105,9 +105,23 @@ add_library(vm STATIC
 )
 target_link_libraries(vm PUBLIC de)
 
-# The byte link between the machines of a network session (src/net/link.h).
-add_library(net STATIC src/net/link.cpp)
+# ENet (github.com/lsalzman/enet, MIT): the network transport's UDP socket, reliable ordered and
+# unreliable channels. Pinned to 1.3.18; -DFETCHCONTENT_SOURCE_DIR_ENET=<dir> uses a local checkout.
+include(FetchContent)
+FetchContent_Declare(enet
+	URL https://codeload.github.com/lsalzman/enet/tar.gz/2662c0de09e36f2a2030ccc2c528a3e4c9e8138a
+	URL_HASH SHA256=37381831c5ccbb41c3c71e867203fee847670f67717f297f930290d18985ad5f)
+FetchContent_MakeAvailable(enet)
+target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
+target_compile_options(enet PRIVATE -w)
+if(WIN32)
+	target_link_libraries(enet PUBLIC winmm ws2_32)
+endif()
+
+# The byte link between the machines of a network session (src/net/link.h) and its ENet transport.
+add_library(net STATIC src/net/link.cpp src/net/enet_link.cpp)
 target_include_directories(net PUBLIC src)
+target_link_libraries(net PRIVATE enet)
 
 # Game runtime: native objects and intrinsics for compiled scripts.
 add_library(game STATIC
@@ -143,6 +157,10 @@ target_link_libraries(deobj-dump PRIVATE vm ZLIB::ZLIB)
 enable_testing()
 add_executable(de-tests tests/de_tests.cpp)
 target_link_libraries(de-tests PRIVATE vm)
+# The transport on localhost, no game data needed.
+add_executable(net-tests tests/net_tests.cpp)
+target_link_libraries(net-tests PRIVATE net)
+add_test(NAME net-tests COMMAND net-tests)
 # The port follows the last official patch, 2.123 (PATCHES.md); the disc's 2.090 data still loads.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../source/patched/v2123/Data")
 	set(OPENBG_DEFAULT_DATA "${CMAKE_CURRENT_SOURCE_DIR}/../source/patched/v2123/Data")
@@ -184,7 +202,7 @@ add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
+	foreach(program deobj-dump de-tests net-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()

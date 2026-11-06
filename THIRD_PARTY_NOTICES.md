@@ -20,13 +20,14 @@ index, define each component's terms.
 | DirectMusic software synthesizer sample (DDKSynth) | Microsoft Windows Driver Kit 8.1 sample, ported to C in dmusic | MIT, Microsoft Corporation; `licenses/DDKSynth.txt` |
 | zlib (Windows only) | [madler/zlib](https://github.com/madler/zlib), 1.3.1 | zlib; `licenses/zlib.txt` (macOS uses the system zlib) |
 | openindeo | [kadima-tech/openindeo](https://github.com/kadima-tech/openindeo), commit `5452df0c8900f0892e701253481bf5c311a9a9d7` | MIT; `licenses/openindeo.txt` |
+| ENet | [lsalzman/enet](https://github.com/lsalzman/enet), 1.3.18 (commit `2662c0de09e36f2a2030ccc2c528a3e4c9e8138a`) | MIT; `licenses/enet.txt` |
 | CPython runtime and included libraries | Python 3.12.12 from [python-build-standalone](https://github.com/astral-sh/python-build-standalone) (macOS: installed by [uv](https://github.com/astral-sh/uv); Windows: release `20251028`, including its Visual C++ runtime DLLs) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
 | bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.2.6 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.2.6.dist-info/` |
 
 The vendored dmusic source notices are also available in
 [`engine/third_party/dmusic/`](https://github.com/kadima-tech/openomf-battlegrounds/tree/main/engine/third_party/dmusic).
 Dependency versions
-and integrity pins live in `launcher/cmake/CMakeLists.txt`, `launcher/bundle-setup.sh`,
+and integrity pins live in `launcher/cmake/CMakeLists.txt`, `engine/CMakeLists.txt` (ENet), `launcher/bundle-setup.sh`,
 `launcher/windows/bundle-python.sh` and `launcher/requirements.txt`. uv is a build-time
 tool and is not distributed in the finished app. macOS system frameworks and libraries
 are supplied by macOS; on Windows, the system DLLs the programs use (including the
