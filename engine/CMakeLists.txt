@@ -171,6 +171,15 @@ add_test(NAME deobjects-edit-reload COMMAND deobjects-data-tests "${OPENBG_DATA_
 add_test(NAME deobjects-round-trip COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}" --all)
 set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 
+# The content editor's data model (docs/EDITOR_SPEC.md): add-on projects, pilots, validation.
+add_library(editor-core STATIC editor/core/addon.cpp editor/core/pilot.cpp editor/core/image_io.cpp
+	editor/core/validate.cpp)
+target_include_directories(editor-core PUBLIC editor/core)
+target_link_libraries(editor-core PUBLIC de ZLIB::ZLIB)
+add_executable(editor-tests tests/editor_tests.cpp)
+target_link_libraries(editor-tests PRIVATE editor-core game)
+add_test(NAME editor-pilot COMMAND editor-tests "${OPENBG_DATA_DIR}")
+
 # Native viewer (SDL2 + OpenGL 4.1 core).
 if(NOT TARGET SDL2::SDL2)
 	find_package(SDL2 REQUIRED)
@@ -203,7 +212,7 @@ add_executable(openbg app/frontend.cpp app/game_view.cpp app/scene_lights.cpp
 target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests vmc2-tests deobjects-data-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
+	foreach(program deobj-dump de-tests vmc2-tests deobjects-data-tests editor-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()

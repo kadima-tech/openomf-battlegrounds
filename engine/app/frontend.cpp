@@ -124,7 +124,7 @@ void print_state(game::World &world, int fr) {
 int main(int argc, char **argv) {
 	de::init_platform();
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <Data dir> [--screenshot out.png --frames N]\n", argv[0]);
+		fprintf(stderr, "usage: %s <Data dir> [--addon file.DEObjects] [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
 	}
 	std::string data = argv[1];
@@ -150,6 +150,17 @@ int main(int argc, char **argv) {
 				if (q == std::string::npos) break;
 				p = q + 1;
 			}
+		}
+		else if (!strcmp(argv[i], "--addon") && i + 1 < argc) {
+			// An extra add-on .DEObjects, loaded as if it were in the Data folder (OPENBG_ADDONS).
+			std::string list = getenv("OPENBG_ADDONS") ? getenv("OPENBG_ADDONS") : "";
+#ifdef _WIN32
+			list += (list.empty() ? "" : ";") + std::string(argv[++i]);
+			_putenv_s("OPENBG_ADDONS", list.c_str());
+#else
+			list += (list.empty() ? "" : ":") + std::string(argv[++i]);
+			setenv("OPENBG_ADDONS", list.c_str(), 1);
+#endif
 		}
 		else if (!strcmp(argv[i], "--headless")) {
 			headless = true;
