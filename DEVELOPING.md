@@ -105,11 +105,17 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   changes (`net: status ...`, `net: Guest reports ...`); `OPENBG_DEBUG_NETSTATES=1` also traces ID requests and links.
   Test switches: `OPENBG_ALL_AI=1` gives every fighter, the user's too, to its pilot's AI; `OPENBG_NET_TRACE=<file>` writes
   each frame's scene time, wall clock and every slot's fighter (place, health, state, creature time); headless network runs
-  are paced to the wall clock. `tools/net-lan/run.sh <Data> [--ping ms] [--frames N] [--port N] [--out dir]` runs a host
-  and a client as two headless processes with scratch HOMEs on localhost, both picking through the game's pages (the
+  are paced to the wall clock. `tools/net-lan/run.sh <Data> [--ping ms] [--frames N] [--port N] [--out dir] [--arena "The Desert"]
+  [--host-fighter Elizabeth,Katana] [--client-fighter Lucas,Jaguar]` runs a host and a client as two headless processes
+  with scratch HOMEs on localhost (started together; `OPENBG_JOIN_RETRY=1` makes `--join` try again until the server
+  accepts it; `HOST_ENV` / `CLIENT_ENV` add settings to one side), both picking through the game's pages (the
   client's opened remotely by the host), plays Last Man Standing with the AI and prints `tools/net-lan/compare.py`'s
-  position and health errors of the client's copies against the server's at the same wall-clock moment, and each
-  fighter's clock offset. `net-tests` (ctest, no game data) checks the transport on localhost.
+  position and health errors of the client's copies against the server's at the same wall-clock moment, each
+  fighter's clock offset, and per object name (projectiles, pickups, hazards: the trace's " # " part lists every
+  replicated creature and every projectile in the scene, linked or not) the frames each machine had one and how far
+  the client's copies were from the server's. A `--join` screenshot run (`--screenshot`, `SHOTS`, `OPENBG_EYE`) keeps
+  the wall clock's pace and writes the trace too. `OPENBG_CHANGE_FIGHTER=<frame>` presses the in-game menu's Change
+  Fighter then. `net-tests` (ctest, no game data) checks the transport on localhost.
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `deobj-dump scripts <file.DEObjects> <dir>` extracts a data file's script source (into your local copy only; it is the game's).

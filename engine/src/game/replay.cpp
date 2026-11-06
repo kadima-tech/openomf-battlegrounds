@@ -163,6 +163,9 @@ struct ReplayWorld {
 	int reticking = 0;
 	// DE_CCreature +0x1ec: SetInstanceNumber's suffix, by handle.
 	std::map<uint32_t, std::pair<const GameObject *, std::string>> instance_numbers;
+	// AppendCreatureID's part of it, kept apart: single player's IDs leave it out (PLACEHOLDERS).
+	std::map<uint32_t, std::pair<const GameObject *, std::string>> appended;
+	bool with_appended = false;
 	// Network play: this machine's side of the session (`session`), the IDs the server issued.
 	NetRole net = NetRole::None;
 	uint32_t next_id = 0;
@@ -186,6 +189,12 @@ de::Guid record_guid(bool repeatable) {
 	return g;
 }
 ReplayWorld &rw(World &w) { return g_worlds[&w]; }
+
+// Replicated arrays and AppendCreatureID are packed online and in network recordings only.
+bool net_format(World &w) {
+	auto &R = rw(w);
+	return R.net != NetRole::None || (R.record && R.record->online);
+}
 
 GameObject *state_manager_object(const GameObject &o) {
 	for (GameObject *c : o.children) {
@@ -331,6 +340,10 @@ std::string build_id(World &w, GameObject &o) {
 		auto &numbers = rw(w).instance_numbers;
 		auto it = numbers.find(o.handle);
 		if (it != numbers.end() && it->second.first == &o) id += it->second.second;
+		if (net_format(w) || rw(w).with_appended) {
+			auto ap = rw(w).appended.find(o.handle);
+			if (ap != rw(w).appended.end() && ap->second.first == &o) id += ap->second.second;
+		}
 		if (f.id & 4) id.append(reinterpret_cast<const char *>(guid_of(o).bytes), 16);
 		if (f.id & 2) id.append(reinterpret_cast<const char *>(&o.creation_time), 4);
 		return id;
@@ -387,6 +400,13 @@ StateManager &join(World &w, GameObject &o) {
 	// An empty ID matches the first empty-ID record, so all such managers share one.
 	if (auto &rec = R.record; rec && flags.record) {
 		sm.record = rec->find(sm.id);
+		// A recording of a network match names its managers with AppendCreatureID's part.
+		if (!sm.record && !rec->recording && !rec->online && R.appended.count(o.handle)) {
+			R.with_appended = true;
+			std::string alt = build_id(w, o);
+			R.with_appended = false;
+			if (StateRecord *r = rec->find(alt)) sm.record = r, sm.id = alt, rec->online = true;
+		}
 		if (!sm.record && rec->recording) {
 			sm.record = rec->managers.emplace_back(std::make_unique<StateRecord>()).get();
 			sm.record->id = sm.id;
@@ -473,8 +493,9 @@ uint32_t extract_element(World &w, Packer &p) {
 
 // Type 2 replicated values: u32 length, then what the value class's generate function (its class
 // node +0xdc) writes.
-enum class Value { Unknown, Text, Data, Guid, GuidPool, Vector, Coordinates };
-Value value_kind(const std::string &cls) {
+enum class Value { Unknown, Text, Data, Guid, GuidPool, Vector, Coordinates, Array };
+bool net_format(World &w);
+Value value_kind(World &w, const std::string &cls) {
 	auto is = [&](const char *n) { return cls == n || cls == std::string("CObject::") + n; };
 	if (is("CText")) return Value::Text;
 	if (is("CData")) return Value::Data;
@@ -482,12 +503,14 @@ Value value_kind(const std::string &cls) {
 	if (is("CGUID")) return Value::Guid;
 	if (is("CVector")) return Value::Vector;
 	if (is("CCoordinateSystem")) return Value::Coordinates;
+	// Single player and its recordings keep the arrays out, as the port always has (PLACEHOLDERS).
+	if (is("CSingleDimensionPrimitiveArray") && net_format(w)) return Value::Array;
 	return Value::Unknown;
 }
 void add_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 	vm::Memory &m = w.memory();
 	Packer v;
-	switch (inst ? value_kind(cls) : Value::Unknown) {
+	switch (inst ? value_kind(w, cls) : Value::Unknown) {
 	case Value::Text: {  // squeezed length with the NUL (0 for none), the bytes
 		uint32_t s = m.get<uint32_t>(inst);
 		std::string t = s ? std::string(reinterpret_cast<const char *>(m.ptr(s))) : std::string();
@@ -511,6 +534,12 @@ void add_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 		v.raw(b.data(), b.size());
 		break;
 	}
+	case Value::Array: {  // SingleDimensionPrimitiveArrayGenerateContentsCaller (Core 0x7014c8a0)
+		uint32_t n = m.get<uint32_t>(inst + 4), data = m.get<uint32_t>(inst);
+		v.squeezed(n);
+		if (n && data) v.raw(m.ptr(data, n * 4), n * 4);
+		break;
+	}
 	case Value::Unknown: v.squeezed(0); break;
 	}
 	p.bytes(v.data);
@@ -520,7 +549,17 @@ void extract_value(World &w, Packer &p, const std::string &cls, uint32_t inst) {
 	v.data = p.rbytes();
 	vm::Memory &m = w.memory();
 	if (!inst || v.data.empty()) return;
-	switch (value_kind(cls)) {
+	switch (value_kind(w, cls)) {
+	case Value::Array: {  // SingleDimensionPrimitiveArrayProcessContentsCaller (Core 0x7014c8d0)
+		uint32_t n = v.rsqueezed();
+		if (n > v.data.size()) break;
+		uint32_t data = m.alloc(std::max<uint32_t>(n, 1) * 4);
+		v.take(m.ptr(data, n * 4), n * 4);
+		m.set<uint32_t>(inst, data);
+		m.set<uint32_t>(inst + 4, n);
+		m.set<uint32_t>(inst + 8, std::max<uint32_t>(n, 1));
+		break;
+	}
 	case Value::Text: {
 		auto b = v.rn(v.rsqueezed());
 		m.set<uint32_t>(inst, w.string(std::string(b.begin(), std::find(b.begin(), b.end(), uint8_t(0)))));
@@ -1446,7 +1485,8 @@ bool recordable(const de::ObjectRef &d) {
 
 void replay_session_begun(World &w, SessionState &s) {
 	auto &R = rw(w);
-	if (s.replaying || R.record) return;
+	// DE_CSession::Begin records only a server's session: a network client never records.
+	if (s.replaying || R.record || R.net == NetRole::Client) return;
 	if (w.registry_string("Gamepley\\Record Session") != "1") return;
 	de::ObjectRef d = s.master_description && s.master_description->file
 	                      ? de::ObjectRef{s.master_description->file, s.master_description->index}
@@ -1717,49 +1757,128 @@ void insert_lagged(World &w, StateManager &sm, LocalState st, int index, bool co
 	}
 }
 
-// DE_CCreature::CompareStates through the behaviour executor (FINDINGS 400): 1 for the same method
-// and status, 0.5 for the same method, halved when neither state is no-interrupt.
-float compare_states(World &w, StateManager &sm, const LocalState &local, const LocalState &in, bool in_no_interrupt) {
-	const vm::ScriptMethod *a = packed_state_method(w, *sm.owner, local.wire ? local.bytes : repack_state(w, local, false));
-	const vm::ScriptMethod *b = packed_state_method(w, *sm.owner, in.bytes);
-	if (!a || a != b) return 0;
-	float f = same_data(w, local, in) ? 1.0f : 0.5f;
-	if (!(local.flags & kNoInterrupt) && !in_no_interrupt) f *= 0.5f;
+// RepackStatus's walk (Core 0x70145e90): each instance's status and last frame's method (+0xf4).
+struct SplitState {
+	std::vector<std::pair<const vm::ScriptMethod *, std::vector<uint8_t>>> statuses;
+	size_t rest = 0;
+};
+SplitState split_state(World &w, GameObject &o, const std::vector<uint8_t> &bytes) {
+	SplitState out;
+	Packer p;
+	p.data = bytes;
+	auto skip = [&](const std::vector<Replicated> &list) {
+		for (const Replicated &r : list) {
+			if (r.type == 0) p.pos = std::min(p.data.size(), p.pos + r.b);
+			else if (r.type == 2) p.rbytes();
+			else if (r.type == 3 || r.type == 4) p.pos = p.chunk_end();
+		}
+	};
+	for (Brain *b : brains_of(w, o)) {
+		size_t start = p.pos;
+		for (const auto &bc : b->cls.code.behaviors) skip(bc.replicated);
+		const vm::ScriptMethod *last = nullptr;
+		for (;;) {
+			uint8_t flag = p.r8();
+			uint32_t width = (flag >> 1) & 3;
+			if (width == 3) break;
+			uint32_t mi = width == 0 ? p.r8() : width == 1 ? p.r16() : p.r32();
+			if (flag & 8) p.r16();
+			else p.r8();
+			last = b->cls.method(mi);
+			if (!last) break;
+			skip(last->cm->replicated);
+			if (!(flag & 1) || p.pos >= p.data.size()) break;
+		}
+		out.statuses.emplace_back(last, std::vector<uint8_t>(bytes.begin() + long(std::min(start, bytes.size())), bytes.begin() + long(std::min(p.pos, bytes.size()))));
+	}
+	out.rest = std::min(p.pos, bytes.size());
+	return out;
+}
+
+std::vector<uint8_t> wire_bytes(World &w, const LocalState &s) { return s.wire ? s.bytes : repack_state(w, s, false); }
+
+// DE_CCreature::CompareStates / CompareStatus (Creature 0x15015050, Core 0x70146170; FINDINGS 418).
+float compare_states(World &w, StateManager &sm, const LocalState &local, const LocalState &in) {
+	if (!sm.owner->is("Actor\\Creature")) return 0;
+	SplitState a = split_state(w, *sm.owner, wire_bytes(w, local)), b = split_state(w, *sm.owner, in.bytes);
+	float f = 1;
+	for (size_t i = 0; i < a.statuses.size() && i < b.statuses.size(); ++i) {
+		// A status without frames leaves +0xf4 as the one before it had set.
+		const vm::ScriptMethod *mb = b.statuses[i].first ? b.statuses[i].first : a.statuses[i].first;
+		if (a.statuses[i].first != mb) return 0;
+		f *= a.statuses[i].second == b.statuses[i].second ? 1.0f : 0.5f;
+	}
 	return f;
 }
 
-// CheckForDiscardState (Core 0x701ae410, FINDINGS 400): 0 to go on to placement, 1 rejected, 2 known.
-// On a client a state of significance 2 or more that its newer prediction already matches is known;
-// one of higher authority is folded into the matched state (AdjustSameState's position nudge is
-// left out: PLACEHOLDERS). The server rejects an ordinary state just after a no-interrupt one.
+// AdjustSameState (Creature 0x15015430, OMF 0x3503acd0): opposite signs, as the listings have them.
+void adjust_same_state(World &w, StateManager &sm, const LocalState &local, const LocalState &in) {
+	GameObject &o = *sm.owner;
+	if (!o.is("Actor\\Creature")) return;
+	std::vector<uint8_t> lb = wire_bytes(w, local);
+	SplitState a = split_state(w, o, lb), b = split_state(w, o, in.bytes);
+	Packer pa, pb;
+	pa.data = lb, pa.pos = a.rest;
+	pb.data = in.bytes, pb.pos = b.rest;
+	CreatureFlags f = creature_flags(o);
+	if (f.position) {
+		std::array<float, 3> l{}, n{};
+		pa.take(l.data(), 12), pb.take(n.data(), 12);
+		for (int k = 0; k < 3; ++k) o.local.t[k] += l[k] - n[k];
+	}
+	if (f.orientation) pa.pos += 12, pb.pos += 12;
+	if (o.fighter && pa.pos < pa.data.size() && pb.pos < pb.data.size()) {
+		FighterState l = decode_physics(w, pa), n = decode_physics(w, pb);
+		for (int k = 0; k < 3; ++k) o.local.t[k] += n.pos[k] - l.pos[k];
+	}
+	++rw(w).counters.adjusted;
+}
+
+// CheckForDiscardState (Core 0x701ae410, FINDINGS 400, 418): 0 placement, 1 rejected, 2 known.
 int check_for_discard(World &w, StateManager &sm, const LocalState &in, bool no_interrupt, bool time_critical, bool correction) {
 	const bool server = rw(w).net == NetRole::Server;
 	int64_t window = sm.discard / 2 * (time_critical ? 2 : 1);
+	bool adjust = !server && in.significance >= 2;
 	auto &h = sm.history;
-	bool passed_ni = false;
-	if (!server && in.significance >= 2) {
-		for (int i = int(h.size()) - 1; i >= 0 && int64_t(h[size_t(i)].time) + window >= int64_t(in.time); --i) {
-			LocalState &l = h[size_t(i)];
-			if (compare_states(w, sm, l, in, no_interrupt) >= 0.5f) {
-				bool newer_auth = false;
-				for (size_t k = size_t(i) + 1; k < h.size(); ++k) newer_auth |= h[k].authority >= in.authority;
-				if (correction && i + 1 < int(h.size()) && h.back().significance > in.significance && !newer_auth) return 0;
-				if (!(in.flags & kNoInterrupt) && i + 1 < int(h.size()) && !passed_ni) return 0;
-				if (l.authority >= in.authority) return 2;
-				if (sm.owner->is_actor && !(l.flags & kAdjusted)) {
-					for (size_t k = size_t(i); k < h.size(); ++k) h[k].flags |= kAdjusted;
-					l.authority = in.authority;
+	bool passed_ni = false, passed_auth = false;
+	int max_sig = 0;
+	for (int i = int(h.size()) - 1; i >= 0; --i) {
+		LocalState &l = h[size_t(i)];
+		const int64_t reach = int64_t(l.time) + window;
+		if (reach < int64_t(in.time)) break;
+		if (l.flags & kNoInterrupt) passed_ni = true;
+		if (int64_t(in.time) < reach) {
+			float c = compare_states(w, sm, l, in);
+			if (!(l.flags & kNoInterrupt) && !no_interrupt) c *= 0.5f;
+			if (c >= 0.5f) {
+				if (in.significance < max_sig && correction && !passed_auth) return 0;
+				if (i < int(h.size()) - 1 && !passed_ni && !no_interrupt && l.time <= in.time) return 0;
+				if (in.authority <= l.authority) return 2;
+				if (l.flags & kAdjusted) adjust = false;
+				int k = i;
+				if (sm.owner->is_actor && adjust && k >= 1) {
+					uint32_t t = in.time;
+					while (k >= 1 && h[size_t(k)].time > t) {
+						if (int64_t(h[size_t(k)].time) - int64_t(t) < int64_t(h[size_t(k - 1)].time) - int64_t(in.time)) break;
+						--k;
+						adjust = false;
+						t = in.time;
+					}
 				}
+				if (sm.owner->is_actor && adjust) {
+					adjust_same_state(w, sm, h[size_t(k)], in);
+					for (size_t j = size_t(k); j < h.size(); ++j) h[j].flags |= kAdjusted;
+				}
+				// 2.123: the matched state takes the incoming authority.
+				h[size_t(i)].authority = in.authority;
+				sm.held.reset();
 				return 2;
 			}
-			passed_ni |= (l.flags & kNoInterrupt) != 0;
 		}
+		max_sig = std::max<int>(max_sig, l.significance);
+		if (in.authority <= l.authority) passed_auth = true;
 	}
-	if (server && !no_interrupt && !correction) {
-		for (auto &l : h) {
-			if ((l.flags & kNoInterrupt) && in.time >= l.time && int64_t(in.time) - int64_t(l.time) <= window) return 1;
-		}
-	}
+	if (passed_ni && !no_interrupt && !correction && server) return 1;
 	return 0;
 }
 
@@ -2289,7 +2408,15 @@ bool replay_held(World &w, const GameObject &o) {
 }
 
 void replay_set_time(World &w, GameObject &o, uint32_t ms) {
-	if (replaying(w)) set_time(w, o, ms);
+	if (replaying(w)) {
+		set_time(w, o, ms);
+	} else if (rw(w).net != NetRole::None && w.creature_rate(&o)) {
+		// Online a live creature's ticks count from its creation time.
+		Clock &c = rw(w).clocks[o.handle];
+		c.base = std::max<uint32_t>(1, o.creation_time);
+		c.ticked = true;
+		set_time(w, o, ms);
+	}
 }
 
 // DE_CScene::TemporalUpdate (Core 0x70070710): the deferred SetTime of restored creatures.
@@ -2307,6 +2434,14 @@ void replay_temporal_update(World &w, const GameObject *session) {
 		if (GameObject *o = w.object(h)) set_time(w, *o, uint32_t(w.scene_ms()));
 	}
 	w.temporal_updating = false;
+}
+
+// DE_CCreature::AppendCreatureID (Creature 0x15019c10): the other creature's ID joins the suffix.
+void append_creature_id(World &w, GameObject &o, GameObject &other) {
+	std::string id = build_id(w, other);
+	auto &[who, s] = rw(w).appended[o.handle];
+	if (who != &o) who = &o, s.clear();
+	s += id;
 }
 
 // SetInstanceNumberCaller (Creature 0x15014100): the number's digits join the ID suffix, which

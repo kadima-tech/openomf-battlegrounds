@@ -17,6 +17,7 @@
 #include "game/navigation.h"
 #include "game/observer.h"
 #include "game/runtime.h"
+#include "game/session.h"
 #include "game/simple_physics.h"
 
 namespace game {
@@ -321,7 +322,7 @@ float global_interest(World &w, GameObject *o) { return w.global_interest_of(o);
 // target clock and sets the quality offset (+0x3d0) to -(quality degradation - 0.5) when that
 // (+0x7cc) is above 0.5. Against a user-controlled creature the offset is cleared unless the
 // master session is joinable (its +0x38 vtable +0x154, the slot IsJoinableCaller reads): only a
-// network game handicaps the computer against a human. Our sessions are local, never joinable.
+// network game handicaps the computer against a human.
 void attack(World &w, GameObject &pilot, GameObject &self, GameObject &target, float aggression) {
 	GameObject::Command m;
 	m.type = kTypeAttack;
@@ -335,7 +336,7 @@ void attack(World &w, GameObject &pilot, GameObject &self, GameObject &target, f
 	const Pilot *p = pilot_of(&self);
 	float q = p ? p->quality : 0;
 	pilot.quality_offset = q > 0.5f ? -(q - 0.5f) : 0;
-	if (target.user_controlled) pilot.quality_offset = 0;
+	if (target.user_controlled && !session_joinable(w, w.session.get())) pilot.quality_offset = 0;
 }
 
 // DE_CStandardHookupExecutor::Confidence: attack and aquire commands score their value, move-to

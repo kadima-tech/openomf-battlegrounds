@@ -933,6 +933,11 @@ SessionState *master_session(SessionState *s) {
 	return s;
 }
 
+bool session_joinable(World &w, SessionState *s) {
+	NetSession *n = net_session(w);
+	return s && n && n->session && master_session(s) == n->session;
+}
+
 // DE_CScene::PassTime (2.123 0x20073f30) after the temporal sets: the scene's delta-tick hooks
 // (+0xd8) with the time it was given at its scale, then its delta-tick list (+0x70).
 void scene_delta_tick(World &w, const GameObject *session, float ms) {
@@ -1411,8 +1416,8 @@ void register_session_natives(World &w) {
 		c.ret_object(s ? s->obj : nullptr);
 	});
 	stub("CSession::SetJoinable(bool)");
-	// IsJoinableCaller (Core 2.123 0x201ff360): single player's sessions are local, never joinable.
-	reg("CSession::bool IsJoinable()", [](const NativeContext &c) { c.ret_bool(false); });
+	// IsJoinableCaller (Core 2.123 0x201ff360): only a network game's sessions are joinable.
+	reg("CSession::bool IsJoinable()", [S](const NativeContext &c) { c.ret_bool(session_joinable(c.world, S(c))); });
 	reg("CSession::class CClient NewClient()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		if (!s) {
@@ -1531,6 +1536,17 @@ void register_session_natives(World &w) {
 		return s ? s->client_of(c.self()) : nullptr;
 	};
 	reg("CClient::bool IsUserControlled()", [client](const NativeContext &c) { auto *cl = client(c); c.ret_bool(cl && cl->user); });
+	// DE_CClient::Ping (Core 0x701f5050): the node's round trip, else the server's last 0x0c (+0x70).
+	reg("CClient::int Ping()", [client](const NativeContext &c) {
+		auto *cl = client(c);
+		NetSession *n = net_session(c.world);
+		int32_t v = 0;
+		if (cl && n) {
+			if (n->role() == NetRole::Client && cl->net_id == n->own_id && !n->peers().empty()) v = int32_t(n->peers()[0].ping);
+			else if (!cl->local) v = std::max(0, cl->ping);
+		}
+		c.ret_u32(uint32_t(v));
+	});
 	reg("CClient::bool IsLocal()", [client](const NativeContext &c) { auto *cl = client(c); c.ret_bool(cl && cl->local); });
 	reg("CClient::string PlayerName()", [client](const NativeContext &c) {
 		auto *cl = client(c);

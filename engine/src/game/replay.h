@@ -43,6 +43,7 @@ struct SessionRecord {
 	float length = 0;          // +0x78: seconds
 	std::string player, server;  // +0x7c, +0x84
 	bool recording = false;    // +0x68
+	bool online = false;       // made by a network session's server
 	std::vector<std::unique_ptr<StateRecord>> managers;  // +0x4c
 	// Its .DEObjects file: the path, the agent (master entry) and the record's own GUID.
 	std::string path, agent;
@@ -86,6 +87,8 @@ void register_state(World &w, GameObject *owner, bool got_hit = false, int autho
 void replay_destroying(World &w, GameObject &o);
 // CCreature::SetInstanceNumber: part of the creature's ID.
 void set_instance_number(World &w, GameObject &o, int32_t n);
+// CCreature::AppendCreatureID: the other creature's ID joins it (online only, PLACEHOLDERS).
+void append_creature_id(World &w, GameObject &o, GameObject &other);
 // DE_CStateManager +0x78: driven by a record (IsSimulating / IsStateAlterable false).
 bool replay_driven(World &w, const GameObject *o);
 // DE_CCreature::Tick at its start: true when the creature skips its physics and brain this tick
@@ -104,7 +107,7 @@ bool creature_delta_ticked(const GameObject &o);
 void creature_delta_tick(World &w, GameObject &o);
 // Held (+0x2fc == 2): a fighter's guide and trailers wait too.
 bool replay_held(World &w, const GameObject &o);
-// DE_CCreature::SetTime after the replay's clock jumped: re-ticks up to it or rewinds.
+// DE_CCreature::SetTime after the scene's clock was set (a replay's jump, SetInitialSceneTime online).
 void replay_set_time(World &w, GameObject &o, uint32_t ms);
 // DE_CScene::TemporalUpdate (Core 0x70070710): restored creatures of `session`'s scene whose SetTime was
 // deferred.

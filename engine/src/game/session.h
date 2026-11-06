@@ -36,6 +36,9 @@ struct SessionClient {
 	SessionSlot *slot = nullptr;
 	GameObject *ui_manager = nullptr;  // the UI manager launched on it, if any
 	uint32_t net_id = 0;               // the server's number for it (the roster's client ID)
+	// DE_CClient +0x70, +0x74, +0xa4 and its kick votes {1 stay / -1 kick / 0, client ID} (0x0b / 0x0c).
+	int32_t ping = -1, admin_level = 0, votes_needed = 0;
+	std::vector<std::pair<int32_t, uint32_t>> kick_votes;
 };
 
 struct SessionSlot {
@@ -161,6 +164,8 @@ void drop_client(World &w, SessionState &s, SessionClient &c);
 const char *net_status_description(int status);
 // The top-level session `s` belongs to (whose status the machine keeps).
 SessionState *master_session(SessionState *s);
+// IsJoinable: the session belongs to a network session (hosted or joined).
+bool session_joinable(World &w, SessionState *s);
 // The front end chose `chosen` in a launched UI manager: it completes on the next update, and
 // every node's UIManagerComplete hook hears about it.
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model = nullptr);

@@ -5,14 +5,16 @@
 # AI fights, and compare.py sets the two machines' views of each fighter side by side.
 #
 #   tools/net-lan/run.sh <Data dir> [--ping ms] [--frames N] [--port N] [--out dir] [--wins "One Win"]
+#       [--arena "The Desert"] [--host-fighter Elizabeth,Katana] [--client-fighter Lucas,Jaguar]
 #
+# HOST_ENV / CLIENT_ENV add environment settings to one side (e.g. CLIENT_ENV=OPENBG_DEBUG_NETSTATES=1).
 # --ping is the round trip the delay simulator adds (Delay Packet Time, half on each side).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 data=${1:?usage: run.sh <Data dir> [--ping ms] [--frames N] [--port N] [--out dir] [--wins name]}
 shift
-ping=0 frames=6000 port=20020 out=$(mktemp -d) wins="One Win"
+ping=0 frames=6000 port=20020 out=$(mktemp -d) wins="One Win" arena="The Desert" hostf="Elizabeth,Katana" clientf="Lucas,Jaguar"
 bin=${OPENBG:-$repo/engine/build/openbg}
 while [ $# -gt 0 ]; do
     case $1 in
@@ -21,6 +23,9 @@ while [ $# -gt 0 ]; do
         --port) port=$2; shift ;;
         --out) out=$2; shift ;;
         --wins) wins=$2; shift ;;
+        --arena) arena=$2; shift ;;
+        --host-fighter) hostf=$2; shift ;;
+        --client-fighter) clientf=$2; shift ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
     shift
@@ -30,15 +35,11 @@ half=$((ping / 2))
 delay="Network\\Winsock\\Delay Packet Time=$half"
 HOME=$(mktemp -d) OPENBG_ALL_AI=1 OPENBG_NET_TRACE="$out/host.trace" \
     OPENBG_SET="Network\\Player Name=Host;Network\\Server Name=net-lan test;$delay" \
-    "$bin" "$data" --host "Last Man Standing" --choose "The Desert,Elizabeth,Katana,$wins" --headless "$frames" --port "$port" > "$out/host.log" 2>&1 &
+    env ${HOST_ENV:-} "$bin" "$data" --host "Last Man Standing" --choose "$arena,$hostf,$wins" --headless "$frames" --port "$port" > "$out/host.log" 2>&1 &
 host=$!
-until grep -q "net: hosting" "$out/host.log" 2>/dev/null; do
-    kill -0 $host 2>/dev/null || { echo "the host did not start:"; tail "$out/host.log"; exit 1; }
-    sleep 1
-done
-HOME=$(mktemp -d) OPENBG_ALL_AI=1 OPENBG_NET_TRACE="$out/client.trace" \
+HOME=$(mktemp -d) OPENBG_JOIN_RETRY=1 OPENBG_ALL_AI=1 OPENBG_NET_TRACE="$out/client.trace" \
     OPENBG_SET="Network\\Player Name=Guest;$delay" \
-    "$bin" "$data" --join "127.0.0.1:$port" --choose "Lucas,Jaguar" --headless "$frames" > "$out/client.log" 2>&1 &
+    env ${CLIENT_ENV:-} "$bin" "$data" --join "127.0.0.1:$port" --choose "$clientf" --headless "$frames" > "$out/client.log" 2>&1 &
 client=$!
 wait $host || true
 wait $client || true

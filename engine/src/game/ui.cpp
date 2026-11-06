@@ -440,7 +440,8 @@ public:
 			destroy_all_sessions(app.world);
 			app.set_next(app.main_menu(), true);
 		} else if (&c == change_) {
-			app.not_ported(c.text);
+			net_change_fighter(app.world);
+			app.delete_stack(true);
 		} else if (&c == quit_) {
 			app.set_next(app.quit_menu(), true);
 		} else if (&c == resume_) {

@@ -165,6 +165,12 @@ Each phase ends with something testable, merged and pushed.
    Join Game session browser (LAN query every 500 ms, typed address) and Host Game on
    `Network\Winsock\Listener Port`; `tools/net-lan/run.sh` plays a two-process match. Approximations
    in PLACEHOLDERS ("Waiting on networking"); not yet: reconnect, remote objects, `AdjustSameState`'s nudge.
+   Gaps closed 2026-11-06 (FINDINGS 417-419, 450-451): objects the server makes appear on clients as the
+   original makes them (owners' replicated states, replicated arrays, `AppendCreatureID`), the full
+   `CheckForDiscardState` with `AdjustSameState`, creature clocks re-timed by the clock's hard set,
+   client data (0x0b / 0x0c) and `CClient::Ping`, `IsJoinable`, Change Fighter (0x1d), and recordings of
+   network matches on the server. Still open: reconnect, chat, kick votes, bans and the admin password
+   (0x1a-0x1c), remote page activation and live updates, the slot state (0x0a), the in-session client list.
 
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and
    bans, disconnect and reconnect, and the dedicated server.
@@ -240,7 +246,7 @@ reads (meaning unknown).
 | 0x1a | S→C | 2 | reason, u32 hours | "Banned From Server" with duration; client leaves the session |
 | 0x1b | C→S | 2 | admin password | server answers 0x1c "Admin Granted" / "Invalid Password" |
 | 0x1c | S→C | 2 | title, text | notification |
-| 0x1d | S→C | 2 | (none) | `GH_CLIENT_RESELECT_FIGHTER` on the client's slot (Change Fighter) |
+| 0x1d | C→S | 2 | (none) | `GH_CLIENT_RESELECT_FIGHTER` ("SessionClientReselectFighter") on the client's slot (Change Fighter, FINDINGS 450) |
 
 Message 7 has no handler. The pre-session lobby uses the app manager's own com interface
 (Core 0x70198130): 1 list request → 3 session infos; 2 join {password, session GUID} → 4 accept
@@ -267,7 +273,7 @@ to 102. A dedicated server's own session passes 102 by itself.
 | Server clamp | future stamps → owner's present |
 | Server gate | client not at 1000 → packet ignored; required correction unacked → manager ignores all |
 | Client floor | after a local NoInterrupt state on a remote creature: older than its time + 2 × lag dropped unless NoInterrupt/Correction |
-| Same prediction | similar state (same method) of higher authority within the window: nudge position, no rollback |
+| Same prediction | similar state (`CompareStates`, per brain instance) within the window: known if the local one has the authority, else taken without a rollback; a client nudges the creature for significance ≥ 2 (FINDINGS 418) |
 | Authority | newer local state of ≥ authority blocks; Correction beats equal non-correction; server adds +1 (max 3); locally controlled creatures register ≥ 2 |
 | Re-simulation | at most 100 ticks (FINDINGS 184) |
 | 2.123 vs disc | a client holds an unplaceable TimeCritical state (disc drops it); a received NoInterrupt state is not stored as NoInterrupt; every Correction gets the local-correction flag; a server gives a client's Correction authority 3; merging adopts the incoming authority; `CanStateInterrupt` (FINDINGS 216) |

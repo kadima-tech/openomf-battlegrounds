@@ -264,7 +264,13 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "net: %s: %s\n", title.c_str(), text.c_str());
 			app.notify(title, text);
 		};
-		netgame.on_joined = [&app] { app.close_stack(); };
+		// OPENBG_JOIN_RETRY=1 (test runs): --join tries again until the server first accepts it.
+		bool joined_once = false;
+		const bool join_retry = getenv("OPENBG_JOIN_RETRY") != nullptr;
+		netgame.on_joined = [&app, &joined_once] {
+			joined_once = true;
+			app.close_stack();
+		};
 		netgame.on_closed = [&world, &app] {
 			game::destroy_all_sessions(world);
 			app.close_stack();
@@ -497,6 +503,9 @@ int main(int argc, char **argv) {
 			// OPENBG_QUIT_SESSION=<frame>: the in-game menu's Main Menu then (testing recordings).
 			static const int quit_session = getenv("OPENBG_QUIT_SESSION") ? atoi(getenv("OPENBG_QUIT_SESSION")) : -1;
 			if (fr == quit_session) game::destroy_all_sessions(world);
+			// OPENBG_CHANGE_FIGHTER=<frame>: the in-game menu's Change Fighter then (network tests).
+			static const int change_fighter = getenv("OPENBG_CHANGE_FIGHTER") ? atoi(getenv("OPENBG_CHANGE_FIGHTER")) : -1;
+			if (fr == change_fighter) game::net_change_fighter(world);
 			// OPENBG_TEST_SNAPSHOT=<frame> runs the launcher's SubSessionCaptureSnapshot(null, null) then.
 			static const int test_snapshot = getenv("OPENBG_TEST_SNAPSHOT") ? atoi(getenv("OPENBG_TEST_SNAPSHOT")) : -1;
 			if (fr == test_snapshot) {
@@ -552,6 +561,48 @@ int main(int argc, char **argv) {
 				traced_registry = world.registry;
 			}
 		};
+		auto net_trace = [&](int fr) {
+			// OPENBG_NET_TRACE=<file>: each frame the session scene's time, the wall clock and every slot's
+			// fighter (place, health, state), for tools/net-lan/compare.py to set two machines side by side.
+			static FILE *trace = getenv("OPENBG_NET_TRACE") ? fopen(getenv("OPENBG_NET_TRACE"), "w") : nullptr;
+			if (trace && world.session && world.session->begun) {
+				game::SessionState *ss = world.session.get();
+				const long long wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+				fprintf(trace, "%d %u %d %lld", fr, world.scene_ms_of(ss->obj), ss->net_status, wall);
+				for (auto &sl : ss->slots) {
+					game::GameObject *f = sl->creature;
+					if (!f || world.object(f->handle) != f || !f->spawned) continue;
+					float h = -1;
+					for (game::GameObject *ch : f->children) {
+						std::vector<uint8_t> args(4);
+						if (ch->brain && ch->brain->cls.name == "PFighterStats" && ch->brain->call(world, "float NormalizedHealth()", args)) memcpy(&h, args.data(), 4);
+					}
+					auto *m = f->brain && f->brain->exec ? f->brain->exec->current_state() : nullptr;
+					std::string st = m ? m->cm->signature : "-";
+					if (size_t c = st.rfind(':'); c != std::string::npos) st = st.substr(c + 1);
+					for (char &ch : st) ch = ch == ' ' ? '_' : ch;
+					fprintf(trace, " | %d %s %.2f %.2f %.2f %.3f %s %u", sl->index, f->name.c_str(), f->local.t[0], f->local.t[1], f->local.t[2], h, st.c_str(),
+					        f->creation_time + uint32_t(f->creature_ticks * game::World::kTickMs));
+				}
+				// " # ", then the scene's other creatures: name, place, 1 linked / 0 unlinked / - not replicated.
+				fputs(" #", trace);
+				std::map<const game::GameObject *, uint32_t> ids;
+				for (auto &m : game::net_managers(world)) ids[m.owner] = m.server_id;
+				for (game::GameObject *o : world.scene_objects()) {
+					if (o->fighter || !o->is("Actor\\Creature") || !o->active) continue;
+					bool part = false;
+					for (game::GameObject *p = o->parent; p && !part && world.object(p->handle) == p; p = p->parent) part = p->fighter;
+					if (part) continue;
+					auto it = ids.find(o);
+					if (it == ids.end() && !o->is("Actor\\Creature\\OMF2Projectile")) continue;
+					std::string n = o->name;
+					for (char &ch : n) ch = ch == ' ' ? '_' : ch;
+					auto t = o->world().t;
+					fprintf(trace, " %s:%.0f,%.0f,%.0f:%s", n.c_str(), t[0], t[1], t[2], it == ids.end() ? "-" : it->second ? "1" : "0");
+				}
+				fputc('\n', trace);
+			}
+		};
 		if (headless) {
 			// OPENBG_RECORD_AUDIO=<file>: what is heard, mixed offline (raw f32 stereo, 44100 Hz).
 			auto offline = std::make_unique<audio::Mixer>();
@@ -590,31 +641,13 @@ int main(int argc, char **argv) {
 				world.autopaused = app.autopaused();
 				world.tick(netgame.frame_ms(step));
 				netgame.update();
-				test_switches(fr);
-				// OPENBG_NET_TRACE=<file>: each frame the session scene's time, the wall clock and every slot's
-				// fighter (place, health, state), for tools/net-lan/compare.py to set two machines side by side.
-				static FILE *trace = getenv("OPENBG_NET_TRACE") ? fopen(getenv("OPENBG_NET_TRACE"), "w") : nullptr;
-				if (trace && world.session && world.session->begun) {
-					game::SessionState *ss = world.session.get();
-					const long long wall = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-					fprintf(trace, "%d %u %d %lld", fr, world.scene_ms_of(ss->obj), ss->net_status, wall);
-					for (auto &sl : ss->slots) {
-						game::GameObject *f = sl->creature;
-						if (!f || !f->spawned) continue;
-						float h = -1;
-						for (game::GameObject *ch : f->children) {
-							std::vector<uint8_t> args(4);
-							if (ch->brain && ch->brain->cls.name == "PFighterStats" && ch->brain->call(world, "float NormalizedHealth()", args)) memcpy(&h, args.data(), 4);
-						}
-						auto *m = f->brain && f->brain->exec ? f->brain->exec->current_state() : nullptr;
-						std::string st = m ? m->cm->signature : "-";
-						if (size_t c = st.rfind(':'); c != std::string::npos) st = st.substr(c + 1);
-						for (char &ch : st) ch = ch == ' ' ? '_' : ch;
-						fprintf(trace, " | %d %s %.2f %.2f %.2f %.3f %s %u", sl->index, f->name.c_str(), f->local.t[0], f->local.t[1], f->local.t[2], h, st.c_str(),
-						        f->creation_time + uint32_t(f->creature_ticks * game::World::kTickMs));
-					}
-					fputc('\n', trace);
+				if (join_retry && !join.empty() && !joined_once && netgame.state() == game::NetGame::State::Closed && fr % 50 == 0) {
+					std::string error;
+					netgame.close();
+					netgame.join(join, net_options(), &error);
 				}
+				test_switches(fr);
+				net_trace(fr);
 				offline->play_requests(world, view.player ? view.ear() : ear);
 				if (recording) {
 					offline->update_music(world);
@@ -633,8 +666,8 @@ int main(int argc, char **argv) {
 			if (game::NetSession *n = netgame.session()) {
 				auto &c = game::net_counters(world);
 				const double secs = std::max(1.0, frames * game::World::kFrameMs / 1000.0);
-				printf("net summary: received %llu inserted %llu same %llu rejected %llu held %llu forced %llu corrections %llu rollbacks %llu (%llu ticks) registered %llu, sent %llu states in %llu packets, %.0f B/s, clock jumps %llu, ID requests %llu, deletes %llu, rosters %llu\n",
-				       (unsigned long long)c.received, (unsigned long long)c.inserted, (unsigned long long)c.same, (unsigned long long)c.rejected,
+				printf("net summary: received %llu inserted %llu same %llu adjusted %llu rejected %llu held %llu forced %llu corrections %llu rollbacks %llu (%llu ticks) registered %llu, sent %llu states in %llu packets, %.0f B/s, clock jumps %llu, ID requests %llu, deletes %llu, rosters %llu\n",
+				       (unsigned long long)c.received, (unsigned long long)c.inserted, (unsigned long long)c.same, (unsigned long long)c.adjusted, (unsigned long long)c.rejected,
 				       (unsigned long long)c.held, (unsigned long long)c.held_forced, (unsigned long long)c.corrections_in, (unsigned long long)c.rollbacks,
 				       (unsigned long long)c.rollback_ticks, (unsigned long long)c.registered, (unsigned long long)n->states_sent, (unsigned long long)n->packets_sent,
 				       n->bytes_sent() / secs, (unsigned long long)n->clock_jumps, (unsigned long long)n->id_requests, (unsigned long long)n->deletes, (unsigned long long)n->rosters);
@@ -758,7 +791,8 @@ int main(int argc, char **argv) {
 			accum += double(now - last) * 1000.0 / double(SDL_GetPerformanceFrequency());
 			last = now;
 			uint32_t frame_ms = 0;
-			if (shot) {
+			// A network screenshot run keeps the wall clock's pace, as the other machine does.
+			if (shot && netgame.state() == game::NetGame::State::Idle) {
 				frame_ms = game::World::kFrameMs;
 			} else if (accum >= game::World::kFrameMs) {
 				frame_ms = uint32_t(std::min(accum, 2000.0));
@@ -813,6 +847,12 @@ int main(int argc, char **argv) {
 			world.autopaused = app.autopaused();
 			world.tick(netgame.frame_ms(frame_ms));
 			netgame.update();
+			net_trace(fr);
+			if (join_retry && !join.empty() && !joined_once && netgame.state() == game::NetGame::State::Closed && fr % 50 == 0) {
+				std::string error;
+				netgame.close();
+				netgame.join(join, net_options(), &error);
+			}
 			++fr;
 			static const int state_every = getenv("OPENBG_DEBUG_STATE") ? std::max(1, atoi(getenv("OPENBG_DEBUG_STATE"))) : 0;
 			if (state_every && fr % state_every == 0) print_state(world, fr);

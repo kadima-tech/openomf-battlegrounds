@@ -31,7 +31,7 @@ enum class NetRole : uint8_t { None, Server, Client };
 
 // What the receiving side did with states, for the harness's measurements.
 struct NetCounters {
-	uint64_t received = 0, inserted = 0, rejected = 0, held = 0, held_forced = 0, discarded = 0, same = 0;
+	uint64_t received = 0, inserted = 0, rejected = 0, held = 0, held_forced = 0, discarded = 0, same = 0, adjusted = 0;
 	uint64_t rollbacks = 0, rollback_ticks = 0;  // fixups that restored a state, and the ticks they re-simulated
 	uint64_t corrections_in = 0;                 // received states flagged Correction that were inserted
 	uint64_t registered = 0;
@@ -48,6 +48,8 @@ struct NetConfig {
 
 // The machine's network session, while there is one.
 NetSession *net_session(World &w);
+// The in-game menu's Change Fighter.
+void net_change_fighter(World &w);
 
 // --- The state managers' network side (replay.cpp) ------------------------------------------
 
@@ -152,6 +154,8 @@ public:
 	void launch_remote_ui(SessionClient &c, GameObject *ui);
 	// A client's copy of a server page completed: the choice goes back (0x04).
 	void remote_ui_complete(GameObject *ui);
+	// The in-game menu's Change Fighter on a client: ClientReselectFighter (0x1d).
+	void reselect_fighter();
 	SessionState *session = nullptr;  // the network session (the top-level one)
 	uint32_t own_id = 0;              // a client's ID in the roster
 	std::function<void(const std::string &title, const std::string &text)> notify;
@@ -178,6 +182,7 @@ private:
 	void send_roster(Peer &p, const std::string &signature);
 	void server_flow(uint32_t now);
 	void client_flow(uint32_t now);
+	void client_data(uint32_t now);
 	void report(int status);
 	void send_clock(uint32_t now);
 	void receive_roster(const std::vector<uint8_t> &d, size_t pos);
@@ -197,7 +202,7 @@ private:
 	int reported_ = 0;           // a client's last status report (0x17)
 	bool clock_synced_ = false;
 	uint32_t last_clock_ = 0;
-	uint32_t last_requests_ = 0;
+	uint32_t last_requests_ = 0, last_client_data_ = 0;
 	std::map<uint32_t, GameObject *> remote_ui_;  // a client's copies of server pages, by their server ID
 	std::map<uint32_t, uint32_t> linked_at_;      // a client's linked IDs: when, until a state is heard
 	std::map<std::string, uint32_t> asked_;       // a client's ID requests (0x15): when last

@@ -34,6 +34,9 @@ enum Msg : uint16_t {
 	kStates = 0x11,     // {server ID, time, flags, state}..., 0
 	kAcks = 0x12,       // {server ID, raw time}..., 0
 	kCorrection = 0x19, // server ID: send your version, flagged Correction
+	kClientData = 0x0b, // name, ping, {vote, client ID}...: UpdateClientData
+	kClientInfo = 0x0c, // client ID, name, ping, admin level, votes needed to kick
+	kReselect = 0x1d,   // (none): ClientReselectFighter
 };
 
 struct Writer {
@@ -202,6 +205,59 @@ void NetSession::launch_remote_ui(SessionClient &c, GameObject *ui) {
 		wr.squeezed(uint32_t(u.pool.size()));
 		for (auto &g : u.pool) wr.bytes(g.bytes, 16);
 		send(p, net::Channel::Reliable, std::move(wr.d));
+	}
+}
+
+// Change Fighter (OMF 0x35059a00, FINDINGS 450); the host's own slot is asked directly (inferred).
+void net_change_fighter(World &w) {
+	NetSession *n = net_session(w);
+	if (n && n->role() == NetRole::Client) {
+		n->reselect_fighter();
+	} else if (n && n->session) {
+		for (auto &cl : n->session->clients) {
+			if (cl->local && cl->user && cl->slot) w.send_event(cl->slot->obj, new_event(w, "SessionClientReselectFighter"));
+		}
+	}
+}
+
+void NetSession::reselect_fighter() {
+	if (role_ != NetRole::Client || peers_.empty()) return;
+	send(peers_[0], net::Channel::Reliable, std::move(message(kReselect).d));
+}
+
+// UpdateClientData (Session 0x45008fa0) and the server's 0x0c, once a second (inferred).
+void NetSession::client_data(uint32_t now) {
+	if (!session || now - last_client_data_ < 1000) return;
+	last_client_data_ = now;
+	if (role_ == NetRole::Client) {
+		if (peers_.empty()) return;
+		Writer wr = message(kClientData);
+		std::string name;
+		for (auto &c : session->clients) {
+			if (c->net_id == own_id) name = c->player_name;
+		}
+		wr.str(name);
+		wr.squeezed(uint32_t(std::max(0.0f, peers_[0].ping)));
+		wr.squeezed(uint32_t(session->clients.size()));
+		for (auto &c : session->clients) wr.squeezed(1), wr.squeezed(c->net_id);
+		send(peers_[0], net::Channel::Reliable, std::move(wr.d));
+		return;
+	}
+	for (auto &p : peers_) {
+		if (p.client) p.client->ping = int32_t(p.ping);
+	}
+	for (auto &p : peers_) {
+		if (!p.client || p.status != 1000) continue;
+		for (auto &c : session->clients) {
+			if (!c->net_id) continue;
+			Writer wr = message(kClientInfo);
+			wr.squeezed(c->net_id);
+			wr.str(c->player_name);
+			wr.squeezed(uint32_t(std::max(0, c->ping)));
+			wr.squeezed(uint32_t(std::max(0, c->admin_level)));
+			wr.squeezed(uint32_t(std::max(0, c->votes_needed)));
+			send(p, net::Channel::Reliable, std::move(wr.d));
+		}
 	}
 }
 
@@ -773,6 +829,39 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			net_acked(w_, owner, t);
 		}
 		break;
+	case kReselect:
+		// GH_CLIENT_RESELECT_FIGHTER on the client's slot: its picker starts choosing again.
+		if (server && p.client && p.client->slot) w_.send_event(p.client->slot->obj, new_event(w_, "SessionClientReselectFighter"));
+		break;
+	case kClientData: {
+		std::string name = r.str();
+		uint32_t ping = r.squeezed();
+		uint32_t n = r.squeezed();
+		std::vector<std::pair<int32_t, uint32_t>> votes;
+		for (uint32_t i = 0; i < n && r.ok; ++i) {
+			int32_t v = int32_t(r.squeezed()) - 1;
+			votes.emplace_back(v, r.squeezed());
+		}
+		if (!r.ok || !server || !p.client) break;
+		if (!name.empty()) p.client->player_name = name;
+		p.client->ping = int32_t(ping);
+		p.client->kick_votes = votes;
+		break;
+	}
+	case kClientInfo: {
+		uint32_t id = r.squeezed();
+		std::string name = r.str();
+		uint32_t ping = r.squeezed(), admin = r.squeezed(), needed = r.squeezed();
+		if (!r.ok || server || !session) break;
+		for (auto &c : session->clients) {
+			if (c->net_id != id) continue;
+			if (!name.empty()) c->player_name = name;
+			c->ping = int32_t(ping);
+			c->admin_level = int32_t(admin);
+			c->votes_needed = int32_t(needed);
+		}
+		break;
+	}
 	case kCorrection: {
 		GameObject *owner = net_owner(w_, r.squeezed());
 		if (!owner || role_ != NetRole::Server) break;
@@ -896,6 +985,7 @@ void NetSession::send_clock(uint32_t now) {
 
 void NetSession::update() {
 	const uint32_t now = w_.global_ms();
+	if (session && std::none_of(w_.sessions.begin(), w_.sessions.end(), [&](const auto &sp) { return sp.get() == session; })) session = nullptr;
 	credit = std::min(1.0f, credit + 0.001f * float(now - last_frame_));
 	last_frame_ = now;
 	for (auto &p : peers_) {
@@ -930,6 +1020,7 @@ void NetSession::update() {
 	if (cfg_.flow) {
 		if (role_ == NetRole::Server) server_flow(now);
 		else client_flow(now);
+		if (role_ == NetRole::Server || (session && session->net_status == 1000)) client_data(now);
 	}
 	for (auto &p : peers_) {
 		if (role_ == NetRole::Server) announce(p);

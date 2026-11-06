@@ -244,7 +244,8 @@ void SimplePhysicsSystem::tick() {
 		for (GameObject *p : physics_of(*actor)) {
 			if (p->class_path != "Physics\\Simple" || p == own) continue;
 			SimplePhysics &s = state(*p);
-			if (!s.enabled || !actor->physics_enabled) {
+			// A clock set back (a network clock sync, a replay's rewind) starts the steps afresh.
+			if (!s.enabled || !actor->physics_enabled || now < s.last_ms) {
 				s.last_ms = now;
 				continue;
 			}

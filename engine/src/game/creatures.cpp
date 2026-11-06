@@ -8,7 +8,7 @@
 #include <functional>
 
 #include "game/netplay.h"
-#include "game/netplay.h"
+#include "game/replay.h"
 #include "game/runtime.h"
 
 namespace game {
@@ -72,8 +72,12 @@ void register_creature_natives(World &w) {
 	reg("COMF2Projectile::SetOrigional(class COMF2Projectile)", [](const NativeContext &) {});
 	// RegisterLastStateTimeCritical (Creature 0x15015790): +0x204's last state +0x28 |= 8.
 	reg("CCreature::RegisterLastStateTimeCritical()", [](const NativeContext &c) { register_last_state(c.world, c.self(), LastState::TimeCritical); });
-	reg("CCreature::AppendCreatureID(class CActor)", [](const NativeContext &) {});  // replication identity
-	reg("CCreature::AppendCreatureID(class CCreature)", [](const NativeContext &) {});
+	for (const char *k : {"CCreature::AppendCreatureID(class CActor)", "CCreature::AppendCreatureID(class CCreature)"}) {
+		reg(k, [](const NativeContext &c) {
+			GameObject *o = c.self(), *other = c.arg_object(0);
+			if (o && other && other->is("Actor\\Creature")) append_creature_id(c.world, *o, *other);
+		});
+	}
 	// RegisterCreatureStateChangedPCHook (Creature 0x15019ce0): from the end, a slot whose instance is
 	// gone is reused, an identical hook ends the search; otherwise it is appended.
 	auto hook_brain = [](const NativeContext &c) {

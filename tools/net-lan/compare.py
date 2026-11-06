@@ -14,6 +14,7 @@ def load(path, scene):
     rows = []
     with open(path) as f:
         for line in f:
+            line, _, objs = line.rstrip("\n").partition(" #")
             parts = line.split(" | ")
             head = parts[0].split()
             if len(head) < 3:
@@ -27,7 +28,12 @@ def load(path, scene):
                 if len(v) < 7:
                     continue
                 fighters[int(v[0])] = (v[1], float(v[2]), float(v[3]), float(v[4]), float(v[5]), v[6], int(v[7]) if len(v) > 7 else 0)
-            rows.append((ms, frame, status, fighters))
+            objects = []
+            for o in objs.split():
+                v = o.rsplit(":", 2)
+                if len(v) == 3:
+                    objects.append((v[0], tuple(float(x) for x in v[1].split(",")), v[2]))
+            rows.append((ms, frame, status, fighters, objects))
     rows.sort(key=lambda r: r[0])
     return rows
 
@@ -49,6 +55,40 @@ def pct(v, f):
     return v[int(f * (len(v) - 1))] if v else 0.0
 
 
+def objects(host, times, client):
+    """The other replicated creatures (projectiles, pickups, hazards): per name, the moments each
+    machine had one, how many it had on the client against the server at the same moment, and how
+    far the nearest copy of the same name was."""
+    seen = {}
+    for ms, frame, status, fighters, objs in client:
+        if status != 1000:
+            continue
+        i = bisect.bisect_left(times, ms)
+        if i == 0 or i >= len(host):
+            continue
+        hobjs = host[i][4]
+        names = {o[0] for o in objs} | {o[0] for o in hobjs}
+        for n in names:
+            c = [o for o in objs if o[0] == n]
+            h = [o for o in hobjs if o[0] == n]
+            e = seen.setdefault(n, {"server": 0, "client": 0, "both": 0, "unlinked": 0, "err": []})
+            e["server"] += bool(h)
+            e["client"] += bool(c)
+            e["both"] += bool(h) and bool(c)
+            e["unlinked"] += sum(1 for o in c if o[2] == "0")
+            e["local"] = any(o[2] == "-" for o in c + h)
+            for o in c:
+                if h:
+                    e["err"].append(min(math.dist(o[1], x[1]) for x in h))
+    if seen:
+        print("objects (frames present on the server / client / both, client copies unlinked, distance to the nearest server copy median / p95):")
+    for n in sorted(seen):
+        e = seen[n]
+        v = sorted(e["err"])
+        kind = " (not replicated)" if e.get("local") else ""
+        print(f"  {n}{kind}: {e['server']} / {e['client']} / {e['both']}, unlinked {e['unlinked']}, distance {pct(v, .5):.1f} / {pct(v, .95):.1f}")
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     scene = "--scene" in sys.argv
@@ -59,7 +99,7 @@ def main():
     times = [r[0] for r in host]
     errors, health, since, clocks = {}, {}, {}, {}
     spawning = ("Entry()", "FighterJustCreated()", "AirFallFromSpawn()")
-    for ms, frame, status, fighters in client:
+    for ms, frame, status, fighters, _ in client:
         if status != 1000:
             since.clear()
             continue
@@ -81,6 +121,7 @@ def main():
             if h[2] >= 0 and f[4] >= 0:
                 health.setdefault(slot, []).append(abs(h[2] - f[4]))
     ok = True
+    objects(host, times, client)
     for slot in sorted(errors):
         v = sorted(errors[slot])
         hv = sorted(health.get(slot, []))
