@@ -59,20 +59,43 @@ in the same process with no glue. Forms are the cheaper part to build.
 
 ## 3. Product shape
 
-- **One window, docked panels.**
-  - Left: the **project**, the objects this add-on creates (NEW) or overrides (OVERRIDE), plus the
-    read-only base game.
-  - Centre: the editor for the selected object.
-  - Right: a **live preview** drawn by the game's renderer, such as the Choose Pilot panel, a robot in
-    its paint, or the arena.
-  - Bottom: a **validation** bar and unsaved changes.
+- **Unreal-Editor-style shell.** Every panel is a dockable tab (Dear ImGui docking): drag it to split,
+  stack, float, or move to a second monitor. Layouts are saved per user, with a "reset layout" option.
+  - **Main window** (the arena / level view):
+    - a toolbar (Save all, Content, Validate, Place, **Play**, play mode, **Simulate**, **Launch game**);
+    - a Place panel (spawn points, pickup spawners, hazards, surfaces, nav links, lights, effects,
+      sounds, prefabs);
+    - 1, 2 or 4 **viewports** (perspective / top / front / side; lit, unlit and collision views; Show
+      menu for surfaces, nav and spawns; move / rotate / scale gizmo with snapping);
+    - **Outliner** and **Details** on the right;
+    - a bottom dock with **Content Browser** (the add-on's objects marked NEW / OVERRIDE, and the
+      read-only base game, with thumbnails and type filters), Output Log, Validation and Script
+      Console.
+  - **Asset editors** (pilot, HAR, tournament, script) open as document tabs along the top, or float
+    as their own windows. Each has its own docked panels and a live preview drawn by the game's
+    renderer (the screens in the mockup's "asset editors" row).
+- **Play in editor.** The editor is a build of the engine, as the original's was.
+  - **Play** runs a match inside the selected viewport, in the same process. The play mode menu sets
+    the robot, opponent, arena and game type, or starts a tournament at a chosen match.
+  - A green border shows the game is running.
+  - **Pause**, **step one tick**, slow motion, **Stop**.
+  - **Eject (F8)** frees the camera and selection while the match keeps running, as in Unreal.
+  - A **live inspector** for the selected creature: state, animation and time, health / energy / stun,
+    momentum, floor, input buffer.
+  - **Debug toggles** cover today's `OPENBG_*` switches: hit spheres, the nav net and AI target, a full
+    energy bar, an idle dummy opponent, AI difficulty.
+  - **Edits while playing:** data edits (stats, colours, sphere sizes) apply live. Script edits
+    recompile when you press Stop.
+  - **Simulate** runs the arena (hazards, AI against AI) without taking control of a fighter.
+  - **Launch game** starts a separate `openbg` on the base data plus the project, for full-flow tests
+    (menus, Choose Pilot, tournaments).
+  - **Network test:** play as a client of a server running in the editor, with set latency, jitter and
+    loss, using the network plan's step-1 link.
+- A **validation** bar and unsaved changes sit at the bottom.
 - **Projects** are one add-on `.DEObjects` file, plus a sidecar folder for source assets (PNGs, WAVs,
   later glTF) so imports can be redone.
 - **New = copy.** Every "new" object starts as a deep copy of a base object with fresh GUIDs, such as a
   pilot from Lucas or a HAR from Jaguar. The editor keeps the references and GUID pool right.
-- **Play-test** launches `openbg` on the base data plus the project. For example, a pilot opens straight
-  in Choose Pilot, a HAR in the training room, an arena in `--direct` with any robot, and a tournament
-  from a chosen match (`openbg-fight` and `--launch` already do most of this).
 - **Validation** runs on save:
   - GUIDs are unique and every reference resolves;
   - scripts compile;
@@ -166,8 +189,9 @@ No design document is public. These come from the official site's FAQ (2002-2003
 ## 8. Milestones
 1. **Writer foundations:** a lossless round trip on all 65 files, the new schemas and an add-on file
    builder. Tests in ctest.
-2. **Shell:** the ImGui docking app, project browser, base-game browser, validation bar and preview
-   viewport (reusing `openbg-viewer` / `openbg-arena` code), and play-test launch.
+2. **Shell:** the ImGui docking app (layouts, document tabs), Content Browser, Outliner, Details,
+   validation bar, viewports (reusing `openbg-viewer` / `openbg-arena` code), Play in editor with
+   pause / step / eject and the live inspector, and Launch game.
 3. **Pilot editor** (first end-to-end path: new pilot → save → shows in Choose Pilot).
 4. **Tournament editor** with the generated script.
 5. **HAR variant editor** (stats, inputs, hitboxes, paint import).
