@@ -102,7 +102,7 @@ struct LocalState {
 	uint64_t serial = 0;
 };
 // CStandardState +0x28.
-constexpr uint32_t kNoInterrupt = 2, kNoReplicate = 4, kTimeCritical = 8, kCorrection = 0x10;
+constexpr uint32_t kNoInterrupt = 2, kNoReplicate = 4, kTimeCritical = 8, kCorrection = 0x10, kAdjusted = 0x20;
 constexpr size_t kLocalRef = 7;  // v1 chunk, size 5, kind 3, u32 handle
 
 struct StateManager {
@@ -126,9 +126,14 @@ struct StateManager {
 	bool up = false, down = true;  // +0x84 / +0x88: replicated from the controlling client / from the server
 	bool discard_check = false;    // +0xa8
 	uint8_t authority = 1, significance = 1;  // +0xe0 / +0xe4
+	uint32_t urgency = 0;          // +0xec: the sender's class (FINDINGS 405)
+	bool preload = false;          // +0xe8: its newest state goes with the pre-load (message 0x0e)
 	bool resend = false;           // +0xac
 	uint32_t required = 0;         // +0xb0: a required correction's time
-	uint32_t lag = 0, lag_window = 0;  // +0x98 / +0x9c, owner units
+	// SetCurrentLag (FINDINGS 397), owner units: the lag +0xa0, the discard window +0x98 and the
+	// server's NoInterrupt horizon +0x9c; used only with +0xa8.
+	int32_t lag = 0, discard = 0, horizon = 0;
+	uint32_t recv_raw = ~0u, recv_shifted = 0;  // the receiver's record +0x24 / +0x28: the state last taken
 	std::optional<LocalState> held;    // +0xd8
 	uint32_t held_at = 0;              // +0xdc
 	uint64_t last = 0;                 // +0x94: the state Register*State made
@@ -163,7 +168,6 @@ struct ReplayWorld {
 	uint32_t next_id = 0;
 	uint64_t serial = 0;
 	NetCounters counters;
-	float lag_ms = 10;
 	std::map<const GameObject *, bool> control;  // SetupCreatureControl's choices, by creature
 	std::map<uint32_t, std::string> links;       // a client's server IDs not matched to a manager yet
 };
@@ -201,10 +205,12 @@ struct ManagerFlags {
 	bool joins = true, record = true, keep_clock = false;  // keep_clock: +0xd0
 	bool up = false, down = true, discard_check = false;
 	uint8_t authority = 1, significance = 1;
+	uint32_t urgency = 0;
+	bool preload = false;
 };
 ManagerFlags manager_flags(const GameObject &o) {
 	bool up = false, down = true, record = true, d0 = false, a8 = false;
-	uint32_t authority = 1, significance = 1;
+	uint32_t authority = 1, significance = 1, urgency = 0, preload = 0;
 	GameObject *m = state_manager_object(o);
 	if (m && m->file) {
 		try {
@@ -224,12 +230,12 @@ ManagerFlags manager_flags(const GameObject &o) {
 			c.seek(ch.end);
 			if (c.remaining() > 2) {
 				de::Chunk sc = de::begin_chunk(c);
-				if (sc.version == 1) authority = c.u32(), significance = c.u32();
+				if (sc.version == 1) authority = c.u32(), significance = c.u32(), urgency = c.u32(), preload = c.u32();
 			}
 		} catch (const std::exception &) {
 		}
 	}
-	return {up || down || record, record, d0, up, down, a8, uint8_t(std::min(authority, 3u)), uint8_t(std::min(significance, 3u))};
+	return {up || down || record, record, d0, up, down, a8, uint8_t(std::min(authority, 3u)), uint8_t(std::min(significance, 3u)), std::min(urgency, 4u), preload != 0};
 }
 
 // DE_CCreature::LocalTime (Creature 0x15008300): a tick-based creature's ticks, else the scene's.
@@ -351,8 +357,6 @@ void set_window(World &w, StateManager &sm) {
 	if (uint32_t rate = sm.owner->is("Actor\\Creature") ? w.creature_rate(sm.owner) : 0) sm.window = uint32_t(1000.0f / float(rate));
 }
 
-void set_net_lag(World &w, StateManager &sm);
-
 // DE_CSession::Add + DE_CSessionRecord::Add (Core 0x701f9520 / 0x70203610); a manager that kept
 // states outside the session keeps them.
 StateManager &join(World &w, GameObject &o) {
@@ -377,8 +381,8 @@ StateManager &join(World &w, GameObject &o) {
 		sm.net = true;
 		sm.up = flags.up, sm.down = flags.down, sm.discard_check = flags.discard_check;
 		sm.authority = flags.authority, sm.significance = flags.significance;
+		sm.urgency = flags.urgency, sm.preload = flags.preload;
 		if (R.net == NetRole::Server) sm.server_id = ++R.next_id;
-		set_net_lag(w, sm);
 	}
 	// An empty ID matches the first empty-ID record, so all such managers share one.
 	if (auto &rec = R.record; rec && flags.record) {
@@ -1596,12 +1600,16 @@ uint32_t owner_unit(World &w, const StateManager &sm) {
 	return r ? r : 1;
 }
 
-// DE_CStateManager::SetCurrentLag (Core 0x701b1ff0): the lag (+0x98) and the lag window (+0x9c) in
-// owner units. The window's rule is an assumption (PLACEHOLDERS): twice the lag plus +0x68's 50 ms.
-void set_net_lag(World &w, StateManager &sm) {
-	float u = float(owner_unit(w, sm)), lag = rw(w).lag_ms;
-	sm.lag = uint32_t(lag / u);
-	sm.lag_window = uint32_t((2 * lag + 50) / u);
+// DE_CStateManager::SetCurrentLag (Core 0x701b1ff0, FINDINGS 397): x = lag in owner units; +0xa0
+// jumps to x under old + 50, else moves a tenth of the way; +0x98 = 1.3 x +0xa0 + 65 ms and +0x9c =
+// 5 x +0xa0 + 2000 ms. Only managers with +0xa8 use them.
+void set_net_lag(World &w, StateManager &sm, float lag_ms) {
+	if (!sm.discard_check) return;
+	float u = float(owner_unit(w, sm)), x = lag_ms / u;
+	if (x < float(sm.lag + 50)) sm.lag = int32_t(x);
+	else sm.lag += int32_t((x - float(sm.lag)) * 0.1f + 0.5f);
+	sm.discard = int32_t(1.3f * float(sm.lag) + 65.0f / u);
+	sm.horizon = int32_t(5.0f * float(sm.lag) + 2000.0f / u);
 }
 
 // The state method of the owner's behaviour executor in packed bytes: its innermost state frame.
@@ -1658,7 +1666,7 @@ int dest_index(World &w, StateManager &sm, uint32_t t, int authority, bool no_in
 	bool guard = !sm.replay;
 	if (guard) {
 		if (!server) guard = !no_interrupt;
-		else guard = h.empty() || std::abs(int64_t(t) - int64_t(h.back().time)) <= int64_t(sm.lag_window);
+		else guard = h.empty() || std::abs(int64_t(t) - int64_t(h.back().time)) <= int64_t(sm.horizon);
 	}
 	bool blocking = false;
 	int i = int(h.size()) - 1;
@@ -1709,80 +1717,151 @@ void insert_lagged(World &w, StateManager &sm, LocalState st, int index, bool co
 	}
 }
 
-// CheckForDiscardState (Core 0x701ae410): not ported yet (phase 0); nothing is discarded.
-bool check_for_discard(World &, StateManager &, const LocalState &, bool) { return false; }
+// DE_CCreature::CompareStates through the behaviour executor (FINDINGS 400): 1 for the same method
+// and status, 0.5 for the same method, halved when neither state is no-interrupt.
+float compare_states(World &w, StateManager &sm, const LocalState &local, const LocalState &in, bool in_no_interrupt) {
+	const vm::ScriptMethod *a = packed_state_method(w, *sm.owner, local.wire ? local.bytes : repack_state(w, local, false));
+	const vm::ScriptMethod *b = packed_state_method(w, *sm.owner, in.bytes);
+	if (!a || a != b) return 0;
+	float f = same_data(w, local, in) ? 1.0f : 0.5f;
+	if (!(local.flags & kNoInterrupt) && !in_no_interrupt) f *= 0.5f;
+	return f;
+}
 
-// AddLaggedState (Core 0x701ae760) for a received state. The server clamps it to its own time and
-// adds one authority; a client marks it NoReplicate. One that cannot go in waits as the held state
-// (+0xd8) when the manager checks discards, unless it is time-critical.
-void add_lagged_network_state(World &w, StateManager &sm, const NetState &in) {
+// CheckForDiscardState (Core 0x701ae410, FINDINGS 400): 0 to go on to placement, 1 rejected, 2 known.
+// On a client a state of significance 2 or more that its newer prediction already matches is known;
+// one of higher authority is folded into the matched state (AdjustSameState's position nudge is
+// left out: PLACEHOLDERS). The server rejects an ordinary state just after a no-interrupt one.
+int check_for_discard(World &w, StateManager &sm, const LocalState &in, bool no_interrupt, bool time_critical, bool correction) {
+	const bool server = rw(w).net == NetRole::Server;
+	int64_t window = sm.discard / 2 * (time_critical ? 2 : 1);
+	auto &h = sm.history;
+	bool passed_ni = false;
+	if (!server && in.significance >= 2) {
+		for (int i = int(h.size()) - 1; i >= 0 && int64_t(h[size_t(i)].time) + window >= int64_t(in.time); --i) {
+			LocalState &l = h[size_t(i)];
+			if (compare_states(w, sm, l, in, no_interrupt) >= 0.5f) {
+				bool newer_auth = false;
+				for (size_t k = size_t(i) + 1; k < h.size(); ++k) newer_auth |= h[k].authority >= in.authority;
+				if (correction && i + 1 < int(h.size()) && h.back().significance > in.significance && !newer_auth) return 0;
+				if (!(in.flags & kNoInterrupt) && i + 1 < int(h.size()) && !passed_ni) return 0;
+				if (l.authority >= in.authority) return 2;
+				if (sm.owner->is_actor && !(l.flags & kAdjusted)) {
+					for (size_t k = size_t(i); k < h.size(); ++k) h[k].flags |= kAdjusted;
+					l.authority = in.authority;
+				}
+				return 2;
+			}
+			passed_ni |= (l.flags & kNoInterrupt) != 0;
+		}
+	}
+	if (server && !no_interrupt && !correction) {
+		for (auto &l : h) {
+			if ((l.flags & kNoInterrupt) && in.time >= l.time && int64_t(in.time) - int64_t(l.time) <= window) return 1;
+		}
+	}
+	return 0;
+}
+
+// AddLaggedState (Core 0x701ae760, 2.123 0x201b5300; FINDINGS 398, 399) for a received state.
+// Unless time-critical it lands now (its time shifted by the lag); a hit reaction keeps the
+// sender's time and goes into the past. The server clamps it to the owner's present and adds one
+// authority (a client's correction gets 3); a client marks it as made elsewhere. One that cannot
+// go in is held (a client always; the server only when newer than its newest).
+NetTake add_lagged_network_state(World &w, StateManager &sm, const NetState &in, float lag_ms) {
 	auto &R = rw(w);
 	const bool server = R.net == NetRole::Server;
+	const bool no_interrupt = in.flags & kNoInterrupt, time_critical = in.flags & kTimeCritical, correction = in.flags & kCorrection;
+	uint32_t t = in.time;
+	if (sm.discard_check && !time_critical) {
+		if (in.time == sm.recv_raw) t = sm.recv_shifted;
+		else t += uint32_t(lag_ms / float(owner_unit(w, sm)));
+	}
+	// The client's floor (+0x1c) after its own no-interrupt state on a creature it does not control.
+	if (!server && !locally_controlled(w, sm.owner) && !no_interrupt && !correction) {
+		for (auto it = sm.history.rbegin(); it != sm.history.rend(); ++it) {
+			if (it->wire) continue;
+			if ((it->flags & kNoInterrupt) && int64_t(t) < int64_t(it->time) + 2 * int64_t(sm.lag)) return NetTake::Floor;
+			break;
+		}
+	}
 	++R.counters.received;
 	if (server && sm.required && !sm.replay) {
 		++R.counters.rejected;
-		return;
+		return NetTake::Rejected;
 	}
 	uint32_t now = local_time(w, *sm.owner);
 	sm.held.reset();
 	LocalState st;
-	st.time = server && now < in.time ? now : in.time;
+	st.time = server && now < t ? now : t;
 	st.bytes = in.bytes;
 	st.wire = true;
-	const bool no_interrupt = in.flags & kNoInterrupt, time_critical = in.flags & kTimeCritical, correction = in.flags & kCorrection;
-	st.flags = (no_interrupt ? kNoInterrupt : 0) | (time_critical ? kTimeCritical : 0) | (correction ? kCorrection : 0) | (server ? 0 : kNoReplicate);
+	st.flags = (time_critical ? kTimeCritical : 0) | (correction ? kCorrection : 0) | (server ? 0 : kNoReplicate);
 	st.authority = in.authority > 3 ? sm.authority : in.authority;
 	st.significance = in.significance > 3 ? sm.significance : in.significance;
 	if (server && st.authority < 3) ++st.authority;
-	if (sm.discard_check && check_for_discard(w, sm, st, correction)) {
-		if (server && !sm.history.empty()) {
-			auto &n = sm.history.back();
-			n.authority = std::max<uint8_t>(n.authority, 2);
-			n.significance = std::max<uint8_t>(n.significance, 2);
+	if (server && correction) st.authority = 3;
+	if (sm.discard_check) {
+		if (int r = check_for_discard(w, sm, st, no_interrupt, time_critical, correction)) {
+			if (server && !sm.history.empty()) {
+				auto &n = sm.history.back();
+				n.authority = std::max<uint8_t>(n.authority, 2);
+				n.significance = std::max<uint8_t>(n.significance, 2);
+			}
+			++R.counters.discarded;
+			if (r == 2) {
+				sm.recv_raw = in.time, sm.recv_shifted = st.time;
+				return NetTake::Known;
+			}
+			return NetTake::Rejected;
 		}
-		++R.counters.discarded;
-		return;
 	}
 	int index = dest_index(w, sm, st.time, st.authority, no_interrupt, correction, interruptible(w, *sm.owner, st.bytes));
 	if (getenv("OPENBG_DEBUG_NETSTATES"))
-		fprintf(stderr, "[net %s %u] %s state %u (now %u) authority %u flags %x: index %d of %zu\n", server ? "server" : "client", w.frame(), sm.owner->name.c_str(), st.time, now,
-		        st.authority, st.flags, index, sm.history.size());
+		fprintf(stderr, "[net %s %u] %s state %u->%u (now %u) authority %u flags %x: index %d of %zu\n", server ? "server" : "client", w.frame(), sm.owner->name.c_str(), in.time, st.time, now,
+		        st.authority, in.flags, index, sm.history.size());
 	if (index != -1) {
+		sm.recv_raw = in.time, sm.recv_shifted = st.time;
 		insert_lagged(w, sm, std::move(st), index, correction);
-		return;
+		return NetTake::Taken;
 	}
 	++R.counters.rejected;
-	if (!sm.discard_check) return;
-	if (time_critical) {
-		if (server) sm.resend = true;
-		return;
+	if (!sm.discard_check) return NetTake::Rejected;
+	if (time_critical && server) {
+		sm.resend = true;
+		return NetTake::Rejected;
 	}
-	if ((!sm.history.empty() && sm.history.back().time < st.time) || !server) {
-		sm.held_at = st.time;
+	if (!server || (!sm.history.empty() && sm.history.back().time < st.time)) {
+		sm.held_at = now;
 		sm.held = std::move(st);
 		++R.counters.held;
+		return NetTake::Held;
 	}
+	return NetTake::Rejected;
 }
 
-// DE_CStandardStateManager::Update (Core 0x701af1a0): the held state goes in at the owner's present
-// once it may; past twice the lag a client forces it in at its own time, the server asks for a resend.
+// DE_CStandardStateManager::Update (Core 0x701af1a0, FINDINGS 399): the held state goes in at the
+// owner's present once it fits; after twice the discard window a client forces it in at its own
+// time (authority 3, no-interrupt, correction), the server drops it and re-sends its own.
 void update_held(World &w, StateManager &sm) {
 	if (!sm.held) return;
 	uint32_t now = local_time(w, *sm.owner);
-	bool force = sm.held_at + sm.lag * 2 < now;
-	if (force) {
-		if (rw(w).net == NetRole::Server) sm.resend = true;
-		else if (int i = dest_index(w, sm, sm.held->time, 3, true, true, true); i != -1) {
+	if (int64_t(sm.held_at) + 2 * int64_t(sm.discard) < int64_t(now)) {
+		if (rw(w).net == NetRole::Server) {
+			sm.resend = true;
+		} else if (int i = dest_index(w, sm, sm.held->time, 3, true, true, true); i != -1) {
 			LocalState st = std::move(*sm.held);
 			sm.held.reset();
+			st.authority = 3;
+			st.flags |= kNoInterrupt | kCorrection;
 			++rw(w).counters.held_forced;
-			insert_lagged(w, sm, std::move(st), i, false);
+			insert_lagged(w, sm, std::move(st), i, true);
 			return;
 		}
 		sm.held.reset();
 		return;
 	}
-	int i = dest_index(w, sm, now, sm.held->authority, sm.held->flags & kNoInterrupt, sm.held->flags & kCorrection, true);
+	int i = dest_index(w, sm, now, sm.held->authority, false, sm.held->flags & kCorrection, true);
 	if (i == -1) return;
 	LocalState st = std::move(*sm.held);
 	sm.held.reset();
@@ -1887,7 +1966,7 @@ NetCounters &net_counters(World &w) { return rw(w).counters; }
 std::vector<NetManager> net_managers(World &w) {
 	std::vector<NetManager> out;
 	for (auto &[h, sm] : rw(w).managers) {
-		if (sm.net && sm.connected && w.object(h) == sm.owner) out.push_back({sm.owner, sm.id, sm.server_id, sm.up, sm.down});
+		if (sm.net && sm.connected && w.object(h) == sm.owner) out.push_back({sm.owner, sm.id, sm.server_id, sm.up, sm.down, sm.urgency, sm.preload});
 	}
 	return out;
 }
@@ -1934,17 +2013,34 @@ bool net_newest_state(World &w, const GameObject *owner, NetState &out) {
 	return false;
 }
 
-void net_receive_state(World &w, GameObject *owner, const NetState &st) {
+NetTake net_receive_state(World &w, GameObject *owner, const NetState &st, float lag_ms) {
 	StateManager *sm = manager_of(w, owner);
-	if (sm && sm->net) add_lagged_network_state(w, *sm, st);
+	return sm && sm->net ? add_lagged_network_state(w, *sm, st, lag_ms) : NetTake::Rejected;
 }
 
-void net_set_lag(World &w, float lag_ms) {
-	auto &R = rw(w);
-	R.lag_ms = lag_ms;
-	for (auto &[h, sm] : R.managers) {
-		if (sm.net) set_net_lag(w, sm);
+void net_set_lag(World &w, float lag_ms, const GameObject *only) {
+	for (auto &[h, sm] : rw(w).managers) {
+		if (sm.net && (!only || sm.owner == only)) set_net_lag(w, sm, lag_ms);
 	}
+}
+
+bool net_take_resend(World &w, const GameObject *owner) {
+	StateManager *sm = manager_of(w, owner);
+	if (!sm || !sm->net || !sm->resend) return false;
+	sm->resend = false;
+	return true;
+}
+
+void net_request_correction(World &w, GameObject *owner) {
+	if (StateManager *sm = manager_of(w, owner); sm && sm->net) sm->resend = true;
+}
+
+void net_acked(World &w, const GameObject *owner, uint32_t time) {
+	if (StateManager *sm = manager_of(w, owner); sm && sm->net && sm->required == time) sm->required = 0;
+}
+
+void net_sent(World &w, const GameObject *owner, uint32_t time) {
+	if (StateManager *sm = manager_of(w, owner); sm && sm->net && sm->required) sm->required = time;
 }
 
 // RegisterLastState* (Creature 0x150156d0 - 0x150157d0): on the state Register*State made last.

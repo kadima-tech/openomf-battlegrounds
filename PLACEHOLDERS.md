@@ -52,15 +52,30 @@ The launcher's own part is known (FINDINGS 124), and so are the UI managers' pag
 | What | Kind | Notes |
 |---|---|---|
 | `GatherAllObjectsDerivedFrom` order | Approximation | The original's (FINDINGS 192): the transfer agents from the last back, each file's objects in table order. The file agents are made in `FindNextFile` order, taken as NTFS's (names compared upper-cased); on FAT the order would be the directory's own and cannot be known. It decides the single-player creature list before its shuffle (FINDINGS 172). |
-| `CSession::IsSinglePlayer` | Fixed answer | Always true; the original reads the session info's +0xdc (FINDINGS 127). Matters only for multiplayer. |
+| `CSession::IsSinglePlayer` | Fixed answer | True, false online; the original reads the session info's +0xdc (FINDINGS 127). |
 | Main menu theme's sound | Ported (one fit) | Compared with a recording of the shipped game (FINDINGS 133, 135, 154): our mix matches it within about 1 dB per octave up to 3.2 kHz. The 22050 Hz synth output's conversion to the device rate is not on the disc (WDM's kernel mixer or the card did it; dsound's own mixer is linear); against the recording, linear interpolation is 2-2.5 dB low at 6.4-9 kHz and leaves too much image energy above 14 kHz, a windowed sinc removes the images the recording has, and a 4-point Hermite fits within about 1.5 dB from 6.4 to 9 kHz and above 14 kHz. Ours uses the Hermite for the music and the sounds (`OPENBG_SRC=linear` or `sinc` to compare). The recording's opening does not line up with ours reliably enough to compare the first 16 s. |
 
-## Waiting on networking (out of scope unless LAN play is wanted)
+## Waiting on networking (phase 1 loopback done; LAN play is phase 2)
+
+Phase 1 (`docs/NETWORK_PLAN.md`) runs a server and a client World in one process through the loopback
+link (`openbg-net`, DEVELOPING.md). The state managers' network side (`replay.cpp`), the roles and the
+2.123 sender (`netplay.cpp`) follow FINDINGS 397-411; what is still not the original:
 
 | What | Kind | Notes |
 |---|---|---|
-| Session status machine | Stand-in | Only a local, server-side session: every client is local, nothing is replicated. `IsServer`, `IsLocal`, `IsReadyToLoad`, `IsFullySequenced`, `AreMasterRequirementsSatisfied`, `IsStateAlterable` return true; `IsReplaying`, `IsNoReplicate` false. |
-| `RegisterUrgentState`, `RegisterLastState*`, `ForceClientsToLoad`, `LoadingComplete` | Stub | Network replication hooks (`RegisterUrgentState` is empty in the original too). `Register*State` takes states for session recordings (FINDINGS 137). |
+| Session status machine | Stand-in | Single player: one local, server-side session, every client local. Online (phase 1) both machines start the same match at once: no roster (0x01), slot messages (0x0a), remote UI pages (0x03-0x09), status reports (0x17) or loading authorization (0x10); states flow from the first frame (the original waits for status 1000), and the client's own slot is marked locally controlled by the harness (the server's roster does it in the original). `IsReadyToLoad`, `IsFullySequenced`, `AreMasterRequirementsSatisfied`, `IsLocal` return true; `IsJoinable` false. |
+| Pre-load (0x0e) | Approximation | The server sends a pre-load manager's newest state (contents +0xe8; e.g. `EnvironmentPicker`, whose default authority 0 keeps it out of 0x11) whenever it changes, not at the client's statuses 101 / 103. |
+| Session-time sync messages | Approximation | 0x13 / 0x14 / 0x15 / 0x16 (re-send, unknown ID, ID request, delete object) are not sent: the server names every manager to every client (0x0d) as it joins, and a state for an unlinked manager is dropped. |
+| `CheckForDiscardState` | Approximation | FINDINGS 400's scan and results; `CompareStates` looks only at the behaviour executor (the same state method, identical bytes), and `AdjustSameState`'s position and orientation nudge is left out: a matched prediction is kept as it is and only takes the incoming authority. |
+| Client floor (+0x1c) | Approximation | Worked out at each received state from the newest local no-interrupt state, not kept per record by the sender's pass. |
+| 0x19 correction request | Approximation | Sent when the victim's last attacker is a fighter controlled here; the original also wants the attacker mid-attack (brain +0x2c, inferred) and sends it for stale +0xb4 managers (not done). |
+| Transport quality | Approximation | The 16000-byte credit and `1 - (1 - credit)^2` are the original's; the node's ping-based quality and +0x54 are taken as 1 (the loopback link loses no node), and the ping is our own round trip measured once a second. Lag-window smoothing, the held-state timeout and the NoInterrupt horizon are FINDINGS 397's. |
+| Clock sync limit | Approximation | The accept limit's starting value (+0x64) is not read; it starts at 1000 ms. |
+| `rand()` in the harness | Stand-in | Each machine in `openbg-net` keeps its own `rand()` state (`use_rand_state`); there is one process-wide stream otherwise, as on one machine. |
+| `CAttackInfo::IsNoReplicate` | Approximation | Online, the attack type's 0x80000000 bit; single player keeps the old answer, false, so seeded runs stay as they were (not checked against the original). |
+| `RegisterUrgentState`, `ForceClientsToLoad`, `LoadingComplete` | Stub | `RegisterUrgentState` is empty in the original too; the other two wait on the status machine. |
+| Remote objects | Missing | Nothing creates objects on a client but its own scripts (FINDINGS 411: the original has no transfer agent either): a projectile or pickup the server's scripts make in `master` code is not seen on the client until the scripts that run there make it; not checked in phase 1. |
+| Session recording online | Missing | A network match is not recorded yet (the recorder and the network managers share the state managers' table). |
 
 ## Waiting on rendering (materials, lights, visibility)
 

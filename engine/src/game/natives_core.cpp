@@ -1160,6 +1160,10 @@ void register_core_natives(World &w) {
 		bool server = net_role(c.world) != NetRole::Client;
 		register_state(c.world, c.self(), true, server ? 3 : 2, 2);
 		if (server) register_last_state(c.world, c.self(), LastState::Correction);
+		// A client hit by a fighter it controls asks the server for its version of the victim (0x19;
+		// the attacker's "mid-attack" test, brain +0x2c, is left out).
+		GameObject *by = c.self() ? c.self()->last_hit_by : nullptr;
+		if (!server && net_role(c.world) == NetRole::Client && by && by->fighter && locally_controlled(c.world, by)) net_request_correction(c.world, c.self());
 		register_last_state(c.world, c.self(), LastState::NoInterrupt);
 		register_last_state(c.world, c.self(), LastState::TimeCritical);
 	});

@@ -35,8 +35,8 @@ struct NetCounters {
 };
 
 struct NetConfig {
-	int budget = 16384;  // bytes a second to each peer (the original's 16 KB/s)
-	float quality = 0.5f;  // the net node's vtable +0x58 (assumed; 0.5 makes the ladder's divisor 1)
+	int budget = 16000;  // Network\Winsock\Maximum Outgoing Bytes: the credit refills in a second
+	float node_quality = 1;  // the node's ping-based quality and +0x54 (the loopback has no drops)
 };
 
 // --- The state managers' network side (replay.cpp) ------------------------------------------
@@ -52,6 +52,8 @@ struct NetManager {
 	std::string id;          // DE_CStateManager::BuildID
 	uint32_t server_id = 0;  // the server's numeric ID (0 on a client until linked)
 	bool up = false, down = true;
+	uint32_t urgency = 0;  // the sender's class, 0..4 (contents +0xec)
+	bool preload = false;  // sent with the pre-load (contents +0xe8)
 };
 std::vector<NetManager> net_managers(World &w);
 // A client learns the server's ID for a manager ID; false while no manager has it yet.
@@ -69,10 +71,19 @@ struct NetState {
 // The newest state of `owner`'s manager the sender may replicate (not NoReplicate), packed for the
 // wire; false when it has none.
 bool net_newest_state(World &w, const GameObject *owner, NetState &out);
-// A state received for `owner`'s manager (AddLaggedState with the packed flags).
-void net_receive_state(World &w, GameObject *owner, const NetState &st);
-// DE_CStateManager::SetCurrentLag: lag in scene ms (10 ms + half the ping at the scene's scale).
-void net_set_lag(World &w, float lag_ms);
+// A state received for `owner`'s manager (AddLaggedState with the packed flags); `lag_ms` is the com
+// interface's lag. All but floor drops are acknowledged.
+enum class NetTake { Taken, Known, Held, Rejected, Floor };
+NetTake net_receive_state(World &w, GameObject *owner, const NetState &st, float lag_ms);
+// DE_CStateManager::SetCurrentLag on every manager, or only `only`'s.
+void net_set_lag(World &w, float lag_ms, const GameObject *only = nullptr);
+// +0xac: the server re-sends the manager's newest state; a client asks for a correction (0x19).
+bool net_take_resend(World &w, const GameObject *owner);
+void net_request_correction(World &w, GameObject *owner);
+// Message 0x12 acknowledged `time`: a required correction (+0xb0) of that time is done; the 2.123
+// sender moves an outstanding one to each state it sends.
+void net_acked(World &w, const GameObject *owner, uint32_t time);
+void net_sent(World &w, const GameObject *owner, uint32_t time);
 // The flags RegisterLastState* put on the state the owner's manager made last.
 enum class LastState { NoInterrupt, NoReplicate, TimeCritical, Correction, RequiredCorrection };
 void register_last_state(World &w, GameObject *owner, LastState what);
@@ -88,20 +99,25 @@ class NetSession {
 public:
 	struct Peer {
 		net::Endpoint *link = nullptr;
-		GameObject *creature = nullptr;  // the creature this peer's machine controls (server side)
+		GameObject *creature = nullptr;  // the creature the client of this link controls
 		float ping = 0;                  // round trip, ms
-		uint32_t last_ping_sent = 0;
 		uint64_t bytes_sent = 0;
-		float tokens = 0;
-		struct Sent {
-			uint64_t serial = 0;
+		// The sender's record per manager (DE_CSignificantStateManager, FINDINGS 405).
+		struct Record {
+			uint64_t serial = 0;         // the newest state it is sending
 			uint32_t time = 0;
-			int step = 0;           // the ladder's rung (CSignificantState +0xc)
-			uint32_t last_ms = 0;   // +0x20
-			bool any = false;
+			int index = 0;               // its resend index (3 bits)
+			uint32_t last_send = 0;      // +0x20
+			int64_t acked = -1;          // +0x24: the last acknowledged time, -1 none
+			bool ever_acked = false;
+			bool force = false;          // +0x40: a correction requested (0x19)
 		};
-		std::map<const GameObject *, Sent> sent;
-		std::map<uint32_t, bool> linked;  // server: IDs announced to this peer
+		std::map<const GameObject *, Record> records;
+		std::map<uint32_t, bool> linked;  // server: IDs sent to this peer (0x0d)
+		std::map<const GameObject *, uint64_t> preloaded;  // server: pre-load states sent (0x0e)
+		std::vector<std::pair<uint32_t, uint32_t>> acks;  // 0x12 to send: server ID, raw time
+		uint32_t acks_since = 0;
+		uint32_t keep_alive_min = 0;
 	};
 	NetSession(World &w, NetRole role, NetConfig cfg = {});
 	~NetSession();
@@ -112,22 +128,27 @@ public:
 	uint32_t frame_ms(uint32_t real_ms);
 	NetRole role() const { return role_; }
 	std::deque<Peer> &peers() { return peers_; }
-	// Bytes sent by this side, and state packets.
 	uint64_t bytes_sent() const;
-	uint64_t states_sent = 0, clock_jumps = 0;
+	uint64_t states_sent = 0, packets_sent = 0, clock_jumps = 0, clock_rejects = 0, correction_requests = 0;
 	int32_t slew_pending = 0;
 	float lag_ms = 10;
+	float credit = 1;  // the transport's budget credit, 0..1 (FINDINGS 406)
 
 private:
 	void receive(Peer &p, const net::Packet &packet);
 	void send_states(Peer &p, uint32_t now);
+	void send_acks(Peer &p, uint32_t now, bool force);
 	void announce(Peer &p);
+	void send(Peer &p, net::Channel ch, std::vector<uint8_t> data);
+	float quality() const;
 	World &w_;
 	NetRole role_;
 	NetConfig cfg_;
 	std::deque<Peer> peers_;
-	uint32_t last_lag_ = 0;
+	uint32_t last_lag_ = 0, last_frame_ = 0;
+	uint32_t class_visit_[5] = {0, 0, 0, 0, 0};
 	uint8_t sync_seq_ = 0;
+	int32_t sync_limit_ = 1000;  // the clock's accept limit (+0x64)
 };
 
 }  // namespace game

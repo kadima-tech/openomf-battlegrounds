@@ -11,6 +11,7 @@
 // scripts it, or its pilot's AI with --client-ai). It prints both machines' view of each fighter,
 // the position error of the client's copy against the server's, the corrections, rollbacks and bytes
 // per second, and the messages each machine shows.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -183,7 +184,7 @@ int main(int argc, char **argv) {
 	std::string data = argv[1], arena = "Desert";
 	std::pair<std::string, std::string> server_pick{"Katana", "Elizabeth"}, client_pick{"Jaguar", "Lucas"};
 	float ping = 0, jitter = 0, loss = 0;
-	int frames = 3000, wins = 2, difficulty = 0, every = 50, budget = 16384;
+	int frames = 3000, wins = 2, difficulty = 0, every = 50, budget = 16000;
 	bool server_user = false, client_ai = false;
 	auto split = [](const std::string &v, std::pair<std::string, std::string> &out) {
 		size_t c = v.find(':');
@@ -238,6 +239,8 @@ int main(int argc, char **argv) {
 
 		double err_sum[2] = {0, 0}, err_max[2] = {0, 0};
 		uint64_t err_n[2] = {0, 0};
+		std::vector<double> errs[2];
+		bool landed[2] = {false, false};
 		for (int fr = 0; fr < frames; ++fr) {
 			clock = uint32_t(fr) * game::World::kFrameMs;
 			for (Side *s : {&server, &client}) {
@@ -260,9 +263,13 @@ int main(int argc, char **argv) {
 			for (size_t i = 0; i < 2; ++i) {
 				game::GameObject *a = slot_creature(server, i), *b = slot_creature(client, i);
 				if (!a || !b || !a->spawned || !b->spawned) continue;
+				// Measured once both copies have landed from the spawn.
+				landed[i] |= a->on_floor && b->on_floor;
+				if (!landed[i]) continue;
 				auto pa = a->local.t, pb = b->local.t;
 				double e = std::sqrt(double((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1]) + (pa[2] - pb[2]) * (pa[2] - pb[2])));
 				err_sum[i] += e, err_n[i]++;
+				errs[i].push_back(e);
 				err_max[i] = std::max(err_max[i], e);
 			}
 			if (const char *dm = getenv("OPENBG_DEBUG_NET"); dm && fr == atoi(dm)) {
@@ -273,7 +280,7 @@ int main(int argc, char **argv) {
 						for (char ch : m.id) shown += ch >= 32 && ch < 127 ? ch : '.';
 						game::NetState st;
 						bool has = game::net_newest_state(*s->world, m.owner, st);
-						printf("%s manager %s (%s) id %u up %d down %d controlled %d newest %d/%u a%u s%u f%x: %s\n", s->name.c_str(), m.owner->name.c_str(), m.owner->class_path.c_str(), m.server_id, m.up, m.down,
+						printf("%s manager %s (%s) id %u up %d down %d urgency %u preload %d controlled %d newest %d/%u a%u s%u f%x: %s\n", s->name.c_str(), m.owner->name.c_str(), m.owner->class_path.c_str(), m.server_id, m.up, m.down, m.urgency, m.preload,
 						       game::locally_controlled(*s->world, m.owner), has, st.time, st.authority, st.significance, st.flags, shown.c_str());
 					}
 				}
@@ -311,8 +318,10 @@ int main(int argc, char **argv) {
 		printf("summary: ping %.0f ms jitter %.0f loss %.2f over %.0f s\n", ping, jitter, loss, secs);
 		for (size_t i = 0; i < 2; ++i) {
 			game::GameObject *a = slot_creature(server, i);
-			printf("summary: slot %zu %s position error mean %.2f max %.2f (%llu samples)\n", i, a ? a->name.c_str() : "-",
-			       err_n[i] ? err_sum[i] / double(err_n[i]) : 0.0, err_max[i], (unsigned long long)err_n[i]);
+			std::sort(errs[i].begin(), errs[i].end());
+			auto pct = [&](double f) { return errs[i].empty() ? 0.0 : errs[i][size_t(f * double(errs[i].size() - 1))]; };
+			printf("summary: slot %zu %s position error (client copy vs server) mean %.2f median %.2f p95 %.2f max %.2f (%llu frames)\n", i,
+			       a ? a->name.c_str() : "-", err_n[i] ? err_sum[i] / double(err_n[i]) : 0.0, pct(0.5), pct(0.95), err_max[i], (unsigned long long)err_n[i]);
 		}
 		for (Side *s : {&server, &client}) {
 			auto &c = game::net_counters(*s->world);
