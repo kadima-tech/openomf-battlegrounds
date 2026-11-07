@@ -1,6 +1,8 @@
 #include "widgets.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 
 #include "icons.h"
 #include "imgui_internal.h"
@@ -40,14 +42,16 @@ bool toolbar_button(const char *icon, const char *label, Tone tone, bool enabled
 	bool hovered = false, held = false;
 	bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held, 0);
 	if (!enabled) hovered = held = pressed = false;
-	unsigned bg = tone == Tone::Play ? (hovered ? kPlayHover : kPlay) : held ? kButtonActive : hovered ? kButtonHover : kButton;
-	unsigned border = tone == Tone::Play ? kPlay : kInputBorder;
+	unsigned bg = tone == Tone::Play ? (hovered ? kPlayHover : kPlay)
+	              : tone == Tone::Accent ? (hovered ? 0x4a4380 : kSelection)
+	              : held ? kButtonActive : hovered ? kButtonHover : kButton;
+	unsigned border = tone == Tone::Play ? kPlay : tone == Tone::Accent ? kAccentLine : kInputBorder;
 	ImDrawList *dl = w->DrawList;
 	if (tone != Tone::Ghost || hovered) {
 		dl->AddRectFilled(bb.Min, bb.Max, rgb(bg, enabled ? 255 : 150), px(6));
 		dl->AddRect(bb.Min, bb.Max, rgb(border, enabled ? 255 : 120), px(6));
 	}
-	unsigned fg = enabled ? (tone == Tone::Play ? 0xffffff : kText) : kTextFaint;
+	unsigned fg = enabled ? (tone == Tone::Play || tone == Tone::Accent ? 0xffffff : kText) : kTextFaint;
 	float y = pos.y + (h - ImGui::GetFontSize()) * 0.5f;
 	float x = pos.x + pad;
 	if (icon) {
@@ -182,7 +186,22 @@ bool tile(const char *id_text, const Tile &t, ImVec2 size, bool *double_clicked)
 		ImGui::PopFont();
 	} else {
 		dl->AddRectFilled(img.Min, img.Max, rgb(0x272833), r);
-		if (t.texture) {
+		if (t.texture && t.aspect > 0) {
+			ImVec2 inner = img.GetSize() - ImVec2(px(12), px(12));
+			ImVec2 fit = t.aspect > inner.x / inner.y ? ImVec2(inner.x, inner.x / t.aspect) : ImVec2(inner.y * t.aspect, inner.y);
+			ImVec2 c = img.GetCenter();
+			const float sq = px(8);
+			ImVec2 a = c - fit * 0.5f, b = c + fit * 0.5f;
+			dl->PushClipRect(a, b, true);
+			for (float y = a.y; y < b.y; y += sq) {
+				for (float x = a.x; x < b.x; x += sq) {
+					bool dark = (int((x - a.x) / sq) + int((y - a.y) / sq)) & 1;
+					dl->AddRectFilled(ImVec2(x, y), ImVec2(x + sq, y + sq), rgb(dark ? 0x2e2f3a : 0x383946));
+				}
+			}
+			dl->PopClipRect();
+			dl->AddImage(t.texture, a, b);
+		} else if (t.texture) {
 			ImVec2 inset(px(1), px(1));
 			dl->AddImageRounded(t.texture, img.Min + inset, img.Max - inset, ImVec2(0, 0), ImVec2(1, 1),
 			                    t.disabled ? IM_COL32(255, 255, 255, 110) : IM_COL32_WHITE, r);
@@ -196,12 +215,13 @@ bool tile(const char *id_text, const Tile &t, ImVec2 size, bool *double_clicked)
 		}
 		dl->AddRect(img.Min, img.Max, rgb(t.selected ? kAccent : hovered && !t.disabled ? 0x4a4c5c : kBorder), r, 0,
 		            t.selected ? px(2.5f) : px(1));
-		if (t.is_new) {
+		if (t.is_new || t.badge) {
+			const char *text = t.is_new ? "NEW" : t.badge;
 			ImGui::PushFont(theme::fonts.semibold, kFontSmall - 2);
-			ImVec2 bs = text_size("NEW");
+			ImVec2 bs = text_size(text);
 			ImVec2 b0 = img.Min + ImVec2(px(8), px(8)), b1 = b0 + bs + ImVec2(px(12), px(6));
-			dl->AddRectFilled(b0, b1, rgb(kNew), px(4));
-			dl->AddText(b0 + ImVec2(px(6), px(3)), rgb(0xffffff), "NEW");
+			dl->AddRectFilled(b0, b1, t.is_new ? rgb(kNew) : rgb(t.badge_colour ? t.badge_colour : 0x3b3d4b, 235), px(4));
+			dl->AddText(b0 + ImVec2(px(6), px(3)), rgb(t.is_new ? 0xffffff : kTextSoft), text);
 			ImGui::PopFont();
 		}
 	}
@@ -326,6 +346,7 @@ bool combo(const char *id, int *current, const char *const items[], int count) {
 }
 
 bool checkbox(const char *id_text, bool *v, bool enabled) {
+	if (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled) enabled = false;
 	ImGuiWindow *w = ImGui::GetCurrentWindow();
 	const ImGuiID id = w->GetID(id_text);
 	const float s = px(22);
@@ -392,6 +413,140 @@ void status_chip(const char *icon, const char *text, unsigned colour) {
 void dim_text(const char *text, unsigned colour) {
 	ImGui::PushStyleColor(ImGuiCol_Text, vec(colour ? colour : kTextMuted));
 	ImGui::TextUnformatted(text);
+	ImGui::PopStyleColor();
+}
+
+void badge(const char *text, unsigned bg, unsigned fg) {
+	ImGui::PushFont(theme::fonts.semibold, kFontSmall - 2);
+	ImVec2 ts = text_size(text);
+	ImVec2 size = ts + ImVec2(px(12), px(6));
+	ImVec2 p = ImGui::GetCursorScreenPos();
+	float dy = std::max(0.0f, (ImGui::GetTextLineHeight() - size.y) * 0.5f);
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	dl->AddRectFilled(p + ImVec2(0, dy), p + ImVec2(0, dy) + size, rgb(bg), px(4));
+	dl->AddText(p + ImVec2(px(6), dy + px(3)), rgb(fg), text);
+	ImGui::PopFont();
+	ImGui::Dummy(ImVec2(size.x, std::max(size.y, ImGui::GetTextLineHeight())));
+}
+
+namespace {
+
+bool word_char(char c) { return std::isalnum(uint8_t(c)) || c == '_'; }
+
+bool is_keyword(const std::string &w) {
+	static const char *const kw[] = {"if", "else", "while", "for", "do", "return", "break", "continue", "switch", "case", "default",
+	                                 "true", "false", "null", "this", "param", "rparam", "instance", "final", "global", "new",
+	                                 "delete", "int", "float", "bool", "string", "void", "class", "import", "static", "const"};
+	for (const char *k : kw) {
+		if (w == k) return true;
+	}
+	return false;
+}
+
+// Colours one line; `in_comment` carries a /* */ comment across lines.
+void draw_code_line(ImDrawList *dl, ImVec2 p, const std::string &line, bool *in_comment) {
+	const unsigned kComment = 0x6a9955, kString = 0xce9178, kNumber = 0xb5cea8, kKeyword = 0xc586c0, kType = 0x4ec9b0,
+	               kMember = 0x9cdcfe, kPlain = 0xd4d4d4;
+	float x = p.x;
+	size_t i = 0;
+	auto emit = [&](size_t from, size_t to, unsigned colour) {
+		if (to <= from) return;
+		const char *a = line.c_str() + from, *b = line.c_str() + to;
+		dl->AddText(ImVec2(x, p.y), rgb(colour), a, b);
+		x += ImGui::CalcTextSize(a, b).x;
+	};
+	while (i < line.size()) {
+		if (*in_comment) {
+			size_t end = line.find("*/", i);
+			size_t stop = end == std::string::npos ? line.size() : end + 2;
+			emit(i, stop, kComment);
+			i = stop;
+			if (end != std::string::npos) *in_comment = false;
+			continue;
+		}
+		char c = line[i];
+		if (c == '/' && i + 1 < line.size() && line[i + 1] == '/') {
+			emit(i, line.size(), kComment);
+			break;
+		}
+		if (c == '/' && i + 1 < line.size() && line[i + 1] == '*') {
+			*in_comment = true;
+			continue;
+		}
+		if (c == '"' || c == '\'') {
+			size_t j = i + 1;
+			while (j < line.size() && line[j] != c) j += line[j] == '\\' ? 2 : 1;
+			j = std::min(line.size(), j + 1);
+			emit(i, j, kString);
+			i = j;
+			continue;
+		}
+		if (std::isdigit(uint8_t(c))) {
+			size_t j = i;
+			while (j < line.size() && (std::isalnum(uint8_t(line[j])) || line[j] == '.')) ++j;
+			emit(i, j, kNumber);
+			i = j;
+			continue;
+		}
+		if (word_char(c)) {
+			size_t j = i;
+			while (j < line.size() && word_char(line[j])) ++j;
+			std::string w = line.substr(i, j - i);
+			unsigned colour = kPlain;
+			if (is_keyword(w)) colour = kKeyword;
+			else if (w.size() > 1 && (w[0] == 'C' || w[0] == 'E' || w[0] == 'B') && std::isupper(uint8_t(w[1]))) colour = kType;
+			else if (w.size() > 2 && (w[0] == 'm' || w[0] == 'g') && w[1] == '_') colour = kMember;
+			emit(i, j, colour);
+			i = j;
+			continue;
+		}
+		size_t j = i + 1;
+		while (j < line.size() && !word_char(line[j]) && line[j] != '"' && line[j] != '/' && line[j] != '\'') ++j;
+		emit(i, j, kPlain);
+		i = j;
+	}
+}
+
+}  // namespace
+
+void code_view(const char *id, const std::vector<std::string> &lines, ImVec2 size) {
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, vec(0x16171d));
+	ImGui::BeginChild(id, size, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+	ImGui::PushFont(theme::fonts.mono, kFontSmall);
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+	const float line_h = ImGui::GetTextLineHeight() + px(3);
+	const float gutter = ImGui::CalcTextSize("00000").x + px(14);
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	std::vector<uint8_t> state(lines.size() + 1, 0);
+	for (size_t k = 0; k < lines.size(); ++k) {
+		bool in = state[k];
+		const std::string &l = lines[k];
+		for (size_t i = 0; i + 1 < l.size(); ++i) {
+			if (!in && l[i] == '/' && l[i + 1] == '/') break;
+			if (!in && l[i] == '/' && l[i + 1] == '*') in = true, ++i;
+			else if (in && l[i] == '*' && l[i + 1] == '/') in = false, ++i;
+		}
+		state[k + 1] = in;
+	}
+	float widest = 0;
+	ImGuiListClipper clip;
+	clip.Begin(int(lines.size()), line_h);
+	while (clip.Step()) {
+		for (int k = clip.DisplayStart; k < clip.DisplayEnd; ++k) {
+			ImVec2 p = ImGui::GetCursorScreenPos();
+			char num[16];
+			snprintf(num, sizeof num, "%d", k + 1);
+			float nw = ImGui::CalcTextSize(num).x;
+			dl->AddText(ImVec2(p.x + gutter - px(14) - nw, p.y), rgb(kTextFaint), num);
+			bool in = state[size_t(k)];
+			draw_code_line(dl, ImVec2(p.x + gutter, p.y), lines[size_t(k)], &in);
+			widest = std::max(widest, ImGui::CalcTextSize(lines[size_t(k)].c_str()).x);
+			ImGui::Dummy(ImVec2(gutter + widest, line_h));
+		}
+	}
+	ImGui::PopStyleVar();
+	ImGui::PopFont();
+	ImGui::EndChild();
 	ImGui::PopStyleColor();
 }
 

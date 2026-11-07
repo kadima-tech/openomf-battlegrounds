@@ -4,6 +4,7 @@
 
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "addon.h"
+#include "content.h"
 #include "file_dialog.h"
 #include "gl_util.h"
 #include "imgui.h"
@@ -27,16 +29,33 @@ struct Options {
 	int pilot_tab = 0;
 	std::string preview;      // "photo" or "robot"
 	std::filesystem::path photo;  // import into the opened pilot
-	std::string content;      // Content Browser folder: Pilots, HARs, Arenas, Tournaments
+	std::string content;      // Content Browser type (Pilots, Images, ...)
 	bool base_content = false;  // show the base game's folder
+	std::string browse_file;  // Content Browser by file: this file's objects
+	std::string open_base;    // "Class:Name": open that base object at start
+	std::string select_base;  // "Class:Name": select it (Details) at start
+	std::string copy_base;    // copy this base pilot into the add-on at start
 	bool screenshot = false;
 	bool level = false;
 	bool save = false;
-	bool launch = false;      // Launch Game once the start-up actions ran        // save once the start-up actions ran       // start on the level editor tab
+	bool launch = false;      // Launch Game once the start-up actions ran
 	std::string select;       // Outliner selection by object name
 };
 
 class Editor;
+
+// An object the editor shows: one of the add-on's (by GUID, as indices move on undo) or a base
+// file's (read-only).
+struct ObjectRef {
+	enum Kind { None, Addon, Base } kind = None;
+	size_t file = 0;
+	uint32_t index = 0;
+	ed::Guid guid;
+	static ObjectRef base(const ed::BaseObject &o) { return {Base, o.file, o.index, o.guid}; }
+	static ObjectRef addon(const ed::Guid &g) { return {Addon, 0, 0, g}; }
+	explicit operator bool() const { return kind != None; }
+	bool operator==(const ObjectRef &o) const { return kind == o.kind && guid == o.guid && (kind != Base || (file == o.file && index == o.index)); }
+};
 
 class Document {
 public:
@@ -47,6 +66,9 @@ public:
 	virtual void draw(Editor &e) = 0;
 	// False once its object is gone (an undo removed it).
 	virtual bool alive(Editor &) const { return true; }
+	// Shows the open add-on's content (closed when another add-on opens).
+	virtual bool addon_content() const { return false; }
+	virtual bool shows(const ObjectRef &) const { return false; }
 };
 
 struct LogLine {
@@ -70,6 +92,28 @@ public:
 	void launch_game();
 	void open_pilot(const ed::Guid &pilot);
 	void new_pilot_dialog(const std::string &base = "");
+	// Runs `then` on the open add-on, or first asks which add-on to use (recent, open, new).
+	void with_addon(const std::string &why, std::function<void()> then);
+	void copy_pilot_to_addon(const ed::BaseObject &pilot);
+	void select(const ObjectRef &r);
+	const ObjectRef &selection() const { return selection_; }
+	// Double-click: the pilot editor (read-only for base pilots) or the object viewer.
+	void open_object(const ObjectRef &r);
+	// The file an object lives in; null while a base file is still being read.
+	const deo::File *file_of(const ObjectRef &r);
+	int addon_index(const ObjectRef &r) const;
+	ObjectRef ref_for_guid(const ed::Guid &g) const;
+	std::string object_label(const ObjectRef &r);
+	ed::ReferenceIndex *reference_index();
+	// A thumbnail for a tile (generated lazily, a few per frame); 0 for none yet.
+	GLuint thumbnail(const ObjectRef &r, float *aspect);
+	// The image that stands for an object (itself, a pilot's photo, a description's icon or its
+	// pilot's photo); *pending while a file it needs is still being read.
+	ObjectRef image_source(const ObjectRef &r, bool *pending = nullptr);
+	bool sync_loads() const { return opt_.screenshot; }
+	void play_wave(const ed::Bytes &wav);
+	void stop_sound();
+	bool sound_playing();
 	void import_photo_dialog(const ed::Guid &pilot);
 	void import_photo(const ed::Guid &pilot, const std::filesystem::path &file);
 	int find_object(const ed::Guid &g) const { return project_ ? project_->find(g) : -1; }
@@ -90,8 +134,10 @@ private:
 	void save_settings();
 	void set_base(const std::filesystem::path &dir);
 	void set_project(std::unique_ptr<ed::Project> p);
-	void new_project_dialog();
-	void open_project_dialog();
+	void open_project(const std::filesystem::path &p, std::function<void()> then = {});
+	void close_project();
+	void new_project_dialog(std::function<void()> then = {});
+	void open_project_dialog(std::function<void()> then = {});
 	void apply_startup();
 	void track_undo();
 	void undo();
@@ -103,6 +149,11 @@ private:
 	void draw_toolbar();
 	void draw_status();
 	void draw_start_page();
+	void draw_welcome_card(ImVec2 p0, ImVec2 size);
+	void draw_addon_chooser();
+	void draw_browser_tree();
+	void draw_browser_items();
+	void rebuild_items();
 	void default_layout(ImGuiID dockspace);
 	void draw_place();
 	void draw_viewport();
@@ -149,11 +200,34 @@ private:
 
 	// Selection.
 	int selected_object_ = -1;
-	std::string content_folder_ = "Pilots";
-	bool content_base_ = false;
-	std::string content_filter_, content_type_ = "All", outliner_filter_, place_filter_, log_filter_;
-	ed::Guid selected_tile_;
-	std::string selected_base_tile_;
+	ObjectRef selection_;
+	std::string outliner_filter_, place_filter_, log_filter_;
+
+	// Content Browser: where (add-on or base; a type, or a file and folder), what (type filter,
+	// search) and how (tiles or list).
+	struct Scope {
+		bool base = true;
+		bool by_file = false;
+		int category = -1;  // -1: every type
+		int file = -1;
+		int folder = -1;    // an object of `file` whose children are shown; -1: the file's roots
+		bool operator==(const Scope &) const = default;
+	} scope_;
+	int type_filter_ = -1;
+	std::string content_filter_;
+	bool list_view_ = false;
+	std::vector<ObjectRef> items_;
+	std::string items_key_;
+	bool items_waiting_ = false;
+	std::map<size_t, std::vector<int>> parents_;  // base file -> object parents
+	const std::vector<int> *parents_of(size_t file);
+	std::map<uint64_t, bool> file_open_;
+
+	// Add-on chooser.
+	bool chooser_open_ = false;
+	std::string chooser_why_;
+	std::function<void()> chooser_then_;
+	std::unique_ptr<ed::ReferenceIndex> refs_;
 	std::string console_input_;
 	std::vector<std::string> console_history_;
 	bool focus_content_ = false;
@@ -162,6 +236,14 @@ private:
 	// Thumbnails.
 	std::map<std::string, std::pair<GLuint, uint64_t>> addon_thumbs_;
 	std::map<std::string, GLuint> base_thumbs_;
+	struct Thumb {
+		GLuint texture = 0;
+		float aspect = 1;
+		bool done = false;
+	};
+	std::map<uint64_t, Thumb> thumbs_;
+	int thumb_budget_ = 0;
+	unsigned audio_device_ = 0;
 	std::vector<std::string> fighters_;
 
 	// Launched game.
@@ -174,4 +256,12 @@ private:
 
 GLuint addon_photo_texture(Editor &e, const ed::Guid &pilot, std::map<std::string, std::pair<GLuint, uint64_t>> &cache);
 std::unique_ptr<Document> make_pilot_document(Editor &e, const ed::Guid &pilot);
+// A base pilot in the pilot editor, read-only, with "Copy to add-on".
+std::unique_ptr<Document> make_base_pilot_document(Editor &e, const ed::BaseObject &pilot);
 bool pilot_document_is(const Document *d, const ed::Guid &pilot);
+std::unique_ptr<Document> make_object_document(Editor &e, const ObjectRef &r);
+// The Details panel's body for any object: identity, decoded fields, references, chunks.
+void draw_object_info(Editor &e, const ObjectRef &r, bool in_document);
+const char *class_icon(const std::string &class_path);
+unsigned class_tint(const std::string &class_path);
+std::string utf8_text(const std::string &latin1);

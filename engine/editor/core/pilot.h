@@ -56,6 +56,8 @@ void write_pilot(Project &p, const PilotObjects &o, const PilotData &d);
 // New pilot = a copy of a base pilot (its description, bio and photo) with fresh GUIDs, listed and
 // unlocked. Returns the new Actor\Creature\Pilot's index.
 uint32_t create_pilot(Project &p, const std::string &base_pilot, const std::string &name);
+// The same from one particular base Actor\Creature\Pilot.
+uint32_t create_pilot(Project &p, const BaseObject &base_pilot, const std::string &name);
 
 // Replaces the photo's pixels with an RGBA image (any size; cropped to a square and scaled to
 // 256 x 256, the size of the shipped photos), stored uncompressed.

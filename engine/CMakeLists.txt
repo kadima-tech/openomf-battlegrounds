@@ -196,10 +196,11 @@ add_test(NAME deobjects-round-trip COMMAND deobjects-data-tests "${OPENBG_DATA_D
 set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 
 # The content editor's data model (docs/EDITOR_SPEC.md): add-on projects, pilots, validation.
-add_library(editor-core STATIC editor/core/addon.cpp editor/core/pilot.cpp editor/core/image_io.cpp
+add_library(editor-core STATIC editor/core/addon.cpp editor/core/content.cpp editor/core/pilot.cpp editor/core/image_io.cpp
 	editor/core/validate.cpp)
 target_include_directories(editor-core PUBLIC editor/core)
-target_link_libraries(editor-core PUBLIC de ZLIB::ZLIB)
+find_package(Threads REQUIRED)
+target_link_libraries(editor-core PUBLIC de ZLIB::ZLIB Threads::Threads)
 add_executable(editor-tests tests/editor_tests.cpp)
 target_link_libraries(editor-tests PRIVATE editor-core game)
 add_test(NAME editor-pilot COMMAND editor-tests "${OPENBG_DATA_DIR}")
@@ -265,7 +266,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp
 	DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/editor/embed.cmake ${EDITOR_FONTS}/Inter-Regular.ttf ${EDITOR_FONTS}/Inter-SemiBold.ttf
 		${EDITOR_FONTS}/JetBrainsMono-Regular.ttf ${EDITOR_FONTS}/lucide.ttf
 	COMMENT "Embedding the editor's fonts" VERBATIM)
-add_executable(openbg-editor editor/app/main.cpp editor/app/editor.cpp editor/app/pilot_doc.cpp editor/app/widgets.cpp
+add_executable(openbg-editor editor/app/main.cpp editor/app/editor.cpp editor/app/browser.cpp editor/app/object_view.cpp editor/app/pilot_doc.cpp editor/app/widgets.cpp
 	editor/app/theme.cpp editor/app/preview.cpp editor/app/launch.cpp editor/app/file_dialog.cpp app/fighter_model.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp)
 target_include_directories(openbg-editor PRIVATE app)

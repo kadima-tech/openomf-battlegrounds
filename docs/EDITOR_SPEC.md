@@ -277,6 +277,16 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
   Details, Content Browser (add-on and read-only base game), Output Log, Validation, Script Console
   (editor commands), status bar, saved per-user layout, undo / redo, and Launch Game
   (`openbg --addon`). Not yet: arena viewports (the viewport is an empty grid), Play / Simulate.
+- **2, browsing (2026-11-07):** no start screen: once `Data` is chosen the full layout shows with no
+  add-on open (an add-on is only opened or created when the user chooses; actions that need one ask
+  which). The Content Browser holds the whole base game (28,337 objects, 65 files) by type (16
+  types) or by file and folder, with lazy thumbnails, BASE / NEW badges, a type filter and search
+  over everything, virtualised tiles or list. Details decodes any object as far as the editor can
+  (identity, description / pilot / image / value / sound / behavior fields, hierarchy, references
+  through known layouts plus a best-effort grammar that explains 94% of objects, a background
+  "referenced by" index, raw chunks). Viewer tabs preview images (channels), scripts (syntax
+  coloured), sounds (play), HARs (animated robot) and base pilots (the pilot editor, read-only, with
+  Copy to Add-on). Not yet: mesh and music previews; editing types other than pilots.
 - **3 (done):** new pilot -> edit -> photo import -> save -> reopen, and the pilot shows in the game's
   Choose Pilot with its photo, stats, colours and bio. Validation runs §7 rules 1-8, 11 and 12, the
   original-only ones as warnings; rules 9-10 wait for script editing.

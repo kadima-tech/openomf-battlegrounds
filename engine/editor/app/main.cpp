@@ -2,7 +2,8 @@
 //
 //   openbg-editor [--data <Data dir>] [<add-on.DEObjects>]
 //                 [--new-pilot Base:Name] [--open-pilot Name] [--tab 0-4] [--preview photo|robot]
-//                 [--photo image.png] [--content Pilots|HARs|Arenas|Tournaments] [--base-content]
+//                 [--photo image.png] [--content <type>] [--base-content] [--browse-file <file stem>]
+//                 [--open-base Class:Name] [--select-base Class:Name] [--copy-base <pilot>]
 //                 [--select <object name>] [--level] [--save] [--launch-game]
 //                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]]
 //
@@ -44,6 +45,10 @@ int main(int argc, char **argv) {
 		else if (arg("--photo")) opt.photo = utf8_path(argv[++i]);
 		else if (arg("--content")) opt.content = argv[++i];
 		else if (!strcmp(argv[i], "--base-content")) opt.base_content = true;
+		else if (arg("--browse-file")) opt.browse_file = argv[++i];
+		else if (arg("--open-base")) opt.open_base = argv[++i];
+		else if (arg("--select-base")) opt.select_base = argv[++i];
+		else if (arg("--copy-base")) opt.copy_base = argv[++i];
 		else if (!strcmp(argv[i], "--level")) opt.level = true;
 		else if (!strcmp(argv[i], "--save")) opt.save = true;
 		else if (!strcmp(argv[i], "--launch-game")) opt.launch = true;

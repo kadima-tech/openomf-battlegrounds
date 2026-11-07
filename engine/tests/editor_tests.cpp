@@ -11,6 +11,7 @@
 #include <iterator>
 
 #include "addon.h"
+#include "content.h"
 #include "de/image.h"
 #include "de/scene.h"
 #include "game/descriptions.h"
@@ -76,6 +77,50 @@ int main(int argc, char **argv) {
 	fs::path tmp = fs::temp_directory_path() / ("openbg-editor-test-" + std::to_string(std::rand()) + std::to_string(time(nullptr)));
 	fs::create_directories(tmp);
 	const fs::path addon = tmp / "TestMod.DEObjects";
+
+	// The base content index: every object in one type, the counts the 2.123 data has.
+	{
+		size_t sum = 0;
+		for (int c = 0; c < ed::kCategoryCount; ++c) {
+			size_t n = base.category(ed::Category(c)).size();
+			printf("  %-12s %zu\n", ed::category_name(ed::Category(c)), n);
+			sum += n;
+		}
+		CHECK(sum == base.object_count());
+		CHECK(base.object_count() == 28337);
+		CHECK(base.files().size() == 65);
+		CHECK(base.category(ed::Category::Pilots).size() == 58);
+		CHECK(base.category(ed::Category::Images).size() == 2251);
+		CHECK(base.category(ed::Category::Sounds).size() == 255);
+		CHECK(base.category(ed::Category::Scripts).size() == 288 + 255 + 286);
+		CHECK(base.category(ed::Category::Arenas).size() == 26 + 25);
+		for (int c = 0; c < ed::kCategoryCount; ++c) CHECK(!base.category(ed::Category(c)).empty());
+		const ed::BaseObject *lucas = base_named(base, "Description\\Pilot", "Lucas");
+		CHECK(lucas != nullptr);
+		if (lucas) {
+			const deo::File &f = base.model(lucas->file);
+			bool listed = false;
+			for (auto &field : ed::describe_object(base, f, lucas->index)) listed |= field.label == "Listed" && field.value == "yes";
+			CHECK(listed);
+			CHECK(!ed::guid_zero(ed::description_resource(f.objects[lucas->index])));
+			size_t complete = 0;
+			for (auto &o : f.objects) {
+				bool ok = false;
+				ed::decode_references(o.info.class_text(), o.references, f.objects.size(), f.guid_pool.size(), &ok);
+				complete += ok;
+			}
+			CHECK(complete == f.objects.size());
+		}
+		const ed::BaseObject *script = base.category(ed::Category::Scripts).empty() ? nullptr : base.category(ed::Category::Scripts)[0];
+		for (const ed::BaseObject *o : base.category(ed::Category::Scripts)) {
+			if (o->class_path == "Behavior") {
+				script = o;
+				break;
+			}
+		}
+		CHECK(script && script->class_path == "Behavior");
+		if (script) CHECK(ed::behavior_source(base.model(script->file).objects[script->index]).find("// Behavior: ") == 0);
+	}
 
 	// The image codecs.
 	ed::RgbaImage src = gradient(300, 200);
@@ -178,6 +223,40 @@ int main(int argc, char **argv) {
 		for (uint32_t c : de::ObjectsFile::children(mod->object_data(desc.info()))) bio.push_back({mod, c});
 		CHECK(bio.size() == 1 && game::read_string_value(bio[0]) == "A test pilot from the editor, caf\xe9 included.");
 		set_env("OPENBG_ADDONS", "");
+	}
+
+	// Copy to a chosen, existing add-on: nothing is written before the user picks or creates
+	// one, and the add-on's file changes only when saved.
+	{
+		fs::path dir = tmp / "chosen";
+		fs::create_directories(dir);
+		const fs::path chosen = dir / "Chosen.DEObjects";
+		auto fresh = ed::Project::create(base, chosen);
+		const ed::BaseObject *elizabeth = base_named(base, "Actor\\Creature\\Pilot", "Elizabeth");
+		CHECK(elizabeth != nullptr);
+		if (elizabeth) ed::create_pilot(*fresh, *elizabeth, "Unsaved");
+		CHECK(fs::is_empty(dir));
+		fresh.reset();
+		CHECK(fs::is_empty(dir));
+		ed::Project::create(base, chosen)->save();
+		auto before = read_file(chosen);
+		auto p = ed::Project::open(base, chosen);
+		CHECK(ed::addon_pilots(*p).empty());
+		if (elizabeth) {
+			uint32_t made = ed::create_pilot(*p, *elizabeth, "Elizabeth Copy");
+			CHECK(p->dirty());
+			CHECK(read_file(chosen) == before);
+			CHECK(!(p->file().objects[made].info.guid == elizabeth->guid));
+			p->save();
+			auto again = ed::Project::open(base, chosen);
+			auto pilots = ed::addon_pilots(*again);
+			CHECK(pilots.size() == 1);
+			if (!pilots.empty()) {
+				ed::PilotData d = ed::read_pilot(*again, ed::pilot_objects(*again, pilots[0]));
+				CHECK(d.name == "Elizabeth Copy" && d.listed && !d.locked);
+				CHECK(!(again->file().objects[pilots[0]].info.guid == elizabeth->guid));
+			}
+		}
 	}
 
 	std::error_code ec;

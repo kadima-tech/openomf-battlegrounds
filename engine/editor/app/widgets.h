@@ -10,7 +10,7 @@ namespace ui {
 
 float px(float v);  // unscaled pixels -> current UI pixels
 
-enum class Tone { Normal, Play, Ghost };
+enum class Tone { Normal, Play, Ghost, Accent };
 bool toolbar_button(const char *icon, const char *label, Tone tone = Tone::Normal, bool enabled = true,
                     const char *tooltip = nullptr, float height = 0);
 bool icon_button(const char *id, const char *icon, const char *tooltip = nullptr, bool enabled = true, float side = 0);
@@ -41,11 +41,21 @@ struct Tile {
 	std::string sublabel;
 	bool selected = false;
 	bool is_new = false;
+	const char *badge = nullptr;  // e.g. "BASE"; is_new draws "NEW"
+	unsigned badge_colour = 0;
+	float aspect = 0;  // texture width / height: fitted inside the tile instead of stretched
 	bool disabled = false;
 	bool add = false;  // the "+ New ..." tile
 };
 // Returns true on click; *double_clicked set on a double click.
 bool tile(const char *id, const Tile &t, ImVec2 size, bool *double_clicked = nullptr);
+
+// A small rounded label (BASE, NEW, READ-ONLY).
+void badge(const char *text, unsigned bg, unsigned fg = 0xffffff);
+
+// Read-only source with syntax colours (C-like script: comments, strings, numbers, keywords),
+// only the visible lines drawn.
+void code_view(const char *id, const std::vector<std::string> &lines, ImVec2 size);
 
 // Form tabs with a violet underline across the strip.
 bool tab_strip(const char *id, const std::vector<std::string> &labels, int *active);

@@ -59,15 +59,6 @@ fs::path utf8_path(const std::string &s) { return fs::path(std::u8string(s.begin
 
 std::string utf8(const std::string &latin1) { return deo::latin1_to_utf8(deo::Bytes(latin1.begin(), latin1.end())); }
 
-const char *class_icon(const std::string &cls) {
-	if (cls == "Actor\\Creature\\Pilot") return ICON_USER;
-	if (cls.rfind("Description", 0) == 0) return ICON_FILE_TEXT;
-	if (cls.rfind("Image", 0) == 0) return ICON_IMAGE;
-	if (cls.rfind("Value", 0) == 0) return ICON_SCROLL_TEXT;
-	if (cls == "Behavior" || cls == "Class") return ICON_FILE_CODE;
-	return ICON_BOX;
-}
-
 // Window names: icon + label, with a stable ID.
 std::string window_name(const char *icon, const std::string &label, const char *id) {
 	return std::string(icon) + "  " + label + "###" + id;
@@ -89,6 +80,7 @@ Editor::Editor(Options options, SDL_Window *window) : opt_(std::move(options)), 
 	log(LogLine::Info, "DEObjects Editor started (Dear ImGui " IMGUI_VERSION ")");
 	if (!opt_.data.empty()) set_base(opt_.data);
 	if (!base_) data_prompt_ = true;
+	// Only an add-on named on the command line opens at start; otherwise the user picks one.
 	if (base_ && !opt_.project.empty()) {
 		try {
 			if (fs::exists(opt_.project)) set_project(ed::Project::open(*base_, opt_.project));
@@ -103,8 +95,12 @@ Editor::Editor(Options options, SDL_Window *window) : opt_(std::move(options)), 
 
 Editor::~Editor() {
 	if (!opt_.screenshot) save_settings();
+	stop_sound();
 	for (auto &[k, v] : addon_thumbs_) delete_texture(v.first);
 	for (auto &[k, v] : base_thumbs_) delete_texture(v);
+	for (auto &[k, v] : thumbs_) delete_texture(v.texture);
+	docs_.clear();
+	refs_.reset();
 }
 
 void Editor::load_settings() {
@@ -117,7 +113,6 @@ void Editor::load_settings() {
 		if (k == "data" && opt_.data.empty()) opt_.data = utf8_path(v);
 		if (k == "recent") recent_.push_back(utf8_path(v));
 	}
-	if (opt_.project.empty() && !recent_.empty() && fs::exists(recent_.front())) opt_.project = recent_.front();
 }
 
 void Editor::save_settings() {
@@ -136,20 +131,36 @@ void Editor::log(LogLine::Level level, const std::string &text) {
 void Editor::set_base(const fs::path &dir) {
 	try {
 		auto b = std::make_unique<ed::BaseData>(dir);
+		fs::path reopen = project_ ? project_->path() : fs::path();
+		if (project_ && project_->dirty()) log(LogLine::Warning, "Unsaved changes to " + reopen.filename().string() + " were dropped with the old Data folder");
+		docs_.resize(1);
+		active_ = 0;
+		project_.reset();
+		refs_.reset();
+		selection_ = {};
+		items_key_.clear();
+		parents_.clear();
+		for (auto &[k, v] : thumbs_) delete_texture(v.texture);
+		thumbs_.clear();
 		base_ = std::move(b);
 		fighters_.clear();
 		base_thumbs_.clear();
 		log(LogLine::Ok, "Base game data: " + dir.string() + " (" + std::to_string(base_->files().size()) + " files, " +
 		                     std::to_string(base_->object_count()) + " objects, read-only)");
 		data_prompt_ = false;
+		if (!reopen.empty() && fs::exists(reopen)) open_project(reopen);
 	} catch (const std::exception &ex) {
 		log(LogLine::Error, std::string("Cannot use ") + dir.string() + " as the game's Data folder: " + ex.what());
 	}
 }
 
 void Editor::set_project(std::unique_ptr<ed::Project> p) {
-	docs_.resize(1);
+	for (size_t i = docs_.size(); i-- > 1;) {
+		if (docs_[i]->addon_content()) docs_.erase(docs_.begin() + long(i));
+	}
 	active_ = 0;
+	if (selection_.kind == ObjectRef::Addon) selection_ = {};
+	if (!scope_.base) items_key_.clear();
 	undo_.clear();
 	redo_.clear();
 	project_ = std::move(p);
@@ -167,6 +178,38 @@ void Editor::set_project(std::unique_ptr<ed::Project> p) {
 	update_title();
 }
 
+void Editor::close_project() {
+	if (!project_) return;
+	for (size_t i = docs_.size(); i-- > 1;) {
+		if (docs_[i]->addon_content()) docs_.erase(docs_.begin() + long(i));
+	}
+	active_ = 0;
+	project_.reset();
+	undo_.clear();
+	redo_.clear();
+	issues_.clear();
+	selected_object_ = -1;
+	if (selection_.kind == ObjectRef::Addon) selection_ = {};
+	scope_.base = true;
+	items_key_.clear();
+	log(LogLine::Info, "Add-on closed");
+	update_title();
+}
+
+void Editor::open_project(const fs::path &p, std::function<void()> then) {
+	if (!base_) return;
+	try {
+		for (auto &f : base_->files()) {
+			std::error_code ec;
+			if (fs::equivalent(f.path, p, ec)) throw std::runtime_error("that is a base game file; the editor never changes those");
+		}
+		set_project(ed::Project::open(*base_, p));
+		if (then) then();
+	} catch (const std::exception &ex) {
+		log(LogLine::Error, std::string("Cannot open ") + p.string() + ": " + ex.what());
+	}
+}
+
 void Editor::update_title() {
 	std::string t = "DEObjects Editor";
 	if (project_) t += " \xe2\x80\x94 " + project_->path().filename().string();
@@ -174,6 +217,36 @@ void Editor::update_title() {
 }
 
 void Editor::apply_startup() {
+	if (!base_) return;
+	for (int c = 0; c < ed::kCategoryCount; ++c) {
+		if (opt_.content == ed::category_name(ed::Category(c))) scope_.category = c;
+	}
+	if (!opt_.content.empty() || opt_.base_content) scope_.base = opt_.base_content || !project_;
+	if (!opt_.browse_file.empty()) {
+		for (size_t f = 0; f < base_->files().size(); ++f) {
+			if (base_->files()[f].stem == opt_.browse_file) scope_ = Scope{true, true, -1, int(f), -1}, file_open_[f] = true;
+		}
+	}
+	for (const std::string *spec : {&opt_.select_base, &opt_.open_base}) {
+		if (spec->empty()) continue;
+		auto colon = spec->rfind(':');
+		std::string cls = spec->substr(0, colon), name = colon == std::string::npos ? "" : spec->substr(colon + 1);
+		for (const ed::BaseObject *o : base_->of_class(cls)) {
+			if (o->name == name) {
+				select(ObjectRef::base(*o));
+				if (spec == &opt_.open_base) open_object(ObjectRef::base(*o));
+				break;
+			}
+		}
+	}
+	if (!opt_.copy_base.empty()) {
+		for (const ed::BaseObject *o : base_->of_class("Actor\\Creature\\Pilot")) {
+			if (o->name == opt_.copy_base) {
+				copy_pilot_to_addon(*o);
+				break;
+			}
+		}
+	}
 	if (!project_) return;
 	if (!opt_.new_pilot.empty()) {
 		auto colon = opt_.new_pilot.find(':');
@@ -200,16 +273,17 @@ void Editor::apply_startup() {
 			}
 		}
 	}
-	if (!opt_.content.empty()) content_folder_ = opt_.content;
-	content_base_ = opt_.base_content;
 	if (!opt_.select.empty()) {
 		for (size_t i = 0; i < project_->file().objects.size(); ++i) {
-			if (selected_object_ < 0 && utf8(project_->file().objects[i].info.name_text()) == opt_.select) selected_object_ = int(i);
+			if (selected_object_ < 0 && utf8(project_->file().objects[i].info.name_text()) == opt_.select) {
+				selected_object_ = int(i);
+				selection_ = ObjectRef::addon(project_->file().objects[i].info.guid);
+			}
 		}
 	}
 	for (uint32_t pi : ed::addon_pilots(*project_)) {
 		if (!opt_.open_pilot.empty() && utf8(project_->file().objects[pi].info.name_text()) == opt_.open_pilot) {
-			selected_tile_ = project_->file().objects[pi].info.guid;
+			selection_ = ObjectRef::addon(project_->file().objects[pi].info.guid);
 		}
 	}
 	if (opt_.level) active_ = 0;
@@ -303,7 +377,10 @@ void Editor::open_pilot(const ed::Guid &pilot) {
 }
 
 void Editor::new_pilot_dialog(const std::string &from) {
-	if (!project_) return;
+	if (!project_) {
+		with_addon("The new pilot goes into an add-on.", [this, from] { new_pilot_dialog(from); });
+		return;
+	}
 	if (!from.empty()) new_pilot_base_ = from;
 	int n = int(ed::addon_pilots(*project_).size()) + 1;
 	new_pilot_name_ = "New Pilot " + std::to_string(n);
@@ -411,14 +488,18 @@ void Editor::redo() {
 	log(LogLine::Info, "Redo");
 }
 
-void Editor::new_project_dialog() {
+void Editor::new_project_dialog(std::function<void()> then) {
 	if (!base_) return;
-	file_dialog_.open(FileDialog::SaveFile, "New Add-on", recent_.empty() ? de::user_data_dir() : recent_.front().parent_path(), {".deobjects"},
-	                  [this](const fs::path &p) {
+	fs::path start = recent_.empty() ? de::user_data_dir() / "addons" : recent_.front().parent_path();
+	std::error_code ec;
+	fs::create_directories(start, ec);
+	file_dialog_.open(FileDialog::SaveFile, "New Add-on", start, {".deobjects"},
+	                  [this, then](const fs::path &p) {
 		                  try {
 			                  auto proj = ed::Project::create(*base_, p);
 			                  set_project(std::move(proj));
 			                  save();
+			                  if (then) then();
 		                  } catch (const std::exception &ex) {
 			                  log(LogLine::Error, ex.what());
 		                  }
@@ -426,25 +507,52 @@ void Editor::new_project_dialog() {
 	                  "MyMod.DEObjects");
 }
 
-void Editor::open_project_dialog() {
+void Editor::open_project_dialog(std::function<void()> then) {
 	if (!base_) return;
 	file_dialog_.open(FileDialog::OpenFile, "Open Add-on", recent_.empty() ? de::user_data_dir() : recent_.front().parent_path(), {".deobjects"},
-	                  [this](const fs::path &p) {
-		                  try {
-			                  for (auto &f : base_->files()) {
-				                  if (fs::equivalent(f.path, p)) throw std::runtime_error("that is a base game file; the editor never changes those");
-			                  }
-			                  set_project(ed::Project::open(*base_, p));
-		                  } catch (const std::exception &ex) {
-			                  log(LogLine::Error, std::string("Cannot open ") + p.string() + ": " + ex.what());
-		                  }
-	                  });
+	                  [this, then](const fs::path &p) { open_project(p, then); });
+}
+
+void Editor::with_addon(const std::string &why, std::function<void()> then) {
+	if (project_) {
+		then();
+		return;
+	}
+	chooser_open_ = true;
+	chooser_why_ = why;
+	chooser_then_ = std::move(then);
+}
+
+void Editor::copy_pilot_to_addon(const ed::BaseObject &pilot) {
+	const ed::BaseObject *bo = &pilot;
+	with_addon("Copy " + utf8(pilot.name) + " into which add-on? The base game's files are never changed: the copy (with fresh GUIDs) goes into an add-on.",
+	           [this, bo] {
+		           std::string name = utf8(bo->name) + " Copy";
+		           auto taken = [&](const std::string &n) {
+			           for (uint32_t pi : ed::addon_pilots(*project_)) {
+				           if (utf8(project_->file().objects[pi].info.name_text()) == n) return true;
+			           }
+			           return false;
+		           };
+		           for (int k = 2; taken(name); ++k) name = utf8(bo->name) + " Copy " + std::to_string(k);
+		           try {
+			           uint32_t made = ed::create_pilot(*project_, *bo, name);
+			           ed::Guid g = project_->file().objects[made].info.guid;
+			           log(LogLine::Ok, "Copied " + utf8(bo->name) + " (" + base_->files()[bo->file].stem + ") to " + project_->path().filename().string() +
+			                                " as " + name + ": fresh GUIDs, listed and unlocked");
+			           select(ObjectRef::addon(g));
+			           open_pilot(g);
+		           } catch (const std::exception &ex) {
+			           log(LogLine::Error, std::string("Cannot copy the pilot: ") + ex.what());
+		           }
+	           });
 }
 
 // ---------------------------------------------------------------------------------------------
 // Frame
 
 void Editor::frame() {
+	thumb_budget_ = opt_.screenshot ? 1000 : 6;
 	drain_game_output();
 	if (project_ && validated_revision_ != project_->revision() && !ImGui::IsAnyItemActive()) validate_now();
 	ImGuiIO &io = ImGui::GetIO();
@@ -489,7 +597,7 @@ void Editor::frame() {
 	                 ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus);
 	ImGui::PopStyleColor();
 	ImGui::PopStyleVar(3);
-	if (!project_) {
+	if (!base_) {
 		draw_start_page();
 	} else {
 		for (size_t i = 0; i < docs_.size();) {
@@ -506,6 +614,7 @@ void Editor::frame() {
 	ImGui::End();
 
 	draw_new_pilot_popup();
+	draw_addon_chooser();
 	draw_data_prompt();
 	draw_about();
 	draw_quit_prompt();
@@ -540,19 +649,20 @@ void Editor::draw_menu() {
 	if (ImGui::BeginMenu("File")) {
 		if (ImGui::MenuItem(ICON_FILE_PLUS "  New Add-on...", nullptr, false, base_ != nullptr)) new_project_dialog();
 		if (ImGui::MenuItem(ICON_FOLDER_OPEN "  Open Add-on...", nullptr, false, base_ != nullptr)) open_project_dialog();
-		if (ImGui::BeginMenu(ICON_HISTORY "  Open Recent", !recent_.empty() && base_)) {
+		if (ImGui::BeginMenu(ICON_HISTORY "  Recent", !recent_.empty() && base_)) {
 			for (auto &r : recent_) {
-				if (ImGui::MenuItem(r.filename().string().c_str())) {
-					try {
-						set_project(ed::Project::open(*base_, r));
-					} catch (const std::exception &ex) {
-						log(LogLine::Error, ex.what());
-					}
+				if (ImGui::MenuItem(r.filename().string().c_str(), nullptr, false, fs::exists(r))) {
+					fs::path chosen = r;
+					open_project(chosen);
 					break;
 				}
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", path_utf8(r).c_str());
 			}
+			ImGui::Separator();
+			if (ImGui::MenuItem("Clear Recent")) recent_.clear();
 			ImGui::EndMenu();
 		}
+		if (ImGui::MenuItem(ICON_X "  Close Add-on", nullptr, false, has_project)) close_project();
 		ImGui::Separator();
 		if (ImGui::MenuItem(ICON_SAVE "  Save", "Ctrl+S", false, has_project)) save();
 		if (ImGui::MenuItem("Save As...", nullptr, false, has_project)) {
@@ -576,7 +686,7 @@ void Editor::draw_menu() {
 		ImGui::EndMenu();
 	}
 	if (ImGui::BeginMenu("Content")) {
-		if (ImGui::MenuItem(ICON_USER "  New Pilot...", nullptr, false, has_project)) new_pilot_dialog();
+		if (ImGui::MenuItem(ICON_USER "  New Pilot...", nullptr, false, base_ != nullptr)) new_pilot_dialog();
 		ImGui::MenuItem(ICON_BOT "  New HAR...", "later iteration", false, false);
 		ImGui::MenuItem(ICON_MOUNTAIN "  New Arena...", "later iteration", false, false);
 		ImGui::MenuItem(ICON_TROPHY "  New Tournament...", "later iteration", false, false);
@@ -609,15 +719,15 @@ void Editor::draw_menu() {
 void Editor::draw_doc_tabs() {
 	ImGui::SetCursorPosY(ImGui::GetWindowHeight() - ui::px(34));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::px(4), 0));
-	if (!project_) {
+	if (!base_) {
 		bool close = false;
 		ui::doc_tab("start", ICON_HEXAGON, "Start", true, false, &close);
 	}
-	for (size_t i = 0; project_ && i < docs_.size(); ++i) {
+	for (size_t i = 0; base_ && i < docs_.size(); ++i) {
 		bool close = false;
 		ImGui::PushID(int(i));
 		if (i) ImGui::SameLine();
-		bool dirty = i == 0 && project_->dirty();
+		bool dirty = i == 0 && project_ && project_->dirty();
 		if (ui::doc_tab("tab", docs_[i]->icon(), docs_[i]->title(*this), i == active_, docs_[i]->closable(), &close, dirty)) active_ = i;
 		ImGui::PopID();
 		if (close) {
@@ -640,7 +750,7 @@ void Editor::draw_toolbar() {
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::px(8), 0));
 	if (ui::toolbar_button(ICON_SAVE, "Save All", ui::Tone::Normal, has, "Write the add-on (Ctrl+S)")) save();
 	ImGui::SameLine();
-	if (ui::toolbar_button(ICON_FOLDER, "Content", ui::Tone::Normal, has, "Show the Content Browser")) focus_content_ = true, active_ = 0;
+	if (ui::toolbar_button(ICON_FOLDER, "Content", ui::Tone::Normal, base_ != nullptr, "Show the Content Browser")) focus_content_ = true, active_ = 0;
 	ImGui::SameLine();
 	if (ui::toolbar_button(ICON_CIRCLE_CHECK, "Validate", ui::Tone::Normal, has, "Run the add-on checks (F7)")) {
 		validate_now();
@@ -692,6 +802,8 @@ void Editor::draw_status() {
 	if (project_) {
 		if (project_->dirty()) right = "\xe2\x97\x8f Unsaved changes    ";
 		right += project_->path().filename().string() + " (Add-on)  |  " + kVersion;
+	} else if (base_) {
+		right = std::string("No add-on open  |  ") + kVersion;
 	} else {
 		right = kVersion;
 	}
@@ -709,31 +821,113 @@ void Editor::draw_start_page() {
 	ImGui::PushFont(fonts.semibold, kFontHeading);
 	ImGui::TextUnformatted("DEObjects Editor");
 	ImGui::PopFont();
-	ui::dim_text("Make pilots (and, in later iterations, HARs, arenas and tournaments) for One Must Fall: Battlegrounds 2.123. "
-	             "A project is one add-on .DEObjects file; the base game's files are never changed.");
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+	ui::dim_text("Browse and make content for One Must Fall: Battlegrounds 2.123. First, point the editor at the game's Data folder; "
+	             "it is only read, never changed.");
+	ImGui::PopTextWrapPos();
 	ImGui::Dummy(ImVec2(0, ui::px(12)));
-	if (!base_) {
-		if (ui::toolbar_button(ICON_FOLDER, "Choose the game's Data folder...")) data_prompt_ = true;
-	} else {
-		if (ui::toolbar_button(ICON_FILE_PLUS, "New Add-on...")) new_project_dialog();
+	if (ui::toolbar_button(ICON_FOLDER, "Choose the game's Data folder...", ui::Tone::Accent)) data_prompt_ = true;
+	ImGui::EndGroup();
+}
+
+void Editor::draw_welcome_card(ImVec2 p0, ImVec2 size) {
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	std::vector<fs::path> recent;
+	for (auto &r : recent_) {
+		if (fs::exists(r) && recent.size() < 5) recent.push_back(r);
+	}
+	float rows = recent.size() > 1 ? float(recent.size() - 1) : 0;
+	ImVec2 card(std::min(size.x - ui::px(40), ui::px(540)), ui::px(150) + (rows > 0 ? ui::px(30) + rows * ui::px(28) : 0));
+	card.y = std::min(card.y, size.y - ui::px(60));
+	ImVec2 c0 = p0 + (size - card) * 0.5f;
+	dl->AddRectFilled(c0, c0 + card, rgb(0x1d1e26, 240), ui::px(8));
+	dl->AddRect(c0, c0 + card, rgb(kBorder), ui::px(8));
+	ImGui::SetCursorScreenPos(c0);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ui::px(22), ui::px(18)));
+	ImGui::BeginChild("##welcome", card, ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+	ImGui::PopStyleVar();
+	ImGui::PushFont(fonts.semibold, kFontUi + 3);
+	ImGui::TextUnformatted("No add-on open");
+	ImGui::PopFont();
+	ImGui::PushTextWrapPos(card.x - ui::px(22));
+	ui::dim_text("The whole base game is in the Content Browser below: double-click anything to view it. To make your own content, "
+	             "open an add-on or start a new one.");
+	ImGui::PopTextWrapPos();
+	ImGui::Dummy(ImVec2(0, ui::px(4)));
+	if (!recent.empty()) {
+		std::string label = "Reopen " + recent.front().filename().string();
+		if (ui::toolbar_button(ICON_HISTORY, label.c_str(), ui::Tone::Accent, true, path_utf8(recent.front()).c_str())) open_project(recent.front());
 		ImGui::SameLine();
-		if (ui::toolbar_button(ICON_FOLDER_OPEN, "Open Add-on...")) open_project_dialog();
-		ImGui::Dummy(ImVec2(0, ui::px(16)));
-		if (!recent_.empty()) {
-			ui::dim_text("RECENT", kTextMuted);
-			for (auto &r : recent_) {
-				if (ImGui::Selectable((std::string(ICON_FILE_TEXT "  ") + r.filename().string() + "   " + r.parent_path().string()).c_str())) {
-					try {
-						set_project(ed::Project::open(*base_, r));
-					} catch (const std::exception &ex) {
-						log(LogLine::Error, ex.what());
-					}
-					break;
-				}
+	}
+	if (ui::toolbar_button(ICON_FOLDER_OPEN, "Open Add-on...", recent.empty() ? ui::Tone::Accent : ui::Tone::Normal)) open_project_dialog();
+	ImGui::SameLine();
+	if (ui::toolbar_button(ICON_FILE_PLUS, "New Add-on...")) new_project_dialog();
+	if (recent.size() > 1) {
+		ImGui::Dummy(ImVec2(0, ui::px(2)));
+		ui::dim_text("RECENT", kTextMuted);
+		for (size_t k = 1; k < recent.size(); ++k) {
+			ImGui::PushID(int(k));
+			std::string row = std::string(ICON_FILE_TEXT "  ") + recent[k].filename().string();
+			bool clicked = ImGui::Selectable(row.c_str(), false, 0, ImVec2(0, ui::px(24)));
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", path_utf8(recent[k]).c_str());
+			ImGui::PopID();
+			if (clicked) {
+				open_project(recent[k]);
+				break;
 			}
 		}
 	}
-	ImGui::EndGroup();
+	ImGui::EndChild();
+}
+
+void Editor::draw_addon_chooser() {
+	if (chooser_open_) ImGui::OpenPopup("Choose an Add-on"), chooser_open_ = false;
+	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(ui::px(580), 0), ImGuiCond_Appearing);
+	if (!ImGui::BeginPopupModal("Choose an Add-on", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	ImGui::PushTextWrapPos(ui::px(560));
+	ImGui::TextUnformatted(chooser_why_.c_str());
+	ImGui::PopTextWrapPos();
+	ImGui::Dummy(ImVec2(0, ui::px(4)));
+	std::function<void()> run;
+	auto then = chooser_then_;
+	std::vector<fs::path> recent;
+	for (auto &r : recent_) {
+		if (fs::exists(r)) recent.push_back(r);
+	}
+	if (!recent.empty()) {
+		ui::dim_text("RECENT ADD-ONS", kTextMuted);
+		for (size_t k = 0; k < recent.size(); ++k) {
+			ImGui::PushID(int(k));
+			std::string row = std::string(ICON_FILE_TEXT "  ") + recent[k].filename().string() + "    " + path_utf8(recent[k].parent_path());
+			if (ImGui::Selectable(row.c_str(), false, 0, ImVec2(ui::px(560), ui::px(26)))) {
+				fs::path chosen = recent[k];
+				run = [this, chosen, then] { open_project(chosen, then); };
+			}
+			ImGui::PopID();
+		}
+		ImGui::Dummy(ImVec2(0, ui::px(4)));
+	} else {
+		ui::dim_text("No recent add-ons yet: open one you have, or make a new one.", kTextMuted);
+		ImGui::Dummy(ImVec2(0, ui::px(2)));
+	}
+	if (ui::toolbar_button(ICON_FOLDER_OPEN, "Open Add-on...", recent.empty() ? ui::Tone::Accent : ui::Tone::Normal)) {
+		run = [this, then] { open_project_dialog(then); };
+	}
+	ImGui::SameLine();
+	if (ui::toolbar_button(ICON_FILE_PLUS, "New Add-on...")) run = [this, then] { new_project_dialog(then); };
+	ImGui::SameLine();
+	ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize("Cancel").x - ui::px(24));
+	if (ui::toolbar_button(nullptr, "Cancel")) {
+		chooser_then_ = {};
+		ImGui::CloseCurrentPopup();
+	}
+	if (run) {
+		chooser_then_ = {};
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+	if (run) run();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -744,10 +938,10 @@ void Editor::default_layout(ImGuiID id) {
 	ImGui::DockBuilderAddNode(id, ImGuiDockNodeFlags_DockSpace);
 	ImGui::DockBuilderSetNodeSize(id, ImGui::GetContentRegionAvail());
 	ImGuiID bottom, top, left, centre, right, right_top, right_bottom;
-	ImGui::DockBuilderSplitNode(id, ImGuiDir_Down, 0.33f, &bottom, &top);
+	ImGui::DockBuilderSplitNode(id, ImGuiDir_Down, 0.45f, &bottom, &top);
 	ImGui::DockBuilderSplitNode(top, ImGuiDir_Left, 0.15f, &left, &centre);
 	ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.24f, &right, &centre);
-	ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.52f, &right_top, &right_bottom);
+	ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.36f, &right_top, &right_bottom);
 	ImGui::DockBuilderDockWindow("###Place", left);
 	ImGui::DockBuilderDockWindow("###Viewport", centre);
 	ImGui::DockBuilderDockWindow("###Outliner", right_top);
@@ -872,7 +1066,11 @@ void Editor::draw_viewport() {
 	ImGui::SameLine();
 	ui::overlay_button(ICON_MAXIMIZE);
 	ImGui::PopStyleVar();
-	// The empty state.
+	if (!project_) {
+		draw_welcome_card(p0, size);
+		ImGui::End();
+		return;
+	}
 	ImVec2 card(std::min(size.x - ui::px(40), ui::px(440)), ui::px(150));
 	ImVec2 c0 = p0 + (size - card) * 0.5f;
 	dl->AddRectFilled(c0, c0 + card, rgb(0x1d1e26, 235), ui::px(8));
@@ -887,6 +1085,11 @@ void Editor::draw_viewport() {
 
 void Editor::draw_outliner() {
 	if (!ImGui::Begin(window_name(ICON_LIST_TREE, "Outliner", "Outliner").c_str())) {
+		ImGui::End();
+		return;
+	}
+	if (!project_) {
+		ui::centered_note(ICON_LIST_TREE, "No add-on open", "The Outliner lists an add-on's objects. Open one, or make a new one, from File or the welcome card.");
 		ImGui::End();
 		return;
 	}
@@ -918,7 +1121,7 @@ void Editor::draw_outliner() {
 				r.selected = selected_object_ == int(i);
 				r.icon_colour = info.class_text() == "Actor\\Creature\\Pilot" ? kAccentText : kTextDim;
 				ImGui::PushID(int(i));
-				if (ui::tree_row("obj", r)) selected_object_ = int(i);
+				if (ui::tree_row("obj", r)) selected_object_ = int(i), selection_ = ObjectRef::addon(info.guid);
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && info.class_text() == "Actor\\Creature\\Pilot") open_pilot(info.guid);
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", info.class_text().c_str());
 				ImGui::PopID();
@@ -963,230 +1166,11 @@ void Editor::draw_details() {
 		ImGui::End();
 		return;
 	}
-	const auto &objs = project_->file().objects;
-	if (selected_object_ < 0 || size_t(selected_object_) >= objs.size()) {
-		ui::centered_note(ICON_SLIDERS_HORIZONTAL, "Nothing selected", "Select an object in the Outliner to see its details.");
-		ImGui::End();
-		return;
+	if (!selection_) {
+		ui::centered_note(ICON_SLIDERS_HORIZONTAL, "Nothing selected", "Select an object in the Content Browser or the Outliner to see its details.");
+	} else {
+		draw_object_info(*this, selection_, false);
 	}
-	const deo::Object &o = objs[size_t(selected_object_)];
-	const std::string cls = o.info.class_text();
-	ImDrawList *dl = ImGui::GetWindowDrawList();
-	ImVec2 p = ImGui::GetCursorScreenPos();
-	float box = ui::px(40);
-	dl->AddRectFilled(p, p + ImVec2(box, box), rgb(kSelection), ui::px(6));
-	ImGui::PushFont(nullptr, 20);
-	ImVec2 is = ImGui::CalcTextSize(class_icon(cls));
-	dl->AddText(p + (ImVec2(box, box) - is) * 0.5f + ImVec2(0, ui::px(2)), rgb(0xd8d4ff), class_icon(cls));
-	ImGui::PopFont();
-	ImGui::SetCursorScreenPos(p + ImVec2(box + ui::px(12), 0));
-	ImGui::BeginGroup();
-	ImGui::PushFont(fonts.semibold, kFontUi + 1);
-	ImGui::TextUnformatted(utf8(o.info.name_text()).c_str());
-	ImGui::PopFont();
-	ui::dim_text(cls.c_str());
-	ImGui::EndGroup();
-	ImGui::Dummy(ImVec2(0, ui::px(6)));
-	const float label_w = ui::px(130);
-	auto row = [&](const char *label, const std::string &value, bool mono = false) {
-		ui::form_label(label, label_w);
-		ImGui::SetNextItemWidth(-1);
-		if (mono) ImGui::PushFont(fonts.mono, kFontSmall);
-		std::string v = value;
-		ImGui::InputText((std::string("##") + label).c_str(), &v, ImGuiInputTextFlags_ReadOnly);
-		if (mono) ImGui::PopFont();
-	};
-	if (ImGui::BeginTable("details", 1, ImGuiTableFlags_None)) {
-		ImGui::TableNextColumn();
-		row("Name", utf8(o.info.name_text()));
-		row("GUID", o.info.guid.str(), true);
-		row("Index", std::to_string(selected_object_), true);
-		row("Value 84", std::to_string(o.info.value84), true);
-		ui::form_label("Compressed", label_w);
-		bool c = o.compressed();
-		ui::checkbox("##compressed", &c, false);
-		row("Contents", std::to_string(o.contents.size()) + " bytes", true);
-		bool understood = false;
-		auto refs = ed::object_references(cls, o.references, &understood);
-		std::string targets;
-		for (auto &r : refs) {
-			if (r.kind == ed::Ref::Null) continue;
-			auto t = project_->target(r);
-			if (!targets.empty()) targets += ", ";
-			targets += t.local >= 0 ? utf8(objs[size_t(t.local)].info.name_text()) : ed::object_name(*project_, t.guid);
-		}
-		row("References", targets.empty() ? (understood ? "none" : "not decoded") : targets);
-		row("Extended data", std::to_string(o.ex.size()) + " entries");
-		ImGui::EndTable();
-	}
-	if (cls == "Actor\\Creature\\Pilot") {
-		ImGui::Dummy(ImVec2(0, ui::px(4)));
-		if (ui::toolbar_button(ICON_USER, "Open Pilot Editor")) open_pilot(o.info.guid);
-	}
-	ImGui::End();
-}
-
-void Editor::draw_content_browser() {
-	if (!ImGui::Begin(window_name(ICON_FOLDER, "Content Browser", "ContentBrowser").c_str())) {
-		ImGui::End();
-		return;
-	}
-	const float tree_w = ui::px(220);
-	ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0);
-	ImGui::BeginChild("tree", ImVec2(tree_w, 0));
-	static bool open_addon = true, open_base = false;
-	if (content_base_ && ImGui::GetFrameCount() < 3) open_base = true;
-	auto pilots = ed::addon_pilots(*project_);
-	ui::TreeRow root;
-	root.icon = ICON_FOLDER_OPEN, root.icon_colour = 0xd9b45a, root.label = project_->agent_name() + " (Add-on)";
-	root.has_children = true, root.open = &open_addon, root.selected = !content_base_ && content_folder_.empty();
-	if (ui::tree_row("addon", root)) content_base_ = false, content_folder_.clear();
-	struct Folder {
-		const char *name;
-		int count;
-		bool enabled;
-	};
-	if (open_addon) {
-		for (Folder f : {Folder{"Pilots", int(pilots.size()), true}, Folder{"HARs", 0, false}, Folder{"Arenas", 0, false}, Folder{"Tournaments", 0, false}}) {
-			ui::TreeRow r;
-			r.icon = ICON_FOLDER, r.icon_colour = f.enabled ? 0xd9b45a : 0x8a7a4a, r.label = f.name, r.count = f.count, r.depth = 1;
-			r.selected = !content_base_ && content_folder_ == f.name;
-			ImGui::PushID(f.name);
-			if (ui::tree_row("f", r)) content_base_ = false, content_folder_ = f.name;
-			ImGui::PopID();
-		}
-	}
-	ui::TreeRow base;
-	base.icon = ICON_LOCK, base.icon_colour = kTextMuted, base.label = "Base Game (Read-Only)", base.has_children = true, base.open = &open_base;
-	base.selected = content_base_ && content_folder_.empty();
-	if (ui::tree_row("base", base)) content_base_ = true, content_folder_.clear(), open_base = true;
-	if (open_base && base_) {
-		const int counts[4] = {int(base_->of_class("Description\\Pilot").size()), int(base_->of_class("Description\\Creature\\Fighter").size()),
-		                       int(base_->of_class("Description\\Environment").size()), int(base_->of_class("Description\\SessionMaster").size())};
-		const char *names[4] = {"Pilots", "HARs", "Arenas", "Tournaments"};
-		for (int k = 0; k < 4; ++k) {
-			ui::TreeRow r;
-			r.icon = ICON_FOLDER, r.icon_colour = 0x9a8f78, r.label = names[k], r.count = counts[k], r.depth = 1;
-			r.selected = content_base_ && content_folder_ == names[k];
-			ImGui::PushID(k);
-			if (ui::tree_row("b", r)) content_base_ = true, content_folder_ = names[k];
-			ImGui::PopID();
-		}
-	}
-	ImGui::EndChild();
-	ImGui::PopStyleVar();
-	ImGui::SameLine(0, 0);
-	{
-		ImVec2 a = ImGui::GetCursorScreenPos();
-		ImGui::GetWindowDrawList()->AddLine(a, a + ImVec2(0, ImGui::GetContentRegionAvail().y), rgb(kDivider));
-	}
-	ImGui::SameLine(0, ui::px(12));
-	ImGui::BeginChild("tiles", ImVec2(0, 0), 0);
-	// Filter row.
-	ImGui::AlignTextToFramePadding();
-	ui::dim_text("Type:", kTextDim);
-	ImGui::SameLine();
-	ImGui::SetNextItemWidth(ui::px(140));
-	if (ui::begin_combo("##type", content_type_.c_str())) {
-		for (const char *t : {"All", "Pilots", "HARs", "Arenas", "Tournaments"}) {
-			if (ImGui::Selectable(t, content_type_ == t)) content_type_ = t;
-		}
-		ImGui::EndCombo();
-	}
-	ImGui::SameLine();
-	ui::search_box("content", "Search content...", &content_filter_, ui::px(260));
-	if (!content_base_) {
-		ImGui::SameLine(ImGui::GetContentRegionMax().x - ui::px(130));
-		if (ui::toolbar_button(ICON_PLUS, "New Pilot", ui::Tone::Normal, true, nullptr, ImGui::GetFrameHeight())) new_pilot_dialog();
-	}
-	ImGui::Dummy(ImVec2(0, ui::px(4)));
-	ImGui::BeginChild("grid");
-	const ImVec2 tile_size(ui::px(170), ui::px(166));
-	const float gap = ui::px(16);
-	float avail = ImGui::GetContentRegionAvail().x;
-	int per_row = std::max(1, int((avail + gap) / (tile_size.x + gap)));
-	int n = 0;
-	auto place = [&] {
-		if (n % per_row) ImGui::SameLine(0, gap);
-		++n;
-	};
-	auto shows = [&](const char *folder) {
-		if (content_type_ != "All" && content_type_ != folder) return false;
-		return content_folder_.empty() || content_folder_ == folder;
-	};
-	if (!content_base_) {
-		if (shows("Pilots")) {
-			place();
-			ui::Tile add;
-			add.add = true, add.label = "New Pilot...";
-			if (ui::tile("newpilot", add, tile_size)) new_pilot_dialog();
-			for (uint32_t pi : pilots) {
-				const auto &info = project_->file().objects[pi].info;
-				std::string name = utf8(info.name_text());
-				if (!matches(name, content_filter_)) continue;
-				place();
-				ui::Tile t;
-				t.texture = (ImTextureID)(intptr_t)addon_photo_texture(*this, info.guid, addon_thumbs_);
-				t.icon = ICON_USER, t.label = name, t.is_new = true, t.selected = selected_tile_ == info.guid;
-				bool dbl = false;
-				ImGui::PushID(int(pi));
-				if (ui::tile("pilot", t, tile_size, &dbl)) selected_tile_ = info.guid, selected_object_ = int(pi);
-				if (dbl) open_pilot(info.guid);
-				if (ImGui::BeginPopupContextItem("ctx")) {
-					if (ImGui::MenuItem(ICON_USER "  Open Pilot Editor")) open_pilot(info.guid);
-					if (ImGui::MenuItem(ICON_IMAGE "  Import Photo...")) import_photo_dialog(info.guid);
-					ImGui::EndPopup();
-				}
-				ImGui::PopID();
-			}
-		}
-		const struct {
-			const char *folder, *label, *icon;
-		} later[] = {{"HARs", "New HAR...", ICON_BOT}, {"Arenas", "New Arena...", ICON_MOUNTAIN}, {"Tournaments", "New Tournament...", ICON_TROPHY}};
-		for (auto &l : later) {
-			if (!shows(l.folder) || (content_folder_.empty() && content_type_ == "All")) continue;
-			place();
-			ui::Tile add;
-			add.add = true, add.label = l.label, add.disabled = true;
-			ui::tile(l.folder, add, tile_size);
-			if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s editing arrives in a later iteration", l.folder);
-		}
-	} else if (base_) {
-		auto tiles = [&](const char *folder, const char *cls, const char *icon, unsigned tint) {
-			if (!shows(folder)) return;
-			std::vector<const ed::BaseObject *> list = base_->of_class(cls);
-			std::sort(list.begin(), list.end(), [](auto *a, auto *b) { return a->name < b->name; });
-			std::string last;
-			for (const ed::BaseObject *o : list) {
-				if (o->name == last || !matches(o->name, content_filter_)) continue;
-				last = o->name;
-				place();
-				ui::Tile t;
-				t.label = utf8(o->name), t.icon = icon, t.tint = tint;
-				if (std::string(cls) == "Description\\Pilot") t.texture = (ImTextureID)(intptr_t)base_pilot_texture(o->name);
-				t.sublabel = base_->files()[o->file].stem;
-				t.selected = selected_base_tile_ == o->name;
-				bool dbl = false;
-				ImGui::PushID(o);
-				if (ui::tile("b", t, tile_size, &dbl)) selected_base_tile_ = o->name;
-				if (std::string(cls) == "Description\\Pilot") {
-					if (dbl) new_pilot_dialog(o->name);
-					if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Double-click to make a new pilot from %s", o->name.c_str());
-					if (ImGui::BeginPopupContextItem("ctx")) {
-						if (ImGui::MenuItem(ICON_COPY "  New Pilot From This...")) new_pilot_dialog(o->name);
-						ImGui::EndPopup();
-					}
-				}
-				ImGui::PopID();
-			}
-		};
-		tiles("Pilots", "Description\\Pilot", ICON_USER, kTextMuted);
-		tiles("HARs", "Description\\Creature\\Fighter", ICON_BOT, 0x8fb8ff);
-		tiles("Arenas", "Description\\Environment", ICON_MOUNTAIN, 0xd9b45a);
-		tiles("Tournaments", "Description\\SessionMaster", ICON_TROPHY, 0xf5d36b);
-	}
-	ImGui::EndChild();
-	ImGui::EndChild();
 	ImGui::End();
 }
 
@@ -1298,6 +1282,10 @@ void Editor::run_command(const std::string &line) {
 	std::string cmd;
 	in >> cmd;
 	auto out = [&](const std::string &s) { console_history_.push_back(s); };
+	if (!project_ && cmd != "help" && !cmd.empty()) {
+		out("  no add-on open: open or create one first (File menu)");
+		return;
+	}
 	if (cmd == "help") {
 		out("help | pilots | casts | validate | save | launch | new-pilot <base> <name> | open <pilot>");
 	} else if (cmd == "pilots") {
@@ -1378,7 +1366,7 @@ void Editor::draw_new_pilot_popup() {
 			uint32_t made = ed::create_pilot(*project_, new_pilot_base_, new_pilot_name_);
 			log(LogLine::Ok, "New pilot " + new_pilot_name_ + " (a copy of " + new_pilot_base_ + ")");
 			open_pilot(project_->file().objects[made].info.guid);
-			selected_tile_ = project_->file().objects[made].info.guid;
+			select(ObjectRef::addon(project_->file().objects[made].info.guid));
 		} catch (const std::exception &ex) {
 			log(LogLine::Error, std::string("Cannot create the pilot: ") + ex.what());
 		}

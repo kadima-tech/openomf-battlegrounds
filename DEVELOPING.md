@@ -129,12 +129,44 @@ CMake fetches Dear ImGui (docking branch, pinned tag), and the fonts are built i
 `engine/third_party/fonts`.
 
 ```sh
-engine/build/openbg-editor --data source/patched/v2123/Data ~/Mods/MyMod.DEObjects
+engine/build/openbg-editor --data source/patched/v2123/Data              # browse; open or create an add-on from the UI
+engine/build/openbg-editor --data source/patched/v2123/Data ~/Mods/MyMod.DEObjects   # straight into an add-on
 ```
 
-Without `--data` it asks for the Data folder; without a project it shows a start page (New / Open
-Add-on). Settings, recent projects and the dock layout live in `<user data>/openbg/editor`
-(`layout.ini`; Tools > Reset Layout restores the default).
+Without `--data` it asks for the Data folder once (remembered). Settings, recent add-ons and the dock
+layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout restores the default).
+
+**Step by step**
+1. **Point it at the game.** Choose the 2.123 `Data` folder. Only the 65 files' headers are read at
+   start (about 20 ms for the 28k objects); a file's objects are read on a background thread the
+   first time something in it is shown, and kept.
+2. **Browse the base game.** The main window opens straight away with **no add-on open** (nothing is
+   created for you). The Content Browser's left side has the base game **By Type** (Pilots, HARs,
+   Arenas, Tournaments, Images, Meshes, Sounds, Music, Scripts, Descriptions, Values, Particles,
+   Materials, Animation, Scene, Other, with counts) or **By File** (every `.DEObjects`, expandable
+   into its folders). The right side shows tiles (thumbnails for images, pilot photos and
+   description icons, made a few per frame and cached; a class icon otherwise) or a list; the Type
+   filter and the search box work across all objects. Every base tile has a **BASE** badge; add-on
+   objects have **NEW**.
+3. **Look at anything.** A click selects it and fills **Details**: class, GUID, file, index, flags,
+   sizes, extended data, the fields the editor decodes (descriptions, pilots, images, values,
+   sounds, behaviors), parent and children, **References** and **Referenced by** (clickable; the
+   base game's reverse index is built on a background thread the first time it is needed), and the
+   raw chunks as hex. A double-click opens a viewer tab: images (fit / 1:1, R G B A channels),
+   Behavior scripts (read-only, syntax coloured), sounds (waveform, Play / Stop), HARs (the robot,
+   animated, drag to turn), base pilots in the pilot editor **read-only**. Meshes and music show their
+   data but no preview yet. In By File, a double-click on a folder goes into it.
+4. **Open or make an add-on.** File > Open Add-on, File > Recent, or the welcome card in the viewport
+   (Reopen <last>, Open, New, recent list). File > New Add-on asks where to save and writes the empty
+   add-on there. File > Close Add-on returns to browsing.
+5. **Make a pilot.** Base content is read-only: the original game cannot override a base object
+   (FINDINGS 430-437), so you copy it. Right-click a base pilot > Copy to Add-on, the Details
+   button, or the banner in the read-only pilot editor. Without an open add-on it first asks which
+   one (recent add-ons, Open..., New...); nothing is written until you choose. The copy (fresh
+   GUIDs, listed, unlocked, named "<Name> Copy") opens in the pilot editor. Content > New Pilot does
+   the same from a pilot you pick.
+6. **Edit, save, test.** Edit the pilot's tabs, Ctrl+S to save, F7 to validate, F5 to launch the
+   game with the add-on (below).
 
 - **This iteration:** the shell (menus, document tabs, toolbar, Place / Viewport / Outliner / Details,
   Content Browser, Output Log, Validation, Script Console, status bar) and the **pilot editor**:
@@ -150,9 +182,13 @@ Add-on). Settings, recent projects and the dock layout live in `<user data>/open
   `openbg --addon file.DEObjects` (repeatable) and `OPENBG_ADDONS` (paths separated by `:`, `;` on
   Windows; read by every program's `de::World`) load add-on files as if they were in `Data`.
 - **Scripted runs** for screenshots and checks: `--new-pilot Lucas:Jetta`, `--open-pilot Jetta`,
-  `--tab 0-4`, `--preview photo|robot`, `--photo file.png`, `--content Pilots`, `--base-content`,
+  `--tab 0-4`, `--preview photo|robot`, `--photo file.png`, `--content <type>`, `--base-content`,
+  `--browse-file <stem>`, `--open-base Class:Name`, `--select-base Class:Name`, `--copy-base <pilot>`,
   `--select <object>`, `--level`, `--save`, `--launch-game`, and `--screenshot out.png [--frames N]
   [--size WxH] [--scale S]` (a hidden window, 1600x1000 points at 2 pixels per point by default).
-- `editor-tests` (ctest `editor-pilot`) checks new pilot -> edit every field -> photo import -> save
-  -> reopen, then reads the add-on with the engine's own readers (`read_pilot`, descriptions, photo).
+- `editor-tests` (ctest `editor-pilot`) checks the base content index (object counts per type),
+  reference decoding and behavior source, new pilot -> edit every field -> photo import -> save ->
+  reopen (then the engine's own readers on the add-on), and copying a base pilot into a chosen,
+  existing add-on with nothing written before the add-on is chosen or saved.
+- Memory: files stay in memory once read; browsing every image in the game reads most of `Data`.
 

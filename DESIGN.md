@@ -154,9 +154,29 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   each closable); a toolbar (Save All, Content, Validate, Place, green Play, Simulate, Launch Game,
   Play Mode on the right); the level editor's dockable panels (Place left, Viewport centre, Outliner
   over Details right, Content Browser / Output Log / Validation / Script Console docked below); a
-  status bar ("Ready" left, "<add-on> (Add-on) | DE v2.123" right). Content Browser tiles are 170 x 166
-  with the name below, a NEW badge on add-on content and a violet border when selected; the first tile
-  is a dashed "+ New ..." tile.
+  status bar ("Ready" left, "<add-on> (Add-on) | DE v2.123" right, or "No add-on open"). The default
+  dock gives the bottom (Content Browser) 45% of the height and Details two thirds of the right column.
+- **No add-on open:** the full layout still shows; the viewport carries a small welcome card (title,
+  one line, a violet "Reopen <last>" button when there is one, Open / New Add-on, a short recent
+  list); the Outliner shows an empty state. Actions that need an add-on open a modal chooser
+  (recent add-ons, Open..., New..., Cancel). A violet "accent" button tone (#3a3566 fill, #5a4fc0
+  border, white text) marks the primary choice.
+- **Content Browser:** a 250 px tree (the add-on with its types and counts, or an "Open or create an
+  add-on..." row; a By Type / By File segmented toggle; "Base Game (Read-Only)" with a lock icon, then
+  types or files with folders) and a virtualised grid of 150 x 160 tiles (or a list: name, class,
+  file, BASE / NEW). Tiles show the thumbnail fitted on a checkerboard (pilot photos fill the tile)
+  or the class icon tinted by type, the name, the short class below, a grey "BASE" badge on base
+  content (green "NEW" on add-on content) and a violet border when selected. A breadcrumb (file >
+  folders, Up) sits over the grid in By File.
+- **Viewer tabs** (any object): a large preview panel on the left (image with channel toggles and
+  fit / 1:1; a code view for scripts; a waveform with a green Play; the animated robot) and a 380-560
+  px info panel on the right: name, class, a violet-bordered read-only banner with a lock for base
+  content, then Details' sections (SeparatorText headings, label / value tables, violet links).
+- **Code view:** JetBrains Mono 13 px on #16171d with faint line numbers; comments #6a9955, strings
+  #ce9178, numbers #b5cea8, keywords #c586c0, types (C/E/B + capital) #4ec9b0, members and globals
+  (`m_`, `g_`) #9cdcfe.
+- **Read-only pilot:** the pilot editor with a "BASE GAME - READ-ONLY" badge by the heading, a banner
+  with "Copy to Add-on..." (accent), and dimmed, disabled fields.
 - **Asset editors:** the pilot editor puts a tall in-engine preview (photo, or the robot in the
   pilot's paint) with a "Preview (in-engine)" footer on the left, and on the right the heading, tabs
   (General / Attributes / AI Traits / Paint / Casts & Flags) over a violet underline, and a footer of

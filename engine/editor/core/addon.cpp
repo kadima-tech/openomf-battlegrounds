@@ -187,16 +187,70 @@ BaseData::BaseData(const fs::path &dir) : dir_(dir) {
 			fi.agent = f.master.guid;
 			for (uint32_t i = 0; i < f.objects.size(); ++i) {
 				const deo::Info &info = f.objects[i].info;
-				fi.objects.push_back({files_.size(), i, info.name_text(), info.class_text(), info.guid});
+				BaseObject o{files_.size(), i, info.name_text(), info.class_text(), info.guid};
+				o.category = category_of(o.class_path);
+				o.search = o.name + "\n" + o.class_path;
+				for (char &ch : o.search) ch = char(tolower(uint8_t(ch)));
+				fi.objects.push_back(std::move(o));
 			}
 			files_.push_back(std::move(fi));
 		} catch (const deo::Error &) {
 		}
 	}
 	if (files_.empty()) throw deo::Error("no .DEObjects files in " + dir.string());
+	categories_.resize(kCategoryCount);
 	for (auto &f : files_) {
-		for (auto &o : f.objects) guids_.emplace(guid_key(o.guid), &o);
+		for (auto &o : f.objects) {
+			guids_.emplace(guid_key(o.guid), &o);
+			categories_[size_t(o.category)].push_back(&o);
+		}
 	}
+}
+
+BaseData::~BaseData() {
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		stop_ = true;
+	}
+	wake_.notify_all();
+	if (thread_.joinable()) thread_.join();
+}
+
+void BaseData::worker() {
+	for (;;) {
+		size_t file;
+		{
+			std::unique_lock<std::mutex> lock(mutex_);
+			wake_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+			if (stop_) return;
+			file = queue_.front();
+			queue_.pop_front();
+			if (models_.count(file)) continue;
+		}
+		std::unique_ptr<deo::File> m;
+		try {
+			m = std::make_unique<deo::File>(deo::File::read(read_all(files_.at(file).path)));
+		} catch (const std::exception &) {
+			m = std::make_unique<deo::File>();
+		}
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (!models_.count(file)) models_[file] = std::move(m);
+	}
+}
+
+const deo::File *BaseData::model_async(size_t file) const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	auto it = models_.find(file);
+	if (it != models_.end()) return it->second.get();
+	if (std::find(queue_.begin(), queue_.end(), file) == queue_.end()) queue_.push_back(file);
+	if (!thread_.joinable()) thread_ = std::thread([this] { const_cast<BaseData *>(this)->worker(); });
+	wake_.notify_one();
+	return nullptr;
+}
+
+bool BaseData::loaded(size_t file) const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return models_.count(file) != 0;
 }
 
 const BaseObject *BaseData::by_guid(const Guid &g) const {
@@ -222,9 +276,16 @@ std::vector<const BaseObject *> BaseData::of_class(const std::string &class_path
 }
 
 const deo::File &BaseData::model(size_t file) const {
-	auto &m = models_[file];
-	if (!m) m = std::make_unique<deo::File>(deo::File::read(read_all(files_.at(file).path)));
-	return *m;
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		auto it = models_.find(file);
+		if (it != models_.end()) return *it->second;
+	}
+	auto m = std::make_unique<deo::File>(deo::File::read(read_all(files_.at(file).path)));
+	std::lock_guard<std::mutex> lock(mutex_);
+	auto &slot = models_[file];
+	if (!slot) slot = std::move(m);
+	return *slot;
 }
 
 size_t BaseData::object_count() const {
@@ -419,7 +480,7 @@ Bytes guid_bytes(const Guid &g) { return Bytes(g.b, g.b + 16); }
 
 }  // namespace
 
-std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uint32_t> &roots) {
+std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uint32_t> &roots, std::map<uint32_t, uint32_t> *source_to_copy) {
 	const deo::File &src = base_.model(file);
 	const Guid src_agent = src.master.guid;
 	std::set<uint32_t> set;
@@ -493,6 +554,7 @@ std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uin
 		made.push_back(std::move(o));
 	}
 	for (auto &o : made) file_.objects.push_back(std::move(o));
+	if (source_to_copy) *source_to_copy = local;
 	touch();
 	std::vector<uint32_t> out;
 	for (uint32_t r : roots) out.push_back(local.at(r));

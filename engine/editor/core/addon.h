@@ -2,12 +2,16 @@
 // .DEObjects that adds objects with fresh GUIDs (docs/EDITOR_SPEC.md §1, §7).
 #pragma once
 
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "de/objects_model.h"
@@ -46,17 +50,43 @@ struct Ref {
 Ref read_ref(deo::Reader &r);
 void write_ref(deo::Writer &w, const Ref &ref);
 
+enum class Category : int {
+	Pilots,
+	Robots,
+	Arenas,
+	Tournaments,
+	Images,
+	Meshes,
+	Sounds,
+	Music,
+	Scripts,
+	Descriptions,
+	Values,
+	Particles,
+	Materials,
+	Animation,
+	Scene,
+	Other,
+	Count
+};
+constexpr int kCategoryCount = int(Category::Count);
+Category category_of(const std::string &class_path);
+const char *category_name(Category c);
+
 // An object of the base data, from the files' headers.
 struct BaseObject {
 	size_t file = 0;  // index into BaseData::files()
 	uint32_t index = 0;
 	std::string name, class_path;
 	Guid guid;
+	Category category = Category::Other;
+	std::string search;  // lower-case name and class path
 };
 
 class BaseData {
 public:
 	explicit BaseData(const std::filesystem::path &dir);
+	~BaseData();
 	struct FileIndex {
 		std::string stem;
 		std::filesystem::path path;
@@ -69,15 +99,26 @@ public:
 	const BaseObject *by_guid(const Guid &g) const;
 	const FileIndex *file(const std::string &stem) const;
 	std::vector<const BaseObject *> of_class(const std::string &class_path) const;
-	// The whole file, read once and kept.
+	const std::vector<const BaseObject *> &category(Category c) const { return categories_[size_t(c)]; }
+	// The whole file, read once and kept (safe from any thread).
 	const deo::File &model(size_t file) const;
+	// The file when it is already read; otherwise queues it for a background read and returns null.
+	const deo::File *model_async(size_t file) const;
+	bool loaded(size_t file) const;
 	size_t object_count() const;
 
 private:
+	void worker();
 	std::filesystem::path dir_;
 	std::vector<FileIndex> files_;
 	std::map<std::string, const BaseObject *> guids_;
+	std::vector<std::vector<const BaseObject *>> categories_;
+	mutable std::mutex mutex_;
+	mutable std::condition_variable wake_;
 	mutable std::map<size_t, std::unique_ptr<deo::File>> models_;
+	mutable std::deque<size_t> queue_;
+	mutable std::thread thread_;
+	mutable bool stop_ = false;
 };
 
 // A project: the add-on file, edited in memory and written by save().
@@ -112,7 +153,8 @@ public:
 	// Deep copy of base objects and everything under them, with fresh GUIDs. References to
 	// copied objects follow the copies; others go through the GUID pool. Returns the new
 	// indices of `roots`. Throws deo::Error for a class whose references are not understood.
-	std::vector<uint32_t> copy_from_base(size_t file, const std::vector<uint32_t> &roots);
+	std::vector<uint32_t> copy_from_base(size_t file, const std::vector<uint32_t> &roots,
+	                                     std::map<uint32_t, uint32_t> *source_to_copy = nullptr);
 	// The object a reference in this file names: a local index or a GUID from the pool.
 	struct Target {
 		int local = -1;

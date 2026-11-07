@@ -371,17 +371,20 @@ uint32_t create_pilot(Project &p, const std::string &base_pilot, const std::stri
 	const BaseData &base = p.base();
 	for (size_t f = 0; f < base.files().size(); ++f) {
 		for (const BaseObject &bo : base.files()[f].objects) {
-			if (bo.class_path != "Actor\\Creature\\Pilot" || bo.name != base_pilot) continue;
-			uint32_t made = p.copy_from_base(f, {bo.index}).at(0);
-			PilotObjects o = pilot_objects(p, made);
-			PilotData d = read_pilot(p, o);
-			d.name = name;
-			d.listed = true, d.locked = false;
-			write_pilot(p, o, d);
-			return made;
+			if (bo.class_path == "Actor\\Creature\\Pilot" && bo.name == base_pilot) return create_pilot(p, bo, name);
 		}
 	}
 	throw deo::Error("no pilot named " + base_pilot + " in the base data");
+}
+
+uint32_t create_pilot(Project &p, const BaseObject &base_pilot, const std::string &name) {
+	uint32_t made = p.copy_from_base(base_pilot.file, {base_pilot.index}).at(0);
+	PilotObjects o = pilot_objects(p, made);
+	PilotData d = read_pilot(p, o);
+	d.name = name;
+	d.listed = true, d.locked = false;
+	write_pilot(p, o, d);
+	return made;
 }
 
 void import_photo(Project &p, const PilotObjects &o, int width, int height, const std::vector<uint8_t> &rgba,

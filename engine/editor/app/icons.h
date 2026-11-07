@@ -97,6 +97,21 @@
 #define ICON_X "\xee\x86\xb1"
 #define ICON_ZAP "\xee\x86\xb3"
 
+#define ICON_ARROW_LEFT "\xee\x81\x8c"
+#define ICON_AUDIO_LINES "\xee\x95\x9e"
+#define ICON_BOOK_OPEN "\xee\x81\xa3"
+#define ICON_BRACES "\xee\x8d\xad"
+#define ICON_CODE "\xee\x82\x97"
+#define ICON_EYE_OFF "\xee\x82\xbf"
+#define ICON_FILE "\xee\x83\x84"
+#define ICON_FILES "\xee\x83\x93"
+#define ICON_FOLDER_TREE "\xee\x8c\xbf"
+#define ICON_HASH "\xee\x83\xb2"
+#define ICON_LINK "\xee\x84\x87"
+#define ICON_MUSIC "\xee\x84\xa5"
+#define ICON_PACKAGE_OPEN "\xee\x8b\x8b"
+#define ICON_PAINTBRUSH "\xee\x8b\xa6"
+#define ICON_SPLINE "\xee\x8e\x8e"
 #define ICON_MAXIMIZE "\xee\x84\x95"
 
 #define ICON_MIN 0xe000

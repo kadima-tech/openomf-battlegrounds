@@ -2,6 +2,7 @@
 // pilot's colours), the pilot's fields in tabs on the right.
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 #include "editor.h"
 #include "icons.h"
@@ -15,25 +16,42 @@ using namespace theme;
 
 class PilotDocument : public Document {
 public:
-	PilotDocument(Editor &e, const ed::Guid &g) : guid_(g) {
+	PilotDocument(Editor &e, const ed::Guid &g) : guid_(g) { init(e); }
+	// A base pilot, read-only: a private copy to read it with the add-on code, never saved.
+	PilotDocument(Editor &e, const ed::BaseObject &base) : base_(&base) {
+		scratch_ = std::make_unique<ed::Project>(*e.base(), "", ed::Project::create(*e.base(), "BaseView.DEObjects")->file());
+		uint32_t made = scratch_->copy_from_base(base.file, {base.index}, &copies_).at(0);
+		guid_ = scratch_->file().objects[made].info.guid;
+		init(e);
+	}
+	~PilotDocument() override { delete_texture(photo_); }
+	std::string title(Editor &e) const override {
+		const ed::Project *p = scratch_ ? scratch_.get() : e.project();
+		int i = p ? p->find(guid_) : -1;
+		if (i < 0) return "Pilot";
+		const auto &n = p->file().objects[size_t(i)].info.name;
+		return "Pilot: " + deo::latin1_to_utf8(deo::Bytes(n.begin(), n.end() - (n.empty() ? 0 : 1))) + (base_ ? "  (Base)" : "");
+	}
+	const char *icon() const override { return base_ ? ICON_LOCK : ICON_USER; }
+	bool alive(Editor &e) const override { return base_ || e.find_object(guid_) >= 0; }
+	bool addon_content() const override { return !base_; }
+	bool shows(const ObjectRef &r) const override {
+		if (base_) return r.kind == ObjectRef::Base && r.file == base_->file && r.index == base_->index;
+		return r.kind == ObjectRef::Addon && r.guid == guid_;
+	}
+	void draw(Editor &e) override;
+	const ed::Guid &guid() const { return guid_; }
+	bool read_only() const { return base_ != nullptr; }
+
+private:
+	void init(Editor &e) {
 		const Options &o = e.options();
 		tab_ = std::clamp(o.pilot_tab, 0, 4);
 		robot_ = o.preview == "robot" || (o.preview.empty() && tab_ == 3);
 		paint_seen_ = tab_ == 3;
 	}
-	~PilotDocument() override { delete_texture(photo_); }
-	std::string title(Editor &e) const override {
-		int i = e.find_object(guid_);
-		if (i < 0) return "Pilot";
-		const auto &n = e.project()->file().objects[size_t(i)].info.name;
-		return "Pilot: " + deo::latin1_to_utf8(deo::Bytes(n.begin(), n.end() - (n.empty() ? 0 : 1)));
-	}
-	const char *icon() const override { return ICON_USER; }
-	bool alive(Editor &e) const override { return e.find_object(guid_) >= 0; }
-	void draw(Editor &e) override;
-	const ed::Guid &guid() const { return guid_; }
-
-private:
+	ed::Project &proj(Editor &e) { return scratch_ ? *scratch_ : *e.project(); }
+	void read_only_banner(Editor &e);
 	void draw_preview(Editor &e, ImVec2 size);
 	void draw_form(Editor &e, ImVec2 size, const ed::PilotObjects &objs);
 	void general(Editor &e);
@@ -45,6 +63,9 @@ private:
 	void footer_bar(Editor &e, const ed::PilotObjects &objs);
 
 	ed::Guid guid_;
+	const ed::BaseObject *base_ = nullptr;
+	std::unique_ptr<ed::Project> scratch_;
+	std::map<uint32_t, uint32_t> copies_;  // base file index -> scratch index
 	ed::PilotData data_, committed_;
 	uint64_t read_revision_ = 0;
 	int tab_ = 0;
@@ -62,9 +83,13 @@ private:
 
 std::unique_ptr<Document> make_pilot_document(Editor &e, const ed::Guid &pilot) { return std::make_unique<PilotDocument>(e, pilot); }
 
+std::unique_ptr<Document> make_base_pilot_document(Editor &e, const ed::BaseObject &pilot) {
+	return std::make_unique<PilotDocument>(e, pilot);
+}
+
 bool pilot_document_is(const Document *d, const ed::Guid &pilot) {
 	auto *p = dynamic_cast<const PilotDocument *>(d);
-	return p && p->guid() == pilot;
+	return p && !p->read_only() && p->guid() == pilot;
 }
 
 namespace {
@@ -75,7 +100,8 @@ const char *const kSexes[3] = {"Male", "Female", "Undefined"};
 }  // namespace
 
 void PilotDocument::draw(Editor &e) {
-	ed::Project &p = *e.project();
+	if (!scratch_ && !e.project()) return;
+	ed::Project &p = proj(e);
 	int idx = p.find(guid_);
 	if (idx < 0) return;
 	ed::PilotObjects objs = ed::pilot_objects(p, uint32_t(idx));
@@ -97,6 +123,7 @@ void PilotDocument::draw(Editor &e) {
 	ImGui::SameLine(0, pad);
 	draw_form(e, ImVec2(avail.x - left - pad * 3, h), objs);
 	ImGui::PopID();
+	if (base_) data_ = committed_;
 	if (!(data_ == committed_)) {
 		try {
 			ed::write_pilot(p, objs, data_);
@@ -119,7 +146,7 @@ void PilotDocument::draw_preview(Editor &e, ImVec2 size) {
 		float rad = std::min(size.x, size.y) * 0.12f * float(k);
 		dl->AddCircleFilled(ImVec2((p0.x + p1.x) * 0.5f, p0.y + (p1.y - p0.y) * 0.36f), rad, rgb(0x3a3352, 14), 64);
 	}
-	ed::Project &p = *e.project();
+	ed::Project &p = proj(e);
 	if (!robot_) {
 		if (photo_revision_ != p.revision()) {
 			int idx = p.find(guid_);
@@ -225,6 +252,12 @@ void PilotDocument::draw_form(Editor &e, ImVec2 size, const ed::PilotObjects &ob
 	ImGui::PushFont(fonts.semibold, kFontHeading);
 	ImGui::TextUnformatted(("Pilot: " + data_.name).c_str());
 	ImGui::PopFont();
+	if (base_) {
+		ImGui::SameLine(0, ui::px(12));
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ui::px(6));
+		ui::badge(ICON_LOCK " BASE GAME  -  READ-ONLY", 0x3b3d4b, kTextSoft);
+		read_only_banner(e);
+	}
 	ImGui::Dummy(ImVec2(0, ui::px(2)));
 	int before = tab_;
 	ui::tab_strip("tabs", {"General", "Attributes", "AI Traits (31)", "Paint", "Casts & Flags"}, &tab_);
@@ -234,6 +267,10 @@ void PilotDocument::draw_form(Editor &e, ImVec2 size, const ed::PilotObjects &ob
 	ImGui::Dummy(ImVec2(0, ui::px(16)));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::px(8), ui::px(16)));
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ui::px(11), ui::px(9)));
+	ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 0.6f);
+	ImGui::PushStyleColor(ImGuiCol_Text, vec(base_ ? kTextMuted : kText));
+	ImGui::PushStyleColor(ImGuiCol_FrameBg, vec(base_ ? kPanel : kInput));
+	ImGui::BeginDisabled(base_ != nullptr);
 	switch (tab_) {
 		case 0: general(e); break;
 		case 1: attributes(); break;
@@ -241,10 +278,34 @@ void PilotDocument::draw_form(Editor &e, ImVec2 size, const ed::PilotObjects &ob
 		case 3: paint(); break;
 		default: casts_and_flags(e, objs); break;
 	}
-	ImGui::PopStyleVar(2);
+	ImGui::EndDisabled();
+	ImGui::PopStyleColor(2);
+	ImGui::PopStyleVar(3);
 	ImGui::EndChild();
 	footer_bar(e, objs);
 	ui::end_panel();
+}
+
+void PilotDocument::read_only_banner(Editor &e) {
+	ImGui::Dummy(ImVec2(0, ui::px(4)));
+	ImVec2 p = ImGui::GetCursorScreenPos();
+	float w = ImGui::GetContentRegionAvail().x;
+	const float h = ui::px(58);
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	dl->AddRectFilled(p, p + ImVec2(w, h), rgb(0x24233a), ui::px(6));
+	dl->AddRect(p, p + ImVec2(w, h), rgb(kSelection), ui::px(6));
+	const char *text = "The original game can't override a base pilot, so base pilots are read-only. Copy this one to an add-on "
+	                   "(fresh GUIDs, listed and unlocked) and edit the copy.";
+	const char *button = ICON_COPY "  Copy to Add-on...";
+	float bw = ImGui::CalcTextSize(button).x + ui::px(30);
+	ImGui::SetCursorScreenPos(p + ImVec2(ui::px(14), ui::px(10)));
+	ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - bw - ui::px(40));
+	ui::dim_text(text, kTextSoft);
+	ImGui::PopTextWrapPos();
+	ImGui::SetCursorScreenPos(ImVec2(p.x + w - bw - ui::px(12), p.y + (h - ui::px(34)) * 0.5f));
+	if (ui::toolbar_button(nullptr, button, ui::Tone::Accent, true, "Copy into the open add-on (or choose one)", ui::px(34))) e.copy_pilot_to_addon(*base_);
+	ImGui::SetCursorScreenPos(p + ImVec2(0, h + ui::px(4)));
+	ImGui::Dummy(ImVec2(0, 0));
 }
 
 void PilotDocument::general(Editor &e) {
@@ -292,7 +353,7 @@ void PilotDocument::casts_editor(Editor &e) {
 	for (size_t k = 0; k < data_.casts.size(); ++k) {
 		ImGui::PushID(int(k));
 		ui::form_label(k == 0 ? "Casts" : "", lw);
-		std::string name = ed::object_name(*e.project(), data_.casts[k]);
+		std::string name = ed::object_name(proj(e), data_.casts[k]);
 		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - fh - ui::px(12));
 		ImGui::InputText("##cast", &name, ImGuiInputTextFlags_ReadOnly);
 		ImGui::SameLine();
@@ -470,11 +531,20 @@ void PilotDocument::casts_and_flags(Editor &e, const ed::PilotObjects &objs) {
 	ui::checkbox("##visible", &data_.visible_when_locked);
 	casts_editor(e);
 	ImGui::Dummy(ImVec2(0, ui::px(4)));
-	ImGui::SeparatorText("Objects in the add-on");
-	ed::Project &p = *e.project();
+	ImGui::SeparatorText(base_ ? "Objects in the base game" : "Objects in the add-on");
+	ed::Project &p = proj(e);
 	auto row = [&](const char *label, int index) {
 		ui::form_label(label, lw);
 		std::string v = index >= 0 ? p.file().objects[size_t(index)].info.guid.str() + "   #" + std::to_string(index) : "(none)";
+		if (base_ && index >= 0) {
+			v = "(none)";
+			for (auto &[from, to] : copies_) {
+				if (int(to) == index) {
+					const auto &o = e.base()->files()[base_->file].objects[from];
+					v = o.guid.str() + "   " + e.base()->files()[base_->file].stem + " #" + std::to_string(from);
+				}
+			}
+		}
 		ImGui::SetNextItemWidth(-ui::px(4));
 		ImGui::PushFont(fonts.mono, kFontSmall);
 		ImGui::InputText((std::string("##") + label).c_str(), &v, ImGuiInputTextFlags_ReadOnly);
@@ -493,6 +563,11 @@ void PilotDocument::footer_bar(Editor &e, const ed::PilotObjects &objs) {
 	dl->AddLine(ImVec2(ImGui::GetWindowPos().x, p.y), ImVec2(ImGui::GetWindowPos().x + w, p.y), rgb(kBorder));
 	ImGui::SetCursorScreenPos(p + ImVec2(0, (ui::px(48) - ImGui::GetFontSize()) * 0.5f));
 	ImGui::PushFont(nullptr, kFontSmall);
+	if (base_) {
+		ui::status_chip(ICON_LOCK, ("Base game pilot from " + e.base()->files()[base_->file].stem + ".DEObjects: read-only").c_str(), kTextDim);
+		ImGui::PopFont();
+		return;
+	}
 	bool guids_ok = false;
 	std::vector<const ed::Issue *> mine;
 	for (auto &i : e.issues()) {
