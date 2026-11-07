@@ -688,15 +688,25 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 					v = {rand_to(w, m.box[3] - m.box[0]) + m.box[0], rand_to(w, m.box[4] - m.box[1]) + m.box[1],
 					     rand_to(w, m.box[5] - m.box[2]) + m.box[2]};
 				} else if (m.kind == "MeshSpawner" && !m.mesh_vertices.empty()) {
+					// DE_CMeshSpawner::CommonSpawnerNewParticles (Particles 0x4000d000): order 0 a random
+					// vertex, 1 forwards and 2 backwards round the mesh; 3 forwards and 4 backwards once,
+					// the pass's end dropping this and the other new particles and stopping the instance.
 					int n = int(m.mesh_vertices.size());
-					int k = 0;
-					if (m.mesh_order == 0) {
-						k = std::min(n - 1, int(random01(w) * float(n)));
-					} else if (m.mesh_order == 2) {
-						if (pm.serial <= 0) pm.serial = n;
-						k = --pm.serial % n;
-					} else {
-						k = (p.serial % n + n) % n;
+					int &next = pm.mesh_next;
+					int k = std::clamp(next, 0, n - 1);
+					bool pass_done = false;
+					switch (m.mesh_order) {
+					case 0: k = std::min(n - 1, int(random01(w) * float(n))); break;
+					case 1: if (++next >= n) next = 0; break;
+					case 2: if (next < 1) next = n; --next; break;
+					case 3: if (++next >= n) next = 0, pass_done = true; break;
+					case 4: if (next < 1) next = n, pass_done = true; else --next; break;
+					default: break;
+					}
+					if (pass_done) {
+						for (size_t j = i; j < in.particles.size(); ++j) in.particles[j].flags &= ~(kAlive | kNew);
+						in.spawning = false;
+						break;
 					}
 					v = m.mesh_vertices[size_t(k)];
 				}

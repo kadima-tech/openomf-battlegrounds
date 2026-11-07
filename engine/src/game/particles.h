@@ -82,6 +82,7 @@ struct ParticleInstance {
 		int32_t serial = 0;
 		int32_t initial = 0;
 		int32_t mesh_burst = 0;  // DE_CMeshSpawner::Begin: one particle per vertex, once
+		int32_t mesh_next = 0;   // DE_CMeshSpawner's instance data +4: the next vertex (orders 1-4)
 		float kill_countdown = 5000;  // DE_CKillWithParticles +0x74 (ms; 999999 once it has killed)
 		bool beam_done = false;       // DE_CBeamSpawner's instance flag: the beam is laid once
 		std::array<float, 3> bolt_target{};  // DE_CLighteningSpawner's instance data: the target's last position

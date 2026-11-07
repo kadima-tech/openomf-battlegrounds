@@ -543,7 +543,7 @@ static int cmd_particles(const char *dir, const char *only) {
 					printf(" | box %g,%g,%g..%g,%g,%g wrap %d%d%d", m.box[0], m.box[1], m.box[2], m.box[3], m.box[4], m.box[5],
 					       m.wrap[0], m.wrap[1], m.wrap[2]);
 				} else if (m.kind == "MeshSpawner") {
-					printf(" | burst %d mesh %s", m.mesh_burst, m.mesh ? m.mesh.info().name.c_str() : "-");
+					printf(" | burst %d order %d mesh %s", m.mesh_burst, m.mesh_order, m.mesh ? m.mesh.info().name.c_str() : "-");
 				} else if (m.kind == "LighteningSpawner") {
 					printf(" | jitter %g min %g 78 %g,%g,%g,%g 8c %d 90 %g 94 %d taper %d follow %d targets", m.bolt_jitter, m.bolt_min_segment, m.bolt_78[0],
 					       m.bolt_78[1], m.bolt_78[2], m.bolt_78[3], m.bolt_8c, m.bolt_90, m.bolt_94, m.bolt_taper, m.bolt_follow);
