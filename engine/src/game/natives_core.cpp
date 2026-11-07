@@ -190,6 +190,7 @@ void register_core_natives(World &w) {
 			return;
 		}
 		bool was = in_scene(*o);
+		const GameObject *scene_before = c.world.actor_scene(o);
 		if (o->parent) {
 			auto &v = o->parent->children;
 			v.erase(std::remove(v.begin(), v.end(), o), v.end());
@@ -197,6 +198,13 @@ void register_core_natives(World &w) {
 		o->parent = p;
 		if (p) {
 			p->children.push_back(o);
+		}
+		// DE_CActor::ObjSetParent (Core 0x7008afb0): an actor joining an actor of another scene is
+		// added to that scene (vtable +0x130), its passive references created and executors started.
+		if (!scene_before && c.world.actor_scene(o)) {
+			if (o->is("Actor\\PassiveReference") && o->file) o = c.world.resolve_passive_reference(o);
+			if (o) c.world.prepare_branch(o);
+			return;
 		}
 		c.world.parented(o, was);
 	});

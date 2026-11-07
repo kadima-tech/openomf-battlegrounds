@@ -399,6 +399,13 @@ void World::parented(GameObject *o, bool was_in_scene) {
 	number_affectors(o);
 }
 
+const GameObject *World::actor_scene(const GameObject *o) const {
+	if (!o || !o->is_actor) return nullptr;
+	while (o->parent && o->parent->is_actor) o = o->parent;
+	if (o->parent || !in_scene(*o)) return nullptr;
+	return std::find(scene_roots.begin(), scene_roots.end(), o) != scene_roots.end() ? o : nullptr;
+}
+
 void World::number_affectors(GameObject *root) {
 	if (!root) return;
 	for (auto it = root->children.rbegin(); it != root->children.rend(); ++it) {
@@ -992,7 +999,7 @@ void register_combat_natives(World &w) {
 		if (!a || !t) return false;
 		t->results.clear();
 		std::vector<const GameObject *> owners;
-		for (auto &ct : touches(c.world, *a, t->groups)) {
+		for (auto &ct : touches(c.world, *a, t->groups, false, true)) {
 			GameObject *owner = c.world.affector_owner(ct.touched);
 			if (t->no_repeat_owners) {
 				if (std::find(owners.begin(), owners.end(), owner) != owners.end()) continue;

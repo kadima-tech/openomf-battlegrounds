@@ -354,9 +354,9 @@ std::optional<Contact> touch(World &w, GameObject &source, GameObject &target) {
 	}
 }
 
-std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups, bool physics) {
+std::vector<Contact> touches(World &w, GameObject &source, uint32_t groups, bool physics, bool scripted) {
 	std::vector<Contact> out;
-	GameObject *self = top_fighter(&source);
+	GameObject *self = scripted ? nullptr : top_fighter(&source);
 	// Its first test starts the line where it stands (ObjPrepare's +0x13c).
 	if (source.swept && w.swept_affectors.insert(&source).second) source.swept_from = source.world().t;
 	w.walk_affectors(groups, [&](GameObject *target, bool record) {
@@ -1361,7 +1361,7 @@ void register_force_natives(World &w) {
 	// IsTouching(groups): is the affector touching anything in those groups?
 	reg("CAffector::bool IsTouching(dword)", [](const NativeContext &c) {
 		GameObject *a = c.self();
-		c.ret_bool(a && !touches(c.world, *a, c.arg<uint32_t>(0)).empty());
+		c.ret_bool(a && !touches(c.world, *a, c.arg<uint32_t>(0), false, true).empty());
 	});
 	// IsNavigable (0x3502b8f0): the segment's first surface must face up more than 0.75 and its
 	// material, if any, must have a positive value (no traction hazards).

@@ -979,6 +979,9 @@ public:
 	// DE_CActor::ObjSetParent (Core 0x7008afb0): a branch parented into the scene from outside it
 	// is added there and then (Scene().Add), joining the affector list at its end.
 	void parented(GameObject *o, bool was_in_scene);
+	// The scene an actor is in (DE_CObject +0x10): the root of its chain of actor parents, when
+	// that root is in the scene; null for an actor under a non-actor (a session modifier, a folder).
+	const GameObject *actor_scene(const GameObject *o) const;
 	// SetActive's Scene().Add of a branch that has just come out of parking under its parent:
 	// prepared and numbered as enter_scene does, staying in its tree (not a root).
 	void prepare_branch(GameObject *o);
