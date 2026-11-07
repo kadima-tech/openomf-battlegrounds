@@ -187,7 +187,11 @@ public:
 	// A generator instance's own switch (DE_CParticleGeneratorInstance +0x58), by generator and
 	// actor: kept for instances not made yet.
 	void set_generator_spawning(const de::ObjectRef &generator, const GameObject *actor, bool on);
+	// The instance's particle size multiplier (+0x64), likewise kept for instances not made yet.
+	void set_generator_size_multiplier(const de::ObjectRef &generator, const GameObject *actor, float m);
 	const de::ParticleRendererDef *renderer(const de::ObjectRef &r);
+	// SetHeightScale: the renderer object's +0x74 (one object, shared by everything that draws it).
+	void set_renderer_height(const de::ObjectRef &r, float h);
 	static bool live(const de::ParticleRendererDef &def);
 	// A material's particles (DE_CParticleSpawningMaterial::ObjPrepare adds its renderer to the
 	// actor's properties): the request list of `spawner` in the actor's instance of `renderer`.
@@ -239,6 +243,7 @@ private:
 	std::map<const GameObject *, ModifierControl> controls_;
 	std::map<const GameObject *, bool> actor_spawning_;
 	std::map<std::pair<std::pair<const de::ObjectsFile *, uint32_t>, const GameObject *>, bool> generator_spawning_;
+	std::map<std::pair<std::pair<const de::ObjectsFile *, uint32_t>, const GameObject *>, float> generator_size_;
 	std::map<const GameObject *, std::array<AttackTrailer, 4>> trailers_;
 	std::map<const GameObject *, AttackTrailer *> trailer_objects_;
 	std::map<const GameObject *, LightState> lights_;

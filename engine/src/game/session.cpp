@@ -1756,6 +1756,12 @@ void register_session_natives(World &w) {
 	// A description's resource is its first passive reference; fighters are built by the app
 	// (make_fighter), pilots and other resources are copies of the referenced object.
 	reg("CDescription::class CObject NewResource()", [](const NativeContext &c) { c.ret_object(new_resource(c.world, c.self(), nullptr)); });
+	// MasterResourceCaller (Core 0x701f1090): the master object of the description's resource reference (+0x98).
+	reg("CDescription::class CObject MasterResource()", [](const NativeContext &c) {
+		de::ObjectRef src = source_of(c.self());
+		auto refs = src ? passive_references(c.world.data(), src) : std::vector<de::ObjectRef>{};
+		c.ret_object(refs.empty() ? nullptr : c.world.global_object(refs[0]));
+	});
 	reg("CFighterDescription::class CObject NewResource(class CGUID)", [](const NativeContext &c) {
 		uint32_t g = c.arg<uint32_t>(0);
 		de::Guid guid{};

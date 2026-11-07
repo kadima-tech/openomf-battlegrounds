@@ -859,6 +859,14 @@ void register_combat_natives(World &w) {
 			c.world.forces->deliver(*force, ct);
 		}
 	});
+	// RemoveByOwnerTouchedCaller (Core 0x7007a9e0): every collision whose touched affector's owner
+	// (OwnerActor) is the actor goes, the last first.
+	reg("CAffector::CCollisionResults::RemoveByOwnerTouched(class CActor)", [=](const NativeContext &c) {
+		Tester *t = tester_of_results(c);
+		GameObject *a = c.arg_object(0);
+		if (!t) return;
+		std::erase_if(t->results, [&](const Collision &col) { return col.touched && c.world.affector_owner(col.touched) == a; });
+	});
 	reg("CAffector::CCollisionResults::int NumCollisions()", [=](const NativeContext &c) {
 		Tester *t = tester_of_results(c);
 		c.ret_u32(t ? uint32_t(t->results.size()) : 0);

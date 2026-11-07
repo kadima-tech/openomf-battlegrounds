@@ -1195,7 +1195,20 @@ void register_ai_natives(World &w) {
 			const Pilot *p = pilot_of(c.self());
 			c.ret_f32(std::clamp(p ? p->stats.*f / 100.0f : 0.5f, 0.0f, 1.0f));
 		});
+		// DE_CPilot::AddPower / AddAgility / AddEndurance / AddFocus (OMF 0x3500fab0..0x3500fb10): +0x3c0..+0x3cc.
+		reg("CPilot::Add" + n + "(float)", [f](const NativeContext &c) {
+			if (const Pilot *p = pilot_of(c.self())) const_cast<Pilot *>(p)->stats.*f += c.arg<float>(0);
+		});
 	}
+	// DE_CCreature::MajorStatChanged (Creature 0x15019500): GH_CREATURE_MAJOR_STATE_CHANGE, object 1 the
+	// creature, sent to the creature.
+	reg("CCreature::MajorStatChanged()", [](const NativeContext &c) {
+		GameObject *o = c.self();
+		if (!o) return;
+		uint32_t e = new_event(c.world, "CreatureMajorStatsChange");
+		c.mem().set<uint32_t>(e + 8, o->handle);
+		c.world.send_event(o, e);
+	});
 	// SetAIDifficultyOffsetCaller (2.123 0x10748e10): +0x3e8, then CalculateAIValues, which rereads the manager's difficulty.
 	reg("CPilot::SetAIDifficultyOffset(float)", [](const NativeContext &c) {
 		GameObject *f = fighter_of(c.self());
