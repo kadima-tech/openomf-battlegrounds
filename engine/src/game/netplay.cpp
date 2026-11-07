@@ -865,7 +865,10 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 		break;
 	case kRemoteActive: {
 		GameObject *ui = w_.object(r.squeezed());
-		if (r.ok && server && ui && session && session->ui.count(ui)) remote_ui_activated(w_, *session, ui, p.client);
+		if (r.ok && server && ui && session && session->ui.count(ui)) {
+			if (getenv("OPENBG_DEBUG_NETSTATES")) fprintf(stderr, "net: %s activated \"%s\"\n", p.client ? p.client->player_name.c_str() : "?", session->ui[ui].description.c_str());
+			remote_ui_activated(w_, *session, ui, p.client);
+		}
 		break;
 	}
 	case kReselect:
