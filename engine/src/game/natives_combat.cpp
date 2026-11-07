@@ -1181,11 +1181,13 @@ void register_combat_natives(World &w) {
 		float f = o->momentum[1] * c.arg<float>(0);
 		o->momentum[1] = f >= 1 ? 0 : (1 - f) * o->momentum[1];
 	});
+	// DampenMomentumCaller (OMF 0x35022260): the momentum shortened by the amount, to 0 at most (the
+	// other Dampen*Momentum scale by 1 - |v| x amount).
 	reg("COMF2Fighter::DampenMomentum(float)", [](const NativeContext &c) {
 		auto *o = c.self();
 		if (!o) return;
-		float f = length(o->momentum) * c.arg<float>(0);
-		float k = f >= 1 ? 0 : 1 - f;
+		float l = length(o->momentum), d = c.arg<float>(0);
+		float k = l <= d ? 0 : (l - d) / l;
 		for (auto &v : o->momentum) v *= k;
 	});
 	reg("CActor::class CCoordinateSystem WorldOrientation()", [](const NativeContext &c) {
