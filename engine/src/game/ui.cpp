@@ -481,7 +481,7 @@ public:
 		list_ = frame->add<List>();
 		list_->title = "Client Browser";
 		list_->entry_h = 20;
-		list_->columns = {{"Name", -1}, {"Score", 0.15f}, {"Ping", 0.15f}};
+		list_->columns = {{"Name", 0.7f}, {"Score", 0.15f}, {"Ping", 0.15f}};
 		list_->on_select = [this, &app](int i) {
 			selected_ = i >= 0 && size_t(i) < shown_.size() ? shown_[size_t(i)] : nullptr;
 			show_info(app);
