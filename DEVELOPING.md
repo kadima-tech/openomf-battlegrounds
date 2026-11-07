@@ -115,7 +115,14 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   replicated creature and every projectile in the scene, linked or not) the frames each machine had one and how far
   the client's copies were from the server's. A `--join` screenshot run (`--screenshot`, `SHOTS`, `OPENBG_EYE`) keeps
   the wall clock's pace and writes the trace too. `OPENBG_CHANGE_FIGHTER=<frame>` presses the in-game menu's Change
-  Fighter then. `net-tests` (ctest, no game data) checks the transport on localhost.
+  Fighter then. `OPENBG_NET_TEST="tab@F;vote@F:<player>:kick|stay|none;admin@F:<password>"` presses the Client Browser key,
+  sets this machine's kick vote on a player and enters the Admin button's password at frame F; with `MOUSE="chart@F;..."`
+  (a character key per item, `key@F` Enter) a test types a chat line ("Say to All" is T). `HOST_ENV` / `CLIENT_ENV` split
+  on spaces, so values there cannot contain any. `OPENBG_DEBUG_NETSTATES=1` also prints a page's activation (0x06) on the
+  server and the client browser's updates (0x08) on a client. Headless runs pace to `steady_clock`, which stops while
+  the machine sleeps: a run that seems stuck for minutes may only have slept (FINDINGS 455). `OPENBG_TRACE=<text>` traces
+  the VM's instructions of the methods whose signature contains the text (`1`: all). `net-tests` (ctest, no game data)
+  checks the transport on localhost.
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `deobj-dump scripts <file.DEObjects> <dir>` extracts a data file's script source (into your local copy only; it is the game's).
