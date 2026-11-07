@@ -10,6 +10,7 @@
 #include <functional>
 #include <tuple>
 
+#include "game/native_math.h"
 #include "game/replay.h"
 #include "game/forces.h"
 #include "game/netplay.h"
@@ -144,9 +145,9 @@ void register_core_natives(World &w) {
 	});
 	reg("CObject::float DifferenceBetween(float,float)",
 	    [](const NativeContext &c) { c.ret_f32(std::fabs(c.arg<float>(0) - c.arg<float>(1))); });
-	// RaiseToPowerCaller (Core 0x70045c90): pow of the two ints, truncated (__ftol).
+	// RaiseToPowerCaller (Core 0x70045c90): pow of the two ints through __ftol.
 	reg("CObject::int RaiseToPower(int,int)", [](const NativeContext &c) {
-		c.ret_u32(uint32_t(int32_t(std::pow(double(c.arg<int32_t>(0)), double(c.arg<int32_t>(1))))));
+		c.ret_u32(uint32_t(ftol(std::pow(double(c.arg<int32_t>(0)), double(c.arg<int32_t>(1))))));
 	});
 	reg("CObject::int NumDescendants()", [](const NativeContext &c) {
 		auto *o = c.self();

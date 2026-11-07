@@ -1,3 +1,4 @@
+#include "game/native_math.h"
 #include "game/particles.h"
 
 #include "game/session.h"
@@ -707,18 +708,9 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 					// vertex, 1 forwards and 2 backwards round the mesh; 3 forwards and 4 backwards once,
 					// the pass's end dropping this and the other new particles and stopping the instance.
 					int n = int(m.mesh_vertices.size());
-					int &next = pm.mesh_next;
-					int k = std::clamp(next, 0, n - 1);
-					bool pass_done = false;
-					switch (m.mesh_order) {
-					case 0: k = std::min(n - 1, int(random01(w) * float(n))); break;
-					case 1: if (++next >= n) next = 0; break;
-					case 2: if (next < 1) next = n; --next; break;
-					case 3: if (++next >= n) next = 0, pass_done = true; break;
-					case 4: if (next < 1) next = n, pass_done = true; else --next; break;
-					default: break;
-					}
-					if (pass_done) {
+					MeshStep step = mesh_vertex_step(m.mesh_order, n, pm.mesh_next);
+					int k = step.vertex >= 0 ? step.vertex : std::min(n - 1, int(random01(w) * float(n)));
+					if (step.pass_done) {
 						for (size_t j = i; j < in.particles.size(); ++j) in.particles[j].flags &= ~(kAlive | kNew);
 						in.spawning = false;
 						break;

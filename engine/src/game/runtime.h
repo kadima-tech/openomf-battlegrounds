@@ -154,7 +154,7 @@ struct GameObject {
 	bool spawned = false;  // a fighter prepared into the scene (DE_CFighterPhysics +0x1a8): in play
 	bool user_controlled = false;  // reads World::input; otherwise driven by AI commands
 	bool autoplayed = false;       // OPENBG_AUTOPLAY: AI-driven, but still the user's to the scripts
-	const Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
+	Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
 	float pilot_time_add = 0;       // a pilot object's +0x7cc (2.123): the static TimeAdd when it was made
 	const std::map<std::string, std::vector<struct InputRequirement>> *inputs = nullptr;  // kind 24 bank
 
@@ -1108,7 +1108,7 @@ void register_creature_natives(World &w);
 void register_need_natives(World &w);
 void register_music_natives(World &w);
 // The pilot behind a pilot object or a fighter (the fighter's own, else a child pilot's).
-const Pilot *pilot_of(GameObject *o);
+Pilot *pilot_of(GameObject *o);
 void register_simple_physics_natives(World &w);
 // A CData's bytes (DE_CDataBlock), by its block in script memory.
 std::vector<uint8_t> &cdata_bytes(World &w, uint32_t block);

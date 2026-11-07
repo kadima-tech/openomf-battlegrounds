@@ -214,7 +214,7 @@ float attack_affinity(World &w, GameObject &o, uint32_t flags) {
 }  // namespace
 
 // The pilot behind a pilot object or a fighter.
-const Pilot *pilot_of(GameObject *o) {
+Pilot *pilot_of(GameObject *o) {
 	if (o && o->pilot) return o->pilot;  // a pilot object (the session's)
 	GameObject *f = fighter_of(o);
 	if (!f) return nullptr;
@@ -1197,7 +1197,7 @@ void register_ai_natives(World &w) {
 		});
 		// DE_CPilot::AddPower / AddAgility / AddEndurance / AddFocus (OMF 0x3500fab0..0x3500fb10): +0x3c0..+0x3cc.
 		reg("CPilot::Add" + n + "(float)", [f](const NativeContext &c) {
-			if (const Pilot *p = pilot_of(c.self())) const_cast<Pilot *>(p)->stats.*f += c.arg<float>(0);
+			if (Pilot *p = pilot_of(c.self())) p->stats.*f += c.arg<float>(0);
 		});
 	}
 	// DE_CCreature::MajorStatChanged (Creature 0x15019500): GH_CREATURE_MAJOR_STATE_CHANGE, object 1 the
@@ -1213,7 +1213,7 @@ void register_ai_natives(World &w) {
 	reg("CPilot::SetAIDifficultyOffset(float)", [](const NativeContext &c) {
 		GameObject *f = fighter_of(c.self());
 		if (f && f->pilot) {
-			auto *p = const_cast<Pilot *>(f->pilot);
+			Pilot *p = f->pilot;
 			p->difficulty_offset = c.arg<float>(0);
 			p->difficulty = c.world.ai_difficulty;
 			p->apply_difficulty();

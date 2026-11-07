@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
 		world.ai_difficulty = difficulty;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
 		static std::deque<game::Pilot> pilots;
-		auto load_pilot = [&](const std::string &who) -> const game::Pilot * {
+		auto load_pilot = [&](const std::string &who) -> game::Pilot * {
 			if (auto *pf = world.data().file("Pilots")) {
 				for (auto &o : pf->objects()) {
 					if (o.class_path == "Actor\\Creature\\Pilot" && o.name == who) {
