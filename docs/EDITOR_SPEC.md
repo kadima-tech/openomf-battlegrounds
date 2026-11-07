@@ -165,6 +165,56 @@ No design document is public. These come from the official site's FAQ (2002-2003
   - Canyon's boulder pickup is never spawned.
   - A "Basic Training" session master is named by the 2004 build but absent from retail.
 
+### 5.3 New game modes: a story campaign with missions, choices, funds and upgrades
+A design doc existed but was never used (to be reworked by the user, not copied verbatim). Beta players
+also scripted a story-driven single-player "mission" system, with decisions that changed the outcome,
+before the ship date cut it. Today single player is "unlock matches and play". The editor should be able
+to author a **whole new mode** on top of the engine, not only new content for the existing ladder:
+- **Campaign graph editor:** chapters → missions → outcomes, drawn as a node graph. Each mission is a
+  match setup (opponents, robots, arena, rules, handicaps, drop-ons), plus objectives and win / lose /
+  special-condition outcomes. Choice nodes branch the story. Consequences set career flags, funds,
+  relationships, unlocks or the next mission.
+- **Dialogue editor:** scenes made of lines with speaker, portrait, mood and optional voice. Player choices
+  link to graph edges. It reuses the cinematic quote / speech-bubble presentation.
+- **Economy and shop editor:** currency, prizes, fees and repair costs. Items and upgrades have a price,
+  prerequisites, effects (robot stats, script constants within limits, pilot attributes, new moves or
+  paint) and **graphics**: icons, shop art, descriptions. Includes a balancing sheet that simulates
+  funds over a campaign path.
+- **UI page editor:** new menu screens (shop, career status, mission briefing, choice screen) built from
+  the game's own GUI controls (`OMFBGGUI`, FINDINGS 159), with a live preview.
+- **Runtime the engine needs** (OpenBG-side work, not only data):
+  - a persistent career save, stored like unlocks but richer;
+  - natives to read and write career state;
+  - a session master type for campaign missions;
+  - the new UI pages;
+  - applying upgrades to fighters at match start.
+- **Original-game compatibility:** the original can't gain new natives. So either a campaign is limited
+  to what existing natives and registry unlocks can express, or **campaign mode is OpenBG-only** (likely).
+  The validator marks which mode a project targets.
+- If any of the beta mission scripts survive, add an importer for them.
+
+### 5.4 MCP support
+The editor exposes its operations as an **MCP server**, so AI assistants and scripts can drive it:
+- **Transport:** stdio (`openbg-editor --mcp`, headless, for agents) and an optional local-only socket
+  while the GUI is open. In the GUI, AI edits appear live, go through the same undo stack, and are
+  marked in the Output Log.
+- **Tools:**
+  - list and search objects;
+  - read an object's details, references and "referenced by";
+  - open and create add-ons;
+  - copy a base object to the add-on;
+  - get and set fields through the same schemas as the UI;
+  - import an image or sound;
+  - compile a script and report its errors;
+  - validate;
+  - save;
+  - Launch Game, or a headless test run that returns screenshots and logs;
+  - later, campaign-graph and economy operations.
+- **Resources:** the data format docs, the schemas, FINDINGS-backed class descriptions, and the
+  validation checklist.
+- **Safety:** base data is read-only. Writes go only to the opened add-on. Nothing is written without
+  an add-on chosen by the user (or named explicitly in a headless call). Each change is logged.
+
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the
    editor write at the object level through the engine's writer. Writing must be byte-exact for
