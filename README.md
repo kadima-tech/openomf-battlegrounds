@@ -217,7 +217,7 @@ read from. The copy-protected game executable is never decrypted.
 Contributions and bug reports are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md)
 and our [Code of Conduct](CODE_OF_CONDUCT.md). [DEVELOPING.md](DEVELOPING.md) describes
 the code, tools and debugging switches; [PLACEHOLDERS.md](PLACEHOLDERS.md) lists open
-work; [PATCHES.md](PATCHES.md) documents the official patches. Report vulnerabilities
+work; [PATCHES.md](PATCHES.md) documents the official patches; [docs/ROADMAP.md](docs/ROADMAP.md) lists planned work. Report vulnerabilities
 using [SECURITY.md](SECURITY.md).
 
 ## License
