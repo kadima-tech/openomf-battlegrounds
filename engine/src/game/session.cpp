@@ -1822,7 +1822,7 @@ void register_session_natives(World &w) {
 	});
 	reg("CScene::Add(class CActor)", [caller_scene](const NativeContext &c) {
 		GameObject *o = c.arg_object(0);
-		if (o) o->removed = false;
+		if (o) o->removed = false, o->added = true;
 		if (o && !o->parent) {
 			int view = World::gui_scene_view(c.self());
 			if (view >= 0) {

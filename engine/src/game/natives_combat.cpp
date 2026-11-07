@@ -1115,7 +1115,7 @@ void register_combat_natives(World &w) {
 		o->active = true;
 		if (!was && in_scene(*o)) c.world.prepare_branch(o);
 	});
-	reg("CActor::Deactivate()", [](const NativeContext &c) { if (auto *o = c.self()) o->active = false; });
+	reg("CActor::Deactivate()", [](const NativeContext &c) { if (auto *o = c.self()) o->active = false, o->added = false; });
 	reg("CAffector::SetOwnerActor(class CActor)", [](const NativeContext &c) { if (auto *o = c.self()) o->owner_actor = c.arg_object(0); });
 	reg("CAffector::class CActor OwnerActor()", [](const NativeContext &c) {
 		auto *o = c.self();

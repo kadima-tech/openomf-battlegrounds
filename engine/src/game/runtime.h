@@ -270,6 +270,7 @@ struct GameObject {
 	bool active = true;
 	bool detached = false;  // a global entry's template: outside the scene (no hits, no danger)
 	bool removed = false;   // CScene::Remove: out of the scene until CScene::Add brings it back
+	bool added = false;     // CScene::Add of an inactive actor: in the scene all the same (DE_CScene::Add 0x7006ed50)
 	bool gui = false;       // a root of the front end's GUI scene (ui.h), drawn with its own camera
 	int view = 0;           // a GUI root's scene: 0 the GUI's own, 1 a scene viewer control's
 	float hotspot = 0, falloff = 0;                       // sphere radii
@@ -345,7 +346,7 @@ std::array<float, 3> focal_point(const GameObject &o);
 // An actor under a Folder has no actor parent (DE_CActor::ObjSetParent 0x7008afb0) and a Folder
 // prepares nothing, so it stays out of the scene unless added itself.
 inline bool parked(const GameObject &o) {
-	return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
+	return o.is_actor && ((!o.active && !o.added) || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
 }
 inline bool in_scene(const GameObject &o) {
 	if (o.destroyed_seq) return false;
