@@ -1803,7 +1803,7 @@ uint32_t World::scene_step(SceneClock &c, uint32_t real_ms, double &global) {
 		global += c.master_given;
 		c.master_given = 0;
 	}
-	if (autopaused && c.autopauses) global = 0;
+	if (autopaused && c.autopauses && !c.remote_clients) global = 0;
 	float x = float(global) * float(c.scale) + c.carry;
 	int32_t ms = int32_t(x);
 	c.carry = x - float(ms);

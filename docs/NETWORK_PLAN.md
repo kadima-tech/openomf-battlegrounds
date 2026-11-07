@@ -170,9 +170,12 @@ Each phase ends with something testable, merged and pushed.
    `CheckForDiscardState` with `AdjustSameState`, creature clocks re-timed by the clock's hard set,
    client data (0x0b / 0x0c) and `CClient::Ping`, `IsJoinable`, Change Fighter (0x1d), and recordings of
    network matches on the server; then reconnect, the network game closing with its session, and
-   creation times at ObjPrepare (FINDINGS 452-454). Still open: chat, kick votes, bans and the admin
-   password (0x1a-0x1c), remote page activation and live updates, the slot state (0x0a), the in-session
-   client list.
+   creation times at ObjPrepare (FINDINGS 452-454); then remote page activation (0x06) and updates
+   (0x08 / 0x09), the Client Browser (Tab) with kick votes, bans (0x1a), the admin password (0x1b / 0x1c),
+   chat ("Say to All": a client's own slot modifiers replicating up), and no autopause for a scene with
+   remote clients (FINDINGS 455-459; the 150 ms fighter error measured before and after FINDINGS 460: no
+   change). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
+   an administrator's level button.
 
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and
    bans, disconnect and reconnect, and the dedicated server.

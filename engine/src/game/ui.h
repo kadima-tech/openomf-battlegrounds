@@ -104,6 +104,10 @@ public:
 
 	void activate(AppManager &app);
 	void deactivate(AppManager &app);
+	// IsUpdateRequired (Core 0x701eb620): once every +0xd8 ms (3000) of the system clock.
+	uint32_t update_interval = 3000;
+	bool update_required(uint32_t now);
+	virtual bool is_client_browser() const { return false; }
 	// UIManagerComplete (Core 0x701eb320).
 	void complete(AppManager &app);
 
@@ -114,6 +118,8 @@ protected:
 	Control marker(AppManager &app, const std::string &marker);
 
 private:
+	bool update_started_ = false;
+	uint32_t update_last_ = 0;            // +0xd4
 	GameObject *root_ = nullptr;          // the custom actor under the UI parent
 	std::vector<GameObject *> ve_actors_;  // SetupFolderControls' VE list
 };
@@ -245,6 +251,10 @@ public:
 	std::function<bool(const std::string &address, const std::string &password, std::string *error)> join_server;
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
+	// The "Client Browser" impulse (Tab): DE_CClientBrowserFactory::ProcessEvent.
+	void client_browser_impulse();
+	// The session info's Admin button: the password typed (ok false when cancelled).
+	void admin_password_entered(bool ok, const std::string &password);
 
 	// <transfer agent>\<name>, or <file>\<name>: a new copy (GetObjectByValueString /
 	// ConstructObject).
@@ -366,7 +376,7 @@ private:
 	std::unique_ptr<Gui> notification_gui_;
 	bool notification_shown_ = false;
 	bool first_ui_ = true;
-	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_;
+	UIPtr main_menu_, quit_menu_, in_game_menu_, help_menu_, options_menu_, recordings_menu_, vcr_, client_browser_;
 };
 
 }  // namespace ui

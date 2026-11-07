@@ -433,6 +433,32 @@ int main(int argc, char **argv) {
 		}
 		// The testing switches that act on the world at a frame (screenshot and headless runs).
 		auto test_switches = [&](int fr) {
+			// OPENBG_NET_TEST="tab@F;vote@F:<player>:kick|stay|none;admin@F:<password>": at frame F the
+			// Client Browser key, this machine's kick vote on a player, the Admin button's password.
+			if (const char *nt = getenv("OPENBG_NET_TEST")) {
+				std::string spec = nt;
+				for (size_t p = 0; p < spec.size();) {
+					size_t q = spec.find(';', p);
+					std::string item = spec.substr(p, q == std::string::npos ? std::string::npos : q - p);
+					size_t at = item.find('@'), colon = item.find(':');
+					std::string what = item.substr(0, at), arg = colon == std::string::npos ? "" : item.substr(colon + 1);
+					if (at != std::string::npos && atoi(item.c_str() + at + 1) == fr) {
+						if (what == "tab") app.client_browser_impulse();
+						if (what == "admin") app.admin_password_entered(true, arg);
+						if (what == "vote") {
+							size_t c2 = arg.find(':');
+							std::string who = arg.substr(0, c2), how = c2 == std::string::npos ? "" : arg.substr(c2 + 1);
+							if (game::NetSession *n = netgame.session(); n && n->session) {
+								for (auto &cl : n->session->clients) {
+									if (cl->player_name == who) cl->my_vote = how == "kick" ? -1 : how == "stay" ? 1 : 0;
+								}
+							}
+						}
+					}
+					if (q == std::string::npos) break;
+					p = q + 1;
+				}
+			}
 			// OPENBG_AUTOPLAY=<frame>: the player's fighter is handed to the AI then (testing whole matches).
 			if (const char *ap = getenv("OPENBG_AUTOPLAY"); ap && fr >= atoi(ap)) {
 				for (game::GameObject *o : world.scene_objects()) {

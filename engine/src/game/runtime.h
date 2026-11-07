@@ -584,6 +584,7 @@ public:
 		float carry = 0;          // +0x190: the fraction PassTime keeps
 		bool started = false;     // +0x164: Genesis
 		bool autopauses = false;  // +0x1c0 cleared by DE_CStandardSession::Begin
+		bool remote_clients = false;  // its session has remote clients: it never autopauses
 		// Its DE_CTemporalMasterScene (+0x140, AssureTemporalMaster): real time at a scale moving to
 		// a target at a rate per ms, pauses and passed time (+0x1c8, +0x1e8, +0x1f0, +0x1d8, +0x1e0).
 		bool master = false, master_started = false;
@@ -751,6 +752,8 @@ public:
 	// the front end shows it (its pool and title are the session's UiManager record) and
 	// completes it with complete_ui (session.h).
 	std::function<void(GameObject *ui)> launch_ui;
+	// CClient::LaunchLocalUIManager of a CEditString: the text entry page.
+	std::function<void(GameObject *ui)> launch_edit_string;
 	// CRulesDisplay (OMF DE_CRulesDisplay; FINDINGS 127): what the session scripts set, and the
 	// front end's screen for it (shown by CRulesDisplay::Begin, closed by CloseUIManagerStack).
 	struct RulesDisplay {
@@ -952,6 +955,9 @@ public:
 	uint32_t global_entry(vm::Executor &ex, uint32_t index) override;
 	uint32_t final_instance(vm::Executor &ex, uint32_t index) override;
 	uint32_t new_instance(vm::Executor &ex, uint32_t class_index, uint32_t count) override;
+	// Online only: single player and its replays keep restored frames' parameters empty, as before.
+	bool restore_param_instances() const override { return online; }
+	bool online = false;  // a network session runs (NetSession)
 	uint32_t new_local_instance(vm::Executor &ex, uint32_t class_index, uint32_t source) override;
 	void destroy_instance(vm::Executor &ex, uint32_t instance) override;
 	// A native value-class instance, initialised as its constructor would (CAttackInfo defaults).

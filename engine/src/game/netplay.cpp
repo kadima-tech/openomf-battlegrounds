@@ -37,6 +37,12 @@ enum Msg : uint16_t {
 	kClientData = 0x0b, // name, ping, {vote, client ID}...: UpdateClientData
 	kClientInfo = 0x0c, // client ID, name, ping, admin level, votes needed to kick
 	kReselect = 0x1d,   // (none): ClientReselectFighter
+	kRemoteActive = 0x06, // page ID: RemoteUIManagerActivated
+	kPageUpdate = 0x08,   // {0, page ID, 1, chosen} or {1, count, {client ID, name, ping}}: UnpackUpdate
+	kPageRequest = 0x09,  // {0, page ID} or {1}: UpdateRemoteUIManager
+	kBanned = 0x1a,       // reason, hours: BanFromServer
+	kAdminLogin = 0x1b,   // admin password
+	kUserMessage = 0x1c,  // title, text: ServerSendClientMessage
 };
 
 struct Writer {
@@ -98,6 +104,10 @@ struct Reader {
 
 std::map<const World *, NetSession *> g_sessions;
 
+bool slot_modifier_of(const SessionClient *c, const GameObject *o) {
+	return c && c->slot && o && std::find(c->slot->modifiers.begin(), c->slot->modifiers.end(), o) != c->slot->modifiers.end();
+}
+
 // DE_CStandardSessionSlot::SlotDataUpdated (Session 0x4501b1c0): GH_SESSION_SLOT_UPDATED, INT1 the slot index.
 void slot_data_updated(World &w, SessionSlot &sl) {
 	uint32_t e = new_event(w, "SessionSlotUpdated");
@@ -146,12 +156,14 @@ Writer message(Msg m) {
 }  // namespace
 
 NetSession::NetSession(World &w, NetRole role, NetConfig cfg) : w_(w), role_(role), cfg_(cfg) {
+	w.online = true;
 	net_managers_begin(w, role, w.session.get());
 	session = master_session(w.session.get());
 	g_sessions[&w] = this;
 }
 
 NetSession::~NetSession() {
+	w_.online = false;
 	net_managers_end(w_);
 	if (auto it = g_sessions.find(&w_); it != g_sessions.end() && it->second == this) g_sessions.erase(it);
 }
@@ -236,9 +248,119 @@ void NetSession::reconnect(Peer &p, SessionClient &c, const std::vector<uint32_t
 	if (c.ui_manager && w_.object(c.ui_manager->handle) == c.ui_manager) launch_remote_ui(c, c.ui_manager);
 }
 
+// LocalUIManagerActivated (Session 0x45008ad0): a client's copy of a server page tells the server.
+void net_ui_activated(World &w, GameObject *ui) {
+	NetSession *n = net_session(w);
+	if (!n || n->role() != NetRole::Client || !n->session || n->peers().empty()) return;
+	auto it = n->session->ui.find(ui);
+	if (it == n->session->ui.end() || !it->second.remote_id) return;
+	n->send_remote_active(it->second.remote_id);
+}
+
+void NetSession::send_remote_active(uint32_t id) {
+	Writer wr = message(kRemoteActive);
+	wr.squeezed(id);
+	send(peers_[0], net::Channel::Reliable, std::move(wr.d));
+}
+
 void NetSession::reselect_fighter() {
 	if (role_ != NetRole::Client || peers_.empty()) return;
 	send(peers_[0], net::Channel::Reliable, std::move(message(kReselect).d));
+}
+
+// LocalUIManagerRequestUpdate (Session 0x45008c30): a client's active page asks the server for its
+// update (0x09); the server's copy answers with its PackUpdate (UpdateRemoteUIManager, 0x08).
+void net_request_page_update(World &w, GameObject *ui, bool client_browser) {
+	NetSession *n = net_session(w);
+	if (!n || n->role() != NetRole::Client || !n->session || n->peers().empty()) return;
+	if (client_browser) return n->request_page_update(1, 0);
+	auto it = ui ? n->session->ui.find(ui) : n->session->ui.end();
+	if (it != n->session->ui.end() && it->second.remote_id) n->request_page_update(0, it->second.remote_id);
+}
+
+void NetSession::request_page_update(uint8_t kind, uint32_t id) {
+	Writer wr = message(kPageRequest);
+	wr.u8(kind);
+	if (kind == 0) wr.squeezed(id);
+	send(peers_[0], net::Channel::Unreliable, std::move(wr.d));
+}
+
+void NetSession::send_user_message(Peer &p, const std::string &title, const std::string &text) {
+	Writer wr = message(kUserMessage);
+	wr.str(title);
+	wr.str(text);
+	send(p, net::Channel::Reliable, std::move(wr.d));
+}
+
+// The client's session info's admin password (+0xd4 set): sent once to the server (0x1b).
+void net_admin_login(World &w, const std::string &password) {
+	NetSession *n = net_session(w);
+	if (!n || n->role() != NetRole::Client || n->peers().empty()) return;
+	Writer wr = message(kAdminLogin);
+	wr.str(password);
+	n->send_raw(std::move(wr.d));
+}
+
+void NetSession::send_raw(std::vector<uint8_t> data) {
+	if (!peers_.empty()) send(peers_[0], net::Channel::Reliable, std::move(data));
+}
+
+// DE_CStandardClientComInterfaceVersion1::BanFromServer (Session 0x4500c530): 0x1a, then the
+// client is dropped.
+void NetSession::ban(SessionClient &c, const std::string &reason, uint32_t hours) {
+	for (auto &p : peers_) {
+		if (p.client != &c) continue;
+		Writer wr = message(kBanned);
+		wr.str(reason);
+		wr.u32(hours);
+		send(p, net::Channel::Reliable, std::move(wr.d));
+		if (on_ban) on_ban(p.link, hours);
+		return;
+	}
+}
+
+// DE_CSession::UpdateVoteResults (Core 0x701faa90): N counts the human clients (the voters); with
+// more than two a client is voted off at floor(N / 2 + 0.51) kick votes (each vote to stay takes
+// one off); the server's own user's and the administrators' votes decide alone: kick bans at
+// once, stay makes the client un-kickable ("Admin Req.").
+void NetSession::update_vote_results() {
+	if (role_ != NetRole::Server || !session) return;
+	auto human = [](const SessionClient &c) { return c.user || !c.local; };
+	int n = 0;
+	for (auto &c : session->clients) n += human(*c);
+	const int threshold = n > 2 ? int(float(n) * 0.5f + 0.51f) : 99999;
+	auto vote_of = [&](const SessionClient &voter, const SessionClient &target) -> int {
+		if (voter.local) return target.my_vote;
+		for (auto &[v, id] : voter.kick_votes) {
+			if (id == target.net_id) return v;
+		}
+		return 0;
+	};
+	std::vector<std::pair<SessionClient *, bool>> kicked;
+	for (auto &t : session->clients) {
+		SessionClient &target = *t;
+		if (target.local) {
+			target.votes_needed = 99999;
+			continue;
+		}
+		int sum = 0, decisive = 0;
+		for (auto &v : session->clients) {
+			if (v.get() == &target || !human(*v)) continue;
+			const int vote = vote_of(*v, target);
+			if (v->local || v->admin_level) decisive += vote;
+			else sum += vote;
+		}
+		if (decisive < 0) sum = -100000;
+		else if (decisive > 0) {
+			target.votes_needed = 99999;
+			continue;
+		}
+		if (-threshold < sum) target.votes_needed = threshold + sum;
+		else kicked.emplace_back(&target, decisive != 0);
+	}
+	for (auto &[c, by_admin] : kicked) {
+		ban(*c, by_admin ? "You have been banned by a server administrator." : "The other players have voted you off the server.", 24);
+	}
 }
 
 // UpdateClientData (Session 0x45008fa0) and the server's 0x0c, once a second (inferred).
@@ -255,13 +377,14 @@ void NetSession::client_data(uint32_t now) {
 		wr.str(name);
 		wr.squeezed(uint32_t(std::max(0.0f, peers_[0].ping)));
 		wr.squeezed(uint32_t(session->clients.size()));
-		for (auto &c : session->clients) wr.squeezed(1), wr.squeezed(c->net_id);
+		for (auto &c : session->clients) wr.squeezed(uint32_t(c->my_vote + 1)), wr.squeezed(c->net_id);
 		send(peers_[0], net::Channel::Reliable, std::move(wr.d));
 		return;
 	}
 	for (auto &p : peers_) {
 		if (p.client) p.client->ping = int32_t(p.ping);
 	}
+	update_vote_results();
 	for (auto &p : peers_) {
 		if (!p.client || p.status != 1000) continue;
 		for (auto &c : session->clients) {
@@ -362,8 +485,10 @@ void NetSession::receive_roster(const std::vector<uint8_t> &d, size_t pos) {
 		c->player_name = e.name;
 		if (e.slot >= 0 && size_t(e.slot) < session->slots.size()) {
 			SessionSlot &sl = *session->slots[size_t(e.slot)];
-			// SetupCreatureControl: a client's own slot is the one it controls.
+			// SetAsLocallyControlled (Session 0x4501ada0): a client's own slot is the one it
+			// controls, and its modifiers' managers replicate up (+0x7c).
 			sl.local = mine;
+			for (GameObject *m : sl.modifiers) set_locally_controlled(w_, m, mine);
 			if (sl.client != c) connect_client(w_, *session, *c, sl);
 		}
 	}
@@ -822,8 +947,9 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			if (!r.ok) break;
 			GameObject *owner = net_owner(w_, id);
 			linked_at_.erase(id);
-			// The server takes from a client only the states of the creature it controls.
-			if (!owner || (role_ == NetRole::Server && owner != p.creature)) continue;
+			// The server takes from a client only the states of the creature it controls and of its
+			// slot's modifiers (SetAsLocallyControlled, Session 0x4501ada0).
+			if (!owner || (role_ == NetRole::Server && owner != p.creature && !slot_modifier_of(p.client, owner))) continue;
 			NetTake took = net_receive_state(w_, owner, st, lag_ms);
 			if (took == NetTake::Floor) continue;
 			if (p.acks.empty()) p.acks_since = now, p.keep_alive_min = ~0u;
@@ -847,6 +973,98 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 			net_acked(w_, owner, t);
 		}
 		break;
+	case kRemoteActive: {
+		GameObject *ui = w_.object(r.squeezed());
+		if (r.ok && server && ui && session && session->ui.count(ui)) {
+			if (getenv("OPENBG_DEBUG_NETSTATES")) fprintf(stderr, "net: %s activated \"%s\"\n", p.client ? p.client->player_name.c_str() : "?", session->ui[ui].description.c_str());
+			remote_ui_activated(w_, *session, ui, p.client);
+		}
+		break;
+	}
+	case kPageRequest: {
+		const uint8_t kind = r.u8();
+		const uint32_t id = kind == 0 ? r.squeezed() : 0;
+		if (!r.ok || !server || !session) break;
+		Writer wr = message(kPageUpdate);
+		wr.u8(kind);
+		if (kind == 0) {
+			GameObject *ui = w_.object(id);
+			if (!ui || !session->ui.count(ui)) break;
+			// DE_CGenericDescriptionSelector::PackUpdate (Core 0x701e49e0): 1, the description chosen.
+			wr.squeezed(id);
+			wr.u8(1);
+			wr.bytes(session->ui[ui].chosen.data(), 16);
+		} else {
+			// DE_CClientBrowser::PackUpdate (Core 0x701dde20): every client's name, ping and ID.
+			wr.squeezed(uint32_t(session->clients.size()));
+			for (auto &c : session->clients) {
+				wr.squeezed(c->net_id);
+				wr.str(c->player_name);
+				wr.squeezed(uint32_t(std::max(0, c->ping)));
+			}
+		}
+		send(p, net::Channel::Unreliable, std::move(wr.d));
+		break;
+	}
+	case kPageUpdate: {
+		const uint8_t kind = r.u8();
+		if (server || !session) break;
+		if (kind == 0) {
+			uint32_t id = r.squeezed();
+			uint8_t has = r.u8();
+			auto chosen = r.take(16);
+			auto it = remote_ui_.find(id);
+			if (r.ok && has == 1 && it != remote_ui_.end() && session->ui.count(it->second)) memcpy(session->ui[it->second].chosen.data(), chosen.data(), 16);
+			break;
+		}
+		uint32_t n = r.squeezed();
+		for (uint32_t i = 0; i < n && r.ok; ++i) {
+			uint32_t id = r.squeezed();
+			std::string name = r.str();
+			uint32_t ping = r.squeezed();
+			if (!r.ok) break;
+			for (auto &c : session->clients) {
+				if (!id || c->net_id != id) continue;
+				if (!name.empty()) c->player_name = name;
+				c->ping = int32_t(ping);
+			}
+			if (getenv("OPENBG_DEBUG_NETSTATES")) printf("[net %u] client list: %u %s ping %u\n", w_.frame(), id, name.c_str(), ping);
+		}
+		break;
+	}
+	case kBanned: {
+		std::string reason = r.str();
+		uint32_t hours = r.u32();
+		if (!r.ok || server) break;
+		// ProcessPacket case 0x1a: the reason and its duration, in hours under a day.
+		std::string text = reason + "\nDurration: ";
+		if (hours < 24) {
+			text += std::to_string(hours) + " Hours";
+		} else {
+			text += std::to_string(hours / 24) + (hours / 24 < 2 ? " Day" : " Days");
+			if (hours % 24) text += ", " + std::to_string(hours % 24) + " Hours";
+		}
+		leaving = true;
+		leave_title = "Banned From Server";
+		leave_text = text;
+		break;
+	}
+	case kAdminLogin: {
+		std::string password = r.str();
+		if (!r.ok || !server || !p.client) break;
+		if (!admin_password.empty() && password == admin_password) {
+			p.client->admin_level = 1;
+			send_user_message(p, "Admin Granted", "The password is correct, administration access granted.");
+		} else {
+			send_user_message(p, "Invalid Password", "The password supplied is invalid, administration access denied.");
+		}
+		break;
+	}
+	case kUserMessage: {
+		std::string title = r.str(), text = r.str();
+		if (r.ok && !server && notify) notify(title, text);
+		break;
+	}
 	case kReselect:
 		// GH_CLIENT_RESELECT_FIGHTER on the client's slot: its picker starts choosing again.
 		if (server && p.client && p.client->slot) w_.send_event(p.client->slot->obj, new_event(w_, "SessionClientReselectFighter"));
@@ -1034,6 +1252,13 @@ void NetSession::update() {
 		// Until a first sample is taken a joining client asks every 200 ms, so that its scene
 		// starts at the server's time before the fighters load.
 		send_clock(now);
+	}
+	// DE_CScene::TemporalUpdate: a scene whose session has remote clients never autopauses (FINDINGS 162).
+	if (session) {
+		const bool remote = std::any_of(session->clients.begin(), session->clients.end(), [](const auto &c) { return !c->local; });
+		for (auto &sp : w_.sessions) {
+			if (master_session(sp.get()) == session) w_.scene_clock(sp->obj).remote_clients = remote;
+		}
 	}
 	if (cfg_.flow) {
 		if (role_ == NetRole::Server) server_flow(now);

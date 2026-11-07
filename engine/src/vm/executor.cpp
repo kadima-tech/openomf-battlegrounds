@@ -241,8 +241,8 @@ int Executor::continue_execution() {
 			if (++budget > 2000000) {
 				throw VMError("vm: runaway script (no yield after 2M instructions) in " + method_->cm->signature);
 			}
-			static const bool trace = getenv("OPENBG_TRACE") != nullptr;
-			if (trace) {
+			static const char *trace = getenv("OPENBG_TRACE");
+			if (trace && (!strcmp(trace, "1") || method_->cm->signature.find(trace) != std::string::npos)) {
 				fprintf(stderr, "[vm] %s +%u op%d base=%u frames=%zu\n", method_->cm->signature.c_str(),
 				        at - method_->code_addr, op, base_, frames_.size());
 			}
@@ -717,10 +717,16 @@ void Executor::restore(const std::vector<RestoreFrame> &frames,
 		base_ = base;
 		method_ = &m;
 		cls_ = m.cls;
+		// A restored frame has no caller, so its instance parameters are made here too.
+		std::vector<uint32_t> owned;
 		for (auto &ci : m.cm->instances) {
-			if (!ci.flag && ci.value + 4 <= m.frame_size()) set<uint32_t>(ci.value, host_.new_instance(*this, ci.class_index, ci.count));
+			if (ci.value + 4 > m.frame_size() || (ci.flag && !host_.restore_param_instances())) continue;
+			uint32_t a = host_.new_instance(*this, ci.class_index, ci.count);
+			set<uint32_t>(ci.value, a);
+			if (ci.flag) owned.push_back(a);
 		}
 		frames_.push_back({base, m.code_addr + rf.ip, &m, false, {}});
+		frames_.back().local_instances = std::move(owned);
 		fill(m, stack_ + base, frames_.back().local_refs);
 		base += m.frame_size();
 	}

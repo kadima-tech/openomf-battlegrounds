@@ -811,6 +811,14 @@ SessionClient &add_client_to(World &w, SessionState &s, bool user, const std::st
 
 SessionClient &add_client(World &w, bool user, const std::string &name) { return add_client_to(w, *w.session, user, name); }
 
+void remote_ui_activated(World &w, SessionState &s, GameObject *ui, SessionClient *c) {
+	std::vector<SessionNode *> nodes;
+	for (auto &[o, n] : s.nodes) {
+		if (!n->slot || (c && n->slot == c->slot)) nodes.push_back(n.get());
+	}
+	for (auto *n : nodes) call_hook(w, n->ui_activate, ui->handle, true);
+}
+
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model) {
 	if (!ui) return;
 	SessionState *s = nullptr;
@@ -1202,6 +1210,11 @@ void register_session_natives(World &w) {
 	reg("CStandardSessionSlot::SetAsRemoteControllable()", [slot](const NativeContext &c) { if (auto *sl = slot(c)) sl->remote_controllable = true; });
 	reg("CStandardSessionSlot::SetClientUnconnectable()", [slot](const NativeContext &c) { if (auto *sl = slot(c)) sl->connectable = false; });
 	reg("CStandardSessionSlot::bool IsLocallyControlled()", [slot](const NativeContext &c) { auto *sl = slot(c); c.ret_bool(sl && sl->local); });
+	// PlayerNameCaller (Session 0x4501a5a0): its client's player name.
+	reg("CStandardSessionSlot::string PlayerName()", [slot](const NativeContext &c) {
+		auto *sl = slot(c);
+		c.ret_u32(sl && sl->client && !sl->client->player_name.empty() ? c.world.string(sl->client->player_name) : 0);
+	});
 	reg("CStandardSessionSlot::bool IsUserControlled()", [slot](const NativeContext &c) {
 		auto *sl = slot(c);
 		c.ret_bool(sl && sl->client && sl->client->user);
@@ -1560,11 +1573,10 @@ void register_session_natives(World &w) {
 	});
 	reg("CClient::Activate()", [client](const NativeContext &c) { if (auto *cl = client(c)) cl->active = true; });
 	// IsAdministratorCaller (Core 0x201fb310, 2.101): a local client of a server session that a
-	// user controls (+0x68, its device, set) is; otherwise its AdministratorLevel (+0x74, 0). Our
-	// sessions are all local servers.
+	// user controls (+0x68, its device, set) is; otherwise its AdministratorLevel (+0x74).
 	reg("CClient::bool IsAdministrator()", [client](const NativeContext &c) {
 		auto *cl = client(c);
-		c.ret_bool(cl && cl->local && cl->user);
+		c.ret_bool(cl && ((cl->local && cl->user && net_role(c.world) != NetRole::Client) || cl->admin_level != 0));
 	});
 	// DestroyClient: the client leaves its slot and the session.
 	reg("CClient::DestroyClient()", [S](const NativeContext &c) {
@@ -1623,6 +1635,30 @@ void register_session_natives(World &w) {
 		c.ret_object(c.world.vcr_ui);
 	});
 	stub("CUIManager::DisableAutodestroy()");
+	// DE_CEditString (Core 0x701e34d0..0x701e37f0): a page with a text field, Ok and Cancel.
+	reg("CObject::class CEditString NewEditString()", [S](const NativeContext &c) {
+		GameObject *ui = c.world.create_child(nullptr, "EditString", "UIManager\\EditString");
+		if (auto *s = S(c)) s->ui[ui].edit_string = true;
+		c.ret_object(ui);
+	});
+	reg("CEditString::SetDescription(string)", [S](const NativeContext &c) {
+		if (auto *s = S(c); s && c.self()) s->ui[c.self()].description = c.arg_string(0);
+	});
+	reg("CEditString::string UserInput()", [S](const NativeContext &c) {
+		auto *s = S(c);
+		auto it = s && c.self() ? s->ui.find(c.self()) : decltype(s->ui.end()){};
+		c.ret_u32(s && it != s->ui.end() && !it->second.input.empty() ? c.world.string(it->second.input) : 0);
+	});
+	reg("CClient::LaunchLocalUIManager(class CUIManager)", [S](const NativeContext &c) {
+		GameObject *ui = c.arg_object(0);
+		auto *s = S(c);
+		if (!ui || !s) return;
+		auto &u = s->ui[ui];
+		u.input.clear();
+		u.shown = true;
+		if (u.edit_string && c.world.launch_edit_string) c.world.launch_edit_string(ui);
+		else c.world.log.push_back("session: no local page for \"" + u.description + "\"");
+	});
 	// The panel finds the observer itself (StandardSessionAssureObserver), as this hands it over.
 	stub("CVCRControls::SetObserverCamera(class CCreature)");
 	// NextUIManagerCaller / CurrentUIManagerCaller (Core 0x2004a510 / 0x2004a530, 2.101).

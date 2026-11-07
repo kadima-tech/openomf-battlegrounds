@@ -459,6 +459,195 @@ private:
 };
 
 
+// DE_CClientBrowser (Core ObjInitContents 0x701dd720, SetupControls 0x701dd8e0, ObjUpdate
+// 0x701ddc50; its robot's ProcessEvent 0x701df140): the "Client Browser" list (Name, Score, Ping)
+// over the network session's clients, refreshed every second; in the Window under it the selected
+// client's info (DE_CClientInfoRobot, OMF 0x35019150: its name, Vote to Kick Yes / No and what the
+// kick needs, Administrator) or, with none selected, the session's (DE_CSessionInfoInGameRobot,
+// OMF 0x3501aae0 / 0x3501b500: its Admin button).
+class ClientBrowser : public UIManager {
+public:
+	ClientBrowser() : UIManager("Client Browser", "ClientBrowser") {
+		uses_transition = false;
+		show_main_frame = false;
+		persistent = true;
+	}
+	bool is_client_browser() const override { return true; }
+	void setup_controls(AppManager &app) override {
+		Gui &g = *gui;
+		Ctl *frame = g.place(marker(app, "ListWindow"));
+		frame->set_frame(2, true);
+		frame->set_fill(theme::kWindowBack);
+		list_ = frame->add<List>();
+		list_->title = "Client Browser";
+		list_->entry_h = 20;
+		list_->columns = {{"Name", 0.7f}, {"Score", 0.15f}, {"Ping", 0.15f}};
+		list_->on_select = [this, &app](int i) {
+			selected_ = i >= 0 && size_t(i) < shown_.size() ? shown_[size_t(i)] : nullptr;
+			show_info(app);
+		};
+		window_ = g.place(marker(app, "Window"));
+		window_->set_frame(2, true);
+		window_->set_fill(theme::kWindowBack);
+		selected_ = nullptr;
+		last_refresh_ = 0;
+		refresh(app);
+		show_info(app);
+	}
+	void update(AppManager &app) override {
+		const uint32_t now = app.world.system_ms();
+		if (now - last_refresh_ >= 1000) refresh(app);
+	}
+
+private:
+	SessionState *session(AppManager &app) {
+		NetSession *n = net_session(app.world);
+		return n ? n->session : nullptr;
+	}
+	static int score(World &w, const SessionClient &c) {
+		if (!c.slot) return 0;
+		uint32_t e = new_event(w, "SlotQuerryPlayerScore");
+		w.send_event(c.slot->obj, e);
+		return w.memory().get<int32_t>(e + 4);
+	}
+	void refresh(AppManager &app) {
+		last_refresh_ = app.world.system_ms();
+		SessionState *s = session(app);
+		std::vector<List::Row> rows;
+		std::vector<SessionClient *> shown;
+		std::string sig;
+		if (s) {
+			for (auto &c : s->clients) {
+				List::Row r;
+				r.cells = {c->player_name, std::to_string(score(app.world, *c)), c->ping >= 0 ? std::to_string(c->ping) : ""};
+				for (auto &cell : r.cells) sig += cell + '\t';
+				sig += std::to_string(c->votes_needed) + ',' + std::to_string(c->admin_level) + '\n';
+				rows.push_back(std::move(r));
+				shown.push_back(c.get());
+			}
+		}
+		if (sig == sig_ && shown == shown_) return;
+		const bool info_changed = shown != shown_ || std::find(shown.begin(), shown.end(), selected_) == shown.end();
+		sig_ = sig;
+		shown_ = shown;
+		if (std::find(shown_.begin(), shown_.end(), selected_) == shown_.end()) selected_ = nullptr;
+		list_->set_rows(std::move(rows));
+		for (size_t i = 0; i < shown_.size(); ++i) {
+			if (shown_[i] == selected_) list_->select(int(i), false);
+		}
+		if (info_changed || selected_) show_info(app);
+	}
+	void show_info(AppManager &app) {
+		Gui &g = *gui;
+		if (info_) info_->destroy();
+		info_ = window_->add<Ctl>()->scale(0.02f, 0.02f, 0.98f, 0.98f);
+		SessionState *s = session(app);
+		const bool server = net_role(app.world) != NetRole::Client;
+		if (selected_) {
+			SessionClient &c = *selected_;
+			auto *name = info_->add<Text>(c.player_name, g.vy(20), theme::kText, 0);
+			name->scale(0, 0, 0.35f, 0.15f);
+			// The vote section: for a client that is not this machine's own (its +0x50).
+			if (!c.local) {
+				Ctl *votes = info_->add<Ctl>()->scale(0.6f, 0, 1, 0.3f);
+				auto *label = votes->add<Text>("Vote to Kick:", g.vy(18), theme::kText, 0);
+				label->scale(0, 0, 1, 0.5f);
+				auto *yes = votes->add<Button>("Yes", Button::Check);
+				yes->scale(0, 0.5f, 0.2f, 1);
+				auto *no = votes->add<Button>("No", Button::Check);
+				no->scale(0.22f, 0.5f, 0.4f, 1);
+				yes->state = c.my_vote < 0, no->state = c.my_vote > 0;
+				SessionClient *target = &c;
+				yes->on_click = [target, yes, no] {
+					target->my_vote = target->my_vote < 0 ? 0 : -1;
+					yes->state = target->my_vote < 0, no->state = target->my_vote > 0;
+				};
+				no->on_click = [target, yes, no] {
+					target->my_vote = target->my_vote > 0 ? 0 : 1;
+					yes->state = target->my_vote < 0, no->state = target->my_vote > 0;
+				};
+				std::string need = c.votes_needed < 1 ? "(Being Kicked)" : c.votes_needed > 999 ? "(Admin Req.)" : "(" + std::to_string(c.votes_needed) + " Needed)";
+				auto *needed = votes->add<Text>(need, g.vy(16), theme::kText, 0);
+				needed->scale(0.45f, 0.5f, 1, 1);
+			}
+			if (!server && c.admin_level) {
+				auto *admin = info_->add<Text>("Administrator", g.vy(16), theme::kText, 0);
+				admin->scale(0.6f, 0.35f, 1, 0.5f);
+			}
+			return;
+		}
+		if (!s) return;
+		auto *title = info_->add<Text>(s->master_description ? s->master_description->name : std::string("Session"), g.vy(18), theme::kText, 0);
+		title->scale(0, 0, 0.6f, 0.2f);
+		auto *admin = info_->add<Button>("Admin", Button::Push);
+		admin->scale(0.6f, 0.8f, 1, 1);
+		if (!server) {
+			for (auto &c : s->clients) {
+				if (c->local && c->user && c->admin_level) admin->disabled = true;
+			}
+		}
+		admin->on_click = [this, &app] {
+			gui->get_string("Enter Password", "", [&app](bool ok, const std::string &pw) { app.admin_password_entered(ok, pw); });
+		};
+	}
+	List *list_ = nullptr;
+	Ctl *window_ = nullptr, *info_ = nullptr;
+	std::vector<SessionClient *> shown_;
+	SessionClient *selected_ = nullptr;
+	std::string sig_;
+	uint32_t last_refresh_ = 0;
+};
+
+// DE_CEditString (Core ObjInitContents 0x701e34d0, SetupControls 0x701e3520, ObjUpdate
+// 0x701e37f0): over the match, a text field of at most 70 characters at InputField, Ok (Enter)
+// and Cancel (Esc); either closes it, Cancel leaving no UserInput. Its folder is taken as Chat.
+class EditStringPage : public UIManager {
+public:
+	EditStringPage(GameObject *ui, const std::string &title) : UIManager(title, "Chat") {
+		script = ui;
+		uses_transition = false;
+		show_main_frame = false;
+		autopause = false;
+	}
+	void setup_controls(AppManager &app) override {
+		Gui &g = *gui;
+		Ctl *field = g.place(marker(app, "InputField"));
+		field->set_frame(2, true);
+		field->set_fill(theme::kWindowBack);
+		edit_ = field->add<Edit>("", 70);
+		edit_->len_y = g.vy(25);
+		edit_->from_top = 2;
+		edit_->on_enter = [this, &app] { finish(app, true); };
+		Ctl *buttons = field->add<Ctl>();
+		buttons->len_x = g.vx(200), buttons->from_right = g.vx(10);
+		buttons->len_y = g.vy(25), buttons->from_bottom = 0;
+		auto *ok = buttons->add<Button>("Ok", Button::Push);
+		ok->scale(0, 0, 0.45f, 1);
+		ok->keys = {kKeyReturn};
+		ok->on_click = [this, &app] { finish(app, true); };
+		auto *cancel = buttons->add<Button>("Cancel", Button::Push);
+		cancel->scale(0.55f, 0, 1, 1);
+		cancel->keys = {kKeyEscape};
+		cancel->on_click = [this, &app] { finish(app, false); };
+		g.set_focus(edit_);
+	}
+
+private:
+	void finish(AppManager &app, bool ok) {
+		if (done_) return;
+		done_ = true;
+		for (auto &sp : app.world.sessions) {
+			auto it = sp->ui.find(script);
+			if (it == sp->ui.end()) continue;
+			it->second.input = ok ? edit_->str : "";
+			it->second.shown = false;
+		}
+		if (app.ui_active(this)) app.set_next(nullptr, false);
+	}
+	Edit *edit_ = nullptr;
+	bool done_ = false;
+};
+
 // DE_COptionsUIManager (OMF ObjInitContents 0x3505b060, SetupControls 0x3505d0e0, click
 // 0x3505e170) and its panel robots in WINDOW: Audio, Video (0x3505eef0), Gameplay (0x3505b170),
 // Network (0x3505bc60) and Controls (0x3505f6e0). No panel is open at first; every button click
@@ -2071,7 +2260,15 @@ void UIManager::activate(AppManager &app) {
 	backed_out = false;
 	read_only = false;
 	activated = true;
+	if (script) net_ui_activated(w, script);
 	if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] activate %s\n", w.frame(), name.c_str());
+}
+
+bool UIManager::update_required(uint32_t now) {
+	if (!update_started_) update_started_ = true, update_last_ = now - update_interval;
+	if (now - update_last_ < update_interval) return false;
+	update_last_ = now;
+	return true;
 }
 
 // DE_CUIManager::Deactivate (Core 0x701eb6e0).
@@ -2133,6 +2330,57 @@ AppManager::AppManager(World &w) : world(w) {
 	world.impulses->attach("In Game Menu", [this](bool up) {
 		if (!up) in_game_menu_impulse();
 	});
+	// DE_CClientBrowserFactory::Init (Core 0x701dd4d0): "Client Browser" on Tab.
+	world.impulses->set_default_hotkey("Client Browser", 9, false, false, false);
+	world.impulses->attach("Client Browser", [this](bool up) {
+		if (!up) client_browser_impulse();
+	});
+	world.launch_edit_string = [this](GameObject *ui) {
+		std::string title;
+		for (auto &sp : world.sessions) {
+			if (auto it = sp->ui.find(ui); it != sp->ui.end()) title = it->second.description;
+		}
+		set_next(std::make_shared<EditStringPage>(ui, title), true);
+	};
+}
+
+// DE_CSessionInfoInGameRobot::ProcessButtonClickEvent (OMF 0x3501b500), its Admin button's
+// password: on the server it becomes the remote admin password (saved, every administrator
+// revoked; none given revokes them only); a client sends it to the server (0x1b).
+void AppManager::admin_password_entered(bool ok, const std::string &pw) {
+	NetSession *n = net_session(world);
+	const bool server = net_role(world) != NetRole::Client;
+	auto revoke = [n] {
+		if (!n || !n->session) return;
+		for (auto &c : n->session->clients) c->admin_level = 0;
+	};
+	if (!ok || pw.empty()) {
+		if (server && ok) {
+			revoke();
+			notify("Remote Administration Disabled", "No password supplied, therefore remote administration will be disabled.");
+		}
+		return;
+	}
+	if (!server) return net_admin_login(world, pw);
+	if (pw != registry_string("Network\\Remote Admin Password")) {
+		set_registry_string("Network\\Remote Admin Password", pw);
+		notify("Password Changed", "Remote administration password changed to '" + pw + "'.  Current remote administrator privelages have been revoked.");
+		revoke();
+	}
+	if (n) n->admin_password = pw;
+}
+
+// DE_CClientBrowserFactory::ProcessEvent (Core 0x701dd530): with no page up, over a network
+// session, its browser opens; with one up, an active browser closes.
+void AppManager::client_browser_impulse() {
+	if (current || next) {
+		if (client_browser_ && current == client_browser_ && client_browser_->activated) set_next(nullptr, false);
+		return;
+	}
+	NetSession *n = net_session(world);
+	if (!n || !n->session) return;
+	if (!client_browser_) client_browser_ = std::make_shared<ClientBrowser>();
+	set_next(client_browser_, true);
 }
 
 namespace {
@@ -2203,7 +2451,7 @@ bool AppManager::in_game_menu_impulse() {
 	SessionState *s = world.sessions.back().get();
 	while (s->owner) s = s->owner;
 	if (!in_game_menu_) in_game_menu_ = std::make_shared<InGameMenu>();
-	in_game_menu_->folder = s->single_player ? "InGameMenuSinglePlayer" : "InGameMenuServer";
+	in_game_menu_->folder = s->single_player ? "InGameMenuSinglePlayer" : net_role(world) == NetRole::Client ? "InGameMenuClient" : "InGameMenuServer";
 	delete_stack(true);
 	set_next(in_game_menu_, true);
 	return true;
@@ -2667,6 +2915,9 @@ void AppManager::update() {
 	set_active(session_overlay, current && under_session && current->show_overlay);
 	if (transition_state != 0 || (!first_transition && ((current && page_finished) || next)) || page_finished) transition_ui();
 	if (current && current->activated) current->update(*this);
+	// The com interface's Update on a client: the active page asks for its update (0x09).
+	if (current && current->activated && net_role(world) == NetRole::Client && current->update_required(world.system_ms()))
+		net_request_page_update(world, current->script, current->is_client_browser());
 	if (!next || next->begun) {
 		if (current) {
 			if (!current->activated && current->begun && !page_finished) current->activate(*this);
