@@ -1,6 +1,7 @@
 #include "game/netgame.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include "de/md5.h"
@@ -117,6 +118,7 @@ NetOptions net_options(const std::map<std::string, std::string> &r) {
 	o.player_name = reg_str(r, "Network\\Player Name");
 	o.server_name = reg_str(r, "Network\\Server Name");
 	o.password = reg_str(r, "Network\\Server Password");
+	o.admin_password = reg_str(r, "Network\\Remote Admin Password");
 	int port = reg_int(r, "Network\\Winsock\\Listener Port", 0);
 	o.port = port > 0 && port < 65536 ? uint16_t(port) : net::kDefaultPort;
 	o.kick_ms = uint32_t(std::max(1000, reg_int(r, "Network\\Kick Time", 60000)));
@@ -162,6 +164,10 @@ bool decode_server_info(const std::vector<uint8_t> &d, NetServerInfo &out) {
 	return in.ok;
 }
 
+namespace {
+uint64_t steady_ms() { return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
+}  // namespace
+
 NetGame::NetGame(World &w) : w_(w) {}
 
 NetGame::~NetGame() { close(); }
@@ -205,6 +211,15 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 	net_ = std::make_unique<NetSession>(w_, NetRole::Server, cfg);
 	w_.session = keep;
 	net_->notify = notify;
+	net_->admin_password = o.admin_password;
+	net_->on_ban = [this](net::Endpoint *link, uint32_t hours) {
+		for (auto &[peer, c] : accepted_) {
+			if (peer != link) continue;
+			bans_[peer->address().ip] = steady_ms() + uint64_t(hours) * 3600000;
+			printf("net: %s banned for %u hours\n", c->player_name.c_str(), hours);
+			host_->disconnect(peer, false);
+		}
+	};
 	host_->discovery_reply = [this] {
 		NetServerInfo i;
 		i.protocol = kNetProtocol;
@@ -268,6 +283,7 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 				if (old != &p && old->address().ip == p.address().ip && cl->player_name == (name.empty() ? "Player" : name)) previous = old;
 			}
 		}
+		if (auto b = bans_.find(p.address().ip); reason.empty() && b != bans_.end() && steady_ms() < b->second) reason = "Banned From Server";
 		if (reason.empty() && !previous && int(hosted_->clients.size()) >= hosted_->max_player_clients) reason = "The server is full.";
 		else if (reason.empty() && !opt_.password.empty() && password != opt_.password) reason = "The password is not correct.";
 		if (!reason.empty()) {
@@ -441,6 +457,10 @@ void NetGame::update() {
 		if (!host_) return;
 	}
 	if (net_) net_->update();
+	if (net_ && net_->leaving) {
+		const std::string title = net_->leave_title, text = net_->leave_text;
+		return fail(title, text);
+	}
 	host_->service();
 }
 

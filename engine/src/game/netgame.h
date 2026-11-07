@@ -26,7 +26,7 @@ const char *net_engine_version();
 std::array<uint8_t, 16> net_data_hash(const de::World &data);
 
 struct NetOptions {
-	std::string player_name, server_name, password;
+	std::string player_name, server_name, password, admin_password;
 	uint16_t port = net::kDefaultPort;
 	net::Delay delay;
 	uint32_t kick_ms = 60000;
@@ -85,6 +85,7 @@ private:
 	std::map<net::EnetPeer *, SessionClient *> accepted_;
 	std::array<uint8_t, 16> hash_{};
 	uint32_t instance_ = 0;
+	std::map<uint32_t, uint64_t> bans_;  // by address: until (steady ms)
 };
 
 }  // namespace game

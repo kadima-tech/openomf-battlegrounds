@@ -39,6 +39,7 @@ struct SessionClient {
 	// DE_CClient +0x70, +0x74, +0xa4 and its kick votes {1 stay / -1 kick / 0, client ID} (0x0b / 0x0c).
 	int32_t ping = -1, admin_level = 0, votes_needed = 0;
 	std::vector<std::pair<int32_t, uint32_t>> kick_votes;
+	int32_t my_vote = 0;  // this machine's LocalVoteToKick (-1) / LocalVoteToStay (1) on it
 };
 
 struct SessionSlot {
@@ -97,6 +98,8 @@ struct SessionState {
 		bool pending = false;
 		bool shown = false;             // launched and not yet completed
 		uint32_t remote_id = 0;         // a client's copy of a page the server launched (0x03): its ID there
+		bool edit_string = false;       // a CEditString (NewEditString)
+		std::string input;              // its UserInput, empty when cancelled
 	};
 	std::map<const GameObject *, UiManager> ui;
 	std::map<std::string, de::Guid> ui_choices;  // "Choose Environment" -> description GUID

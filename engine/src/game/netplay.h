@@ -52,6 +52,10 @@ NetSession *net_session(World &w);
 void net_change_fighter(World &w);
 // A UI manager became active: a client's copy of a server page sends 0x06.
 void net_ui_activated(World &w, GameObject *ui);
+// A client's active page wants its update (0x09): a copy of a server page, or the client browser.
+void net_request_page_update(World &w, GameObject *ui, bool client_browser);
+// The Admin button on a client: the password goes to the server (0x1b).
+void net_admin_login(World &w, const std::string &password);
 
 // --- The state managers' network side (replay.cpp) ------------------------------------------
 
@@ -161,6 +165,16 @@ public:
 	// The in-game menu's Change Fighter on a client: ClientReselectFighter (0x1d).
 	void reselect_fighter();
 	void send_remote_active(uint32_t id);
+	void request_page_update(uint8_t kind, uint32_t id);
+	void send_user_message(Peer &p, const std::string &title, const std::string &text);
+	void send_raw(std::vector<uint8_t> data);
+	// BanFromServer: the client hears why (0x1a) and is dropped (on_ban).
+	void ban(SessionClient &c, const std::string &reason, uint32_t hours);
+	std::function<void(net::Endpoint *, uint32_t hours)> on_ban;
+	std::string admin_password;  // the session info's (Network\Remote Admin Password)
+	// A client banned by the server leaves with this notification.
+	bool leaving = false;
+	std::string leave_title, leave_text;
 	SessionState *session = nullptr;  // the network session (the top-level one)
 	uint32_t own_id = 0;              // a client's ID in the roster
 	std::function<void(const std::string &title, const std::string &text)> notify;
@@ -188,6 +202,7 @@ private:
 	void server_flow(uint32_t now);
 	void client_flow(uint32_t now);
 	void client_data(uint32_t now);
+	void update_vote_results();
 	void report(int status);
 	void send_clock(uint32_t now);
 	void receive_roster(const std::vector<uint8_t> &d, size_t pos);
