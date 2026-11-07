@@ -226,6 +226,9 @@ add_executable(pcc tools/pcc.cpp)
 target_link_libraries(pcc PRIVATE vm)
 add_executable(openbg-brain tools/brain.cpp)
 target_link_libraries(openbg-brain PRIVATE vm)
+# A registry with everything unlocked, for playtesters (tools/unlock_all.cpp).
+add_executable(openbg-unlock-all tools/unlock_all.cpp)
+target_link_libraries(openbg-unlock-all PRIVATE game)
 add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg-fight PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)

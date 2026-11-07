@@ -125,6 +125,8 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   checks the transport on localhost.
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
+`openbg-unlock-all <Data> <registry.txt>` writes a registry with everything the game locks unlocked, for playtesters (`tools/unlock_all.cpp`): id 0 on each description locked by default, the 22 RECON DATA stats (ids 100-121) on each pilot, and every session master's starting matches (0x10063 + n); the host's arena toggle (0xffff) is left alone. An existing file keeps its other values. A playtester puts the result in their settings folder as `registry.txt` (see the Registry entry in PLACEHOLDERS.md for the folder); with a registry present the first-run Basic Training is skipped. Build it from the patched data (the default `OPENBG_DATA_DIR`) so 2.123's content is included; add-ons in `OPENBG_ADDONS` are unlocked too.
+
 `deobj-dump scripts <file.DEObjects> <dir>` extracts a data file's script source (into your local copy only; it is the game's).
 
 ## The content editor
