@@ -10,6 +10,7 @@
 #include <functional>
 #include <tuple>
 
+#include "game/native_math.h"
 #include "game/replay.h"
 #include "game/forces.h"
 #include "game/netplay.h"
@@ -144,6 +145,10 @@ void register_core_natives(World &w) {
 	});
 	reg("CObject::float DifferenceBetween(float,float)",
 	    [](const NativeContext &c) { c.ret_f32(std::fabs(c.arg<float>(0) - c.arg<float>(1))); });
+	// RaiseToPowerCaller (Core 0x70045c90): pow of the two ints through __ftol.
+	reg("CObject::int RaiseToPower(int,int)", [](const NativeContext &c) {
+		c.ret_u32(uint32_t(ftol(std::pow(double(c.arg<int32_t>(0)), double(c.arg<int32_t>(1))))));
+	});
 	reg("CObject::int NumDescendants()", [](const NativeContext &c) {
 		auto *o = c.self();
 		c.ret_u32(o ? uint32_t(count_descendants(o)) : 0);
@@ -190,6 +195,7 @@ void register_core_natives(World &w) {
 			return;
 		}
 		bool was = in_scene(*o);
+		const GameObject *scene_before = c.world.actor_scene(o);
 		if (o->parent) {
 			auto &v = o->parent->children;
 			v.erase(std::remove(v.begin(), v.end(), o), v.end());
@@ -197,6 +203,13 @@ void register_core_natives(World &w) {
 		o->parent = p;
 		if (p) {
 			p->children.push_back(o);
+		}
+		// DE_CActor::ObjSetParent (Core 0x7008afb0): an actor joining an actor of another scene is
+		// added to that scene (vtable +0x130), its passive references created and executors started.
+		if (!scene_before && c.world.actor_scene(o)) {
+			if (o->is("Actor\\PassiveReference") && o->file) o = c.world.resolve_passive_reference(o);
+			if (o) c.world.prepare_branch(o);
+			return;
 		}
 		c.world.parented(o, was);
 	});

@@ -1,3 +1,4 @@
+#include "game/native_math.h"
 #include "game/particles.h"
 
 #include "game/session.h"
@@ -128,6 +129,11 @@ const de::ParticleRendererDef *ParticleSystem::renderer(const de::ObjectRef &r) 
 	return it->second.get();
 }
 
+void ParticleSystem::set_renderer_height(const de::ObjectRef &r, float h) {
+	renderer(r);
+	if (auto it = defs_.find({r.file, r.index}); it != defs_.end()) it->second->height = h;
+}
+
 void ParticleSystem::set_spawning(GameObject *actor, bool on) {
 	actor_spawning_[actor] = on;
 	for (auto &in : instances_) {
@@ -140,6 +146,14 @@ void ParticleSystem::set_generator_spawning(const de::ObjectRef &generator, cons
 	for (auto &in : instances_) {
 		const de::ObjectRef &g = in->def->generator.object;
 		if (in->actor == actor && g.file == generator.file && g.index == generator.index) in->spawning = on;
+	}
+}
+
+void ParticleSystem::set_generator_size_multiplier(const de::ObjectRef &generator, const GameObject *actor, float m) {
+	generator_size_[{{generator.file, generator.index}, actor}] = m;
+	for (auto &in : instances_) {
+		const de::ObjectRef &g = in->def->generator.object;
+		if (in->actor == actor && g.file == generator.file && g.index == generator.index) in->size_multiplier = m;
 	}
 }
 
@@ -166,6 +180,7 @@ ParticleInstance &ParticleSystem::instance(GameObject *actor, const de::Particle
 	if (auto sp = actor_spawning_.find(actor); sp != actor_spawning_.end()) in->spawning = sp->second;
 	const de::ObjectRef &g = def->generator.object;
 	if (auto gs = generator_spawning_.find({{g.file, g.index}, actor}); gs != generator_spawning_.end()) in->spawning = gs->second;
+	if (auto gz = generator_size_.find({{g.file, g.index}, actor}); gz != generator_size_.end()) in->size_multiplier = gz->second;
 	// The actor's own copies of the generator's modifiers (where scripts reach them by name).
 	std::function<GameObject *(GameObject *, const de::ObjectRef &)> find = [&](GameObject *o, const de::ObjectRef &r) -> GameObject * {
 		if (o->file == r.file && o->index == r.index) return o;
@@ -392,6 +407,7 @@ void ParticleSystem::forget_destroyed() {
 	std::erase_if(controls_, [&](const auto &kv) { return gone(kv.first); });
 	std::erase_if(actor_spawning_, [&](const auto &kv) { return gone(kv.first); });
 	std::erase_if(generator_spawning_, [&](const auto &kv) { return gone(kv.first.second); });
+	std::erase_if(generator_size_, [&](const auto &kv) { return gone(kv.first.second); });
 	std::erase_if(lights_, [&](const auto &kv) { return gone(kv.first); });
 	std::erase_if(trail_enabled_, [&](const auto &kv) { return gone(kv.first); });
 }
@@ -688,15 +704,16 @@ void ParticleSystem::step(ParticleInstance &in, float now) {
 					v = {rand_to(w, m.box[3] - m.box[0]) + m.box[0], rand_to(w, m.box[4] - m.box[1]) + m.box[1],
 					     rand_to(w, m.box[5] - m.box[2]) + m.box[2]};
 				} else if (m.kind == "MeshSpawner" && !m.mesh_vertices.empty()) {
+					// DE_CMeshSpawner::CommonSpawnerNewParticles (Particles 0x4000d000): order 0 a random
+					// vertex, 1 forwards and 2 backwards round the mesh; 3 forwards and 4 backwards once,
+					// the pass's end dropping this and the other new particles and stopping the instance.
 					int n = int(m.mesh_vertices.size());
-					int k = 0;
-					if (m.mesh_order == 0) {
-						k = std::min(n - 1, int(random01(w) * float(n)));
-					} else if (m.mesh_order == 2) {
-						if (pm.serial <= 0) pm.serial = n;
-						k = --pm.serial % n;
-					} else {
-						k = (p.serial % n + n) % n;
+					MeshStep step = mesh_vertex_step(m.mesh_order, n, pm.mesh_next);
+					int k = step.vertex >= 0 ? step.vertex : std::min(n - 1, int(random01(w) * float(n)));
+					if (step.pass_done) {
+						for (size_t j = i; j < in.particles.size(); ++j) in.particles[j].flags &= ~(kAlive | kNew);
+						in.spawning = false;
+						break;
 					}
 					v = m.mesh_vertices[size_t(k)];
 				}
@@ -1226,6 +1243,30 @@ void register_particle_natives(World &w) {
 		g_generator_instances[h] = {ref, a};
 		c.ret_u32(h);
 	});
+	// InstanceCaller (Core 0x701d5190): the actor's instance (one is made when its renderer is
+	// prepared; ours are made at first use, so the handle stands for it until then).
+	reg("CParticleGenerator::class CInstance Instance(class CActor)", [](const NativeContext &c) {
+		GameObject *g = c.self(), *a = c.arg_object(0);
+		if (!g || !g->file || !a) {
+			c.ret_u32(0);
+			return;
+		}
+		de::ObjectRef ref{g->file, g->index};
+		for (auto &[h, v] : g_generator_instances) {
+			if (v.first.file == ref.file && v.first.index == ref.index && v.second == a) {
+				c.ret_u32(h);
+				return;
+			}
+		}
+		uint32_t h = c.mem().alloc(8);
+		g_generator_instances[h] = {ref, a};
+		c.ret_u32(h);
+	});
+	// InstanceSetParticleSizeMultiplierCaller (Core 0x701d5280): the instance's +0x64.
+	reg("CParticleGenerator::CInstance::SetParticleSizeMultiplier(float)", [](const NativeContext &c) {
+		auto it = g_generator_instances.find(c.self_handle());
+		if (it != g_generator_instances.end()) c.world.particles->set_generator_size_multiplier(it->second.first, it->second.second, c.arg<float>(0));
+	});
 	for (auto [sig, on] : {std::pair{"CParticleGenerator::CInstance::SpawningOff()", false}, std::pair{"CParticleGenerator::CInstance::SpawningOn()", true}}) {
 		reg(sig, [on = on](const NativeContext &c) {
 			auto it = g_generator_instances.find(c.self_handle());
@@ -1245,6 +1286,11 @@ void register_particle_natives(World &w) {
 		GameObject *r = c.self();
 		const de::ParticleRendererDef *d = r && r->file ? c.world.particles->renderer({r->file, r->index}) : nullptr;
 		if (d) c.world.particles->set_value_color(d->color_ref, {c.arg<float>(0), c.arg<float>(1), c.arg<float>(2), -1});
+	});
+	// SetHeightScaleCaller (Particles 0x4000ff50): the renderer's +0x74, shared as the renderer object is.
+	reg("CBillboardedQuadParticleRenderer::SetHeightScale(float)", [](const NativeContext &c) {
+		GameObject *r = c.self();
+		if (r && r->file) c.world.particles->set_renderer_height({r->file, r->index}, c.arg<float>(0));
 	});
 	reg("CValueRGBA::Set(float,float,float,float)", [](const NativeContext &c) {
 		if (GameObject *v = c.self(); v && v->file) c.world.particles->set_value_color({v->file, v->index}, {c.arg<float>(0), c.arg<float>(1), c.arg<float>(2), c.arg<float>(3)});

@@ -168,6 +168,10 @@ target_link_libraries(de-tests PRIVATE vm)
 add_executable(net-tests tests/net_tests.cpp)
 target_link_libraries(net-tests PRIVATE net)
 add_test(NAME net-tests COMMAND net-tests)
+# Pure computations behind natives (src/game/native_math.h), no game data needed.
+add_executable(game-unit-tests tests/game_unit_tests.cpp)
+target_include_directories(game-unit-tests PRIVATE src)
+add_test(NAME game-unit-tests COMMAND game-unit-tests)
 # The port follows the last official patch, 2.123 (PATCHES.md); the disc's 2.090 data still loads.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../source/patched/v2123/Data")
 	set(OPENBG_DEFAULT_DATA "${CMAKE_CURRENT_SOURCE_DIR}/../source/patched/v2123/Data")
@@ -226,6 +230,9 @@ add_executable(pcc tools/pcc.cpp)
 target_link_libraries(pcc PRIVATE vm)
 add_executable(openbg-brain tools/brain.cpp)
 target_link_libraries(openbg-brain PRIVATE vm)
+# A registry with everything unlocked, for playtesters (tools/unlock_all.cpp).
+add_executable(openbg-unlock-all tools/unlock_all.cpp)
+target_link_libraries(openbg-unlock-all PRIVATE game)
 add_executable(openbg-fight app/fight.cpp app/game_view.cpp app/scene_lights.cpp
 	app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp app/music_player.cpp app/glow.cpp)
 target_link_libraries(openbg-fight PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL ZLIB::ZLIB)

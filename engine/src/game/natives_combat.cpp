@@ -17,6 +17,7 @@
 #include <tuple>
 
 #include "de/image.h"
+#include "game/native_math.h"
 #include "game/netplay.h"
 #include "game/replay.h"
 #include "game/forces.h"
@@ -397,6 +398,13 @@ void World::parented(GameObject *o, bool was_in_scene) {
 	};
 	clear(o);
 	number_affectors(o);
+}
+
+const GameObject *World::actor_scene(const GameObject *o) const {
+	if (!o || !o->is_actor) return nullptr;
+	while (o->parent && o->parent->is_actor) o = o->parent;
+	if (o->parent || !in_scene(*o)) return nullptr;
+	return std::find(scene_roots.begin(), scene_roots.end(), o) != scene_roots.end() ? o : nullptr;
 }
 
 void World::number_affectors(GameObject *root) {
@@ -852,6 +860,14 @@ void register_combat_natives(World &w) {
 			c.world.forces->deliver(*force, ct);
 		}
 	});
+	// RemoveByOwnerTouchedCaller (Core 0x7007a9e0): every collision whose touched affector's owner
+	// (OwnerActor) is the actor goes, the last first.
+	reg("CAffector::CCollisionResults::RemoveByOwnerTouched(class CActor)", [=](const NativeContext &c) {
+		Tester *t = tester_of_results(c);
+		GameObject *a = c.arg_object(0);
+		if (!t) return;
+		std::erase_if(t->results, [&](const Collision &col) { return col.touched && c.world.affector_owner(col.touched) == a; });
+	});
 	reg("CAffector::CCollisionResults::int NumCollisions()", [=](const NativeContext &c) {
 		Tester *t = tester_of_results(c);
 		c.ret_u32(t ? uint32_t(t->results.size()) : 0);
@@ -992,7 +1008,7 @@ void register_combat_natives(World &w) {
 		if (!a || !t) return false;
 		t->results.clear();
 		std::vector<const GameObject *> owners;
-		for (auto &ct : touches(c.world, *a, t->groups)) {
+		for (auto &ct : touches(c.world, *a, t->groups, false, true)) {
 			GameObject *owner = c.world.affector_owner(ct.touched);
 			if (t->no_repeat_owners) {
 				if (std::find(owners.begin(), owners.end(), owner) != owners.end()) continue;
@@ -1108,7 +1124,7 @@ void register_combat_natives(World &w) {
 		o->active = true;
 		if (!was && in_scene(*o)) c.world.prepare_branch(o);
 	});
-	reg("CActor::Deactivate()", [](const NativeContext &c) { if (auto *o = c.self()) o->active = false; });
+	reg("CActor::Deactivate()", [](const NativeContext &c) { if (auto *o = c.self()) o->active = false, o->added = false; });
 	reg("CAffector::SetOwnerActor(class CActor)", [](const NativeContext &c) { if (auto *o = c.self()) o->owner_actor = c.arg_object(0); });
 	reg("CAffector::class CActor OwnerActor()", [](const NativeContext &c) {
 		auto *o = c.self();
@@ -1166,12 +1182,9 @@ void register_combat_natives(World &w) {
 		float f = o->momentum[1] * c.arg<float>(0);
 		o->momentum[1] = f >= 1 ? 0 : (1 - f) * o->momentum[1];
 	});
+	// DampenMomentumCaller (OMF 0x35022260); the other Dampen*Momentum scale by 1 - |v| x amount.
 	reg("COMF2Fighter::DampenMomentum(float)", [](const NativeContext &c) {
-		auto *o = c.self();
-		if (!o) return;
-		float f = length(o->momentum) * c.arg<float>(0);
-		float k = f >= 1 ? 0 : 1 - f;
-		for (auto &v : o->momentum) v *= k;
+		if (auto *o = c.self()) o->momentum = dampen_momentum(o->momentum, c.arg<float>(0));
 	});
 	reg("CActor::class CCoordinateSystem WorldOrientation()", [](const NativeContext &c) {
 		auto *o = c.self();

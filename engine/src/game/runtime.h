@@ -154,7 +154,7 @@ struct GameObject {
 	bool spawned = false;  // a fighter prepared into the scene (DE_CFighterPhysics +0x1a8): in play
 	bool user_controlled = false;  // reads World::input; otherwise driven by AI commands
 	bool autoplayed = false;       // OPENBG_AUTOPLAY: AI-driven, but still the user's to the scripts
-	const Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
+	Pilot *pilot = nullptr;  // the fighter's pilot (COMF2Fighter::Pilot())
 	float pilot_time_add = 0;       // a pilot object's +0x7cc (2.123): the static TimeAdd when it was made
 	const std::map<std::string, std::vector<struct InputRequirement>> *inputs = nullptr;  // kind 24 bank
 
@@ -270,6 +270,7 @@ struct GameObject {
 	bool active = true;
 	bool detached = false;  // a global entry's template: outside the scene (no hits, no danger)
 	bool removed = false;   // CScene::Remove: out of the scene until CScene::Add brings it back
+	bool added = false;     // CScene::Add of an inactive actor: in the scene all the same (DE_CScene::Add 0x7006ed50)
 	bool gui = false;       // a root of the front end's GUI scene (ui.h), drawn with its own camera
 	int view = 0;           // a GUI root's scene: 0 the GUI's own, 1 a scene viewer control's
 	float hotspot = 0, falloff = 0;                       // sphere radii
@@ -345,7 +346,7 @@ std::array<float, 3> focal_point(const GameObject &o);
 // An actor under a Folder has no actor parent (DE_CActor::ObjSetParent 0x7008afb0) and a Folder
 // prepares nothing, so it stays out of the scene unless added itself.
 inline bool parked(const GameObject &o) {
-	return o.is_actor && (!o.active || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
+	return o.is_actor && ((!o.active && !o.added) || !de::shown_at_detail(o.actor_flags) || (o.parent && o.parent->class_path == "Folder"));
 }
 inline bool in_scene(const GameObject &o) {
 	if (o.destroyed_seq) return false;
@@ -979,6 +980,9 @@ public:
 	// DE_CActor::ObjSetParent (Core 0x7008afb0): a branch parented into the scene from outside it
 	// is added there and then (Scene().Add), joining the affector list at its end.
 	void parented(GameObject *o, bool was_in_scene);
+	// The scene an actor is in (DE_CObject +0x10): the root of its chain of actor parents, when
+	// that root is in the scene; null for an actor under a non-actor (a session modifier, a folder).
+	const GameObject *actor_scene(const GameObject *o) const;
 	// SetActive's Scene().Add of a branch that has just come out of parking under its parent:
 	// prepared and numbered as enter_scene does, staying in its tree (not a root).
 	void prepare_branch(GameObject *o);
@@ -1104,7 +1108,7 @@ void register_creature_natives(World &w);
 void register_need_natives(World &w);
 void register_music_natives(World &w);
 // The pilot behind a pilot object or a fighter (the fighter's own, else a child pilot's).
-const Pilot *pilot_of(GameObject *o);
+Pilot *pilot_of(GameObject *o);
 void register_simple_physics_natives(World &w);
 // A CData's bytes (DE_CDataBlock), by its block in script memory.
 std::vector<uint8_t> &cdata_bytes(World &w, uint32_t block);

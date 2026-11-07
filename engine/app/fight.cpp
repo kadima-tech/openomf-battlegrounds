@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
 		world.ai_difficulty = difficulty;
 		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
 		static std::deque<game::Pilot> pilots;
-		auto load_pilot = [&](const std::string &who) -> const game::Pilot * {
+		auto load_pilot = [&](const std::string &who) -> game::Pilot * {
 			if (auto *pf = world.data().file("Pilots")) {
 				for (auto &o : pf->objects()) {
 					if (o.class_path == "Actor\\Creature\\Pilot" && o.name == who) {
@@ -474,6 +474,22 @@ int main(int argc, char **argv) {
 				p = q + 1;
 			}
 		}
+		// OPENBG_HEALTH="Jaguar:-95@250": adjust that fighter's health by the amount then, with no attacker
+		// (BFighterStats::AdjustHealthAndStun; several separated by ';').
+		std::vector<std::tuple<std::string, float, int>> healths;
+		if (const char *he = getenv("OPENBG_HEALTH")) {
+			std::string spec = he;
+			for (size_t p = 0; p < spec.size();) {
+				size_t q = spec.find(';', p);
+				std::string item = spec.substr(p, q == std::string::npos ? std::string::npos : q - p);
+				char who[32] = {};
+				float amount = 0;
+				int at = 0;
+				if (sscanf(item.c_str(), "%31[^:]:%f@%d", who, &amount, &at) == 3) healths.emplace_back(who, amount, at);
+				if (q == std::string::npos) break;
+				p = q + 1;
+			}
+		}
 		// OPENBG_FIND="EnergyBoost@2600": where objects of that name are at that frame.
 		std::string find_name;
 		int find_at = -1;
@@ -504,6 +520,19 @@ int main(int argc, char **argv) {
 				if (fr != at) continue;
 				for (auto *fi : fighters) {
 					if (fi->actor->name == who) fi->actor->local.t = p, fi->actor->momentum = {0, 0, 0};
+				}
+			}
+			for (auto &[who, amount, at] : healths) {
+				if (fr != at) continue;
+				for (auto *fi : fighters) {
+					if (fi->actor->name != who) continue;
+					for (game::GameObject *ch : fi->actor->children) {
+						if (!ch->brain || ch->brain->cls.name != "PFighterStats") continue;
+						std::vector<uint8_t> args(16, 0);
+						float stun = 0;
+						memcpy(&args[4], &amount, 4), memcpy(&args[8], &stun, 4);
+						ch->brain->call(world, "AdjustHealthAndStun(class CObject,float,float,class CAttackInfo)", args);
+					}
 				}
 			}
 			for (auto &[who, at] : energies) {
