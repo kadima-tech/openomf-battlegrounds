@@ -11,9 +11,14 @@ endif()
 # macOS takes zlib from its SDK. Windows has none, so a pinned zlib is built and linked statically;
 # ZLIB_* are preset so find_package(ZLIB) in the engine and unshield resolve to it.
 if(WIN32)
+    # zlib 1.4 builds shared, tests and install rules by default, and its shared target
+    # already claims ZLIB::ZLIB; only the static library is wanted here.
+    set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(zlib
-        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
-        URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23)
+        URL https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz
+        URL_HASH SHA256=02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584)
     FetchContent_MakeAvailable(zlib)
     target_include_directories(zlibstatic INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
     add_library(ZLIB::ZLIB ALIAS zlibstatic)
