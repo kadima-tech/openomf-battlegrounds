@@ -717,10 +717,10 @@ void Executor::restore(const std::vector<RestoreFrame> &frames,
 		base_ = base;
 		method_ = &m;
 		cls_ = m.cls;
-		// A restored frame has no caller, so its instance parameters are made here too.
+		// SetupStack on the zeroed frame: an instance parameter with no caller's value is made new.
 		std::vector<uint32_t> owned;
 		for (auto &ci : m.cm->instances) {
-			if (ci.value + 4 > m.frame_size() || (ci.flag && !host_.restore_param_instances())) continue;
+			if (ci.value + 4 > m.frame_size()) continue;
 			uint32_t a = host_.new_instance(*this, ci.class_index, ci.count);
 			set<uint32_t>(ci.value, a);
 			if (ci.flag) owned.push_back(a);

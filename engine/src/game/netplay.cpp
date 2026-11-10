@@ -156,14 +156,12 @@ Writer message(Msg m) {
 }  // namespace
 
 NetSession::NetSession(World &w, NetRole role, NetConfig cfg) : w_(w), role_(role), cfg_(cfg) {
-	w.online = true;
 	net_managers_begin(w, role, w.session.get());
 	session = master_session(w.session.get());
 	g_sessions[&w] = this;
 }
 
 NetSession::~NetSession() {
-	w_.online = false;
 	net_managers_end(w_);
 	if (auto it = g_sessions.find(&w_); it != g_sessions.end() && it->second == this) g_sessions.erase(it);
 }
