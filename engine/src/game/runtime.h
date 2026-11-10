@@ -977,9 +977,6 @@ public:
 	uint32_t global_entry(vm::Executor &ex, uint32_t index) override;
 	uint32_t final_instance(vm::Executor &ex, uint32_t index) override;
 	uint32_t new_instance(vm::Executor &ex, uint32_t class_index, uint32_t count) override;
-	// Online only: single player and its replays keep restored frames' parameters empty, as before.
-	bool restore_param_instances() const override { return online; }
-	bool online = false;  // a network session runs (NetSession)
 	uint32_t new_local_instance(vm::Executor &ex, uint32_t class_index, uint32_t source) override;
 	void destroy_instance(vm::Executor &ex, uint32_t instance) override;
 	// A native value-class instance, initialised as its constructor would (CAttackInfo defaults).

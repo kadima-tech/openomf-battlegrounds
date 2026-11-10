@@ -62,8 +62,6 @@ public:
 	virtual uint32_t new_instance(Executor &ex, uint32_t index, uint32_t count);
 	// op 42: copy-construct a local instance of class `index` from `source` (may be 0).
 	virtual uint32_t new_local_instance(Executor &, uint32_t index, uint32_t source);
-	// A restored frame (no caller) gets its instance parameters made too, to take their values.
-	virtual bool restore_param_instances() const { return false; }
 	// CloseStack: an instance SetupStack made for a frame that has closed.
 	virtual void close_instance(Executor &, uint32_t /*instance*/) {}
 	// The class's destroy (vtable +0xd4) on an op 42 copy as its frame ends.

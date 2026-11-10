@@ -236,6 +236,10 @@ void World::enter_scene(GameObject *root) {
 		if (o->is("Actor\\PassiveReference") && o->file && o != root) {
 			if (GameObject *n = resolve_passive_reference(o)) {
 				o = branch[i] = n;
+				if (parked(*n)) {  // a deactivated target stays out of the scene, its executors unstarted
+					branch[i] = nullptr;
+					continue;
+				}
 			} else if (!object(o->handle)) {
 				branch[i] = nullptr;  // created outside the branch
 				continue;
