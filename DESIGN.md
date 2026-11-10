@@ -36,7 +36,9 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 - **Logo.** "ONE MUST FALL" light brushed metal (only the first pass lit, the base tint unused),
   "BATTLEGROUNDS" bright scrolling fire, unlit (FINDINGS 329); the fire scrolls on every visit.
 - **Frame.** The GUI is laid out in a 4:3 field (x 0..1, y 0..0.75), drawn through a 60° horizontal
-  field of view looking down −Z and stretched to fill the window (FINDINGS 126, 161).
+  field of view looking down −Z and stretched to fill the window (FINDINGS 126, 161). On a window
+  wider than 4:3 the field sits unstretched in the middle, its controls with it, and the 3D scene
+  (tunnel, iris, backdrops) widens to the window's edges.
 - **Buttons.** A hit rectangle over each button's `DisplayArea` mesh. Hover, leave and click go to
   the button's script (`GUIEnter`, `GUILeave`, `GUISelect`), which lights the button's glass panel
   (`LightingGlass`, `LightedGlass_Back` / `_Next`) while the mouse is over it and plays `MouseEnter` /
@@ -113,7 +115,12 @@ The data is the final official patch's (2.123, PATCHES.md); the notes below desc
 
 - **HUD and messages.** Drawn from the scripts' screen-space primitives (text in `Font_Ariel` or the
   in-game `Font_Metalic`, quads, status bars), as the game's own HUD data describes them. One font
-  unit is the text size; HUD letters stretch with the screen's shape (x by its width, y by its height).
+  unit is the text size; at 4:3 and narrower the HUD stretches with the screen's shape (x by its width,
+  y by its height), as the original's. Wider screens keep each element its 4:3 size by the screen's
+  height and attach it to the left edge, the centre or the right edge by the third of the 4:3 screen it
+  sits in: pilot panels, photos, stat bars, names and the scoreboard at the edges, the centre panel,
+  timer, announcements and quote texts in the middle, full-width bands across the whole screen, and
+  what follows a fighter (its mini stats) over it.
   Every text primitive is on screen (crowd responses and pilot quotes too). A text's lines are
   justified one by one, 1.2 font units apart; quotes sit on a dark blue underlay band (0, 0, 0.15 at
   0.75 alpha) as tall as the text, with soft bands above and below. Stat bars fill along

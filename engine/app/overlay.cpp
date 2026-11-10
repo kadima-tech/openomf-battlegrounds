@@ -145,7 +145,7 @@ void OverlayRenderer::quadv(const std::array<float, 8> &xy, const std::array<flo
 	const int order[6] = {0, 1, 2, 0, 2, 3};
 	for (int i = 0; i < 6; ++i) {
 		size_t k = size_t(order[i]) * 2;
-		q[i][0] = xy[k], q[i][1] = xy[k + 1], q[i][2] = uv[k], q[i][3] = uv[k + 1];
+		q[i][0] = wide_ ? wide_x(xy[k]) : xy[k], q[i][1] = xy[k + 1], q[i][2] = uv[k], q[i][3] = uv[k + 1];
 	}
 	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 	glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STREAM_DRAW);
@@ -195,6 +195,7 @@ std::vector<float> OverlayRenderer::text_vertices(const FontGL &f, const game::W
 void OverlayRenderer::text(const FontGL &f, const game::World::Primitive &t, const float *rgba, float sx, float dx, float dy) {
 	std::vector<float> v = text_vertices(f, t, sx, t.height, dx, dy);
 	if (v.empty()) return;
+	if (wide_) for (size_t i = 0; i < v.size(); i += 4) v[i] = wide_x(v[i]);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(v.size() * sizeof(float)), v.data(), GL_STREAM_DRAW);
 	glUniform4fv(glGetUniformLocation(prog_, "color"), 1, rgba);
@@ -282,7 +283,11 @@ void OverlayRenderer::draw(const game::World &world, int width, int height) {
 	// Larger sort values are further back.
 	std::stable_sort(order.begin(), order.end(), [](auto *a, auto *b) { return a->sort > b->sort; });
 	auto mode = [&](int m) { glUniform1i(glGetUniformLocation(prog_, "mode"), m); };
+	const bool wide = int64_t(width) * 3 > int64_t(height) * 4;
+	wide_k_ = wide ? 4.0f * float(height) / (3.0f * float(width)) : 1.0f;
 	for (auto *t : order) {
+		wide_ = wide && !game::World::full_width(*t);
+		wide_anchor_ = wide_ ? game::World::screen_anchor(*t) : 0.0f;
 		if (t->modulate) glBlendFunc(GL_DST_COLOR, GL_ZERO);
 		else glBlendFunc(GL_SRC_ALPHA, t->additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 		if (t->kind == game::World::Primitive::Text) {
@@ -306,7 +311,7 @@ void OverlayRenderer::draw(const game::World &world, int width, int height) {
 		mode(tex ? 0 : 2);
 		const float *b = t->box;
 		if (t->kind == game::World::Primitive::Quad) {
-			quad(b[0], b[1], b[2], b[3], t->uv[0], t->uv[1], t->uv[2], t->uv[3], t->rgba);
+			quad(wide_x(b[0]), b[1], wide_x(b[2]), b[3], t->uv[0], t->uv[1], t->uv[2], t->uv[3], t->rgba);
 			continue;
 		}
 		// CStatusBarPrimitive::UpdateBar (0x7012d210): the body (the texture's lower half) up to one
@@ -327,6 +332,7 @@ void OverlayRenderer::draw(const game::World &world, int width, int height) {
 			quadv({x0, s, x1, s, x1, hi, x0, hi}, {u, 0.5f, u, 0, 0.9f, 0, 0.9f, 0.5f}, t->rgba);
 		}
 	}
+	wide_ = false;
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable(GL_BLEND);
 	glEnable(GL_DEPTH_TEST);

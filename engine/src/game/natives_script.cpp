@@ -928,7 +928,7 @@ void register_script_natives(World &w) {
 		if (auto *t = text(c)) t->text = c.arg_string(0) == "Hold attack buttons to accelerate time" ? "" : c.arg_string(0);
 	});
 	reg(tp + "SetPosition(float,float,float)", [text](const NativeContext &c) {
-		if (auto *t = text(c)) t->x = c.arg<float>(0), t->y = c.arg<float>(1), t->z = c.arg<float>(2);
+		if (auto *t = text(c)) t->x = c.arg<float>(0), t->y = c.arg<float>(1), t->z = c.arg<float>(2), t->follows_view = c.world.projected(t->x);
 	});
 	reg(tp + "SetHeight(float)", [text](const NativeContext &c) { if (auto *t = text(c)) t->height = c.arg<float>(0); });
 	reg(tp + "SetAsOverlay()", [text](const NativeContext &c) { if (auto *t = text(c)) t->overlay = true; });
@@ -1012,6 +1012,7 @@ void register_script_natives(World &w) {
 		if (auto *t = text(c)) {
 			for (int i = 0; i < 4; ++i) t->box[i] = c.arg<float>(size_t(i));
 			t->z = c.arg<float>(4);
+			t->follows_view = c.world.projected((t->box[0] + t->box[2]) / 2);
 		}
 	});
 	const std::string sb = "CPrimitiveGeneratorMesh::CStatusBarPrimitive::";
@@ -1019,6 +1020,7 @@ void register_script_natives(World &w) {
 		if (auto *t = text(c)) {
 			for (int i = 0; i < 4; ++i) t->box[i] = c.arg<float>(size_t(i));
 			t->z = c.arg<float>(4);
+			t->follows_view = c.world.projected((t->box[0] + t->box[2]) / 2);
 		}
 	});
 	reg(sb + "SetValue(float)", [text](const NativeContext &c) { if (auto *t = text(c)) t->value = std::clamp(c.arg<float>(0), 0.0f, 1.0f); });

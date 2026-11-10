@@ -502,7 +502,9 @@ void register_transform_natives(World &w) {
 	reg("CRenderer::ConvertFromWorldToScreen(class CVector)", [](const NativeContext &c) {
 		uint32_t v = c.arg<uint32_t>(0);
 		if (!v) return;
-		write_vec(c.mem(), v, c.world.world_to_screen ? c.world.world_to_screen(read_vec(c.mem(), v)) : std::array<float, 3>{0, 0, 0});
+		auto sp = c.world.world_to_screen ? c.world.world_to_screen(read_vec(c.mem(), v)) : std::array<float, 3>{0, 0, 0};
+		c.world.projected_x[c.world.projected_n++ % c.world.projected_x.size()] = sp[0];
+		write_vec(c.mem(), v, sp);
 	});
 	reg("CScene::dword PreciseTime()", [](const NativeContext &c) {
 		const GameObject *o = c.owner();

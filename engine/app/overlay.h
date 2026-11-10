@@ -62,6 +62,10 @@ private:
 	void quadv(const std::array<float, 8> &xy, const std::array<float, 8> &uv, const float *rgba);
 	GLuint image(const game::GameObject *img);
 	GLuint image(const de::ObjectsFile *file, uint32_t index);
+	// The wide-screen layout (World::screen_anchor): x kept at k times its distance from the anchor.
+	float wide_x(float x) const { return wide_ ? wide_anchor_ + (x - wide_anchor_) * wide_k_ : x; }
+	bool wide_ = false;
+	float wide_k_ = 1, wide_anchor_ = 0;
 	std::map<std::string, FontGL> fonts_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> images_;
 	float aspect_ = 16.0f / 9;

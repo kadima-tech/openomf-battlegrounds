@@ -89,13 +89,20 @@ void save_registry(const std::map<std::string, std::string> &reg) {
 
 // The GUI's viewport: the whole window. InitGUI (2004 build 0x408b20) hangs the UI parent actor,
 // scaled (1, 4/3, 1), under the PostSceneView control that fills the window, so the 0..1 x 0..0.75
-// GUI scene is stretched to the window's shape, which is the 4:3 view drawn into it.
+// GUI scene is stretched to the window's shape, which is the 4:3 view drawn into it. Wider windows
+// (a deliberate deviation, PLACEHOLDERS.md) get the centred 4:3 area; the 3D scene widens around it.
 struct Viewport {
 	int x = 0, y = 0, w = 1, h = 1;
+	bool wide = false;
 };
 Viewport gui_viewport(int dw, int dh) {
 	Viewport v;
 	v.w = dw, v.h = dh;
+	if (int64_t(dw) * 3 > int64_t(dh) * 4) {
+		v.wide = true;
+		v.w = int(std::lround(double(dh) * 4 / 3));
+		v.x = (dw - v.w) / 2;
+	}
 	return v;
 }
 
@@ -141,9 +148,11 @@ int main(int argc, char **argv) {
 	int frames = 60;
 	std::string join;  // --join: the server to join at once
 	int port = 0;      // --port
+	int shot_w = 1024, shot_h = 768;  // --size WxH: a screenshot run's frame
 	for (int i = 2; i < argc; ++i) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &shot_w, &shot_h);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
 		else if (!strcmp(argv[i], "--host") && i + 1 < argc) launch = argv[++i], host = true;
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
@@ -725,7 +734,7 @@ int main(int argc, char **argv) {
 		}
 		std::sort(app.resolutions.begin(), app.resolutions.end());
 		// Preferences\Renderer\Resolution X / Y (the Video panel's; the next start) and Full Screen.
-		const int W = shot ? 1024 : std::max(320, app.render_started.res_x), H = shot ? 768 : std::max(240, app.render_started.res_y);
+		const int W = shot ? std::max(320, shot_w) : std::max(320, app.render_started.res_x), H = shot ? std::max(240, shot_h) : std::max(240, app.render_started.res_y);
 		bool fullscreen = !shot && app.registry_bool("Preferences\\Renderer\\Full Screen");
 		SDL_GLContext ctx = nullptr;
 		SDL_Window *win = glu::create_gl_window("One Must Fall: Battlegrounds", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H,
@@ -957,12 +966,13 @@ int main(int argc, char **argv) {
 			} else {
 				glClear(GL_DEPTH_BUFFER_BIT);
 			}
-			glViewport(vpt.x, vpt.y, vpt.w, vpt.h);
+			if (vpt.wide) glViewport(0, 0, dw, dh);
+			else glViewport(vpt.x, vpt.y, vpt.w, vpt.h);
 			glEnable(GL_DEPTH_TEST);
 			float vfov = 2.0f * std::atan(std::tan(hfov / 2) / aspect) / 0.017453292f;
 			float eye[3] = {listener.t[0], listener.t[1], listener.t[2]}, fwd[3] = {0, 0, -1}, up[3] = {0, 1, 0};
 			float proj[16], view[16], vp[16];
-			glu::perspective(proj, vfov, aspect, 0.01f, 100.0f);
+			glu::perspective(proj, vfov, vpt.wide ? float(dw) / float(dh) : aspect, 0.01f, 100.0f);
 			glu::look_view(view, eye, fwd, up);
 			glu::mul(vp, proj, view);
 			render::Lighting game_lighting = render::g_lighting;
@@ -995,6 +1005,7 @@ int main(int argc, char **argv) {
 			auto *picker = dynamic_cast<game::ui::ModelPicker *>(app.current.get());
 			if (picker && picker->activated && picker->camera) {
 				glClear(GL_DEPTH_BUFFER_BIT);
+				if (vpt.wide) glViewport(vpt.x, vpt.y, vpt.w, vpt.h);
 				app::CameraLens lens = app::camera_lens(picker->camera);
 				de::Transform ct = picker->camera->world();
 				auto f = ct.rotate({0, 0, 1}), up = ct.rotate({0, 1, 0});
@@ -1034,6 +1045,7 @@ int main(int argc, char **argv) {
 				particles_r.draw(world, pvp, pview, ceye);
 				particles_r.only = nullptr;
 				render::g_lighting = gui_lighting;
+				if (vpt.wide) glViewport(0, 0, dw, dh);
 			}
 			};
 			render::update_animated_textures(world.image_phases);
@@ -1047,8 +1059,9 @@ int main(int argc, char **argv) {
 			particles_r.only = nullptr;
 			if (!game_shown) {
 				overlay.draw_world(world, vp);
-				overlay.draw(world, vpt.w, vpt.h);
+				overlay.draw(world, vpt.wide ? dw : vpt.w, vpt.h);
 			}
+			if (vpt.wide) glViewport(vpt.x, vpt.y, vpt.w, vpt.h);
 			// The controls: button labels (DE_CButtonControl3d::SetText: 16 of 600 virtual pixels,
 			// centred; white, the colour the screens pass), then a notification over everything.
 			const float white[4] = {1, 1, 1, 1};
@@ -1086,7 +1099,9 @@ int main(int argc, char **argv) {
 				}
 			}
 			// The doors close over the page's controls, which are 3D controls behind them in the original.
+			if (vpt.wide) glViewport(0, 0, dw, dh);
 			actors_r.draw(world.data(), doors, vp, eye);
+			if (vpt.wide) glViewport(vpt.x, vpt.y, vpt.w, vpt.h);
 			render::g_lighting = game_lighting;
 			if (game::ui::Gui *g = app.notification_gui()) {
 				std::vector<game::ui::DrawItem> items;

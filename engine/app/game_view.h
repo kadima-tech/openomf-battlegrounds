@@ -94,6 +94,7 @@ private:
 
 	std::string arena;
 	std::array<float, 16> screen_vp{};
+	float screen_wide_k = 1;  // 4:3 width over the screen width, below 1 on wide screens
 	float cam_base = 0;  // camera heading, trailing the fighter's facing
 	bool cam_init = false;
 	bool owners_set = false;

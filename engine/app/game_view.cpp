@@ -461,7 +461,10 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	glu::mul(vp, proj, view);
 	// CRenderer::ConvertFromWorldToScreen for the HUD: screen fractions (y up), view depth.
-	if (!capture_camera) memcpy(screen_vp.data(), vp, sizeof vp);
+	if (!capture_camera) {
+		memcpy(screen_vp.data(), vp, sizeof vp);
+		screen_wide_k = int64_t(dw) * 3 > int64_t(dh) * 4 ? 4.0f * float(dh) / (3.0f * float(dw)) : 1.0f;
+	}
 	if (!world.world_to_screen) {
 		world.world_to_screen = [this](const std::array<float, 3> &p) {
 			const float *m = screen_vp.data();
@@ -469,7 +472,10 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			float y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
 			float w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
 			if (w <= 0) return std::array<float, 3>{0, 0, w};
-			return std::array<float, 3>{(x / w + 1) / 2, (y / w + 1) / 2, w};
+			float sx = (x / w + 1) / 2;
+			// Wide screens: in the centred 4:3 frame the HUD is laid out in.
+			if (screen_wide_k != 1.0f) sx = 0.5f + (sx - 0.5f) / screen_wide_k;
+			return std::array<float, 3>{sx, (y / w + 1) / 2, w};
 		};
 	}
 	// The frame's lights and their lighting owners (scene_lights.h).

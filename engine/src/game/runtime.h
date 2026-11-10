@@ -8,6 +8,9 @@
 // int/float/bool/pointers 4).
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <deque>
 #include <functional>
 #include <map>
@@ -820,7 +823,25 @@ public:
 		bool modulate = false;                       // SetBlendModulate: the screen times the primitive
 		float value = 0;                             // status bar fill, 0..1
 		bool bottom_to_top = false;                  // status bar direction (else left to right)
+		bool follows_view = false;                   // placed at a point from ConvertFromWorldToScreen
 	};
+	// Wide screens (PLACEHOLDERS.md): the edge or centre a screen-space primitive keeps its 4:3 size against.
+	static bool full_width(const Primitive &p) {
+		return p.kind != Primitive::Text && std::min(p.box[0], p.box[2]) <= 0 && std::max(p.box[0], p.box[2]) >= 1;
+	}
+	static float screen_anchor(const Primitive &p) {
+		float c = p.kind == Primitive::Text ? p.x : (p.box[0] + p.box[2]) / 2;
+		if (p.follows_view) return 0.5f;
+		return c < 1.0f / 3 ? 0.0f : c > 2.0f / 3 ? 1.0f : 0.5f;
+	}
+	// The latest ConvertFromWorldToScreen x values, to recognise primitives placed there.
+	std::array<float, 32> projected_x{};
+	size_t projected_n = 0;
+	bool projected(float x) const {
+		for (size_t i = 0; i < std::min(projected_n, projected_x.size()); ++i)
+			if (std::fabs(projected_x[i] - x) < 1e-4f) return true;
+		return false;
+	}
 	std::map<const GameObject *, Primitive> texts;
 	std::set<const GameObject *> screen_space_meshes;
 	std::map<uint32_t, GameObject *> orientation_owners;
