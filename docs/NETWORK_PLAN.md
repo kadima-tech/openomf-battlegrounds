@@ -174,7 +174,11 @@ Each phase ends with something testable, merged and pushed.
    (0x08 / 0x09), the Client Browser (Tab) with kick votes, bans (0x1a), the admin password (0x1b / 0x1c),
    chat ("Say to All": a client's own slot modifiers replicating up), and no autopause for a scene with
    remote clients (FINDINGS 455-459; the 150 ms fighter error measured before and after FINDINGS 460: no
-   change). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
+   change). Host Game from the menus runs the original's Match Server (FINDINGS 490-494, 2026-11-10): Choose
+   Session Master, the setup Choose Cast, then each match as a sub-session with the host's own Choose Pilot /
+   Choose Creature and the guests' remote ones; no session (nor its listener) outlives the screens: the main menu
+   ends every one, a failed bind makes none, and `tools/net-lan/host-menu.sh` hosts, backs out, hosts again and has
+   a guest join (direct or through the LAN list). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
    an administrator's level button.
 
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and

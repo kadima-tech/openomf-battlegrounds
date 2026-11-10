@@ -285,6 +285,11 @@ int main(int argc, char **argv) {
 			app.close_stack();
 			app.set_next(app.main_menu(), true);
 		};
+		// No session outlives the screens: back at the main menu every one ends, and the network game with it.
+		app.leave_sessions = [&] {
+			netgame.close();
+			if (!world.sessions.empty()) game::destroy_all_sessions(world);
+		};
 		auto net_options = [&] {
 			game::NetOptions o = game::net_options(world.registry);
 			if (port > 0 && port < 65536) o.port = uint16_t(port);
@@ -349,15 +354,22 @@ int main(int argc, char **argv) {
 			};
 			if (!single_player) {
 				std::string error;
-				if (!netgame.host(ss, net_options(), &error)) app.notify("Unable To Host", error);
+				if (netgame.state() != game::NetGame::State::Idle) netgame.close();
+				if (!netgame.host(ss, net_options(), &error)) {
+					app.notify("WinSock", error);
+					game::end_session(world, ss);
+					return nullptr;
+				}
 			}
 			if (app.satisfy_master_requirements(ss, begin)) begin();
 			return sp;
 		};
 		// A UI manager the session scripts launch (FINDINGS 127): a description selector over the
 		// script's pool; Next completes it for the script.
+		world.satisfy_master_requirements = [&](game::SessionState &s) { app.satisfy_master_requirements(s, nullptr, true); };
 		world.launch_ui = [&](game::GameObject *ui) {
-			auto &u = world.session->ui[ui];
+			game::SessionState *owner = game::session_of_ui(world, ui);
+			auto &u = (owner ? owner : world.session.get())->ui[ui];
 			auto sel = std::make_shared<game::ui::DescriptionSelector>(u.description);
 			sel->title = u.description;
 			sel->autoselect_key = u.autoselect;
@@ -373,6 +385,7 @@ int main(int argc, char **argv) {
 				if (!res.empty()) game::complete_ui(world, ui, s.chosen.info().guid, &res[0].info().guid);
 				else game::complete_ui(world, ui, s.chosen.info().guid);
 			};
+			if (!u.activate_hooks.empty()) sel->on_begin = [&world, ui](game::ui::AppManager &) { game::ui_manager_began(world, ui); };
 			printf("UI \"%s\": %zu descriptions\n", u.description.c_str(), sel->pool.size());
 			for (auto &d : sel->pool) {
 				if (std::find(choose.begin(), choose.end(), d.info().name) != choose.end()) {
@@ -416,7 +429,13 @@ int main(int argc, char **argv) {
 		app.launch_replay = [&](const std::string &path) { return game::start_replay(world, game::load_recording(path)); };
 		// AddIfAbsentLocalSession comes with the session's Begin: one Choose Cast made is not local.
 		app.has_local_session = [&] { return world.session != nullptr && world.session->begun; };
-		app.session_fully_sequenced = [] { return true; };
+		// IsFullySequenced (Core 0x70010e10) of the newest local session: Sequenced (status 1000).
+		app.session_fully_sequenced = [&] {
+			for (auto it = world.sessions.rbegin(); it != world.sessions.rend(); ++it) {
+				if (!(*it)->owner && (*it)->begun) return (*it)->net_status == 1000;
+			}
+			return true;
+		};
 		app.session_scene_rendering = [&] { return world.session != nullptr && view.has_arena(); };
 		if (!launch.empty()) {
 			de::ObjectRef d = world.data().find("Description\\SessionMaster", launch);

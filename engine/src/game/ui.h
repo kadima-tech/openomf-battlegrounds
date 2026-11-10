@@ -80,6 +80,8 @@ public:
 	// +0x38 (DE_CMultipleReferenceCompleteCreatedObjects): what its completion made, deleted
 	// (DeleteThisLater) when it begins again or deactivates backed out.
 	std::vector<uint32_t> created;
+	// Begin's Activate hooks (a scripts' manager's RegisterUIManagerActivateHook).
+	std::function<void(AppManager &)> on_begin;
 
 	std::vector<Control> controls;
 	// The page's 3D controls (built by setup_controls, gone when it deactivates).
@@ -96,6 +98,7 @@ public:
 	virtual bool key(AppManager &, int) { return false; }
 	virtual void wheel(AppManager &, int) {}
 	virtual void text(AppManager &, const std::string &) {}
+	virtual void shown(AppManager &) {}
 	virtual void deactivated(AppManager &) {}
 	// The UI manager it owns as a child object, if any (IsActive looks through it).
 	virtual UIManager *child() const { return nullptr; }
@@ -312,9 +315,11 @@ public:
 	std::vector<std::pair<int, int>> resolutions;
 	// DE_COMF2Manager::ProcessEvent on the session chooser's Complete: start the chosen session.
 	std::function<SessionState *(const de::ObjectRef &master_description, bool single_player)> launch_session;
+	// The main menu is shown: whatever session (and network game) is left ends.
+	std::function<void()> leave_sessions;
 	// DE_CSession::SatisfyMasterRequirements: true when the master's required casts are met;
 	// otherwise the Choose Cast page is queued and `begin` runs when it completes.
-	bool satisfy_master_requirements(SessionState &s, std::function<void()> begin);
+	bool satisfy_master_requirements(SessionState &s, std::function<void()> begin, bool scripted = false);
 	// --choose (testing): the Choose Cast page takes these names (modifiers, a starting match) and
 	// completes at once.
 	std::vector<std::string> cast_presets;

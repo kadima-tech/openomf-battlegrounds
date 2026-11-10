@@ -173,6 +173,7 @@ NetGame::NetGame(World &w) : w_(w) {}
 NetGame::~NetGame() { close(); }
 
 void NetGame::close() {
+	if (host_ && state_ == State::Hosting) printf("net: stopped hosting, port %u released\n", host_->port());
 	net_.reset();
 	if (host_) {
 		for (net::EnetPeer *p : host_->peers()) host_->disconnect(p, true);
@@ -194,7 +195,12 @@ void NetGame::fail(const std::string &title, const std::string &text) {
 bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 	opt_ = o;
 	host_ = net::EnetHost::listen(o.port, 16, error);
-	if (!host_) return false;
+	if (!host_) {
+		// WinSockService::ObjInitContents's notice (Core 0x7019e0b0), giving up on the port at once.
+		if (error) *error = "Couldn't activate listening port " + std::to_string(o.port) + " because it is already active.  Giving up on activating listening port.";
+		printf("net: cannot host on port %u\n", o.port);
+		return false;
+	}
 	host_->set_delay(o.delay);
 	host_->set_kick_time(o.kick_ms);
 	hash_ = net_data_hash(w_.data());
@@ -226,7 +232,9 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 		i.version = net_engine_version();
 		i.data_hash = hash_;
 		i.server_name = opt_.server_name.empty() ? "Battlegrounds Server" : opt_.server_name;
-		if (hosted_ && hosted_->master_description && hosted_->master_description->file)
+		// A match server shows the match it runs (SetDisplayedSessionMaster).
+		if (de::ObjectRef shown = hosted_ && hosted_->displayed_master ? w_.data().by_guid(*hosted_->displayed_master) : de::ObjectRef{}) i.session_name = shown.info().name;
+		else if (hosted_ && hosted_->master_description && hosted_->master_description->file)
 			i.session_name = hosted_->master_description->file->objects()[hosted_->master_description->index].name;
 		i.players = hosted_ ? int(hosted_->clients.size()) : 0;
 		i.max_players = hosted_ ? hosted_->max_player_clients : 0;
@@ -439,7 +447,7 @@ void NetGame::update() {
 			uint32_t ev = new_event(w_, handle);
 			w_.send_event(s->obj, ev);
 			auto it = accepted_.find(e.peer);
-			if (it != accepted_.end() && it->second->slot) w_.send_event(it->second->slot->obj, ev);
+			if (SessionClient *pc = it != accepted_.end() ? playing(w_, it->second) : nullptr; pc && pc->slot) w_.send_event(pc->slot->obj, ev);
 			printf("net: %s %s\n", e.peer->address().text().c_str(), e.kind == net::EnetHost::Event::Interrupted ? "interrupted" : "restored");
 			break;
 		}

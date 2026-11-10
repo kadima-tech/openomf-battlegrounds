@@ -27,6 +27,9 @@ struct SessionState;
 struct SessionClient;
 class NetSession;
 
+// The client a player plays through: its newest sub-client (AssureSubClient), else itself.
+SessionClient *playing(World &w, SessionClient *c);
+
 enum class NetRole : uint8_t { None, Server, Client };
 
 // What the receiving side did with states, for the harness's measurements.
@@ -206,6 +209,7 @@ private:
 	void report(int status);
 	void send_clock(uint32_t now);
 	void receive_roster(const std::vector<uint8_t> &d, size_t pos);
+	void connect_sub_clients();
 	void receive_remote_ui(const std::vector<uint8_t> &d, size_t pos);
 	std::string roster_signature();
 	GameObject *clock_object(const Peer &p) const;
@@ -226,6 +230,7 @@ private:
 	std::map<uint32_t, GameObject *> remote_ui_;  // a client's copies of server pages, by their server ID
 	std::map<uint32_t, uint32_t> linked_at_;      // a client's linked IDs: when, until a state is heard
 	std::map<std::string, uint32_t> asked_;       // a client's ID requests (0x15): when last
+	std::map<uint32_t, int> sub_slots_;           // a client's roster: each player's slot in the sub-session it plays in
 	uint32_t next_client_id_ = 1;
 };
 

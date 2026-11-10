@@ -338,8 +338,14 @@ int Executor::continue_execution() {
 				if (!callee) {
 					throw VMError("vm: call to missing method index " + std::to_string(idx));
 				}
+				const uint64_t gen = generation_;
 				invoke(*callee, args);
-				if (state_switched_) {
+				// A state switched to deeper in this call has run to its exSleep(): no enclosing level runs on in it (FINDINGS 491).
+				if (generation_ != gen && yielded_gen_ == generation_ && !state_switched_) {
+					result = 0;
+					resume_pc = pc_;
+					pc_ = end_;
+				} else if (state_switched_) {
 					state_switched_ = false;
 					result = 0;  // the new state's prologue runs on the next pulse
 					resume_pc = pc_;
@@ -603,6 +609,7 @@ int Executor::continue_execution() {
 			case 306:  // exSleep(n): set the sleep counter and suspend
 			case 307:  // exSleep forever
 				inst_.sleep = op == 306 ? get<int32_t>(u32()) : 0xfffffff;
+				if (op == 307) yielded_gen_ = generation_;
 				result = 0;
 				resume_pc = pc_;
 				pc_ = end_;

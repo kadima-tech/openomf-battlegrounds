@@ -756,6 +756,8 @@ public:
 	// the front end shows it (its pool and title are the session's UiManager record) and
 	// completes it with complete_ui (session.h).
 	std::function<void(GameObject *ui)> launch_ui;
+	// CSession::SatisfyMasterRequirements from a script (BMatchServer's setup sub-session): its Choose Cast page.
+	std::function<void(struct SessionState &)> satisfy_master_requirements;
 	// CClient::LaunchLocalUIManager of a CEditString: the text entry page.
 	std::function<void(GameObject *ui)> launch_edit_string;
 	// CRulesDisplay (OMF DE_CRulesDisplay; FINDINGS 127): what the session scripts set, and the

@@ -122,7 +122,13 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   server and the client browser's updates (0x08) on a client. Headless runs pace to `steady_clock`, which stops while
   the machine sleeps: a run that seems stuck for minutes may only have slept (FINDINGS 455). `OPENBG_TRACE=<text>` traces
   the VM's instructions of the methods whose signature contains the text (`1`: all). `net-tests` (ctest, no game data)
-  checks the transport on localhost.
+  checks the transport on localhost. `tools/net-lan/host-menu.sh <Data> [--port N] [--out dir] [--lan]` hosts through
+  the real menus (a `MOUSE`-driven screenshot run: Host Game, Back out of Choose Session Master, Host Game again, Last
+  Man Standing, Choose Cast, Choose Pilot, Choose Creature), starts a guest once the second session listens (`--join`,
+  or with `--lan` through Join Game's session browser), lets the AI fight, leaves through the in-game menu's Main Menu
+  and hosts a third time; it passes when the port was released each time and hosted again, and the guest got its remote
+  pages and a fighter (`SHOTS` / `CLIENT_SHOTS` take screenshots of either side). Each machine prints `net: hosting on
+  port N` and `net: stopped hosting, port N released`.
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `openbg-unlock-all <Data> <registry.txt>` writes a registry with everything the game locks unlocked, for playtesters (`tools/unlock_all.cpp`): id 0 on each description locked by default, the 22 RECON DATA stats (ids 100-121) on each pilot, and every session master's starting matches (0x10063 + n); the host's arena toggle (0xffff) is left alone. An existing file keeps its other values. A playtester puts the result in their settings folder as `registry.txt` (see the Registry entry in PLACEHOLDERS.md for the folder); with a registry present the first-run Basic Training is skipped. Build it from the patched data (the default `OPENBG_DATA_DIR`) so 2.123's content is included; add-ons in `OPENBG_ADDONS` are unlocked too.

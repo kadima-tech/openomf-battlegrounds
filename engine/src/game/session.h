@@ -14,6 +14,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,7 @@ struct SessionClient {
 	std::string player_name, description;
 	SessionSlot *slot = nullptr;
 	GameObject *ui_manager = nullptr;  // the UI manager launched on it, if any
+	SessionClient *master = nullptr;   // AssureSubClient: the owner session's client this one stands for
 	uint32_t net_id = 0;               // the server's number for it (the roster's client ID)
 	// DE_CClient +0x70, +0x74, +0xa4 and its kick votes {1 stay / -1 kick / 0, client ID} (0x0b / 0x0c).
 	int32_t ping = -1, admin_level = 0, votes_needed = 0;
@@ -86,6 +88,9 @@ struct SessionState {
 	bool scene_started = false;  // its scene's Genesis (OwnEnvironment): DE_CScene +0xf0 clear
 	bool watchers_active = false;  // ActivateSceneWatchers: its scene has the audio player (+0x1b8)
 	std::vector<ScriptHook> slot_connect_hooks, slot_disconnect_hooks;
+	// SetDisplayedSessionMaster / SetDisplayedAttachedSessionModifiers: what a match server shows (info +0x64, +0x90).
+	std::optional<de::Guid> displayed_master;
+	std::vector<de::Guid> displayed_attached;
 	// UI managers (description selectors). The menus that would show them are not built yet:
 	// a launched UI whose description has a preset choice completes on the next update with it.
 	struct UiManager {
@@ -100,6 +105,7 @@ struct SessionState {
 		uint32_t remote_id = 0;         // a client's copy of a page the server launched (0x03): its ID there
 		bool edit_string = false;       // a CEditString (NewEditString)
 		std::string input;              // its UserInput, empty when cancelled
+		std::vector<ScriptHook> complete_hooks, activate_hooks;  // the manager's own (RegisterUIManager*Hook)
 	};
 	std::map<const GameObject *, UiManager> ui;
 	std::map<std::string, de::Guid> ui_choices;  // "Choose Environment" -> description GUID
@@ -172,6 +178,10 @@ bool session_joinable(World &w, SessionState *s);
 // The front end chose `chosen` in a launched UI manager: it completes on the next update, and
 // every node's UIManagerComplete hook hears about it.
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model = nullptr);
+// DE_CUIManager::Begin's Activate hooks for a scripts' manager the front end shows (BeginLocal).
+void ui_manager_began(World &w, GameObject *ui);
+// The session holding a scripts' UI manager's record.
+SessionState *session_of_ui(World &w, const GameObject *ui);
 // RemoteUIManagerActivated (Session 0x45016290): the UIManagerActivate hooks of the session's and the client's slot's modifiers.
 void remote_ui_activated(World &w, SessionState &s, GameObject *ui, SessionClient *c);
 // DE_CTransferAgent::CPassiveReference: every passive reference's object in an object's contents,

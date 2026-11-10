@@ -823,6 +823,19 @@ void remote_ui_activated(World &w, SessionState &s, GameObject *ui, SessionClien
 	for (auto *n : nodes) call_hook(w, n->ui_activate, ui->handle, true);
 }
 
+SessionState *session_of_ui(World &w, const GameObject *ui) {
+	for (auto &sp : w.sessions) {
+		if (sp->ui.count(ui)) return sp.get();
+	}
+	return nullptr;
+}
+
+void ui_manager_began(World &w, GameObject *ui) {
+	SessionState *s = session_of_ui(w, ui);
+	if (!s) return;
+	for (const ScriptHook &h : std::vector<ScriptHook>(s->ui[ui].activate_hooks)) call_hook(w, h, ui->handle, true);
+}
+
 void complete_ui(World &w, GameObject *ui, const de::Guid &chosen, const de::Guid *model) {
 	if (!ui) return;
 	SessionState *s = nullptr;
@@ -871,6 +884,8 @@ static void update_one(World &w, SessionState &s) {
 	for (auto &[ui, u] : s.ui) {
 		if (!u.pending) continue;
 		u.pending = false;
+		// DE_CUIManager::UIManagerComplete (Core 0x701eb320): the manager's own hooks first.
+		for (const ScriptHook &h : std::vector<ScriptHook>(u.complete_hooks)) call_hook(w, h, ui->handle, true);
 		std::vector<SessionNode *> nodes;
 		for (auto &[o, n] : s.nodes) nodes.push_back(n.get());
 		for (auto *n : nodes) call_hook(w, n->ui_complete, ui->handle, true);
@@ -912,6 +927,12 @@ void connect_client(World &w, SessionState &s, SessionClient &c, SessionSlot &sl
 }
 
 void drop_client(World &w, SessionState &s, SessionClient &c) {
+	// Its sub-clients (children of its object) leave their sub-sessions with it.
+	for (auto &sp : std::vector<std::shared_ptr<SessionState>>(w.sessions)) {
+		for (size_t i = sp->clients.size(); i-- > 0;) {
+			if (i < sp->clients.size() && sp->clients[i]->master == &c) drop_client(w, *sp, *sp->clients[i]);
+		}
+	}
 	if (SessionSlot *sl = c.slot) {
 		w.send_event(sl->obj, new_event(w, "SessionSlotResetAll"));
 		for (auto &h : s.slot_disconnect_hooks) call_hook(w, h, sl->obj->handle, true);
@@ -1141,11 +1162,13 @@ void register_session_natives(World &w) {
 		uint32_t g = c.arg<uint32_t>(0);
 		if (auto *s = S(c); s && g) memcpy(s->environment_guid, c.mem().ptr(g, 16), 16);
 	});
-	reg("CObject::class CGUID EnvironmentGUID()", [S](const NativeContext &c) {
-		uint32_t g = c.world.make_instance("CObject::CGUID", 1);
-		if (auto *s = S(c)) memcpy(c.mem().ptr(g, 16), s->environment_guid, 16);
-		c.ret_u32(g);
-	});
+	for (const char *k : {"CObject::class CGUID EnvironmentGUID()", "CStandardSession::class CGUID EnvironmentGUID()"}) {
+		reg(k, [S](const NativeContext &c) {
+			uint32_t g = c.world.make_instance("CObject::CGUID", 1);
+			if (auto *s = S(c)) memcpy(c.mem().ptr(g, 16), s->environment_guid, 16);
+			c.ret_u32(g);
+		});
+	}
 	// DE_CStandardSessionModifier::CreateNewSlot: a new slot appended to the session.
 	reg("CStandardSessionModifier::class CStandardSessionSlot CreateSlot()", [S](const NativeContext &c) {
 		auto *s = S(c);
@@ -1348,6 +1371,53 @@ void register_session_natives(World &w) {
 	reg("CSession::bool AreMasterRequirementsSatisfied()", [S](const NativeContext &c) {
 		SessionState *s = S(c);
 		c.ret_bool(!s || (!s->settings_active && master_requirements_met(c.world, *s)));
+	});
+	// SatisfyMasterRequirementsCaller (Core 0x701f7c50): the session's Choose Cast page when a required cast is unmet.
+	reg("CSession::SatisfyMasterRequirements()", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		if (s && c.world.satisfy_master_requirements) c.world.satisfy_master_requirements(*s);
+	});
+	// SetDisplayedSessionMasterCaller / SetDisplayedAttachedSessionModifiersCaller (Session 0x4500e540 / 0x4500e570): kept on the info, each GUID once.
+	reg("CObject::SetDisplayedSessionMaster(class CGUID)", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		uint32_t g = c.arg<uint32_t>(0);
+		if (!s || !g) return;
+		de::Guid guid;
+		memcpy(guid.bytes, c.mem().ptr(g, 16), 16);
+		s->displayed_master = guid;
+	});
+	reg("CObject::SetDisplayedAttachedSessionModifiers(class CGUIDPool)", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		uint32_t p = c.arg<uint32_t>(0);
+		if (!s || !p) return;
+		s->displayed_attached.clear();
+		uint32_t data = c.mem().get<uint32_t>(p), n = c.mem().get<uint32_t>(p + 4);
+		for (uint32_t i = 0; i < n; ++i) {
+			de::Guid g;
+			memcpy(g.bytes, c.mem().ptr(data + i * 16, 16), 16);
+			if (std::none_of(s->displayed_attached.begin(), s->displayed_attached.end(), [&](const de::Guid &a) { return std::equal(g.bytes, g.bytes + 16, a.bytes); }))
+				s->displayed_attached.push_back(g);
+		}
+	});
+	// AutoPopulateCheckNeededCaller (Core 0x701f7db0) sets +0x134; there are no AI bots to add yet.
+	stub("CSession::AutoPopulateCheckNeeded()");
+	// DE_CStandardSession::AssureSubClient (Session 0x4500f860): the owner's client's child client in this
+	// session, else a new one taking its ID, locality and user control, activated.
+	reg("CObject::class CStandardClient AssureSubClient(class CStandardClient)", [S](const NativeContext &c) {
+		SessionState *s = S(c);
+		GameObject *mo = c.arg_object(0);
+		SessionState *ms = mo ? session_of(c.world, mo) : nullptr;
+		SessionClient *m = ms ? ms->client_of(mo) : nullptr;
+		if (!s || !m) return c.ret_object(nullptr);
+		for (auto &cl : s->clients) {
+			if (cl->master == m) return c.ret_object(cl->obj);
+		}
+		SessionClient &cl = add_client_to(c.world, *s, m->user, m->player_name);
+		cl.master = m;
+		cl.local = m->local;
+		cl.net_id = m->net_id;
+		cl.active = true;
+		c.ret_object(cl.obj);
 	});
 	reg("CSession::string StatusDescription()", [S](const NativeContext &c) {
 		SessionState *m = master_session(S(c));
@@ -1687,6 +1757,28 @@ void register_session_natives(World &w) {
 	reg("CObject::class CGenericDescriptionSelector NewGenericDescriptionSelector()", [](const NativeContext &c) {
 		c.ret_object(c.world.create_child(nullptr, "GenericDescriptionSelector", "UIManager\\GenericDescriptionSelector"));
 	});
+	// RegisterUIManagerCompletePCHook / ActivatePCHook (Core 0x701ed0d0 / 0x701ed220): the manager's own lists, each pair once.
+	for (bool complete : {true, false}) {
+		reg(std::string("CUIManager::RegisterUIManager") + (complete ? "Complete" : "Activate") + "Hook(class CClassExecutorInstance,Method(class CUIManager))",
+		    [S, complete](const NativeContext &c) {
+			    SessionState *s = session_of_ui(c.world, c.self());
+			    if (!s) s = S(c);
+			    if (!s || !c.self()) return;
+			    auto &hooks = complete ? s->ui[c.self()].complete_hooks : s->ui[c.self()].activate_hooks;
+			    ScriptHook h{c.world.brain_of(c.ex), c.arg<uint32_t>(1)};
+			    if (std::none_of(hooks.begin(), hooks.end(), [&](const ScriptHook &o) { return o.brain == h.brain && o.method == h.method; })) hooks.push_back(h);
+		    });
+	}
+	// BeginLocalCaller (Core 0x701ea8c0): an unbegun manager becomes the next page, stacking the current one.
+	reg("CUIManager::BeginLocal()", [S](const NativeContext &c) {
+		SessionState *s = session_of_ui(c.world, c.self());
+		if (!s) s = S(c);
+		if (!s || !c.self()) return;
+		auto &u = s->ui[c.self()];
+		if (u.shown || !c.world.launch_ui) return;
+		u.shown = true;
+		c.world.launch_ui(c.self());
+	});
 	reg("CObject::class CChooseFighterUIManager NewChooseFighterUIManager()", [S](const NativeContext &c) {
 		GameObject *ui = c.world.create_child(nullptr, "ChooseFighterUIManager", "UIManager\\GenericDescriptionSelector\\ChooseFighter");
 		if (auto *s = S(c)) s->ui[ui].choose_fighter = true;
@@ -1850,6 +1942,14 @@ void register_session_natives(World &w) {
 	reg("CScene::ActivateSceneWatchers()", [caller_scene](const NativeContext &c) {
 		if (World::gui_scene_view(c.self()) >= 0) return;
 		if (SessionState *s = session_of(c.world, caller_scene(c))) s->watchers_active = true;
+	});
+	// EnsureGenesisCaller (Core 0x7006dcf0): the scene's Genesis unless it has had it.
+	reg("CScene::EnsureGenesis()", [caller_scene](const NativeContext &c) {
+		if (World::gui_scene_view(c.self()) >= 0) return;
+		if (SessionState *s = session_of(c.world, caller_scene(c)); s && !s->scene_started) {
+			s->scene_started = true;
+			c.world.scene_genesis(s->obj);
+		}
 	});
 	// IsLoadingCompleteCaller (Core 2.123 0x20071b80): the scene's +0x1c8, which ActivateSceneWatchers sets.
 	reg("CScene::bool IsLoadingComplete()", [caller_scene](const NativeContext &c) {

@@ -20,7 +20,7 @@ class World;
 
 namespace game {
 
-constexpr uint16_t kNetProtocol = 1;  // ours; the original's handshake carried 10
+constexpr uint16_t kNetProtocol = 2;  // ours; the original's handshake carried 10
 const char *net_engine_version();
 // MD5 over every data file's table of contents and the contents of everything but its media.
 std::array<uint8_t, 16> net_data_hash(const de::World &data);

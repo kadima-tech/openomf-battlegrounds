@@ -232,6 +232,9 @@ public:
 		}
 		return true;
 	}
+	void shown(AppManager &app) override {
+		if (app.leave_sessions) app.leave_sessions();
+	}
 	void setup_controls(AppManager &app) override {
 		nags_ = 0;
 		options_ = button(app, "Options", "OPTIONS");
@@ -1389,9 +1392,16 @@ public:
 	    : UIManager("SessionSettings", "ChooserListNextBack"), session_(s), required_(std::move(required)), optional_(std::move(optional)),
 	      on_complete_(std::move(on_complete)) {}
 
+	// A script's page (a match server's setup) shows again when backed into, as Begin (Core 0x701e5f30) always does.
+	bool shows_again = false;
+
 	bool begin(AppManager &app) override {
 		UIManager::begin(app);
 		SessionState *s = session(app);
+		if (s && done_ && shows_again) {
+			done_ = false;
+			s->settings_active = true;
+		}
 		if (!s || done_) return false;
 		if (!app.cast_presets.empty()) {
 			preset(app);
@@ -1779,7 +1789,7 @@ void SessionSettings::finish(AppManager &app) {
 // description requires is met by none of the session's modifiers, a DE_CSessionSettings page over
 // the required casts and the casts under COREMeshes\OptionalSessionModifier is queued (stacked);
 // the session begins when it completes.
-bool AppManager::satisfy_master_requirements(SessionState &s, std::function<void()> begin) {
+bool AppManager::satisfy_master_requirements(SessionState &s, std::function<void()> begin, bool scripted) {
 	if (master_requirements_met(world, s)) return true;
 	if (s.settings_active) return false;
 	std::vector<de::ObjectRef> required;
@@ -1795,6 +1805,7 @@ bool AppManager::satisfy_master_requirements(SessionState &s, std::function<void
 		}
 	}
 	auto page = std::make_shared<SessionSettings>(&s, required, optional, std::move(begin));
+	page->shows_again = scripted;
 	page->load_modifiers(*this);
 	s.settings_active = true;
 	set_next(page, true);
@@ -2229,6 +2240,7 @@ bool AppManager::is_locked(const de::ObjectRef &d) const {
 bool UIManager::begin(AppManager &app) {
 	backed_out = false;
 	for (uint32_t h : std::exchange(created, {})) app.world.clean_later(app.world.object(h));
+	if (on_begin) on_begin(app);
 	begun = true;
 	return true;
 }
@@ -2262,6 +2274,7 @@ void UIManager::activate(AppManager &app) {
 	activated = true;
 	if (script) net_ui_activated(w, script);
 	if (getenv("OPENBG_DEBUG_UI")) fprintf(stderr, "[ui %u] activate %s\n", w.frame(), name.c_str());
+	shown(app);
 }
 
 bool UIManager::update_required(uint32_t now) {

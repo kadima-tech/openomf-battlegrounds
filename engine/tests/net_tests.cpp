@@ -111,6 +111,13 @@ int main() {
 	});
 	check(gone, "the server hears the disconnect");
 
+	// Hosting again after leaving a session: the port is free once the host is gone, and taken while it lives.
+	check(net::EnetHost::listen(port, 4, &err) == nullptr, "a port in use cannot be listened on twice");
+	client.reset();
+	server.reset();
+	auto again = net::EnetHost::listen(port, 4, &err);
+	check(again != nullptr && again->port() == port, "the same port listens again once released");
+
 	uint32_t clock = 0;
 	net::LoopbackLink link({50, 0, 0}, [&clock] { return clock; });
 	link.a().send(net::Channel::Reliable, {1, 2});
