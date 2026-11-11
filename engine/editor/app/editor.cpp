@@ -252,6 +252,7 @@ void Editor::apply_startup() {
 			}
 		}
 	}
+	models_startup(*this);
 	if (!project_) return;
 	if (!opt_.new_pilot.empty()) {
 		auto colon = opt_.new_pilot.find(':');
@@ -292,7 +293,6 @@ void Editor::apply_startup() {
 		}
 	}
 	assets_startup(*this);
-	models_startup(*this);
 	if (opt_.level) active_ = 0;
 	if (opt_.save) save();
 	if (opt_.launch) launch_game();

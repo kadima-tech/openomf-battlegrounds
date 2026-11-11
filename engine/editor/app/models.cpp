@@ -282,7 +282,10 @@ State &state() {
 	return s;
 }
 
-ObjectRef find_spec(Editor &e, const std::string &spec) {
+// "[file stem/][Class:]Name".
+ObjectRef find_spec(Editor &e, const std::string &spec_in) {
+	std::string spec = spec_in, stem;
+	if (auto slash = spec.find('/'); slash != std::string::npos) stem = spec.substr(0, slash), spec = spec.substr(slash + 1);
 	auto colon = spec.rfind(':');
 	std::string cls = colon == std::string::npos ? "" : spec.substr(0, colon), name = colon == std::string::npos ? spec : spec.substr(colon + 1);
 	if (ed::Project *p = e.project()) {
@@ -292,6 +295,7 @@ ObjectRef find_spec(Editor &e, const std::string &spec) {
 	}
 	if (ed::BaseData *b = e.base()) {
 		for (auto &f : b->files()) {
+			if (!stem.empty() && f.stem != stem) continue;
 			for (auto &o : f.objects) {
 				if (o.name == name && (cls.empty() || o.class_path == cls) && !ed::export_kind(o.class_path).empty()) return ObjectRef::base(o);
 			}

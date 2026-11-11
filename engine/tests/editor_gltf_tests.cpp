@@ -13,6 +13,7 @@
 #include <ctime>
 #include <filesystem>
 #include <map>
+#include <random>
 #include <set>
 
 #include "addon.h"
@@ -46,7 +47,8 @@ static void set_env(const char *name, const std::string &value) {
 }
 
 static fs::path scratch() {
-	fs::path d = fs::temp_directory_path() / ("openbg-gltf-tests-" + std::to_string(rand()));
+	static std::random_device rd;
+	fs::path d = fs::temp_directory_path() / ("openbg-gltf-tests-" + std::to_string(rd()) + std::to_string(rd()));
 	fs::create_directories(d);
 	return d;
 }
@@ -514,7 +516,6 @@ int main(int argc, char **argv) {
 		printf("wrote %s and %s\n", (dir / "prop.glb").string().c_str(), (dir / "arena.glb").string().c_str());
 		return 0;
 	}
-	srand(unsigned(time(nullptr)));
 	test_round_trip();
 	if (argc > 1) {
 		fs::path data = argv[1];

@@ -1334,8 +1334,8 @@ struct NavNet {
 };
 
 // A grid over the walkable faces (normal within 45 degrees of up), an area where a cell's centre
-// lands on one, linked to its neighbours when the way is clear (a robot is ~30 units tall: up
-// to 60 units up, any height down); coarser until it fits kMaxNavAreas / kMaxNavLinks.
+// lands on one, linked to its neighbours when a robot (~30 units tall) can walk there: no wall in
+// the way, no step over 12 units, no hole; coarser until it fits kMaxNavAreas / kMaxNavLinks.
 NavNet generate_nav(const std::vector<V3> &floor, const std::vector<V3> &solid, float spacing) {
 	NavNet net;
 	if (floor.empty()) return net;
@@ -1349,22 +1349,26 @@ NavNet generate_nav(const std::vector<V3> &floor, const std::vector<V3> &solid, 
 		area += std::fabs(n[1]) * 0.5f;
 	}
 	if (spacing <= 0) spacing = std::max(150.0f, std::sqrt(area / 40.0f));
+	auto heights_at = [&](float x, float z) {
+		std::vector<float> heights;
+		for (size_t t = 0; t + 2 < floor.size(); t += 3) {
+			const V3 &a = floor[t], &b = floor[t + 1], &c = floor[t + 2];
+			float d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+			if (std::fabs(d) < 1e-9f) continue;
+			float l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / d;
+			float l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / d;
+			float l3 = 1 - l1 - l2;
+			if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+			heights.push_back(l1 * a[1] + l2 * b[1] + l3 * c[1]);
+		}
+		std::sort(heights.begin(), heights.end());
+		return heights;
+	};
 	for (int attempt = 0; attempt < 12; ++attempt, spacing *= 1.2f) {
 		net = {};
 		for (float x = lo[0] + spacing * 0.5f; x <= hi[0]; x += spacing) {
 			for (float z = lo[2] + spacing * 0.5f; z <= hi[2]; z += spacing) {
-				std::vector<float> heights;
-				for (size_t t = 0; t + 2 < floor.size(); t += 3) {
-					const V3 &a = floor[t], &b = floor[t + 1], &c = floor[t + 2];
-					float d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
-					if (std::fabs(d) < 1e-9f) continue;
-					float l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / d;
-					float l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / d;
-					float l3 = 1 - l1 - l2;
-					if (l1 < 0 || l2 < 0 || l3 < 0) continue;
-					heights.push_back(l1 * a[1] + l2 * b[1] + l3 * c[1]);
-				}
-				std::sort(heights.begin(), heights.end());
+				std::vector<float> heights = heights_at(x, z);
 				float last = -1e30f;
 				for (float y : heights) {
 					if (y - last < 40) continue;
@@ -1377,11 +1381,29 @@ NavNet generate_nav(const std::vector<V3> &floor, const std::vector<V3> &solid, 
 			for (size_t b = 0; b < net.areas.size(); ++b) {
 				if (a == b) continue;
 				const V3 &A = net.areas[a].at, &B = net.areas[b].at;
-				float dx = B[0] - A[0], dz = B[2] - A[2], dy = B[1] - A[1];
-				if (std::sqrt(dx * dx + dz * dz) > spacing * 1.5f) continue;
-				if (dy > 60) continue;
-				V3 p{A[0], std::max(A[1], B[1]) + 15, A[2]}, q{B[0], std::max(A[1], B[1]) + 15, B[2]};
-				if (segment_hits(solid, p, q)) continue;
+				float dx = B[0] - A[0], dz = B[2] - A[2];
+				float d = std::sqrt(dx * dx + dz * dz);
+				if (d > spacing * 1.5f) continue;
+				bool clear = true;
+				for (float h : {5.0f, 15.0f}) {
+					V3 p{A[0], A[1] - 15 + h, A[2]}, q{B[0], B[1] - 15 + h, B[2]};
+					clear = clear && !segment_hits(solid, p, q);
+				}
+				if (!clear) continue;
+				// Walkable: the ground along the way never rises more than a step, never opens into a
+				// hole, and ends on B's floor.
+				float ground = A[1] - 15;
+				int n = std::max(2, int(d / 8));
+				for (int k = 1; k <= n && clear; ++k) {
+					float u = float(k) / float(n);
+					float best = -1e30f;
+					for (float y : heights_at(A[0] + dx * u, A[2] + dz * u)) {
+						if (y <= ground + 12 && y >= ground - 60) best = std::max(best, y);
+					}
+					clear = best > -1e29f;
+					ground = best;
+				}
+				if (!clear || std::fabs(ground - (B[1] - 15)) > 12) continue;
 				net.links.push_back({int(a), int(b)});
 			}
 		}
