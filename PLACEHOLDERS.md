@@ -190,6 +190,13 @@ registration in the DLLs either, but their methods are in Session.ModuleDLL and 
 | Prop collision | Missing | Imported props are drawn only; put blocking shapes in an arena's `Collision`. |
 | Vertex colours, morph targets, cameras, lights | Missing | Not read on import; vertex colours (stage colour channels) are not exported. |
 | Imported images | Approximation | Stored uncompressed (as the editor's photo import), resized to powers of two up to 1024 (FINDINGS 540). |
+| Robot retargeting | Approximation | Base sequences keep each channel's rotations and scale its offsets by the bone's change of length; a bone's bind frame is turned so it points the way the base's does (two directions for the pelvis and chest, one for limbs, the parent's for hands, feet and head). Twist about a limb is not matched, and contacts (feet on the floor, hands on an opponent in grabs) are not corrected for new proportions. |
+| Robot root motion | Approximation | A file animation's horizontal drift of the root bone is removed (moves play in place, the game's physics moves the fighter), unless the file has a `Body` node, as our exports do. |
+| Robot materials | Approximation | Several materials go into one texture atlas (the fighter filter paints one RGBMain); UVs past 0..1 are moved per triangle into the tile and clamped there. The model's own colours are an `RGBStatic` image, which the 2.123 filter adds unpainted (FINDINGS 165) though no shipped model has one: untested in the original game. |
+| Robot LODs | Approximation | LOD1 / LOD2 are half-edge quadric decimations of LOD0 to the base robot's triangle counts (UV seams and skin borders are penalised, not locked). |
+| Robot paint jobs | Missing | An imported HAR has one model description; the base's other paint jobs are unlinked from it (their meshes do not fit the new rig). |
+| New hitboxes | Missing | `Sphere:<name>` empties place the base robot's spheres; a name the base lacks is reported and left out (the scripts look spheres up by name). |
+| Secondary rigs | Missing | Gargoyle's wings (`WingDeformInfo`, `WingAnimationBank`) stay the base's. |
 
 ## Patch level
 

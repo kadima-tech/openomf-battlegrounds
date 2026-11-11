@@ -206,6 +206,15 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   orange, filled and 2.5 px); tabs General / Movement / Inputs / Hitboxes / Sounds / Paint / Script
   on the right. Inputs: a sequence list beside step cards of a 3 x 3 direction pad (lit cells
   #3a3566), six button toggles (grey any, green pressed, dark red released) and four timing fields.
+- **Robot import** (the Import dialog's Bones / Animations / Hitboxes pages): the Bones page is a
+  table of rig bones (a status icon, the bone, "optional" dimmed), a searchable joint dropdown per
+  row (the joint's current owner in brackets), "found by" coloured by source (name / preset green
+  #8fe3a8, guess amber #ffc98a, manual violet #8b7cf6, missing red #ff8f8f) and a 64 px confidence
+  bar in the same colour; a Preset combo ("Auto (Mixamo)"), Map again and Clear above, with count
+  chips. The preview draws the new robot (faces flat-shaded in the demo paint) beside the base robot
+  in grey, the file's joints as violet dots with lines (unmapped grey, the selected bone's orange),
+  the base's bones in blue (#6bb8ff) and the new rig's in green when posed; a footer has the pose
+  combo (Bind pose or any sequence), play / pause and Base robot / Skeletons toggles.
 - **Arena viewports:** the game's renderer fills each pane (lit, unlit, or collision: flat-shaded
   surfaces and affector meshes on #121318). Dark overlay buttons at the top left (layout, view,
   shading, Show menu) and top right (move / rotate gizmo, magnet snap, maximise); the arena's name

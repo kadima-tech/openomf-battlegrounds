@@ -217,9 +217,9 @@ The editor exposes its operations as an **MCP server**, so AI assistants and scr
 
 ### 5.5 3D model import and export (glTF)
 Status (2026-11-11): export (meshes, LOD switchers, props, arenas, robots with skin and
-animations), prop import and arena import are built, with the Import dialog; robot (HAR) import is
-next, on the same reader (`engine/editor/core/gltf.h`) and dialog (a bone-mapping page through
-`register_import_step`). See "Built" at the end of this section and DEVELOPING.md. glTF 2.0 (`.gltf` + `.bin`, or `.glb`) is the exchange format:
+animations), prop, arena and robot (HAR) import are built, with the Import dialog (robots add Bones,
+Animations and Hitboxes pages). See "Built" and "Built: robots" at the end of this section and
+DEVELOPING.md. glTF 2.0 (`.gltf` + `.bin`, or `.glb`) is the exchange format:
 Blender, Maya and 3ds Max read and write it, it carries skins and animations, and its
 extensions take custom data (`extras`) for what DE needs beyond meshes.
 
@@ -289,10 +289,63 @@ they can be redone.
 - Verified: a generated box arena and the Desert exported and re-imported play in the editor and in
   `openbg-fight` (fighters stand on the floors, walls hold them, the AI walks the generated net to
   its opponent); an imported prop placed in the arena draws in the viewport and in the game.
-- Not yet: robot import (bone mapping, weights to `Deform*VertexData`, sequences); props have no
-  collision; jump pad strength is the shared launcher's (only the direction follows `extras.impulse`);
+- Not yet: props have no collision; jump pad strength is the shared launcher's (only the direction follows `extras.impulse`);
   an exported arena's death volume is written only when it is a box or mesh (Desert's is a passive
   reference); vertex colours are exported for neither direction.
+
+**Built: robots (2026-11-11, `engine/editor/core/har_import.h`, `editor/app/robot_import.cpp`).**
+- What it makes: a HAR variant of the chosen base robot (`create_har_variant`: its scripts, inputs,
+  sounds and spheres) whose model is a copy of the base's default `FighterModel` rewritten in place:
+  each LOD's `Mesh\Standard` geometry, the fighter material's per-face UVs (RGBMain / ReflectionMask
+  texture managers; the environment reflection takes none), one `Deform<Bone>VertexData` channel per
+  skin bone (weights summed over the file's up to 4 influences, unmapped joints' weight given to their
+  nearest mapped ancestor, quantised to bytes), the paint mask / reflection / bump images, and an
+  `RGBStatic` image with the model's own colours (added unpainted by the fighter filter, FINDINGS
+  165). The bank's channels and sequences, the deform info's binds, the bone actors' rest and the
+  spheres are rewritten in the copy. The description and its first paint job name the new model; the
+  base's other paint jobs are unlinked (FINDINGS 560).
+- Bone mapping: rows are the base skin's bones (required: an error blocks the import) plus
+  `HeadAnchor` and `Body` (optional, exact name). Exact or normalised names first (`mixamorig:`,
+  `DEF-`, `Bip01` prefixes; `Left` / `L_` / `.L` / `_l` sides), then a preset (Auto picks the one that
+  matches most: Mixamo, Blender Rigify, Unreal, 3ds Max Biped, then Generic), then the skeleton's
+  shape (the pelvis joins the two lowest joints, the chest the two widest, each limb's two longest
+  consecutive segments are its upper and lower bones, the head the last weighted joint towards the
+  top). Each row shows how it was found and a confidence; picks by hand are kept by "Map again" and
+  saved (with the base robot, preset, facing and paint) as `mapping.json` beside the kept source, so
+  a re-import of the same name restores them.
+- Orientation: the file's left (left minus right upper arm) and forward (the feet's vertices ahead
+  of the ankles, else the toes) against the base's; a different handedness is mirrored (x negated:
+  glTF characters are the mirror image of the game's convention, FINDINGS 561), then turned in 90
+  degree steps; the lowest vertex goes to the floor. Exports of ours are taken as they are.
+- Retargeting: each skin bone's bind frame is the base's turned so the bone points the way the base's
+  does (pelvis and chest by two directions, limbs by one, hands, feet and head by their parent's);
+  every sequence keeps the base's rotations, and each channel's offset is scaled by its bone's change
+  of length (others by the overall size). A file animation named as a sequence (Blender's
+  `Armature|` prefix ignored, or chosen on the Animations page) replaces it: sampled at 30 keys a
+  second and normalised to 0..1 (`extras.de_normalised` exports are 0..1 already), each mapped bone
+  following its joint; the root's horizontal drift is removed unless the file has a `Body` node.
+  Every sequence the scripts name (`seq<Name>` globals) is kept, so none can go missing.
+- LODs: nodes named `LOD0`-`LOD2` (or ending so), else every mesh is LOD0; missing LODs are quadric
+  decimations to the base's triangle counts; LOD0 is decimated to fit 65,535 vertices (or to the
+  base's budget when asked). Meshes parented to a joint without a skin follow that joint.
+- Materials: an export's `extras.de_stages` give the RGBMain and ReflectionMask images and each
+  stage's UV set back; otherwise the materials' textures and colours go into one atlas, used as the
+  model's own colours (RGBStatic, paint mask blank) or, for untextured files by default, as a paint
+  mask (each material one of the pilot's three colours). Images named `PaintMask`, `ReflectionMask`
+  or `Bump` (or material extras `de_paint_mask`, `de_reflection_mask`, `de_bump`) are used as such.
+- Hitboxes: an empty `Sphere:<affector>` under a joint moves that sphere to the joint's bone (its
+  scale the falloff, in metres); the base's other spheres keep their bone, offsets scaled with it.
+- Game side: a description's robot is set up from the robot object itself and its own bank, inputs,
+  class and deform info (the nearest in an add-on holding several, `de::robot_part`), so an add-on's
+  HAR variant fights as itself in `openbg`, `openbg-fight` and Play in editor; renderers draw
+  `RGBStatic`.
+- Verified (ctest `editor-har-import`): Jaguar exported and imported onto Jaguar comes back with the
+  same vertices, binds, channel rest and, posed in every 7th sequence, within 0.008 units of the
+  base; a generated humanoid with numbered joint names and other proportions maps by shape alone and a
+  Mixamo-named rig (centimetre armature) by preset; in every sequence their limbs point within a
+  degree of the base's and no edge stretches more than the base's does; the add-on validates, saves
+  and the engine reads its skin, bank and materials back. Both fight in `openbg-fight`: hits land
+  both ways.
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the
@@ -442,5 +495,9 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
   Creature and fights. Not yet: fighter scripts do not compile with our compiler (the `master`
   statement), so a changed constant leaves the class's VMC2 stale (a validation error); the robot
   preview shows the base paint.
-- **7 (started, 2026-11-11):** glTF export of meshes, props, arenas and robots; prop and arena
-  import through the Import dialog (§5.5 "Built"). Next: robot (HAR) import.
+- **7 (mostly done, 2026-11-11):** glTF export of meshes, props, arenas and robots; prop, arena and
+  robot (HAR) import through the Import dialog (§5.5 "Built", "Built: robots"): bone mapping with
+  presets, guesses and a mapping UI, retargeted sequences, file animations, decimated LODs, hitboxes;
+  the imported HAR opens in the HAR editor and fights in the game. Not yet: twist and contact
+  correction in retargeting, extra paint jobs and new hitboxes for imported robots, secondary rigs
+  (Gargoyle's wings).
