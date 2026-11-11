@@ -1,5 +1,6 @@
 #include "assets.h"
 
+#include <algorithm>
 #include <map>
 
 #include "har.h"
