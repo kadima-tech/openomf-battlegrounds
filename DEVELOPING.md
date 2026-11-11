@@ -207,3 +207,45 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   existing add-on with nothing written before the add-on is chosen or saved.
 - Memory: files stay in memory once read; browsing every image in the game reads most of `Data`.
 
+**Arenas and play in editor** (`editor/app/world_*.cpp`, `pie.cpp`, `editor/core/arena.*`):
+- Content > Open Arena, or a double-click on an arena description or environment, opens it in the
+  viewport. Only the files the arena reaches are read (`ed::arena_files`: its file and what its GUID
+  pool reaches, about 16 files; `de::World`'s filter), on a thread. RMB-drag looks, with WASD / QE
+  to fly (wheel: speed); MMB pans; Alt+LMB orbits; the wheel dollies; F frames the selection; W / E
+  pick move / rotate. The Outliner groups the tree (Gameplay: spawn points, pickup spawners,
+  hazards, surfaces, force affectors, death volumes, nav areas and their links; Environment:
+  lights, cameras, all objects).
+- **Variants.** Copy to Add-on (viewport, Place panel, Content menu) copies the description (with
+  its icon) and the whole environment tree into the add-on with fresh GUIDs, plus the arena's
+  FightingSurfaceCollision mesh (the floor is looked up by name in the arena's file); the
+  description's resource points at the copy. References are remapped by class layout where the
+  engine's readers fix one (`kClassLayouts`), else by the content grammar only when its parse is
+  unambiguous; every chunk of every shipped arena copies (a Desert variant is about 4.8 MB, mostly
+  the actors' mesh children). Editable: name, players, listed / locked (Details on the arena),
+  actor positions and yaw (gizmo with 10-unit / 15-degree snapping, or Details), light colour and
+  intensity, spawn points and pickup spawners added (Place: a copy where the view looks) or removed
+  (Delete; the object leaves the tree, Ctrl+Z restores it). Arena checks join the Validation panel:
+  spawns on a fighting surface, spawns against max players, nav net connectivity.
+- **Play** (Alt+P) runs the game's Last Man Standing session in the selected viewport, the open add-on
+  loaded as `--addon` would (written to `<user data>/openbg/editor/pie/`), only the files the match
+  reaches unless "Load all game data" is set. Play Mode (toolbar) picks robots, pilots (add-on pilots
+  too), AI or idle dummy (no session: the editor spawns both), difficulty, game type and wins. The
+  keyboard reaches the game only while the viewport has focus (arrows, A/S/Z/X, Space, Shift, C).
+  Pause, Step (one 20 ms frame), speed, Eject / F8 (free camera, click a fighter to inspect it),
+  Esc or Stop. Debug: hit (blue) and attack (red) spheres, nav net and AI targets, full energy.
+  An add-on pilot's attributes reach its running fighter at once; anything else on the next Play.
+  **Simulate** is the same match with every fighter on its AI and the camera ejected.
+- Scripted runs: `--arena <name|stem>`, `--variant`, `--select-node <name>`, `--move-to x,y,z`,
+  `--light-colour r,g,b,intensity`, `--camera x,y,z,yaw,pitch`, `--layout 1|2|4`, `--shading 0|1|2`,
+  `--play`, `--simulate`, `--play-ticks N`, `--replay` (Stop and Play again), `--eject`,
+  `--inspector`, `--debug hits,nav,energy`.
+- `editor-arena-tests` (ctest `editor-arena`): the arena list, Desert's tree (16 spawn points, nav
+  links resolved, checks pass), a variant -> description, spawn moved and duplicated, light recoloured
+  -> save -> reopen, and the engine reading the saved variant: same counts, and for 431 copied
+  objects the engine's own readers (components, nav links, cube faces, lights, materials) reach the
+  base's targets or their copies.
+- Known limits: two variants in one add-on would both be drawn by the game's arena renderer (it
+  bakes every environment in a file); arena scripts' globals still name the base arena's objects;
+  meshes, hazards, nav links and prefabs cannot be placed yet; a light's colour edit shows on
+  dynamic geometry only (static geometry is lightmapped).
+

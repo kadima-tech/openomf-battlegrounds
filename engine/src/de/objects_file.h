@@ -37,6 +37,8 @@ struct Reference {
 class ObjectsFile {
 public:
 	explicit ObjectsFile(std::vector<uint8_t> data);
+	// Unique in the process, never reused: caches keyed by it outlive a destroyed file safely.
+	uint64_t serial() const { return serial_; }
 
 	uint8_t format() const { return format_; }
 	const ObjectInfo &master() const { return master_; }
@@ -90,6 +92,7 @@ private:
 	mutable Contents file_;
 	uint8_t format_ = 0;
 	ObjectInfo master_;
+	uint64_t serial_ = 0;
 	std::vector<ObjectInfo> objects_;
 	std::vector<Guid> guid_pool_;
 };

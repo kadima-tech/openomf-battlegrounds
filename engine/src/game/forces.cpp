@@ -76,9 +76,9 @@ struct MeshShape {
 };
 
 const MeshShape *mesh_shape(const de::ObjectRef &r) {
-	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, MeshShape> cache;
+	static std::map<std::pair<uint64_t, uint32_t>, MeshShape> cache;
 	if (!r) return nullptr;
-	auto key = std::make_pair(r.file, r.index);
+	auto key = std::make_pair(r.file->serial(), r.index);
 	auto it = cache.find(key);
 	if (it != cache.end()) return &it->second;
 	MeshShape &s = cache[key];

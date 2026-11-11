@@ -32,8 +32,8 @@ std::optional<std::array<std::array<float, 3>, 3>> paint_colours(game::World &wo
 			if (!ch->is("Actor\\Creature\\Pilot") || !ch->faction) continue;
 			game::GameObject *f = world.object(ch->faction);
 			if (!f || !f->file) break;
-			static std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::optional<std::array<float, 3>>> cache;
-			auto key = std::make_pair(f->file, f->index);
+			static std::map<std::pair<uint64_t, uint32_t>, std::optional<std::array<float, 3>>> cache;
+			auto key = std::make_pair(f->file->serial(), f->index);
 			if (auto it = cache.find(key); it != cache.end()) {
 				if (it->second) colours[0] = *it->second;
 				break;
@@ -459,7 +459,9 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			glu::look_view(view, eye, f, up);
 		}
 	}
+	if (camera_override) camera_override(dw, dh, proj, view, eye);
 	glu::mul(vp, proj, view);
+	memcpy(drawn_vp.data(), vp, sizeof vp);
 	// CRenderer::ConvertFromWorldToScreen for the HUD: screen fractions (y up), view depth.
 	if (!capture_camera) {
 		memcpy(screen_vp.data(), vp, sizeof vp);
