@@ -128,7 +128,12 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   or with `--lan` through Join Game's session browser), lets the AI fight, leaves through the in-game menu's Main Menu
   and hosts a third time; it passes when the port was released each time and hosted again, and the guest got its remote
   pages and a fighter (`SHOTS` / `CLIENT_SHOTS` take screenshots of either side). Each machine prints `net: hosting on
-  port N` and `net: stopped hosting, port N released`.
+  port N` and `net: stopped hosting, port N released` (and `Couldn't activate listening port ... Attempting connection on
+  port N` when it moves to the next port). `--guest-first` (implies `--lan`) opens the guest's Join Game before anyone
+  hosts: a headless host on the port appears unprompted, the menu host's first session moves to the next port and is
+  found there, the headless host is stopped and leaves the list, and the guest joins the second session. Join Game prints
+  `net: LAN list: <server>@<address> ...` whenever its list changes, keeps the wall clock's pace in a screenshot run,
+  and `OPENBG_LAN_JOIN="<server name>:<port>"` joins that session as soon as it is listed (testing).
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `openbg-unlock-all <Data> <registry.txt>` writes a registry with everything the game locks unlocked, for playtesters (`tools/unlock_all.cpp`): id 0 on each description locked by default, the 22 RECON DATA stats (ids 100-121) on each pilot, and every session master's starting matches (0x10063 + n); the host's arena toggle (0xffff) is left alone. An existing file keeps its other values. A playtester puts the result in their settings folder as `registry.txt` (see the Registry entry in PLACEHOLDERS.md for the folder); with a registry present the first-run Basic Training is skipped. Build it from the patched data (the default `OPENBG_DATA_DIR`) so 2.123's content is included; add-ons in `OPENBG_ADDONS` are unlocked too.

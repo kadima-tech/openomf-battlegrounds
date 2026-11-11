@@ -343,12 +343,14 @@ int main(int argc, char **argv) {
 			int max_clients = atoi(app.registry_string("Network\\Max Clients").c_str());
 			ss.max_player_clients = single_player ? 20 : max_clients > 0 ? max_clients : 16;
 			game::SessionState *sp = &ss;
-			auto begin = [&world, &app, sp] {
+			auto begin = [&world, &app, sp, single_player] {
 				for (auto &s : world.sessions) {
 					if (s.get() == sp) world.session = s;
 				}
 				if (world.session.get() != sp) return;
-				game::add_client(world, true, "User");
+				// DE_CClient::SetAsUserControlled (Core 0x701f4c70): online, a set Network\Player Name renames it.
+				const std::string player = single_player ? std::string() : app.registry_string("Network\\Player Name");
+				game::add_client(world, true, player.empty() ? "User" : player);
 				game::begin_session(world);
 				app.set_registry_bool("SinglePlayerPlayed", true);
 			};
@@ -846,8 +848,9 @@ int main(int argc, char **argv) {
 			last = now;
 			uint32_t frame_ms = 0;
 			// A network screenshot run keeps the wall clock's pace, as the other machine does.
-			if (shot && netgame.state() == game::NetGame::State::Idle) {
+			if (shot && netgame.state() == game::NetGame::State::Idle && !(app.current && app.current->wall_clock)) {
 				frame_ms = game::World::kFrameMs;
+				accum = 0;
 			} else if (accum >= game::World::kFrameMs) {
 				frame_ms = uint32_t(std::min(accum, 2000.0));
 				accum = accum > 2000 ? 0 : accum - frame_ms;

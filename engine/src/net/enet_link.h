@@ -21,6 +21,8 @@ struct _ENetEvent;
 namespace net {
 
 constexpr uint16_t kDefaultPort = 2002;  // Network\Winsock\Listener Port
+// WinSockService::ObjInitContents (Core 0x7019e0b0): a port in use, the next one, up to 99 more.
+constexpr int kPortRetries = 99;
 
 struct Address {
 	uint32_t ip = 0;  // network byte order, as ENet keeps it
@@ -72,8 +74,8 @@ public:
 		EnetPeer *peer;
 	};
 	// A server on `port` (0: any free one) for `max_peers` machines, or a client connecting to
-	// `to`. Null with `error` set when the socket cannot be opened.
-	static std::unique_ptr<EnetHost> listen(uint16_t port, size_t max_peers, std::string *error = nullptr);
+	// `to`. Null with `error` set when the socket cannot be opened; `in_use` tells a port taken.
+	static std::unique_ptr<EnetHost> listen(uint16_t port, size_t max_peers, std::string *error = nullptr, bool *in_use = nullptr);
 	static std::unique_ptr<EnetHost> connect(const Address &to, std::string *error = nullptr);
 	~EnetHost();
 	// Sends what the delay simulator has released and takes in what arrived; call every frame.
@@ -117,6 +119,7 @@ public:
 	~Discovery();
 	bool ok() const { return socket_ >= 0; }
 	void query_broadcast(uint16_t port);
+	void query_broadcast(const std::vector<uint16_t> &ports);
 	void query(const Address &to);
 	bool receive(Reply &out);
 
