@@ -385,6 +385,12 @@ HarData read_har(const Project &p, const HarObjects &o) {
 				HarConstant c;
 				if (parse_final(line, &c) && tunable(c.name)) h.constants.push_back(c);
 			}
+			auto rank = [](const HarConstant &c) {
+				return c.name.find("Damage") != std::string::npos ? 0 : c.name.find("Stun") != std::string::npos ? 1
+				       : c.name.find("Armor") != std::string::npos                                                ? 2
+				                                                                                                   : 3;
+			};
+			std::stable_sort(h.constants.begin(), h.constants.end(), [&](const HarConstant &a, const HarConstant &b) { return rank(a) < rank(b); });
 		} catch (const std::exception &) {
 		}
 	}

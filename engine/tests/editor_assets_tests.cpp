@@ -18,6 +18,7 @@
 #include "game/descriptions.h"
 #include "game/runtime.h"
 #include "har.h"
+#include "pilot.h"
 #include "script.h"
 #include "tournament.h"
 #include "validate.h"
@@ -186,6 +187,31 @@ static void har(const fs::path &data, const fs::path &tmp) {
 	h.spheres[0].falloff *= 2;
 	h.inputs[0].steps[0].max_age += 3;
 	ed::write_har(*proj, o, h);
+	{
+		// A script constant: the behavior's members line is rewritten (compiling fighter scripts
+		// waits for the compiler's "master" statements, so the edit is checked on a scratch copy).
+		ed::Project scratch(base, tmp / "Scratch.DEObjects", proj->file());
+		ed::HarData c = ed::read_har(scratch, o);
+		bool damage = false;
+		for (auto &k : c.constants) {
+			if (k.name == "m_InitialMeleeAttackDamageMultiplier") k.value = 1.25, damage = true;
+		}
+		CHECK(damage);
+		ed::write_har(scratch, o, c);
+		CHECK(ed::script_text(ed::read_pcode(scratch.file().objects[size_t(o.behavior)])).text.find("m_InitialMeleeAttackDamageMultiplier=1.25;") != std::string::npos);
+		CHECK(ed::read_har(scratch, o).constants.front().name == "m_InitialMeleeAttackDamageMultiplier");
+	}
+	uint32_t paint = ed::create_paint_job(*proj, o, "Paint2");
+	auto images = ed::paint_images(*proj, paint);
+	CHECK(images.size() >= 2);
+	for (auto &img : images) {
+		if (img.name != "RGBMain") continue;
+		int w = 0, hh = 0, type = 0;
+		ed::image_header(proj->file().objects[size_t(img.object)], &type, &w, &hh);
+		std::vector<uint8_t> px(size_t(w) * size_t(hh) * 4);
+		for (size_t k = 0; k < px.size(); k += 4) px[k] = 40, px[k + 1] = 200, px[k + 2] = 90, px[k + 3] = 255;
+		ed::set_image_pixels(*proj, uint32_t(img.object), w, hh, px, "green.png");
+	}
 	auto issues = ed::validate(*proj);
 	for (auto &i : issues) {
 		if (i.severity == ed::Issue::Error) printf("  validation error: %s\n", i.text.c_str());
@@ -208,7 +234,8 @@ static void har(const fs::path &data, const fs::path &tmp) {
 		if (desc) {
 			game::DescriptionInfo info = game::read_description(w.data(), desc);
 			CHECK(info.listed && !info.locked_by_default);
-			CHECK(!game::fighter_models(w.data(), desc).empty());
+			printf("paint jobs: %zu\n", game::fighter_models(w.data(), desc).size());
+			CHECK(game::fighter_models(w.data(), desc).size() >= 2);
 			de::ObjectRef actor = w.data().by_guid(*reinterpret_cast<const de::Guid *>(again->file().objects[size_t(ed::har_objects(*again, list[0]).fighter)].info.guid.b));
 			CHECK(actor);
 			if (actor) {

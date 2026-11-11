@@ -503,6 +503,9 @@ public:
 		}
 		// Enums and finals of every visible behavior; members of the attached ones, laid out from
 		// the last behavior to the first.
+		// Enums first: a behavior's members may name an enum another behavior declares (BFighter's
+		// eReactionTypes is BThrowable's).
+		for (size_t i = infos_.size(); i-- > 0;) declarations(i, false, true);
 		for (size_t i = infos_.size(); i-- > 0;) declarations(i, i < attached_.size());
 		declare_methods();
 		for (auto &m : methods_) local_classes(m.body);
@@ -792,7 +795,7 @@ private:
 		}
 	}
 
-	void declarations(size_t bi, bool attached) {
+	void declarations(size_t bi, bool attached, bool enums_only = false) {
 		auto &pcode = infos_[bi].pcode;
 		std::string w = where(bi, "Members");
 		std::vector<pc::StmtPtr> stmts;
@@ -815,6 +818,7 @@ private:
 				}
 			}
 		}
+		if (enums_only) return;
 		for (auto &s : stmts) {
 			if (s->kind == Stmt::DeclS) {
 				auto &d = *s->decl;

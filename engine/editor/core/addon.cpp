@@ -388,6 +388,10 @@ const RefLayout kRefLayouts[] = {
     {"Description\\SessionModifier", 2, "*"},
     {"Behavior", 1, "B"},
     {"AnimationSequenceManager", 1, "LN"},
+    {"Mesh\\LODSwitchingMesh", 1, "*"},
+    {"Mesh\\LODSwitchingMesh", 2, "D"},
+    {"TextureProcess\\MultiStage", 1, "*"},
+    {"TextureProcess\\MultiStage", 2, "S"},
 };
 
 const char *find_layout(const std::string &class_path, size_t index) {
@@ -460,6 +464,24 @@ bool map_reference_chunk(const std::string &class_path, size_t chunk_index, cons
 				if (!map_list(r, w, map) || r.pos() != end) return false;
 				w.end_chunk(at, size);
 				w.bytes(r.bytes(r.remaining()));
+			} else if (*op == 'D') {
+				// LOD meshes: BOOL-terminated (reference, f32 switch distance) pairs.
+				for (;;) {
+					uint8_t b = r.u8();
+					w.u8(b);
+					if (b == 0) break;
+					if (b != 1) return false;
+					write_ref(w, map(read_ref(r)));
+					w.bytes(r.bytes(4));
+				}
+			} else if (*op == 'S') {
+				// Texture stages: a u32 count of (texture manager, 28 bytes of stage settings).
+				uint32_t n = r.u32();
+				w.u32(n);
+				for (uint32_t k = 0; k < n; ++k) {
+					write_ref(w, map(read_ref(r)));
+					w.bytes(r.bytes(28));
+				}
 			} else if (*op == 'N') {
 				while (r.remaining()) {
 					uint32_t n = r.u32();
