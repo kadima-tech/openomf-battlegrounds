@@ -19,6 +19,7 @@
 #include "theme.h"
 #include "widgets.h"
 #include "world.h"
+#include "assets.h"
 
 namespace fs = std::filesystem;
 using namespace theme;
@@ -289,6 +290,7 @@ void Editor::apply_startup() {
 			selection_ = ObjectRef::addon(project_->file().objects[pi].info.guid);
 		}
 	}
+	assets_startup(*this);
 	if (opt_.level) active_ = 0;
 	if (opt_.save) save();
 	if (opt_.launch) launch_game();
@@ -309,6 +311,7 @@ void Editor::validate_now() {
 
 void Editor::save() {
 	if (!project_) return;
+	assets_before_save(*this);
 	try {
 		project_->save();
 		log(LogLine::Ok, "Saved " + project_->path().string() + " (" + std::to_string(fs::file_size(project_->path())) + " bytes)");
@@ -322,7 +325,7 @@ void Editor::save() {
 	update_title();
 }
 
-void Editor::launch_game() {
+void Editor::launch_game(const std::vector<std::string> &extra_args) {
 	if (!project_ || !base_) return;
 	if (game_ && game_->running()) {
 		log(LogLine::Warning, "The game is already running");
@@ -349,7 +352,9 @@ void Editor::launch_game() {
 	try {
 		auto mutex = game_mutex_;
 		auto lines = game_lines_;
-		game_ = GameProcess::start(program, {base_->dir().string(), "--addon", addon.string()}, [mutex, lines](const std::string &l) {
+		std::vector<std::string> args{base_->dir().string(), "--addon", addon.string()};
+		args.insert(args.end(), extra_args.begin(), extra_args.end());
+		game_ = GameProcess::start(program, args, [mutex, lines](const std::string &l) {
 			std::lock_guard<std::mutex> lock(*mutex);
 			lines->push_back(l);
 		});
@@ -380,6 +385,17 @@ void Editor::open_pilot(const ed::Guid &pilot) {
 		}
 	}
 	docs_.push_back(make_pilot_document(*this, pilot));
+	active_ = docs_.size() - 1;
+}
+
+void Editor::add_document(std::unique_ptr<Document> doc, const ObjectRef &shows) {
+	for (size_t i = 1; i < docs_.size(); ++i) {
+		if (docs_[i]->shows(shows)) {
+			active_ = i;
+			return;
+		}
+	}
+	docs_.push_back(std::move(doc));
 	active_ = docs_.size() - 1;
 }
 
@@ -622,6 +638,7 @@ void Editor::frame() {
 	ImGui::End();
 
 	draw_new_pilot_popup();
+	assets_popups(*this);
 	draw_addon_chooser();
 	draw_data_prompt();
 	draw_about();
@@ -695,9 +712,8 @@ void Editor::draw_menu() {
 	}
 	if (ImGui::BeginMenu("Content")) {
 		if (ImGui::MenuItem(ICON_USER "  New Pilot...", nullptr, false, base_ != nullptr)) new_pilot_dialog();
-		ImGui::MenuItem(ICON_BOT "  New HAR...", "later iteration", false, false);
 		if (world_) world_->draw_arena_menu();
-		ImGui::MenuItem(ICON_TROPHY "  New Tournament...", "later iteration", false, false);
+		assets_content_menu(*this);
 		ImGui::Separator();
 		if (ImGui::MenuItem(ICON_FOLDER "  Content Browser")) focus_content_ = true, active_ = 0;
 		ImGui::EndMenu();
@@ -1262,7 +1278,10 @@ void Editor::draw_validation() {
 			ui::dim_text(i.rule ? ("\xc2\xa7" "7." + std::to_string(i.rule)).c_str() : "", kTextMuted);
 			ImGui::TableNextColumn();
 			ImGui::PushID(int(k));
-			if (ImGui::Selectable(i.text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns) && i.object >= 0) selected_object_ = i.object;
+			if (ImGui::Selectable(i.text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns) && i.object >= 0) {
+				selected_object_ = i.object;
+				if (i.line > 0) assets_open_issue(*this, i);
+			}
 			ImGui::PopID();
 		}
 		ImGui::EndTable();

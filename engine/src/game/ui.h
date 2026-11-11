@@ -323,6 +323,7 @@ public:
 	// --choose (testing): the Choose Cast page takes these names (modifiers, a starting match) and
 	// completes at once.
 	std::vector<std::string> cast_presets;
+	int start_match = -1;  // --start-match (testing): the starting match, whatever is unlocked
 
 	// One app update (DE_CAppManager::ObjUpdate before the sessions): UpdateUI.
 	void update();

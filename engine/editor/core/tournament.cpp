@@ -727,6 +727,7 @@ void import_match(const Importer &im, const std::string &source, TMatch &m, std:
 			m.name = quote;
 			continue;
 		}
+		if (have_quote && st.find("m_Quote") != std::string::npos) *rest += "m_Quote=\"" + literal(quote) + "\";\n";
 		*rest += st + "\n";
 	}
 	if (m.opponents.empty()) m.opponents.resize(1);
@@ -777,6 +778,7 @@ void import_cinematic(const Importer &im, const std::string &source, Tournament 
 			t.ending_quotes.push_back(quote);
 			continue;
 		}
+		if (have && st.find("m_Quote") != std::string::npos) *rest += "m_Quote=\"" + literal(quote) + "\";\n";
 		*rest += st + "\n";
 	}
 }
@@ -829,6 +831,11 @@ Imported import_scripts(const Project &p, const TournamentObjects &o) {
 	Importer im{p, visible_globals(p, o)};
 	de::PCode sub = read_pcode(p.file().objects.at(size_t(o.bsub)));
 	de::PCode master = read_pcode(p.file().objects.at(size_t(o.bmaster)));
+	// The original editor saved whole buffers: what follows a source's NUL is stale memory.
+	for (de::PCode *c : {&sub, &master}) {
+		c->members.source = c->members.source.substr(0, c->members.source.find('\0'));
+		for (auto &e : c->elements) e.source = e.source.substr(0, e.source.find('\0'));
+	}
 	{
 		BehaviorGlobals g = behavior_globals_of(p.file().objects[size_t(o.bsub)]);
 		for (size_t k = 0; k < g.names.size(); ++k) im.globals.add(g.names[k], k < g.refs.size() ? p.target(g.refs[k]).guid : Guid{});
@@ -1063,7 +1070,8 @@ GeneratedScripts generate_scripts(const Project &p, const TournamentObjects &o, 
 		for (auto &[id, text] : user_blocks(script_text(read_pcode(p.file().objects.at(size_t(o.bsub)))).text)) blocks[id] = text;
 	}
 	std::map<std::string, std::string> master_blocks;
-	const de::PCode base_master = read_pcode(p.file().objects.at(size_t(o.bmaster)));
+	de::PCode base_master = read_pcode(p.file().objects.at(size_t(o.bmaster)));
+	for (auto &e : base_master.elements) e.source = e.source.substr(0, e.source.find('\0'));
 	for (auto &[id, text] : user_blocks(script_text(base_master).text)) master_blocks[id] = text;
 
 	// BMaster: the shipped template with this ladder's enum, and the lose branches.

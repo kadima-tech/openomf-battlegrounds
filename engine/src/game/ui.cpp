@@ -1403,7 +1403,7 @@ public:
 			s->settings_active = true;
 		}
 		if (!s || done_) return false;
-		if (!app.cast_presets.empty()) {
+		if (!app.cast_presets.empty() || app.start_match >= 0) {
 			preset(app);
 			finish(app);
 			return false;
@@ -1649,7 +1649,12 @@ private:
 		for (size_t i = 0; i < matches_.size(); ++i) {
 			if (!matches_[i].empty() && std::find(app.cast_presets.begin(), app.cast_presets.end(), matches_[i]) != app.cast_presets.end()) g_starting_match = int(i);
 		}
-		if (matches_unlocked_ > 1) printf("Choose Cast: Starting Match %d (%s)\n", g_starting_match, matches_[size_t(g_starting_match)].c_str());
+		if (app.start_match >= 0 && size_t(app.start_match) < matches_.size()) {
+			g_starting_match = app.start_match;
+			printf("Choose Cast: Starting Match %d (forced)\n", g_starting_match);
+		} else if (matches_unlocked_ > 1) {
+			printf("Choose Cast: Starting Match %d (%s)\n", g_starting_match, matches_[size_t(g_starting_match)].c_str());
+		}
 	}
 
 	// SetCurrentModifier (0x201f0670): the cast's DE_CModifierControlRobot in +0x64.

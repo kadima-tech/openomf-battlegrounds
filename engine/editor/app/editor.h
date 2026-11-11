@@ -45,6 +45,10 @@ struct Options {
 	std::string arena, select_node, camera, debug, move_to, light_colour;
 	bool variant = false, play = false, simulate = false, eject = false, inspector = false, replay = false;
 	int play_ticks = 0, layout = 0, shading = -1;
+	// The asset side (assets.h): tournaments and HAR variants.
+	std::string new_tournament, open_tournament, new_har, open_har;
+	int asset_tab = -1, asset_select = -100;
+	bool compile = false;
 };
 
 class Editor;
@@ -94,7 +98,10 @@ public:
 	void status(const std::string &text) { status_ = text; }
 	void validate_now();
 	void save();
-	void launch_game();
+	void launch_game(const std::vector<std::string> &extra_args = {});
+	// Opens a document (or shows the open one that shows the same object).
+	void add_document(std::unique_ptr<Document> doc, const ObjectRef &shows);
+	Document *active_document() { return active_ < docs_.size() ? docs_[active_].get() : nullptr; }
 	void open_pilot(const ed::Guid &pilot);
 	void new_pilot_dialog(const std::string &base = "");
 	// Runs `then` on the open add-on, or first asks which add-on to use (recent, open, new).
