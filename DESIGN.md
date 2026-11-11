@@ -206,6 +206,15 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   orange, filled and 2.5 px); tabs General / Movement / Inputs / Hitboxes / Sounds / Paint / Script
   on the right. Inputs: a sequence list beside step cards of a 3 x 3 direction pad (lit cells
   #3a3566), six button toggles (grey any, green pressed, dark red released) and four timing fields.
+- **Robot import** (the Import dialog's Bones / Animations / Hitboxes pages): the Bones page is a
+  table of rig bones (a status icon, the bone, "optional" dimmed), a searchable joint dropdown per
+  row (the joint's current owner in brackets), "found by" coloured by source (name / preset green
+  #8fe3a8, guess amber #ffc98a, manual violet #8b7cf6, missing red #ff8f8f) and a 64 px confidence
+  bar in the same colour; a Preset combo ("Auto (Mixamo)"), Map again and Clear above, with count
+  chips. The preview draws the new robot (faces flat-shaded in the demo paint) beside the base robot
+  in grey, the file's joints as violet dots with lines (unmapped grey, the selected bone's orange),
+  the base's bones in blue (#6bb8ff) and the new rig's in green when posed; a footer has the pose
+  combo (Bind pose or any sequence), play / pause and Base robot / Skeletons toggles.
 - **Arena viewports:** the game's renderer fills each pane (lit, unlit, or collision: flat-shaded
   surfaces and affector meshes on #121318). Dark overlay buttons at the top left (layout, view,
   shading, Show menu) and top right (move / rotate gizmo, magnet snap, maximise); the arena's name
@@ -222,5 +231,17 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   Inspector is a tab beside Details: a creature picker, State / Stats (health green, energy blue,
   stun amber bars) / Physics / Input buffer sections; with no match it shows the Play Mode form,
   which also opens from the toolbar's Play Mode combo ("Jaguar vs Katana").
+- **Import dialog** (File > Import 3D Model, or a file dropped on the window): a wide modal with no
+  title bar, its heading (download icon, SemiBold) and the source path dimmed. Left, a 190 px step
+  list on the panel-head colour: numbered circles (violet #6b5ce7 fill on the current step, a red x
+  on a step with errors) with icon and title, the current row on the selection colour, and error /
+  warning chips below. Middle, the page: SeparatorText sections, a 160 px label column, segmented
+  accent buttons for choices (Prop | Arena, +Y | +Z), tables with role dropdowns whose icon is
+  tinted by role (surfaces #b18cff, walls and jump pads #7fd1c7, death #ff5a5a, spawns #4fc3f7,
+  pickups #8fe3a8, ignored muted). Right, a turntable preview on the viewport colour (#121318):
+  visual meshes textured with a soft key light, collision and gameplay as 38 % tinted overlays and
+  marker rings in the role colours, Visual / Collision toggles under it. Footer: Cancel, Back and an
+  accent Next or Import. The Place panel lists imported props under "Imported Props" (violet box
+  icons).
 - **Not yet active** features (HAR and tournament editing) keep their place in
   the layout, greyed or with an empty state that says they arrive in a later iteration.

@@ -48,6 +48,10 @@ struct WorldEditor::ArenaState {
 	bool built = false;
 	std::string error;
 	std::unique_ptr<de::World> world;
+	// What the viewport draws: the arena's base file, or for an add-on arena the add-on itself
+	// (in `world` under its stem) and that arena's environment in it.
+	std::string render_stem;
+	int render_env = -1;
 	std::vector<PickMesh> picks;
 	std::unique_ptr<render::ArenaRenderer> renderer;
 	std::unique_ptr<render::GlowRenderer> glow;

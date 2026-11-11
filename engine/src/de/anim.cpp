@@ -170,6 +170,21 @@ std::vector<Transform> AnimBank::pose(const AnimSequence &seq, float t, bool roo
 	return out;
 }
 
+int robot_part(const ObjectsFile &f, size_t robot, const std::string &cls, const std::function<bool(const ObjectInfo &)> &accept) {
+	const auto &objs = f.objects();
+	size_t robots = 0;
+	for (auto &o : objs) robots += o.class_path == "Actor\\Creature\\OMF2Fighter";
+	int best = -1;
+	size_t best_d = SIZE_MAX;
+	for (size_t i = 0; i < objs.size(); ++i) {
+		if (objs[i].class_path != cls || (accept && !accept(objs[i]))) continue;
+		if (robots <= 1) return int(i);
+		size_t d = i >= robot ? (i - robot) * 2 : (robot - i) * 2 + 1;
+		if (d < best_d) best_d = d, best = int(i);
+	}
+	return best;
+}
+
 AnimBank read_anim_bank(const ObjectsFile &f, const ObjectInfo &o) {
 	Contents c(f.object_data(o).contents);
 	Chunk ch = begin_chunk(c);

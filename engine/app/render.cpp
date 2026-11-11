@@ -1379,7 +1379,35 @@ GLuint load_environment(const de::World &world, const de::ObjectsFile &file) {
 	return 0;
 }
 
-void ArenaRenderer::load(const de::World &world, const std::string &stem) {
+// The meshes an environment's fighting-surface mesh affectors name (contents chunk 1: the groups,
+// 0x200000; references chunk 3: v2 { v1 { BOOL, mesh } }), in its own file.
+static std::set<uint32_t> surface_meshes(const de::ObjectsFile &file, uint32_t environment) {
+	std::set<uint32_t> out;
+	auto parents = file.parents();
+	for (uint32_t i = 0; i < file.objects().size(); ++i) {
+		if (file.objects()[i].class_path != "Actor\\Affector\\Mesh") continue;
+		bool under = false;
+		for (int p = int(i); p >= 0 && !under; p = parents[size_t(p)]) under = uint32_t(p) == environment;
+		if (!under) continue;
+		try {
+			auto d = file.object_data(file.objects()[i]);
+			de::Contents c(d.contents);
+			c.seek(de::begin_chunk(c).end);
+			de::begin_chunk(c);
+			if (!(c.u32() & 0x200000)) continue;
+			de::Contents r(d.references);
+			for (int k = 0; k < 3; ++k) r.seek(de::begin_chunk(r).end);
+			if (de::begin_chunk(r).version != 2) continue;
+			if (de::begin_chunk(r).version != 1 || !r.boolean()) continue;
+			de::Reference ref = de::Reference::read(r);
+			if (ref.kind == de::Reference::kLocal) out.insert(ref.index);
+		} catch (const std::exception &) {
+		}
+	}
+	return out;
+}
+
+void ArenaRenderer::load(const de::World &world, const std::string &stem, int environment) {
 	prog_ = glu::program(kArenaVS, kArenaFS);
 	const de::ObjectsFile *file = world.file(stem);
 	if (!file) {
@@ -1396,8 +1424,11 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 	g_lighting.ambient = de::read_ambient(world, *file);
 	load_projector_images(world);
 	// Floor: the fighting-surface collision mesh (world-space; it lives in a plain folder).
-	for (auto &o : file->objects()) {
-		if (o.class_path == "Mesh\\Standard" && o.name.find("FightingSurfaceCollision") != std::string::npos) {
+	std::set<uint32_t> surfaces;
+	if (environment >= 0) surfaces = surface_meshes(*file, uint32_t(environment));
+	for (uint32_t oi = 0; oi < file->objects().size(); ++oi) {
+		const auto &o = file->objects()[oi];
+		if (o.class_path == "Mesh\\Standard" && o.name.find("FightingSurfaceCollision") != std::string::npos && (environment < 0 || surfaces.count(oi))) {
 			auto m = de::read_mesh(*file, o);
 			for (auto &f : m.faces) {
 				floor_tris_.push_back({m.vertices[f.v[0]], m.vertices[f.v[1]], m.vertices[f.v[2]]});
@@ -1411,7 +1442,9 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 		for (int p = int(item.actor_index); p >= 0; p = parents[size_t(p)]) chain.push_back(uint32_t(p));
 		// Only the environment's own branch is in the scene; the file's other actors (templates such
 		// as the Trophy Room's trophies) appear only as copies, drawn where they are.
-		if (std::none_of(chain.begin(), chain.end(), [&](uint32_t i) { return file->objects()[i].class_path == "Actor\\Creature\\Environment"; })) {
+		if (std::none_of(chain.begin(), chain.end(), [&](uint32_t i) {
+			    return environment >= 0 ? i == uint32_t(environment) : file->objects()[i].class_path == "Actor\\Creature\\Environment";
+		    })) {
 			if (getenv("OPENBG_DEBUG_MATERIALS")) fprintf(stderr, "[mesh] %s: outside the environment, not baked\n", item.actor.c_str());
 			continue;
 		}
@@ -1607,7 +1640,7 @@ std::optional<std::array<float, 3>> ArenaRenderer::segment_point(const std::arra
 // Actors made at run time (pickups, jets, spawned props)
 
 namespace {
-de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection, const std::vector<de::Image> &scaled = {});
+de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection, const std::vector<de::Image> &scaled = {}, const std::vector<de::Image> &statics = {});
 }
 
 void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &actors, const float *vp, const float *eye) {
@@ -1668,6 +1701,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				if (c->paint) {
 					paint_key(key, *c->paint);
 					for (auto &sc : c->scaled) ref_key(key, sc);
+					for (auto &sc : c->statics) ref_key(key, sc);
 				}
 				chosen.emplace(std::make_pair(manager.file, manager.index), std::move(*c));
 			}
@@ -1680,10 +1714,11 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				if (!r) return 0;
 				// A filtered image: painted like the fighter's RGBMain / ReflectionMask.
 				std::optional<Paint> paint;
-				const std::vector<de::ObjectRef> *scaled = nullptr;
+				const std::vector<de::ObjectRef> *scaled = nullptr, *statics = nullptr;
 				if (auto pb = painted_by.find(std::make_pair(r.file, r.index)); pb != painted_by.end()) {
 					paint = pb->second->paint;
 					scaled = &pb->second->scaled;
+					statics = &pb->second->statics;
 				} else if (paint_of) {
 					paint = paint_of(r);
 				}
@@ -1691,11 +1726,18 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				std::string pkey;
 				ref_key(pkey, r);
 				paint_key(pkey, *paint);
-				std::vector<de::Image> scaled_images;
+				std::vector<de::Image> scaled_images, static_images;
 				for (const de::ObjectRef &sc : scaled ? *scaled : std::vector<de::ObjectRef>{}) {
 					ref_key(pkey, sc);
 					try {
 						scaled_images.push_back(de::read_image(*sc.file, sc.info()));
+					} catch (const std::exception &) {
+					}
+				}
+				for (const de::ObjectRef &sc : statics ? *statics : std::vector<de::ObjectRef>{}) {
+					ref_key(pkey, sc);
+					try {
+						static_images.push_back(de::read_image(*sc.file, sc.info()));
 					} catch (const std::exception &) {
 					}
 				}
@@ -1704,7 +1746,7 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				try {
 					auto img = de::read_image(*r.file, r.info());
 					if (!img.channels.empty()) {
-						auto px = paint_image(img, *paint, r.info().name == "ReflectionMask", scaled_images).rgba();
+						auto px = paint_image(img, *paint, r.info().name == "ReflectionMask", scaled_images, static_images).rgba();
 						t = glu::texture_rgba(img.width, img.height, px.data());
 						detail_texture(t, img);
 					}
@@ -1814,8 +1856,9 @@ namespace {
 // i x c x 256, clamped to 0..65280; Filter sums the three channels' entries and shifts by 8.
 // The image named exactly ReflectionMask takes the colours lightened: normalize(c x 0.5 + 0.5).
 // Then each RGBScaled image of the same size is added, scaled by UpdateStaticColorRemapperTable's
-// clamp(0.7 L + 0.3, 0, 1), L a weighted sum of the unlightened colours.
-de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection, const std::vector<de::Image> &scaled) {
+// clamp(0.7 L + 0.3, 0, 1), L a weighted sum of the unlightened colours; then each RGBStatic image
+// of the same size unscaled (FINDINGS 165; no shipped model has one, imported robots do).
+de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint, bool reflection, const std::vector<de::Image> &scaled, const std::vector<de::Image> &statics) {
 	FighterRenderer::Paint p = paint;
 	if (reflection) {
 		for (auto &c : p) {
@@ -1858,12 +1901,20 @@ de::Image paint_image(const de::Image &src, const FighterRenderer::Paint &paint,
 				out.channels[ch][px] = uint8_t(std::min(int(out.channels[ch][px]) + int(float(it->second[px]) * gain), 255));
 		}
 	}
+	for (const de::Image &st : statics) {
+		if (st.width != src.width || st.height != src.height) continue;
+		for (int ch = 0; ch < 3; ++ch) {
+			auto it = st.channels.find(ch);
+			if (it == st.channels.end() || it->second.size() < r->size()) break;
+			for (size_t px = 0; px < r->size(); ++px) out.channels[ch][px] = uint8_t(std::min(int(out.channels[ch][px]) + int(it->second[px]), 255));
+		}
+	}
 	return out;
 }
 
 }  // namespace
 
-void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, const de::ObjectsFile *fighter, size_t model) {
+void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, const de::ObjectsFile *fighter, size_t model, size_t fighter_actor) {
 	const auto &objs = f.objects();
 	if (model >= objs.size() || objs[model].class_path != "FighterModel") model = SIZE_MAX;
 	for (size_t i = 0; i < objs.size() && model == SIZE_MAX; ++i) {
@@ -1898,10 +1949,8 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 	radius = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) + (hi[2] - lo[2]) * (hi[2] - lo[2])) / 2;
 	if (fighter) {
 		const de::ObjectInfo *bank_obj = nullptr, *deform = nullptr;
-		for (auto &o : fighter->objects()) {
-			if (!bank_obj && o.class_path == "AnimationSequenceGroup") bank_obj = &o;
-			if (!deform && o.class_path == "ActorDeformInfo") deform = &o;
-		}
+		if (int k = de::robot_part(*fighter, fighter_actor, "AnimationSequenceGroup"); k >= 0) bank_obj = &fighter->objects()[size_t(k)];
+		if (int k = de::robot_part(*fighter, fighter_actor, "ActorDeformInfo"); k >= 0) deform = &fighter->objects()[size_t(k)];
 		if (bank_obj && deform) {
 			bank = de::read_anim_bank(*fighter, *bank_obj);
 			bones_ = de::read_skin(*fighter, *deform, f, mesh_index);
@@ -1916,14 +1965,15 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 	// DE_CCreatureModel::Setup (OMF 0x35037470): the model's descendant images named RGBScaled* join
 	// the filter's scaled list.
 	scaled_.clear();
+	static_.clear();
 	if (model != SIZE_MAX) {
 		std::vector<uint32_t> todo = de::ObjectsFile::children(f.object_data(objs[model]));
 		while (!todo.empty()) {
 			uint32_t i = todo.back();
 			todo.pop_back();
-			if (objs[i].class_path == "Image\\Standard" && objs[i].name.rfind("RGBScaled", 0) == 0) {
+			if (objs[i].class_path == "Image\\Standard" && (objs[i].name.rfind("RGBScaled", 0) == 0 || objs[i].name.rfind("RGBStatic", 0) == 0)) {
 				try {
-					scaled_.push_back(de::read_image(f, objs[i]));
+					(objs[i].name.rfind("RGBScaled", 0) == 0 ? scaled_ : static_).push_back(de::read_image(f, objs[i]));
 				} catch (const std::exception &) {
 				}
 			}
@@ -1972,7 +2022,7 @@ void FighterRenderer::build() {
 		try {
 			auto img = de::read_image(*r.file, r.info());
 			if (!img.channels.empty()) {
-				auto px = paint_image(img, paint_, name == "ReflectionMask", scaled_).rgba();
+				auto px = paint_image(img, paint_, name == "ReflectionMask", scaled_, static_).rgba();
 				t = glu::texture_rgba(img.width, img.height, px.data());
 				detail_texture(t, img);
 			}

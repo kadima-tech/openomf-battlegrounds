@@ -70,7 +70,7 @@ std::optional<render::ActorMeshRenderer::LayerImage> filtered(game::World &world
 		if (!p->fighter) continue;
 		auto paint = paint_colours(world, p);
 		if (!paint) return std::nullopt;
-		return render::ActorMeshRenderer::LayerImage{image, paint, filter->scaled_images};
+		return render::ActorMeshRenderer::LayerImage{image, paint, filter->scaled_images, filter->static_images};
 	}
 	return std::nullopt;
 }
@@ -100,23 +100,34 @@ GameView::images_of(const game::GameObject *o) {
 	};
 }
 
-Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats, const de::ObjectsFile *file) {
-	const de::ObjectsFile *ff = file ? file : world.data().file(name);
+Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats) {
+	const de::ObjectsFile *ff = world.data().file(name);
 	if (!ff) {
 		throw std::runtime_error("no fighter file " + name);
 	}
-	std::string stem = name;
-	for (auto &[n, f] : world.data().files())
-		if (f.get() == ff) stem = n;
+	for (uint32_t i = 0; i < ff->objects().size(); ++i) {
+		if (ff->objects()[i].class_path == "Actor\\Creature\\OMF2Fighter") return setup_fighter(world, de::ObjectRef{ff, i}, user, with_stats);
+	}
+	throw std::runtime_error("fighter actor or class not found");
+}
+
+Fighter &setup_fighter(game::World &world, const de::ObjectRef &robot, bool user, bool with_stats) {
+	const de::ObjectsFile *ff = robot.file;
+	if (!ff) {
+		throw std::runtime_error("no fighter");
+	}
+	std::string stem;
+	for (auto &[st, f] : world.data().files()) {
+		if (f.get() == ff) stem = st;
+	}
 	world.instantiate_file(stem);
 	static std::deque<Fighter> keep;  // banks must outlive the world's pointers
 	Fighter &fi = keep.emplace_back();
+	const std::string name = robot.info().name;
 	fi.name = name;
-	for (auto &o : ff->objects()) {
-		if (o.class_path == "JoystickInputSequenceGroup") {
-			fi.inputs = game::read_input_bank(*ff, o);
-		}
-	}
+	fi.file = ff;
+	fi.index = robot.index;
+	if (int k = de::robot_part(*ff, robot.index, "JoystickInputSequenceGroup"); k >= 0) fi.inputs = game::read_input_bank(*ff, ff->objects()[size_t(k)]);
 	if (auto *common = world.data().file("Fighter")) {
 		for (auto &o : common->objects()) {
 			if (o.class_path == "JoystickInputSequenceGroup" && o.name == "StandardInputSequenceBank") {
@@ -131,21 +142,12 @@ Fighter &setup_fighter(game::World &world, const std::string &name, bool user, b
 			}
 		}
 	}
+	// CFighterDescription::NewResource: the fighter is a copy of the file's robot (the file's own
+	// objects stay the template, as globals and copies refer to them).
+	if (game::GameObject *tpl = world.object_for(ff, robot.index)) fi.actor = world.copy_tree(*tpl);
+	if (int k = de::robot_part(*ff, robot.index, "AnimationSequenceGroup"); k >= 0) fi.bank = de::read_anim_bank(*ff, ff->objects()[size_t(k)]);
 	de::ObjectRef cls_obj;
-	for (uint32_t i = 0; i < ff->objects().size(); ++i) {
-		auto &o = ff->objects()[i];
-		if (!fi.actor && o.class_path == "Actor\\Creature\\OMF2Fighter") {
-			// CFighterDescription::NewResource: the fighter is a copy of the file's robot (the
-			// file's own objects stay the template, as globals and copies refer to them).
-			if (game::GameObject *tpl = world.object_for(ff, i)) fi.actor = world.copy_tree(*tpl);
-		}
-		if (o.class_path == "AnimationSequenceGroup" && fi.bank.sequences.empty()) {
-			fi.bank = de::read_anim_bank(*ff, o);
-		}
-		if (o.class_path == "Class" && o.name == "P" + name) {
-			cls_obj = {ff, i};
-		}
-	}
+	if (int k = de::robot_part(*ff, robot.index, "Class", [&](const de::ObjectInfo &o) { return o.name == "P" + name; }); k >= 0) cls_obj = {ff, uint32_t(k)};
 	if (!fi.actor || !cls_obj) {
 		throw std::runtime_error("fighter actor or class not found");
 	}
@@ -293,7 +295,7 @@ void GameView::init_gl() {
 
 void GameView::wire_session() {
 	world.make_fighter = [this](const de::ObjectRef &actor) -> game::GameObject * {
-		Fighter &nf = setup_fighter(world, actor.info().name, false, false, actor.file);
+		Fighter &nf = setup_fighter(world, actor, false, false);
 		fighters.push_back(&nf);
 		return nf.actor;
 	};
@@ -306,21 +308,23 @@ void GameView::wire_session() {
 	};
 }
 
-void GameView::load_arena(const std::string &stem) {
+void GameView::load_arena(const std::string &stem, int environment) {
 	arena = stem;
+	arena_environment = environment;
 	owners_set = false;
 	inherited_owner_.clear();
 	arena_r = render::ArenaRenderer();
-	arena_r.load(world.data(), stem);
+	arena_r.load(world.data(), stem, environment);
 	world.floor = [this](float x, float z, float from) { return arena_r.floor_height(x, z, from); };
 	if (auto *f = world.data().file(stem)) render::g_lighting.ambient = de::read_ambient(world.data(), *f);
 	printf("arena %s: %zu triangles\n", stem.c_str(), arena_r.triangles);
 }
 
 // The session's environment in the scene: its file is the arena.
-std::string GameView::find_arena() const {
+std::string GameView::find_arena(int *environment) const {
 	for (game::GameObject *o : world.scene_objects()) {
 		if (!o->file || o->class_path != "Actor\\Creature\\Environment" || !shown(o)) continue;
+		if (environment) *environment = int(o->index);
 		// The file's stem: Volcano's master object is named "Volcanoe".
 		for (auto &[stem, f] : world.data().files()) {
 			if (f.get() == o->file) return stem;
@@ -336,9 +340,10 @@ void GameView::load_renderers() {
 			const de::ObjectsFile *mf = world.data().file(fi->name + "Model1");
 			size_t model = SIZE_MAX;
 			for (game::GameObject *ch : fi->actor->children) {
-				if (ch->class_path == "FighterModel" && ch->file == mf) model = ch->index;
+				if (ch->class_path == "FighterModel" && ch->file) mf = ch->file, model = ch->index;
 			}
-			fi->renderer.load(world.data(), *mf, world.data().file(fi->name), model);
+			if (!mf) throw std::runtime_error("no model for " + fi->name);
+			fi->renderer.load(world.data(), *mf, fi->file ? fi->file : world.data().file(fi->name), model, fi->file ? fi->index : 0);
 			fi->renderer_loaded = true;
 		}
 	}
@@ -370,19 +375,20 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	render::g_reflections_enabled = world.reflections_enabled || (force_reflections && force_reflections->bits);
 	if (reflections_built_ != int(render::g_reflections_enabled)) {
 		reflections_built_ = int(render::g_reflections_enabled);
-		if (!arena.empty()) load_arena(arena);
+		if (!arena.empty()) load_arena(arena, arena_environment);
 		for (auto *fi : fighters) fi->renderer_loaded = false;
 	}
 	if (arena.empty() || follow_scene) {
 		// The session's environment came or went (a match began or ended).
-		std::string a = find_arena();
-		if (a != arena) {
+		int env = -1;
+		std::string a = find_arena(&env);
+		if (a != arena || (!a.empty() && env != arena_environment)) {
 			if (a.empty()) {
 				arena.clear();
 				fighters.clear();
 				player = nullptr;
 			} else {
-				load_arena(a);
+				load_arena(a, env);
 			}
 		}
 	}

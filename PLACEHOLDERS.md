@@ -179,6 +179,26 @@ registration in the DLLs either, but their methods are in Session.ModuleDLL and 
 | Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. The stats are read on the clocks the original uses (FINDINGS 367); the `GetStat*` natives add each pilot object's TimeAdd (7647.25 ms per pilot object made, FINDINGS 371), counted over the pilot loads and copies ours makes: pilot GUIDs the original's launcher or earlier screens resolved first are not known, so its count can start higher. |
 | VMC2 trailing bytes | Ported | `DE_CClass::LoadVMCode` seeks to the chunk end after the final instances: the 1–3 bytes there are never read by the original either. |
 
+## Content editor: glTF import and export
+
+| What | Kind | Notes |
+|---|---|---|
+| Scale | Approximation | 10 DE units a metre is our choice (a robot is ~30 units, FINDINGS 543); files the editor exported carry their own scale. |
+| Robot animation time | Approximation | Sequence times are normalised (0..1) in the bank; exported animations run 1 s each (`extras.de_normalised`). |
+| Jump pad strength | Stand-in | An imported jump pad is Desert's `JumpPad1` launcher turned so its +Y follows `extras.impulse`; the launch speed is the shared launcher class's, not the file's. |
+| Death volumes | Approximation | Each `Death` mesh and the `kill` collision become one Grudge Match death box over their bounds, not the exact shape. Exporting an arena whose death volume is a passive reference (Desert) writes no shape for it. |
+| Generated navigation net | Stand-in | A grid over the floors (walkable links only: no wall, no step over 12 units, no hole), not hand-placed areas; no jump links, so floors reachable only by jumping or jump pads get no path up. |
+| Prop collision | Missing | Imported props are drawn only; put blocking shapes in an arena's `Collision`. |
+| Vertex colours, morph targets, cameras, lights | Missing | Not read on import; vertex colours (stage colour channels) are not exported. |
+| Imported images | Approximation | Stored uncompressed (as the editor's photo import), resized to powers of two up to 1024 (FINDINGS 540). |
+| Robot retargeting | Approximation | Base sequences keep each channel's rotations and scale its offsets by the bone's change of length; a bone's bind frame is turned so it points the way the base's does (two directions for the pelvis and chest, one for limbs, the parent's for hands, feet and head). Twist about a limb is not matched, and contacts (feet on the floor, hands on an opponent in grabs) are not corrected for new proportions. |
+| Robot root motion | Approximation | A file animation's horizontal drift of the root bone is removed (moves play in place, the game's physics moves the fighter), unless the file has a `Body` node, as our exports do. |
+| Robot materials | Approximation | Several materials go into one texture atlas (the fighter filter paints one RGBMain); UVs past 0..1 are moved per triangle into the tile and clamped there. The model's own colours are an `RGBStatic` image, which the 2.123 filter adds unpainted (FINDINGS 165) though no shipped model has one: untested in the original game. |
+| Robot LODs | Approximation | LOD1 / LOD2 are half-edge quadric decimations of LOD0 to the base robot's triangle counts (UV seams and skin borders are penalised, not locked). |
+| Robot paint jobs | Missing | An imported HAR has one model description; the base's other paint jobs are unlinked from it (their meshes do not fit the new rig). |
+| New hitboxes | Missing | `Sphere:<name>` empties place the base robot's spheres; a name the base lacks is reported and left out (the scripts look spheres up by name). |
+| Secondary rigs | Missing | Gargoyle's wings (`WingDeformInfo`, `WingAnimationBank`) stay the base's. |
+
 ## Patch level
 
 | What | Kind | Notes |

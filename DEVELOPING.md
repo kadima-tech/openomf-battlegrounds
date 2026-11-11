@@ -284,8 +284,76 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   -> save -> reopen, and the engine reading the saved variant: same counts, and for 431 copied
   objects the engine's own readers (components, nav links, cube faces, lights, materials) reach the
   base's targets or their copies.
-- Known limits: two variants in one add-on would both be drawn by the game's arena renderer (it
-  bakes every environment in a file); arena scripts' globals still name the base arena's objects;
-  meshes, hazards, nav links and prefabs cannot be placed yet; a light's colour edit shows on
-  dynamic geometry only (static geometry is lightmapped).
+- Known limits: arena scripts' globals still name the base arena's objects; hazards and nav links
+  cannot be placed yet (imported props can, below); a light's colour edit shows on dynamic geometry
+  only (static geometry is lightmapped). The viewport and the game draw an add-on arena from the
+  add-on itself, only that arena's environment branch, so one add-on can hold several arenas.
+
+### 3D models: glTF import and export
+
+The editor reads and writes glTF 2.0 (`.glb`, or `.gltf` with its `.bin` and images; spec
+[§5.5](docs/EDITOR_SPEC.md#55-3d-model-import-and-export-gltf)). CMake fetches cgltf (v1.15, reading)
+and stb_image (JPEG textures; PNG goes through the editor's own decoder); the writer is our own.
+`engine/editor/core/gltf.h` is the shared reader / writer (a plain scene: nodes, meshes, materials,
+decoded images, skins, animations, extras), `model_export.h` turns DE content into it and
+`model_import.h` turns it into add-on objects. Scale: 10 DE units a metre (a robot is ~30 units,
+3 m); an export records it in `asset.extras.de_units_per_metre`, so a re-import is exact.
+
+- **Export:** right-click an object in the Content Browser > Export to glTF..., or File > Export
+  Selected to glTF...: a `Mesh\Standard` (a primitive per material, `extras.de_stages` with every
+  MultiStage stage, images as PNG), a `Mesh\LODSwitchingMesh` (LOD0.. nodes), an actor (a prop with
+  its children), an arena (`Description\Environment` or its environment: the drawn meshes under
+  `Visual`, and `Collision` / `Death` / `JumpPad` / `Spawn` / `Pickup` / `Navigation` collections) or a
+  robot (`FighterModel`: 3 LODs skinned to the animation bank's channels, every sequence as a 1 s
+  animation). Exporting then importing an unmodified mesh gives back its vertices, faces (order,
+  adjacency, smoothing groups), materials, stage settings, UVs and pixels.
+- **Import:** File > Import 3D Model... or drop a `.glb` / `.gltf` on the window. The Import dialog
+  walks through Source (prop or arena, name, units, up axis; for arenas the template arena whose
+  lights, sky, music and cameras the new one takes, and the nav net), Contents (each node and what it
+  becomes: Visual, Floor / Wall / Kill collision, Death volume, Jump pad, Spawn point, Pickup
+  spawner, Ignore; pickups and launch directions), Materials (stages, textures, sizes as stored) and
+  Review (format checks: u16 vertex / face limits, power-of-two textures up to 1024, spawn count,
+  pickup names, collision present), with a turntable preview (visual meshes textured, collision and
+  gameplay tinted by role). Importers add pages through `register_import_step` (`models.h`).
+  - A **prop** becomes a folder with the prefab actor, its mesh, materials and images; the Place panel
+    lists it under Imported Props and places copies (sharing the mesh) where the view looks.
+  - An **arena** is built from collections named `Visual`, `Collision` (by material name: `floor`,
+    `wall`, `kill`), `Death`, `JumpPad` (`extras.impulse` = launch direction), `Spawn` and `Pickup`
+    (`extras.pickups` = names such as `EnergyBoost`): a node under a node of that name, or with
+    `extras.de_collection`. In Blender, parent objects to empties of those names, or export with
+    "Full Collection Hierarchy". Floors and walls become one fighting-surface mesh affector; death
+    meshes Grudge Match's death box sized to them; jump pads Desert's launcher; spawns and pickups
+    Grudge Match's; a navigation net is generated over the floors (areas where a robot can walk to
+    each neighbour, at most 64 areas and 256 links). The new arena opens in the viewport, plays in
+    the editor and with `openbg --addon`.
+  - A **robot** (a file with a skin; or Kind: Robot) becomes a new HAR variant of the chosen base
+    robot with the file's model (§5.5 "Built: robots"). Source picks the base robot, "Match <base>'s
+    size", facing (from the skeleton, or mirror and turn by hand), the floor and the paint (the
+    model's own colours, or the pilot's by material). **Bones** maps the base skin's bones to the
+    file's joints (Auto picks a preset: Mixamo, Rigify, Unreal, Biped, Generic; then the skeleton's
+    shape); each row has a searchable joint list, how it was found and a confidence; a click on a
+    joint in the preview gives it to the selected bone. **Animations** names file animations as
+    sequences (the rest are the base's, retargeted). **Hitboxes** lists the spheres (`Sphere:<name>`
+    empties in the file move them). The preview shows the new robot beside the base with both
+    skeletons, in the bind pose or playing any sequence. The new HAR opens in the HAR editor (its
+    preview draws the imported model) and the bone mapping is saved as
+    `<add-on>.assets/models/<name>/mapping.json` for re-imports.
+  - The source file is copied to `<add-on>.assets/models/<name>/` so the import can be redone.
+- Scripted runs: `--import file.glb [--import-kind prop|arena|robot] [--import-name N]
+  [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
+  instead), `--place-prop <name>` (with `--arena`), `--export "[file/][Class:]Name" --export-out
+  out.glb`. Example: `openbg-editor --data <Data> mods/Box.DEObjects --import arena.glb --import-kind
+  arena --import-name "Box Arena" --arena "Box Arena" --play`.
+- `editor-gltf-tests` (ctest `editor-gltf`, no game data: reader / writer round trip of a generated
+  scene; `editor-gltf-import`: a base mesh exported and imported back equal, Jaguar exported with
+  skins and animations, a generated crate prop, a generated box arena imported, saved and read by
+  the engine with its spawns on the floor and its nav net connected). `editor-gltf-tests --samples
+  <dir>` writes the generated `prop.glb` and `arena.glb`.
+- `editor-har-import-tests` (ctest `editor-har-import`): Jaguar exported and imported back onto
+  Jaguar (vertices, binds, rest and poses equal), a generated humanoid with unknown joint names and
+  other proportions (mapped by shape) onto Jaguar, a Mixamo-named rig onto Katana (an animation named
+  by hand), each checked posed in every sequence (limbs along the base's, no stretching past the
+  base's), validated, saved and read by the engine. `--samples <dir>` writes the generated rigs
+  (`humanoid.glb`, `mixamo.glb`); `<Data> --keep <dir>` keeps the add-ons for
+  `OPENBG_ADDONS=<dir>/HarBoxBot.DEObjects openbg-fight <Data> "Box Bot"`.
 

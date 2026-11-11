@@ -199,10 +199,28 @@ add_test(NAME deobjects-edit-reload COMMAND deobjects-data-tests "${OPENBG_DATA_
 add_test(NAME deobjects-round-trip COMMAND deobjects-data-tests "${OPENBG_DATA_DIR}" --all)
 set_tests_properties(deobjects-round-trip PROPERTIES LABELS full)
 
+# glTF 2.0 for the editor's model import and export: cgltf (MIT) pinned to v1.15, and stb_image
+# (MIT / public domain) for JPEG textures, pinned to a commit (stb has no release tags).
+FetchContent_Declare(cgltf
+	URL https://github.com/jkuhlmann/cgltf/archive/refs/tags/v1.15.tar.gz
+	URL_HASH SHA256=84e352092e5cd6aab7f66de62ddb66beb5e6f18d412ca9d12950d7a55bfef25a
+	SOURCE_SUBDIR headers-only
+	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_Declare(stb
+	URL https://codeload.github.com/nothings/stb/tar.gz/f58f558c120e9b32c217290b80bad1a0729fbb2c
+	URL_HASH SHA256=be1a5dad9ac38f42ef8abf00bd7db776101661b77603f832fcc0bae843d82846
+	SOURCE_SUBDIR headers-only
+	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(cgltf stb)
+
 # The content editor's data model (docs/EDITOR_SPEC.md): add-on projects, pilots, validation.
 add_library(editor-core STATIC editor/core/addon.cpp editor/core/content.cpp editor/core/pilot.cpp editor/core/image_io.cpp
-	editor/core/validate.cpp editor/core/arena.cpp editor/core/script.cpp editor/core/tournament.cpp editor/core/har.cpp)
+	editor/core/validate.cpp editor/core/arena.cpp editor/core/script.cpp editor/core/tournament.cpp editor/core/har.cpp
+	editor/core/gltf.cpp editor/core/gltf_libs.c editor/core/model_export.cpp editor/core/model_import.cpp editor/core/har_import.cpp
+	editor/core/mesh_simplify.cpp)
 target_include_directories(editor-core PUBLIC editor/core)
+target_include_directories(editor-core PRIVATE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR})
+set_source_files_properties(editor/core/gltf_libs.c PROPERTIES COMPILE_OPTIONS -w)
 find_package(Threads REQUIRED)
 target_link_libraries(editor-core PUBLIC game de vm deobjects-convert ZLIB::ZLIB Threads::Threads)
 add_executable(editor-tests tests/editor_tests.cpp)
@@ -215,6 +233,13 @@ add_executable(editor-assets-tests tests/editor_assets_tests.cpp)
 target_link_libraries(editor-assets-tests PRIVATE editor-core game)
 add_test(NAME editor-tournament COMMAND editor-assets-tests "${OPENBG_DATA_DIR}" tournament)
 add_test(NAME editor-har COMMAND editor-assets-tests "${OPENBG_DATA_DIR}" har)
+add_executable(editor-gltf-tests tests/editor_gltf_tests.cpp)
+target_link_libraries(editor-gltf-tests PRIVATE editor-core game)
+add_test(NAME editor-gltf COMMAND editor-gltf-tests)
+add_test(NAME editor-gltf-import COMMAND editor-gltf-tests "${OPENBG_DATA_DIR}")
+add_executable(editor-har-import-tests tests/editor_har_import_tests.cpp)
+target_link_libraries(editor-har-import-tests PRIVATE editor-core game)
+add_test(NAME editor-har-import COMMAND editor-har-import-tests "${OPENBG_DATA_DIR}")
 
 # Native viewer (SDL2 + OpenGL 4.1 core).
 if(NOT TARGET SDL2::SDL2)
@@ -283,7 +308,8 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp
 add_executable(openbg-editor editor/app/main.cpp editor/app/editor.cpp editor/app/browser.cpp editor/app/object_view.cpp editor/app/pilot_doc.cpp editor/app/widgets.cpp
 	editor/app/theme.cpp editor/app/preview.cpp editor/app/launch.cpp editor/app/file_dialog.cpp app/fighter_model.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp
-	editor/app/assets.cpp editor/app/code_view.cpp editor/app/tournament_doc.cpp editor/app/har_doc.cpp)
+	editor/app/assets.cpp editor/app/code_view.cpp editor/app/tournament_doc.cpp editor/app/har_doc.cpp editor/app/models.cpp
+	editor/app/robot_import.cpp)
 # The world side: arena viewports and play in editor, on the game's own renderer and runtime.
 target_sources(openbg-editor PRIVATE editor/app/world_view.cpp editor/app/world_panels.cpp editor/app/pie.cpp
 	app/game_view.cpp app/scene_lights.cpp app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp
@@ -296,7 +322,7 @@ endif()
 
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests editor-tests editor-arena-tests editor-assets-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
+	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests editor-tests editor-arena-tests editor-assets-tests editor-gltf-tests editor-har-import-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()

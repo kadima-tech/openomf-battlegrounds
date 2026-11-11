@@ -101,8 +101,10 @@ cmake --build engine/build -j
 The Indeo video decoder, [openindeo](https://github.com/kadima-tech/openindeo), is fetched by CMake
 automatically. Run `ctest --test-dir engine/build` to check that your game data parses.
 
-The build also makes `openbg-editor`, a first version of the content editor for making new pilots
-as an add-on `.DEObjects` file next to the untouched game data ([DEVELOPING.md](DEVELOPING.md#the-content-editor),
+The build also makes `openbg-editor`, a first version of the content editor for making new pilots,
+tournaments, robot variants and arenas (including robots, arenas and props imported from glTF /
+Blender / Mixamo, and glTF export of the game's meshes, arenas and robots) as an add-on `.DEObjects` file next to the
+untouched game data ([DEVELOPING.md](DEVELOPING.md#the-content-editor),
 [docs/EDITOR_SPEC.md](docs/EDITOR_SPEC.md)).
 
 ### Building on Windows

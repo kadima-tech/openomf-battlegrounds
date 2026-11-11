@@ -224,6 +224,7 @@ int main(int argc, char **argv) {
 			glUniformMatrix4fv(glGetUniformLocation(prog, "mvp"), 1, GL_FALSE, mvp);
 			glUniform3f(glGetUniformLocation(prog, "light"), 0.4f, 0.7f, 0.6f);
 			glUniform1i(glGetUniformLocation(prog, "skin"), 0);
+			glUniform1i(glGetUniformLocation(prog, "statics"), 1);
 			glUniformMatrix3fv(glGetUniformLocation(prog, "pilot"), 1, GL_FALSE, colors);
 			glBindVertexArray(vao);
 			glDrawArrays(GL_TRIANGLES, 0, GLsizei(verts.size()));

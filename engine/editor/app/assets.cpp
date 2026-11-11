@@ -61,6 +61,8 @@ bool make_har(Editor &e, const std::string &base, const std::string &name) {
 
 }  // namespace
 
+void assets_open_har(Editor &e, uint32_t description) { open_har(e, description); }
+
 ed::ScriptCompiler &script_compiler(Editor &e) {
 	static std::map<std::string, std::unique_ptr<ed::ScriptCompiler>> compilers;
 	auto &c = compilers[e.base()->dir().string()];

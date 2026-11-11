@@ -50,6 +50,12 @@ struct Options {
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	int asset_tab = -1, asset_select = -100;
 	bool compile = false;
+	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an
+	// object, place an imported prop in the open arena.
+	std::filesystem::path import_file, export_out;
+	std::string import_kind, import_name, import_template, import_base, import_pose, export_spec, place_prop;
+	bool import_dialog = false;
+	int import_step = 0;
 };
 
 class Editor;
@@ -129,6 +135,8 @@ public:
 	bool sound_playing();
 	void import_photo_dialog(const ed::Guid &pilot);
 	void import_photo(const ed::Guid &pilot, const std::filesystem::path &file);
+	// A file dropped on the window.
+	void drop_file(const std::filesystem::path &file);
 	int find_object(const ed::Guid &g) const { return project_ ? project_->find(g) : -1; }
 
 	ed::BaseData *base() { return base_.get(); }

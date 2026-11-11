@@ -628,6 +628,8 @@ void World::setup_creature_model(GameObject *model, GameObject *creature, const 
 			}
 		} else if (n.rfind("RGBScaled", 0) == 0 && img->file) {
 			filter->scaled_images.push_back({img->file, img->index});
+		} else if (n.rfind("RGBStatic", 0) == 0 && img->file) {
+			filter->static_images.push_back({img->file, img->index});
 		}
 		creature->components.push_back(img);
 	}
