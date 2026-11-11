@@ -34,9 +34,7 @@ void read_global(Contents &c, PCodeElement &e) {
 	} else if (ch.version >= 2) {
 		int32_t n = c.i32();
 		for (int32_t i = 0; i < n; ++i) {
-			if (ch.version >= 3) {
-				c.i32();
-			}
+			e.global_flags.push_back(ch.version >= 3 ? c.i32() : 0);
 			e.globals.push_back(block_text(c));
 		}
 	}
@@ -53,6 +51,10 @@ void read_method(Contents &c, PCodeElement &e) {
 	e.source = block_text(c);
 	if (c.pos() < ch.end) e.virtual_ = c.u8() == 0;
 	if (c.pos() < ch.end) e.excluded = c.u8() != 0;
+	if (ch.version >= 9 && c.pos() < ch.end) {
+		e.inherits = block_text(c);
+		e.copied_from = block_text(c);
+	}
 	c.seek(ch.end);
 }
 

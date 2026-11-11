@@ -19,9 +19,12 @@ struct PCodeElement {
 	std::string source;
 	uint32_t method_id = 0;  // Method v9: leading u32 (+0x54): 0 a state, 1 instant, 2+ not compiled
 	bool virtual_ = false;   // Method: the byte after the source is 0
-	bool excluded = false;   // Method: the next byte is set (Templates, Setup: not compiled, nor their children)
+	bool excluded = false;   // Method: the next byte is set (Templates, Setup: not compiled; what is nested in it only under a method inheriting it)
+	std::string inherits;     // Method v9 (+0x44): the element whose nested methods it lists too (BJaguar's Effects: "Effects.StandardBiped")
+	std::string copied_from;  // Method v9 (+0x4c): the element it was copied from, if any
 	int32_t link = -1;       // trailing per-element index: parent element (nesting), -1 = top level
 	std::vector<std::string> globals;  // Global v2+: entry names
+	std::vector<int32_t> global_flags;  // Global v3: per entry (DE_CPCodeGlobalEntry +8)
 };
 
 struct PCode {

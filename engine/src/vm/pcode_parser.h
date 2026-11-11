@@ -61,10 +61,10 @@ struct Stmt;
 using StmtPtr = std::unique_ptr<Stmt>;
 
 struct Stmt {
-	enum Kind { Empty, ExprS, DeclS, Block, If, While, DoWhile, For, Return, Break, Continue, Switch, Inherit, Enum } kind;
+	enum Kind { Empty, ExprS, DeclS, Block, If, While, DoWhile, For, Return, Break, Continue, Switch, Inherit, Enum, Master } kind;
 	int line = 0;
 	ExprPtr e, cond, step;
-	StmtPtr init, body, other;  // For: init/cond/step/body; If: body/other
+	StmtPtr init, body, other;  // For: init/cond/step/body; If: body/other; Master: body
 	std::vector<StmtPtr> list;  // Block; Switch: the body statements
 	std::unique_ptr<Decl> decl;
 	std::unique_ptr<EnumDecl> enm;

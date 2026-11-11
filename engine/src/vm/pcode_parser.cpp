@@ -332,6 +332,12 @@ private:
 			expect(";");
 			return s;
 		}
+		if (is_word("master")) {
+			auto s = make(Stmt::Master);
+			++p_;
+			s->body = statement();
+			return s;
+		}
 		if (is_word("inherit")) {
 			auto s = make(Stmt::Inherit);
 			++p_;
@@ -432,7 +438,8 @@ private:
 			e->text = peek().text;
 			++p_;
 			e->a = std::move(lhs);
-			e->b = binary(p);
+			// PCParser's arithmetic is right-associative (a-b+c is a-(b+c)); && and || are not.
+			e->b = binary(p >= 9 ? p - 1 : p);
 			lhs = std::move(e);
 		}
 	}
@@ -542,7 +549,8 @@ private:
 		if (is(".")) {  // .Bounce, .PlayerWon.PlayerDestroyed1: a method path from the running state
 			++p_;
 			auto e = node(Expr::Ident);
-			e->text = "." + ident();
+			e->text = accept(".") ? ".." : ".";  // ..SuperLeap: from the enclosing state
+			e->text += ident();
 			return e;
 		}
 		if (t.kind == Token::Ident) {

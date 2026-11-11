@@ -492,9 +492,10 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
   reference grammar); the HAR editor edits movement and jump stats, input sequences (direction pad,
   buttons, timing), sphere sizes (drawn on the preview's bones), sound swaps, new paint jobs (a copied
   model whose images take PNG/BMP imports) and the behavior's numeric finals. The variant shows in Choose
-  Creature and fights. Not yet: fighter scripts do not compile with our compiler (the `master`
-  statement), so a changed constant leaves the class's VMC2 stale (a validation error); the robot
-  preview shows the base paint.
+  Creature and fights as its own robot (the game builds it from the variant's file). A changed
+  constant recompiles the fighter's classes (the compiler takes the fighter scripts' `master`,
+  inherited elements and sequence names, FINDINGS 522-527) and the game uses the new value. Not yet:
+  the robot preview shows the base paint.
 - **7 (mostly done, 2026-11-11):** glTF export of meshes, props, arenas and robots; prop, arena and
   robot (HAR) import through the Import dialog (§5.5 "Built", "Built: robots"): bone mapping with
   presets, guesses and a mapping UI, retargeted sequences, file animations, decimated LODs, hitboxes;

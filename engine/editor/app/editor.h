@@ -47,6 +47,7 @@ struct Options {
 	int play_ticks = 0, layout = 0, shading = -1;
 	// The asset side (assets.h): tournaments and HAR variants.
 	std::string new_tournament, open_tournament, new_har, open_har;
+	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	int asset_tab = -1, asset_select = -100;
 	bool compile = false;
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an

@@ -916,6 +916,8 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	auto d = cls_obj.file->object_data(cls_obj.info());
 	auto vmc2 = cls_obj.file->ex_payload(d, "VMC2");
 	auto behavior_refs = vm::class_behavior_refs(d.references);
+	static const std::string recompile = getenv("OPENBG_RECOMPILE") ? "," + std::string(getenv("OPENBG_RECOMPILE")) + "," : "";
+	if (vmc2 && !recompile.empty() && (recompile == ",all," || recompile.find("," + cls_obj.info().name + ",") != std::string::npos)) vmc2.reset();
 	vm::VMClass code;
 	if (vmc2) {
 		code = vm::VMClass::parse(vmc2->data, behavior_refs.size());
@@ -934,7 +936,11 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	auto b = std::make_unique<Brain>();
 	b->owner = owner;
 	static const bool debug_attach = getenv("OPENBG_DEBUG_ATTACH") != nullptr;
-	if (debug_attach) fprintf(stderr, "[attach %u] %s on %s%s\n", frame_, cls_obj.info().name.c_str(), owner->name.c_str(), vmc2 ? "" : " (compiled)");
+	if (debug_attach) {
+		std::string stem;
+		for (auto &[n, f] : data_.files()) if (f.get() == cls_obj.file) stem = n;
+		fprintf(stderr, "[attach %u] %s (%s) on %s%s\n", frame_, cls_obj.info().name.c_str(), stem.c_str(), owner->name.c_str(), vmc2 ? "" : " (compiled)");
+	}
 	vm::load_class(b->cls, mem_, d.contents, std::move(code));
 	// The class's behaviors (Behavior objects, possibly in other files) and their global IDs.
 	for (auto &r : behavior_refs) {

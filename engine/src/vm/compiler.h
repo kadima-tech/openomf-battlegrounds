@@ -30,7 +30,8 @@ std::vector<de::ObjectRef> behavior_globals(const de::World &data, const de::Obj
 // A behavior's compiled methods (by element index) in the order VMC2 lists them, the order
 // interface calls (op 37) number them: its method elements depth first, each followed by the
 // methods nested in it, leaving out templates and settings (method flag 2+) and excluded elements
-// with what is nested in them.
+// with what is nested in them (a class's attached behaviors also list what is nested in the
+// excluded elements their methods were copied from: Compiler::declare_methods).
 std::vector<size_t> compiled_elements(const de::PCode &p);
 
 // Compile `cls` (a Class object). Throws pc::CompileError naming the behavior and line; `notes`
