@@ -1,4 +1,5 @@
 #include "addon.h"
+#include "content.h"
 
 #include <algorithm>
 #include <cstring>
@@ -375,6 +376,22 @@ const RefLayout kRefLayouts[] = {
     {"Description", 1, "LOOLLOR"},
     {"Image", 1, "*"},
     {"Value", 1, "*"},
+    {"Value\\ObjectReference", 2, "*"},
+    {"Class", 1, "*"},
+    {"ClassExecutor", 1, "O"},
+    {"ControlCreator", 1, "*"},
+    {"StateManager", 1, "*"},
+    {"StateManager", 2, "*"},
+    {"SessionModifier\\StandardSessionMaster", 1, "*"},
+    {"SessionModifier\\StandardSessionMaster", 2, "*"},
+    {"Description\\SessionMaster", 2, "*"},
+    {"Description\\SessionModifier", 2, "*"},
+    {"Behavior", 1, "B"},
+    {"AnimationSequenceManager", 1, "LN"},
+    {"Mesh\\LODSwitchingMesh", 1, "*"},
+    {"Mesh\\LODSwitchingMesh", 2, "D"},
+    {"TextureProcess\\MultiStage", 1, "*"},
+    {"TextureProcess\\MultiStage", 2, "S"},
 };
 
 const char *find_layout(const std::string &class_path, size_t index) {
@@ -431,6 +448,46 @@ bool map_reference_chunk(const std::string &class_path, size_t chunk_index, cons
 				if (r.pos() < end && !map_opt(r, w, map)) return false;
 				if (r.pos() != end) return false;
 				w.end_chunk(at, size);
+			} else if (*op == 'B') {
+				// Behavior: a chunk of globals (BOOL, reference each), the imports list, then
+				// one chunk per element.
+				deo::ChunkSize size;
+				size_t end;
+				uint8_t v = r.chunk(&end, &size);
+				size_t at = w.begin_chunk(v);
+				while (r.pos() < end) {
+					if (!map_opt(r, w, map)) return false;
+				}
+				w.end_chunk(at, size);
+				v = r.chunk(&end, &size);
+				at = w.begin_chunk(v);
+				if (!map_list(r, w, map) || r.pos() != end) return false;
+				w.end_chunk(at, size);
+				w.bytes(r.bytes(r.remaining()));
+			} else if (*op == 'D') {
+				// LOD meshes: BOOL-terminated (reference, f32 switch distance) pairs.
+				for (;;) {
+					uint8_t b = r.u8();
+					w.u8(b);
+					if (b == 0) break;
+					if (b != 1) return false;
+					write_ref(w, map(read_ref(r)));
+					w.bytes(r.bytes(4));
+				}
+			} else if (*op == 'S') {
+				// Texture stages: a u32 count of (texture manager, 28 bytes of stage settings).
+				uint32_t n = r.u32();
+				w.u32(n);
+				for (uint32_t k = 0; k < n; ++k) {
+					write_ref(w, map(read_ref(r)));
+					w.bytes(r.bytes(28));
+				}
+			} else if (*op == 'N') {
+				while (r.remaining()) {
+					uint32_t n = r.u32();
+					w.u32(n);
+					for (uint32_t k = 0; k < n; ++k) write_ref(w, map(read_ref(r)));
+				}
 			} else if (*op == 'R') {
 				w.bytes(r.bytes(r.remaining()));
 			} else if (*op == '*') {
@@ -480,7 +537,8 @@ Bytes guid_bytes(const Guid &g) { return Bytes(g.b, g.b + 16); }
 
 }  // namespace
 
-std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uint32_t> &roots, std::map<uint32_t, uint32_t> *source_to_copy) {
+std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uint32_t> &roots, std::map<uint32_t, uint32_t> *source_to_copy,
+                                              bool guess_layouts) {
 	const deo::File &src = base_.model(file);
 	const Guid src_agent = src.master.guid;
 	std::set<uint32_t> set;
@@ -536,7 +594,8 @@ std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uin
 		Chunks rc = split_chunks(o.references);
 		for (size_t k = 0; k < rc.chunks.size(); ++k) {
 			RawChunk out;
-			if (!map_reference_chunk(cls, k, rc.chunks[k], out, map)) {
+			if (!map_reference_chunk(cls, k, rc.chunks[k], out, map) &&
+			    !(guess_layouts && guess_map_reference_chunk(rc.chunks[k], out, src.objects.size(), src.guid_pool.size(), map))) {
 				throw deo::Error("cannot copy " + o.info.name_text() + ": the references of a " + cls + " are not decoded yet");
 			}
 			rc.chunks[k] = std::move(out);

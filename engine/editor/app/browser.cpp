@@ -9,6 +9,7 @@
 
 #include "editor.h"
 #include "world.h"
+#include "assets.h"
 #include "icons.h"
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
@@ -176,6 +177,7 @@ void Editor::open_object(const ObjectRef &r) {
 			return;
 		}
 	}
+	if (assets_open(*this, r)) return;
 	if (r.kind == ObjectRef::Addon) {
 		int i = addon_index(r);
 		if (i < 0) return;

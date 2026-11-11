@@ -52,6 +52,8 @@ public:
 	const std::map<std::string, std::unique_ptr<ObjectsFile>> &files() const { return files_; }
 	ObjectRef resolve(const ObjectsFile &from, const Reference &r) const;
 	ObjectRef by_guid(const Guid &g) const;
+	// Adds an objects file held in memory (an add-on being edited), replacing one of that stem.
+	void set_file(const std::string &stem, std::vector<uint8_t> data);
 	// The first object of that class and name in any file (stems in order).
 	ObjectRef find(const std::string &class_path, const std::string &name) const {
 		for (auto &[stem, f] : files_) {

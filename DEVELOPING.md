@@ -34,7 +34,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   Player's Choose Match work, and a chosen match's session runs its Choose Pilot / Choose Creature
   screens, then its matches: a tournament plays through to its cinematic and back to the main menu
   (FINDINGS 256-261, 272-274), and the Trophy Room and Training run. Other screens say they are not ported yet.
-  `--launch Training` starts a match at once (`--host "Last Man Standing"` as a joinable session, whose Choose Cast lists the
+  `--launch Training` starts a match at once (`--start-match N`: a tournament at its match N, whatever is unlocked) (`--host "Last Man Standing"` as a joinable session, whose Choose Cast lists the
   Available Arenas), `--choose Elizabeth,Jaguar` has its screens pick those, and
   `--headless N` runs without a window and lists the natives still missing. `--screenshot out.png --frames N` (`--size WxH`, default 1024x768) with
   `MOUSE="0.5,0.93@50;down@52;up@54"` (fractions of the 4:3 menu area) scripts the mouse, and `HOLD` (as in `openbg-fight`) the user's buttons.
@@ -195,8 +195,8 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   256 x 256 `Image\Standard`), bio, listed / locked flags, casts, the four attributes, the 31 AI
   traits and the three paint colours. The preview shows the photo, or the robot posed and painted in
   the pilot's colours (the viewer's fighter code, `app/fighter_model.*`). Ctrl+S saves, Ctrl+Z undoes.
-  Arena, HAR and tournament editing, Play and Simulate are shown but not active yet.
-- **Validate** (F7) runs the §7 checks that apply; rules only the original 2.123 enforces are warnings.
+  Tournaments and HAR variants have their own editors (below); arenas and Play are the world side.
+- **Validate** (F7) runs the §7 checks that apply (rules 9-10: current VMC2 and the last compile's errors, a click opens the script at the line); rules only the original 2.123 enforces are warnings.
 - **Launch Game** (F5) writes the add-on to `<user data>/openbg/editor/launch/` and starts `openbg`
   (next to the editor, or `OPENBG_GAME`) with `<Data> --addon <file>`; its output goes to the Output Log.
   `openbg --addon file.DEObjects` (repeatable) and `OPENBG_ADDONS` (paths separated by `:`, `;` on
@@ -210,6 +210,35 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   reference decoding and behavior source, new pilot -> edit every field -> photo import -> save ->
   reopen (then the engine's own readers on the add-on), and copying a base pilot into a chosen,
   existing add-on with nothing written before the add-on is chosen or saved.
+- **Tournaments** (Content > New Tournament): pick a base tournament (Single Player's ten that run a
+  BMaster) and a name; "Blank ladder" starts with one match instead of the base's. The copy holds the
+  description, session master (and its ExcludePilots / PlayerPilots values), sub-session handler,
+  both classes and behaviors and the Choose Match panel, under a folder with an `OpenBG Tournament`
+  Value\String: the editor's model (JSON), so the original game ignores it. The ladder is read from
+  the base scripts: the standard calls (`SubSessionActivateSlot`, `AddPilotQuote`,
+  `SetIntroMatchCommentary`, `SetNextMatchName`, drop-ons, `AddUnlock`...) become form fields, the
+  rest of a match goes into its user block, and the base's other methods (PlayerWon conversations...)
+  are kept as they are. Every form change regenerates `BMaster` (the shipped template: the enum, the
+  finals, a lose-branch line after `/*PreDestroyLastSessionInsert*/`) and `BSubSession` (FINDINGS 521);
+  Compile (or Save, when a class's VMC2 is stale) builds VMC2 with `vm::compile_class` against the base
+  game, read once on a background thread (`ed::ScriptCompiler`, about 700 MB). "Play from match"
+  saves, compiles and runs `openbg --addon ... --launch "<name>" --start-match <n>`.
+- **HAR variants** (Content > New HAR Variant): a base robot's whole fighter file (`<Robot>.DEObjects`,
+  ~190 objects), its Description\Creature\Fighter and its FighterModelDescriptions are copied with
+  fresh GUIDs; references of classes with no known layout go through the reference grammar
+  (`ed::guess_map_reference_chunk`). New paint job copies the base model (~20 MB of meshes and
+  images) so RGBMain / ReflectionMask / Bump can be replaced. Script constants rewrite the
+  behavior's `final` line; fighter scripts do not compile with our compiler yet (`master`), so that
+  leaves a stale-VMC2 validation error.
+- More scripted options: `--new-tournament "<Base>:<Name>"` (`blank=<Base>:<Name>` for a blank ladder),
+  `--open-tournament <Name>`, `--new-har "<Robot>:<Name>"`, `--open-har <Name>`, `--asset-tab N`,
+  `--asset-select N` (the tournament tree's row: a match index, -1 settings, -2 ending, -3 branches,
+  -4 unlocks; the HAR's sphere), `--compile`. `editor-assets-tests` (ctest `editor-tournament`,
+  `editor-har`) copies North American Open, edits it, regenerates (a user block survives), compiles,
+  validates, saves, reopens and checks the engine's description reader and the VMC2 change
+  information; and makes Jaguar Mk2, edits stats, spheres, inputs, a constant and a paint job, and
+  checks `read_fighter_stats` and `fighter_models` through `OPENBG_ADDONS`. `EDITOR_ASSETS_OUT=<dir>`
+  keeps the add-ons (for `openbg --addon`).
 - Memory: files stay in memory once read; browsing every image in the game reads most of `Data`.
 
 **Arenas and play in editor** (`editor/app/world_*.cpp`, `pie.cpp`, `editor/core/arena.*`):

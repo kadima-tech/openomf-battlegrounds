@@ -153,8 +153,10 @@ public:
 	// Deep copy of base objects and everything under them, with fresh GUIDs. References to
 	// copied objects follow the copies; others go through the GUID pool. Returns the new
 	// indices of `roots`. Throws deo::Error for a class whose references are not understood.
+	// guess_layouts: references of classes with no known layout are rewritten through the
+	// reference grammar instead of refusing the copy.
 	std::vector<uint32_t> copy_from_base(size_t file, const std::vector<uint32_t> &roots,
-	                                     std::map<uint32_t, uint32_t> *source_to_copy = nullptr);
+	                                     std::map<uint32_t, uint32_t> *source_to_copy = nullptr, bool guess_layouts = false);
 	// The object a reference in this file names: a local index or a GUID from the pool.
 	struct Target {
 		int local = -1;

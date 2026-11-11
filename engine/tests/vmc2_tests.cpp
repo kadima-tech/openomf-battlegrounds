@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
 	printf("  %zu more methods differ only in the frame size\n", same_but_frame);
 	for (auto &[r, n] : reasons) printf("  %zu: %s\n", n, r.c_str());
 	// Floors for the compiler's fidelity on 2.123's 255 compiled classes, so it can only improve.
-	if (classes == 0 || (classes == 255 && (compiled < 211 || tables < 56 || same_code < 236 || same_code + same_but_frame < 4243))) {
+	if (classes == 0 || (classes == 255 && (compiled < 211 || tables < 56 || same_code < 283 || same_code + same_but_frame < 4505))) {
 		fprintf(stderr, "compiler fidelity fell below the recorded floor\n");
 		++failures;
 	}

@@ -503,6 +503,9 @@ public:
 		}
 		// Enums and finals of every visible behavior; members of the attached ones, laid out from
 		// the last behavior to the first.
+		// Enums first: a behavior's members may name an enum another behavior declares (BFighter's
+		// eReactionTypes is BThrowable's).
+		for (size_t i = infos_.size(); i-- > 0;) declarations(i, false, true);
 		for (size_t i = infos_.size(); i-- > 0;) declarations(i, i < attached_.size());
 		declare_methods();
 		for (auto &m : methods_) local_classes(m.body);
@@ -518,6 +521,7 @@ public:
 			for (auto &mi : members_instances_[b]) code_.behaviors[b].instances.push_back(mi);
 		}
 		for (size_t m = 0; m < methods_.size(); ++m) compile_method(m);
+		for (auto &v : value_instances_) code_.behaviors[v.behavior].instances[v.index].class_index = class_index(v.cls);
 		for (size_t i = 0; i < ref_member_classes_.size(); ++i) code_.ref_members[i] = class_index(ref_member_classes_[i]);
 		code_.classes.clear();
 		for (auto &c : classes_) {
@@ -549,6 +553,11 @@ private:
 	std::map<std::string, Member> members_;
 	uint32_t member_end_ = 0;
 	std::map<size_t, std::vector<ClassInstance>> members_instances_;
+	struct ValueInstance {
+		size_t behavior, index;
+		std::string cls;
+	};
+	std::vector<ValueInstance> value_instances_;
 	std::vector<MethodDecl> methods_;
 	std::vector<std::string> classes_;
 	std::map<std::string, uint32_t> intrinsic_index_;
@@ -786,7 +795,7 @@ private:
 		}
 	}
 
-	void declarations(size_t bi, bool attached) {
+	void declarations(size_t bi, bool attached, bool enums_only = false) {
 		auto &pcode = infos_[bi].pcode;
 		std::string w = where(bi, "Members");
 		std::vector<pc::StmtPtr> stmts;
@@ -809,6 +818,7 @@ private:
 				}
 			}
 		}
+		if (enums_only) return;
 		for (auto &s : stmts) {
 			if (s->kind == Stmt::DeclS) {
 				auto &d = *s->decl;
@@ -844,7 +854,7 @@ private:
 					m.name = dc.name;
 					m.type = decl_type(d, dc.array, w);
 					m.iface = d.interface;
-					m.instance = d.instance || dc.array;
+					m.instance = d.instance || dc.array || (m.type.k == Type::Obj && !m.iface && implicit_instance(m.type.name));
 					if (m.type.k == Type::Obj && !m.iface && !m.instance && !is_value_class(m.type.name)) {
 						m.ref = true;
 						m.offset = uint32_t(code_.ref_members.size());
@@ -862,6 +872,11 @@ private:
 						members_instances_[bi].push_back({class_index(m.type.name), m.offset, false, et.k == Type::Obj ? 4u : member_size(et), {}});
 					} else if (d.instance && !d.interface) {
 						members_instances_[bi].push_back({class_index(m.type.name), m.offset, false, 0, {}});
+					} else if (m.type.k == Type::Obj && implicit_instance(m.type.name) && !d.interface) {
+						// CObject's value classes (CGUIDPool, CText) are instances even when not declared
+						// so; the class is registered after the code's, keeping the class table's order.
+						value_instances_.push_back({bi, members_instances_[bi].size(), m.type.name});
+						members_instances_[bi].push_back({0, m.offset, false, 0, {}});
 					}
 					if (m.iface) {
 						int vi = visible_index(m.type.name);
@@ -1133,7 +1148,12 @@ private:
 			}
 			l.offset = c_->top;
 			c_->top += 4;
-			if (d.instance && !d.interface) c_->instances.push_back({class_index(l.type.name), l.offset, false, 0, {}});
+			if (dc.array && !d.interface) {
+				Type et = type_named(d.type).value_or(prim(Type::Int));
+				c_->instances.push_back({class_index(l.type.name), l.offset, false, et.k == Type::Obj ? 4u : member_size(et), {}});
+			} else if (d.instance && !d.interface) {
+				c_->instances.push_back({class_index(l.type.name), l.offset, false, 0, {}});
+			}
 			if (d.interface) c_->interfaces.push_back({l.offset, visible_index(l.type.name), false});
 			c_->locals.emplace(dc.name, l);
 		}
@@ -1212,6 +1232,10 @@ private:
 		std::vector<bool> set(slots_.size(), false);
 		for (auto &m : methods_) {
 			if (m.virt && !m.nested) table[size_t(m.slot)] = m.pool, set[size_t(m.slot)] = true;
+		}
+		// A slot only nested methods fill defaults to the first of them (2.123's tables do).
+		for (auto &m : methods_) {
+			if (m.virt && !set[size_t(m.slot)]) table[size_t(m.slot)] = m.pool, set[size_t(m.slot)] = true;
 		}
 		std::function<void(size_t, int)> apply = [&](size_t s, int depth) {
 			if (depth > 8) return;
@@ -2134,6 +2158,7 @@ private:
 	bool is_value_class(const std::string &full) const {
 		return full.find("::") != std::string::npos;
 	}
+	static bool implicit_instance(const std::string &full) { return full.rfind("CObject::", 0) == 0; }
 
 	void store(const Place &p, const Type &from, uint32_t t, const Expr &e) {
 		Code &code = c_->code;

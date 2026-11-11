@@ -63,6 +63,8 @@ uint32_t create_pilot(Project &p, const BaseObject &base_pilot, const std::strin
 // 256 x 256, the size of the shipped photos), stored uncompressed.
 void import_photo(Project &p, const PilotObjects &o, int width, int height, const std::vector<uint8_t> &rgba,
                   const std::string &source_name);
+// Replaces an Image\Standard's pixels (one level, stored uncompressed) with width x height RGBA.
+void set_image_pixels(Project &p, uint32_t image, int width, int height, const std::vector<uint8_t> &rgba, const std::string &source_name);
 // The photo as RGBA, or empty.
 std::vector<uint8_t> photo_rgba(const Project &p, const PilotObjects &o, int *width, int *height);
 // An Image\Standard's full-size pixels as RGBA, or empty.

@@ -391,15 +391,18 @@ void import_photo(Project &p, const PilotObjects &o, int width, int height, cons
                   const std::string &source_name) {
 	if (o.photo < 0) throw deo::Error("this pilot has no photo object");
 	const int side = 256;
-	std::vector<uint8_t> square = crop_square_resize(width, height, rgba, side);
-	deo::Object &img = p.file().objects[size_t(o.photo)];
+	set_image_pixels(p, uint32_t(o.photo), side, side, crop_square_resize(width, height, rgba, side), source_name);
+}
+
+void set_image_pixels(Project &p, uint32_t image, int width, int height, const std::vector<uint8_t> &rgba, const std::string &source_name) {
+	deo::Object &img = p.file().objects.at(image);
 	Chunks ic = split_chunks(img.contents);
 	RawChunk &c0 = chunk_at(ic, 0, "image");
 	deo::Reader r(c0.body);
 	r.block();
 	size_t at = r.pos();
 	if (c0.body.size() < at + 12) throw deo::Error("image header too short");
-	int32_t wh[2] = {side, side};
+	int32_t wh[2] = {width, height};
 	memcpy(c0.body.data() + at + 4, wh, 8);
 	img.contents = join_chunks(ic);
 
@@ -412,7 +415,7 @@ void import_photo(Project &p, const PilotObjects &o, int width, int height, cons
 	deo::Writer plain;
 	for (int ch = 0; ch < 4; ++ch) {
 		plain.u32(uint32_t(ch));
-		for (int i = 0; i < side * side; ++i) plain.u8(square[size_t(i) * 4 + size_t(ch)]);
+		for (int i = 0; i < width * height; ++i) plain.u8(rgba[size_t(i) * 4 + size_t(ch)]);
 	}
 	plain.u32(0xFFFFFFFFu);
 	deo::Writer stream;

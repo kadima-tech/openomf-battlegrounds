@@ -234,4 +234,24 @@ std::vector<uint8_t> crop_square_resize(int width, int height, const std::vector
 	return out;
 }
 
+std::vector<uint8_t> resize_rgba(int width, int height, const std::vector<uint8_t> &rgba, int out_w, int out_h) {
+	std::vector<uint8_t> out(size_t(out_w) * size_t(out_h) * 4);
+	for (int y = 0; y < out_h; ++y) {
+		float sy = std::clamp((float(y) + 0.5f) * float(height) / float(out_h) - 0.5f, 0.0f, float(height - 1));
+		int iy = int(sy), jy = std::min(iy + 1, height - 1);
+		float fy = sy - float(iy);
+		for (int x = 0; x < out_w; ++x) {
+			float sx = std::clamp((float(x) + 0.5f) * float(width) / float(out_w) - 0.5f, 0.0f, float(width - 1));
+			int ix = int(sx), jx = std::min(ix + 1, width - 1);
+			float fx = sx - float(ix);
+			for (int k = 0; k < 4; ++k) {
+				auto at = [&](int px, int py) { return float(rgba[(size_t(py) * size_t(width) + size_t(px)) * 4 + size_t(k)]); };
+				float v = (at(ix, iy) * (1 - fx) + at(jx, iy) * fx) * (1 - fy) + (at(ix, jy) * (1 - fx) + at(jx, jy) * fx) * fy;
+				out[(size_t(y) * size_t(out_w) + size_t(x)) * 4 + size_t(k)] = uint8_t(std::lround(std::clamp(v, 0.0f, 255.0f)));
+			}
+		}
+	}
+	return out;
+}
+
 }  // namespace ed

@@ -14,6 +14,7 @@ struct Issue {
 	int rule = 0;      // §7 checklist item, 0 for general notes
 	int object = -1;   // add-on object index, when it concerns one
 	std::string text;
+	int line = 0;  // a line of that Behavior's script_text()
 };
 
 std::vector<Issue> validate(const Project &p);

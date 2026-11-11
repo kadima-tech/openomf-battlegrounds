@@ -11,7 +11,8 @@
 // --port the port to host on or join at); --choose Elizabeth,Jaguar makes the UIs
 // it launches pick those (testing), and Choose Cast take the modifiers and starting match named
 // there ("Turbo Speed", "Intensity") and the defaults for the rest; --headless N runs N frames
-// without a window and lists the natives still missing.
+// without a window and lists the natives still missing. --start-match N starts a tournament at
+// its match N whatever is unlocked (the editor's Play from match).
 //
 // MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
 // of the window, y down); SHOTS="40,80" also writes <out>-<frame>.png.
@@ -141,6 +142,7 @@ int main(int argc, char **argv) {
 	std::string data = argv[1];
 	const char *shot = nullptr;
 	std::string launch;
+	int start_match = -1;
 	bool host = false;  // --host: --launch as a joinable session, as BMatchServer sets one up (testing)
 	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
@@ -154,6 +156,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &shot_w, &shot_h);
 		else if (!strcmp(argv[i], "--launch") && i + 1 < argc) launch = argv[++i];
+		else if (!strcmp(argv[i], "--start-match") && i + 1 < argc) start_match = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--host") && i + 1 < argc) launch = argv[++i], host = true;
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
 		else if (!strcmp(argv[i], "--join") && i + 1 < argc) join = argv[++i];
@@ -247,6 +250,7 @@ int main(int argc, char **argv) {
 		}
 		game::ui::AppManager app(world);
 		app.cast_presets = choose;
+		app.start_match = start_match;
 		game::ui::system_time = [&world] { return world.system_ms(); };
 		world.ui_manager_active = [&app] { return app.current && app.current->activated; };
 		world.ui_active_locally = [&app](const game::GameObject *ui) { return app.ui_active(app.page_of(ui)); };

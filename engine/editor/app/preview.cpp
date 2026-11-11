@@ -83,6 +83,7 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 
 	const de::AnimSequence *seq = animation >= 0 && size_t(animation) < rig_->bank.sequences.size() ? &rig_->bank.sequences[size_t(animation)] : nullptr;
 	fighter::skin_vertices(model_, rig_.get(), seq, t, pos_);
+	pose_ = seq ? rig_->bank.pose(*seq, t) : std::vector<de::Transform>{};
 	auto verts = fighter::build_vertices(model_, pos_);
 	float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
 	for (auto &p : model_.mesh.vertices) {
@@ -104,6 +105,8 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 	                centre[2] + distance * std::cos(yaw) * std::cos(pitch)};
 	glu::fps_view(view, eye, -yaw, pitch);
 	glu::mul(mvp, proj, view);
+	memcpy(mvp_, mvp, sizeof mvp_);
+	pixel_scale_ = float(h) * 0.5f / (distance * std::tan(fov * 0.5f * 3.14159265f / 180.0f));
 	glUseProgram(prog_);
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "mvp"), 1, GL_FALSE, mvp);
 	glUniform3f(glGetUniformLocation(prog_, "light"), 0.4f, 0.7f, 0.6f);
@@ -122,6 +125,23 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 	glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prev_fbo));
 	glViewport(vp[0], vp[1], vp[2], vp[3]);
 	return colour_;
+}
+
+bool RobotPreview::bone_screen(const std::string &bone, float *x, float *y, float *pixels_per_unit) const {
+	if (!rig_ || tw_ <= 0) return false;
+	for (size_t b = 0; b < rig_->bones.size(); ++b) {
+		if (rig_->bones[b].name != bone) continue;
+		int c = rig_->bone_channel[b];
+		std::array<float, 3> p = c >= 0 && size_t(c) < pose_.size() ? pose_[size_t(c)].t : rig_->bones[b].bind.t;
+		float clip[4];
+		for (int r = 0; r < 4; ++r) clip[r] = mvp_[r] * p[0] + mvp_[4 + r] * p[1] + mvp_[8 + r] * p[2] + mvp_[12 + r];
+		if (clip[3] <= 0) return false;
+		*x = (clip[0] / clip[3] * 0.5f + 0.5f) * float(tw_);
+		*y = (0.5f - clip[1] / clip[3] * 0.5f) * float(th_);
+		*pixels_per_unit = pixel_scale_;
+		return true;
+	}
+	return false;
 }
 
 GLuint upload_texture(int w, int h, const std::vector<uint8_t> &rgba, GLuint reuse) {
