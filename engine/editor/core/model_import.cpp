@@ -10,7 +10,9 @@
 
 #include "arena.h"
 #include "content.h"
+#include "har_import.h"
 #include "image_io.h"
+#include "model_build.h"
 #include "model_export.h"
 
 namespace ed {
@@ -821,6 +823,50 @@ Role surface_role(const std::string &material) {
 
 }  // namespace
 
+namespace build {
+
+Bytes stored(const std::string &utf8) { return ed::stored(utf8); }
+uint32_t add_object(Project &p, const std::string &class_path, const std::string &name, Bytes contents, Bytes references, Bytes hierarchy) {
+	return ed::add_object(p, class_path, name, std::move(contents), std::move(references), std::move(hierarchy));
+}
+Ref local_ref(uint32_t index) { return ed::local_ref(index); }
+void set_children(Project &p, uint32_t parent, const std::vector<uint32_t> &kids) { ed::set_children(p, parent, kids); }
+void add_child(Project &p, uint32_t parent, uint32_t child) { ed::add_child(p, parent, child); }
+void rename(Project &p, uint32_t object, const std::string &name) { ed::rename(p, object, name); }
+void put_f32(deo::Writer &w, float f) { ed::put_f32(w, f); }
+uint32_t add_image(Project &p, const std::string &name, int width, int height, const std::vector<uint8_t> &rgba) { return ed::add_image(p, name, width, height, rgba); }
+int pow2_at_most(int v, int cap) { return ed::pow2_at_most(v, cap); }
+
+void mesh_adjacency(std::vector<de::Mesh::Face> &faces) {
+	Built b;
+	b.faces = std::move(faces);
+	adjacency(b);
+	faces = std::move(b.faces);
+}
+
+void mesh_smoothing(std::vector<de::Mesh::Face> &faces, const std::vector<std::array<V3, 3>> &corner_normals) {
+	Built b;
+	b.faces = std::move(faces);
+	smoothing(b, corner_normals);
+	faces = std::move(b.faces);
+}
+
+Bytes mesh_geometry(const std::vector<V3> &vertices, const std::vector<de::Mesh::Face> &faces) {
+	deo::Writer e;
+	size_t at = e.begin_chunk(1);
+	e.u16(uint16_t(vertices.size()));
+	for (auto &v : vertices) put_f32(e, v[0]), put_f32(e, v[1]), put_f32(e, v[2]);
+	e.u16(uint16_t(faces.size()));
+	for (auto &f : faces) {
+		for (int k = 0; k < 3; ++k) e.u16(f.v[size_t(k)]), e.u16(f.adjacent[size_t(k)]);
+		e.u32(f.flags);
+	}
+	e.end_chunk(at);
+	return e.data();
+}
+
+}  // namespace build
+
 const char *role_name(Role r) {
 	static const char *const names[] = {"Visual", "Floor", "Wall", "Kill", "Death volume", "Jump pad", "Spawn point", "Pickup spawner", "Ignore"};
 	return names[std::min(size_t(r), size_t(Role::Ignore))];
@@ -902,7 +948,7 @@ ImportPlan analyse(gltf::Scene scene, const ImportSettings &settings) {
 		if (n.mesh >= 0) {
 			for (const auto &p : s.meshes[size_t(n.mesh)].primitives) it.triangles += p.triangles(), it.vertices += p.positions.size();
 		}
-		if (settings.kind == ImportKind::Prop) {
+		if (settings.kind != ImportKind::Arena) {
 			it.role = n.mesh >= 0 ? Role::Visual : Role::Ignore;
 		} else {
 			it.role = role ? *role : (n.mesh >= 0 ? Role::Visual : Role::Ignore);
@@ -999,6 +1045,9 @@ void revalidate(ImportPlan &plan, const BaseData *base) {
 		if (!visual) add(Issue::Error, "Nothing to import: the file has no meshes");
 		if (!s.skins.empty()) add(Issue::Warning, "The file has a skin: props are imported unskinned (robots come with the HAR importer)");
 		if (!s.animations.empty()) add(Issue::Warning, std::to_string(s.animations.size()) + " animation(s) are not imported for props");
+	} else if (plan.settings.kind == ImportKind::Robot) {
+		if (!visual) add(Issue::Error, "Nothing to import: the file has no meshes");
+		robot_issues(plan, plan.issues);
 	} else {
 		size_t floors = plan.count(Role::Floor), spawns = plan.count(Role::Spawn);
 		if (!floors) add(Issue::Error, "No walkable collision: put the floor meshes in a Collision collection (material \"floor\")");

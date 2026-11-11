@@ -216,7 +216,8 @@ FetchContent_MakeAvailable(cgltf stb)
 # The content editor's data model (docs/EDITOR_SPEC.md): add-on projects, pilots, validation.
 add_library(editor-core STATIC editor/core/addon.cpp editor/core/content.cpp editor/core/pilot.cpp editor/core/image_io.cpp
 	editor/core/validate.cpp editor/core/arena.cpp editor/core/script.cpp editor/core/tournament.cpp editor/core/har.cpp
-	editor/core/gltf.cpp editor/core/gltf_libs.c editor/core/model_export.cpp editor/core/model_import.cpp)
+	editor/core/gltf.cpp editor/core/gltf_libs.c editor/core/model_export.cpp editor/core/model_import.cpp editor/core/har_import.cpp
+	editor/core/mesh_simplify.cpp)
 target_include_directories(editor-core PUBLIC editor/core)
 target_include_directories(editor-core PRIVATE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR})
 set_source_files_properties(editor/core/gltf_libs.c PROPERTIES COMPILE_OPTIONS -w)
@@ -236,6 +237,9 @@ add_executable(editor-gltf-tests tests/editor_gltf_tests.cpp)
 target_link_libraries(editor-gltf-tests PRIVATE editor-core game)
 add_test(NAME editor-gltf COMMAND editor-gltf-tests)
 add_test(NAME editor-gltf-import COMMAND editor-gltf-tests "${OPENBG_DATA_DIR}")
+add_executable(editor-har-import-tests tests/editor_har_import_tests.cpp)
+target_link_libraries(editor-har-import-tests PRIVATE editor-core game)
+add_test(NAME editor-har-import COMMAND editor-har-import-tests "${OPENBG_DATA_DIR}")
 
 # Native viewer (SDL2 + OpenGL 4.1 core).
 if(NOT TARGET SDL2::SDL2)
@@ -317,7 +321,7 @@ endif()
 
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests editor-tests editor-arena-tests editor-assets-tests editor-gltf-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
+	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests editor-tests editor-arena-tests editor-assets-tests editor-gltf-tests editor-har-import-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()
