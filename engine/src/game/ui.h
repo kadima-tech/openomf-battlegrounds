@@ -77,6 +77,9 @@ public:
 	bool persistent = false;       // the factory's persistent instance: never deleted
 	bool deleted = false;          // DeleteThisLater'd: never shown again
 	GameObject *script = nullptr;  // the DE_CUIManager object the scripts hold, if any
+	bool wall_clock = false;       // a screenshot run keeps the wall clock's pace while it is current
+	// The page it was last stacked over: a host's Back when a rules display has cleared the stack.
+	std::shared_ptr<UIManager> below;
 	// +0x38 (DE_CMultipleReferenceCompleteCreatedObjects): what its completion made, deleted
 	// (DeleteThisLater) when it begins again or deactivates backed out.
 	std::vector<uint32_t> created;
@@ -278,6 +281,8 @@ public:
 	GameObject *next_ui_object() const { return next ? next->script : nullptr; }
 	GameObject *current_ui_object() const { return current ? current->script : nullptr; }
 	void set_last();
+	// Ours: Back on a host whose stack a rules display cleared returns to the page below the current one.
+	bool back_to_below() const;
 	void delete_stack(bool close_current);
 	void close_stack();
 	void begin_ui();

@@ -1551,8 +1551,11 @@ public:
 		if (&c == next_) {
 			finish(app);
 		} else if (&c == back_) {
-			// The unbegun session stays until Choose Match begins again and deletes it.
-			if (SessionState *s = session(app)) s->settings_active = false;
+			// A host's Back with a cleared stack keeps the page active, or the match server starts the next match.
+			const bool below = app.back_to_below();
+			const bool leave = app.stack.empty() && !below && shows_again && net_role(app.world) == NetRole::Server;
+			if (SessionState *s = session(app); s && !below && !leave) s->settings_active = false;
+			if (leave) return app.set_next(app.main_menu(), true);
 			app.set_last();
 		}
 	}
@@ -2566,17 +2569,19 @@ void AppManager::apply_settings() {
 // DE_CSessionBrowser (Core ObjInitContents 0x701dfd20, SetupControls 0x701e0320, its robot's
 // ProcessButtonClickEvent 0x701e2bb0): a "Session Browser" list (Server, Ping, Players,
 // Description) over the known sessions, Join and Cancel. The original filled it from GameSpy and
-// its LAN query; ours asks the LAN every 500 ms on the game port and, in the strip under the list
-// where the GameSpy query control was, takes an address typed in (host or host:port).
+// its LAN query; ours asks the LAN every 500 ms on the game port and the next ones a host may have
+// moved to, and, in the strip under the list where the GameSpy query control was, takes an address
+// typed in (host or host:port).
 class SessionBrowser : public UIManager {
 public:
-	SessionBrowser() : UIManager("Join Game", "MatchBrowser") {}
+	SessionBrowser() : UIManager("Join Game", "MatchBrowser") { wall_clock = true; }
 
 	bool begin(AppManager &app) override {
 		UIManager::begin(app);
 		sessions_.clear();
 		discovery_ = std::make_unique<net::Discovery>();
 		last_query_ = 0;
+		if (const char *j = getenv("OPENBG_LAN_JOIN")) auto_join_ = j;
 		return true;
 	}
 	void setup_controls(AppManager &app) override {
@@ -2614,7 +2619,18 @@ public:
 		const uint32_t now = net::now_ms();
 		if (now - last_query_ >= 500) {
 			last_query_ = now;
-			discovery_->query_broadcast(port(app));
+			// The configured port and the known hosts' every time; the retry range a few ports at a time.
+			const int base = port(app);
+			std::vector<uint16_t> ports = {uint16_t(base)};
+			auto ask = [&ports](int p) {
+				if (p > 0 && p < 65536 && std::find(ports.begin(), ports.end(), uint16_t(p)) == ports.end()) ports.push_back(uint16_t(p));
+			};
+			for (const Entry &e : sessions_) ask(e.at.port);
+			for (int i = 0; i < kSweep; ++i) {
+				sweep_ = sweep_ % net::kPortRetries + 1;
+				ask(base + sweep_);
+			}
+			discovery_->query_broadcast(ports);
 			if (typed_) discovery_->query(*typed_);
 		}
 		bool changed = false;
@@ -2625,10 +2641,35 @@ public:
 			net::Address at = r.from;
 			if (info.port) at.port = info.port;
 			auto it = std::find_if(sessions_.begin(), sessions_.end(), [&](const Entry &e) { return e.at == at || (info.instance && e.info.instance == info.instance); });
-			if (it == sessions_.end()) sessions_.push_back({at, info, r.ping_ms}), changed = true;
-			else if (it->ping != r.ping_ms || it->info.players != info.players) it->info = info, it->ping = r.ping_ms, changed = true;
+			if (it == sessions_.end()) sessions_.push_back({at, info, r.ping_ms, now}), changed = true;
+			else {
+				if (it->ping != r.ping_ms || it->info.players != info.players || it->info.instance != info.instance) changed = true;
+				it->info = info, it->ping = r.ping_ms, it->heard = now;
+			}
 		}
-		if (changed) refresh();
+		// A host that stops answering leaves the list.
+		const bool had = selected_ >= 0 && size_t(selected_) < sessions_.size();
+		const net::Address keep = had ? sessions_[size_t(selected_)].at : net::Address{};
+		const size_t before = sessions_.size();
+		sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(), [now](const Entry &e) { return now - e.heard > kForget; }), sessions_.end());
+		if (sessions_.size() != before) {
+			changed = true;
+			auto it = std::find_if(sessions_.begin(), sessions_.end(), [&](const Entry &e) { return had && e.at == keep; });
+			select(it == sessions_.end() ? -1 : int(it - sessions_.begin()));
+		}
+		if (!changed) return;
+		refresh();
+		std::string seen;
+		for (const Entry &e : sessions_) seen += " " + (e.info.server_name.empty() ? std::string("?") : e.info.server_name) + "@" + e.at.text();
+		if (seen != listed_) printf("net: LAN list:%s\n", seen.empty() ? " empty" : seen.c_str());
+		listed_ = seen;
+		// OPENBG_LAN_JOIN="<server name>:<port>" (testing): that session is chosen and joined once it is listed.
+		for (size_t i = 0; i < sessions_.size() && !auto_join_.empty(); ++i) {
+			if (auto_join_ != sessions_[i].info.server_name + ":" + std::to_string(sessions_[i].at.port)) continue;
+			auto_join_.clear();
+			list_->select(int(i));
+			click(app, *join_);
+		}
 	}
 	void click(AppManager &app, Control &c) override {
 		if (&c == cancel_) {
@@ -2657,7 +2698,10 @@ private:
 		net::Address at;
 		NetServerInfo info;
 		uint32_t ping = 0;
+		uint32_t heard = 0;
 	};
+	static constexpr int kSweep = 20;
+	static constexpr uint32_t kForget = 6000;  // the WinSock node's silence before an interruption
 	static uint16_t port(AppManager &app) {
 		int p = atoi(app.registry_string("Network\\Winsock\\Listener Port").c_str());
 		return p > 0 && p < 65536 ? uint16_t(p) : net::kDefaultPort;
@@ -2702,6 +2746,8 @@ private:
 	std::optional<std::array<uint8_t, 16>> hash_;
 	std::vector<Entry> sessions_;
 	uint32_t last_query_ = 0;
+	int sweep_ = 0;
+	std::string listed_, auto_join_;
 	int selected_ = -1;
 	Control *join_ = nullptr, *cancel_ = nullptr;
 	List *list_ = nullptr;
@@ -2788,6 +2834,11 @@ void AppManager::set_next(const UIPtr &mgr, bool push) {
 	last = current;
 	if (current) {
 		if (push && !on_stack(current.get())) stack.push_back(current);
+		if (push && mgr) {
+			bool cycle = false;
+			for (UIManager *b = current.get(); b && !cycle; b = b->below.get()) cycle = b == mgr.get();
+			if (!cycle) mgr->below = current;
+		}
 		if (!mgr) page_finished = true;
 	}
 	next = mgr;
@@ -2812,10 +2863,23 @@ UIManager *AppManager::page_of(const GameObject *ui) const {
 
 // SetLastUIManager (Core 0x7019b100): Back.
 void AppManager::set_last() {
-	if (stack.empty()) return;
+	if (stack.empty()) {
+		if (back_to_below()) {
+			UIPtr below = current->below;
+			below->deleted = false;
+			set_next(below, false);
+		}
+		return;
+	}
 	UIPtr top = stack.back();
 	set_next(top, false);
 	stack.pop_back();
+}
+
+bool AppManager::back_to_below() const {
+	if (!stack.empty() || !current || !current->below || net_role(world) != NetRole::Server) return false;
+	const UIManager &b = *current->below;
+	return !b.script || session_of_ui(world, b.script);
 }
 
 // DeleteUIManagerStack (Core 0x7019ba00).

@@ -178,7 +178,10 @@ Each phase ends with something testable, merged and pushed.
    Session Master, the setup Choose Cast, then each match as a sub-session with the host's own Choose Pilot /
    Choose Creature and the guests' remote ones; no session (nor its listener) outlives the screens: the main menu
    ends every one, a failed bind makes none, and `tools/net-lan/host-menu.sh` hosts, backs out, hosts again and has
-   a guest join (direct or through the LAN list). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
+   a guest join (direct or through the LAN list). Polish (FINDINGS 495-498, 2026-11-11): the listener moves to the next
+   port when its own is in use (up to 99) and Join Game finds it there, keeps querying and drops hosts silent for 6 s
+   (`host-menu.sh --guest-first`), the host's player is `Network\Player Name`, a host's Back after a match returns to
+   Choose Session Master, and no pre-fight ghost destruction (ENet's throttle no longer drops ID requests). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
    an administrator's level button.
 
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and

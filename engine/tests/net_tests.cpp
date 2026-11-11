@@ -112,7 +112,9 @@ int main() {
 	check(gone, "the server hears the disconnect");
 
 	// Hosting again after leaving a session: the port is free once the host is gone, and taken while it lives.
-	check(net::EnetHost::listen(port, 4, &err) == nullptr, "a port in use cannot be listened on twice");
+	bool in_use = false;
+	check(net::EnetHost::listen(port, 4, &err, &in_use) == nullptr, "a port in use cannot be listened on twice");
+	check(in_use, "a port in use is told apart from other failures (the WinSock service's next-port retry)");
 	client.reset();
 	server.reset();
 	auto again = net::EnetHost::listen(port, 4, &err);

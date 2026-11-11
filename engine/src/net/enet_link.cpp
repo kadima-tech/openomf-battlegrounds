@@ -3,7 +3,11 @@
 #include <enet/enet.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
+#ifdef _WIN32
+#include <mstcpip.h>
+#endif
 #include <map>
 #include <mutex>
 
@@ -28,6 +32,25 @@ std::mutex g_hosts_lock;
 std::map<const ENetHost *, EnetHost *> g_hosts;
 
 uint8_t channel_id(Channel ch) { return ch == Channel::Reliable ? 0 : 1; }
+
+// WSAEADDRINUSE / EADDRINUSE from a bind of our own (ENet keeps no error).
+bool port_taken(uint16_t port) {
+	ENetSocket s = enet_socket_create(ENET_SOCKET_TYPE_DATAGRAM);
+	if (s == ENET_SOCKET_NULL) return false;
+	ENetAddress a{};
+	a.host = ENET_HOST_ANY;
+	a.port = port;
+	bool taken = false;
+	if (enet_socket_bind(s, &a) != 0) {
+#ifdef _WIN32
+		taken = WSAGetLastError() == WSAEADDRINUSE;
+#else
+		taken = errno == EADDRINUSE;
+#endif
+	}
+	enet_socket_destroy(s);
+	return taken;
+}
 
 }  // namespace
 
@@ -120,7 +143,8 @@ int answer_query(ENetHost *h, ENetEvent *) {
 	return 1;
 }
 
-std::unique_ptr<EnetHost> EnetHost::listen(uint16_t port, size_t max_peers, std::string *error) {
+std::unique_ptr<EnetHost> EnetHost::listen(uint16_t port, size_t max_peers, std::string *error, bool *in_use) {
+	if (in_use) *in_use = false;
 	if (!init()) {
 		if (error) *error = "The network could not be started.";
 		return nullptr;
@@ -132,6 +156,7 @@ std::unique_ptr<EnetHost> EnetHost::listen(uint16_t port, size_t max_peers, std:
 	h->host_ = enet_host_create(&a, max_peers, kChannels, 0, 0);
 	if (!h->host_) {
 		if (error) *error = "Port " + std::to_string(port) + " could not be opened; another program may be using it.";
+		if (in_use) *in_use = port_taken(port);
 		return nullptr;
 	}
 	{
@@ -233,6 +258,9 @@ void EnetHost::service() {
 	while (enet_host_service(host_, &e, 0) > 0) {
 		switch (e.type) {
 		case ENET_EVENT_TYPE_CONNECT: {
+			// No packet throttle (the WinSock service had none): it drops whole bursts of unsequenced packets.
+			e.peer->packetThrottleDeceleration = 0;
+			e.peer->packetThrottle = e.peer->packetThrottleLimit;
 			EnetPeer *p = wrap(e.peer);
 			p->last_heard_ = enet_time_get();
 			events_.push_back({Event::Connected, p});
@@ -300,6 +328,12 @@ Discovery::Discovery() {
 	if (s == ENET_SOCKET_NULL) return;
 	enet_socket_set_option(s, ENET_SOCKOPT_NONBLOCK, 1);
 	enet_socket_set_option(s, ENET_SOCKOPT_BROADCAST, 1);
+#if defined(_WIN32) && defined(SIO_UDP_CONNRESET)
+	// Asking ports nobody listens on must not fill the socket with WSAECONNRESET.
+	BOOL report = FALSE;
+	DWORD bytes = 0;
+	WSAIoctl(s, SIO_UDP_CONNRESET, &report, sizeof report, nullptr, 0, &bytes, nullptr, nullptr);
+#endif
 	ENetAddress any{};
 	any.host = ENET_HOST_ANY;
 	any.port = 0;
@@ -322,7 +356,7 @@ void Discovery::send_to(uint32_t ip, uint16_t port) {
 	uint32_t seq = ++sequence_;
 	memcpy(q + 5, &seq, 4);
 	sent_.emplace_back(seq, enet_time_get());
-	if (sent_.size() > 64) sent_.erase(sent_.begin());
+	if (sent_.size() > 1024) sent_.erase(sent_.begin(), sent_.begin() + 256);
 	ENetAddress a{};
 	a.host = ip;
 	a.port = port;
@@ -338,6 +372,10 @@ void Discovery::query_broadcast(uint16_t port) {
 	ENetAddress local{};
 	enet_address_set_host_ip(&local, "127.0.0.1");
 	send_to(local.host, port);
+}
+
+void Discovery::query_broadcast(const std::vector<uint16_t> &ports) {
+	for (uint16_t p : ports) query_broadcast(p);
 }
 
 void Discovery::query(const Address &to) { send_to(to.ip, to.port); }

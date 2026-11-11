@@ -21,6 +21,8 @@ namespace {
 constexpr uint8_t kLobby = 3;
 enum : uint16_t { kJoin = 2, kAccept = 4, kRefuse = 5 };
 constexpr char kMagic[] = "OMFBG-NET";
+// DE_CClient::SetAsUserControlled's name for a player who gives none (Core 0x70351e34).
+constexpr char kUnnamed[] = "Unknown Player";
 
 struct Out {
 	std::vector<uint8_t> d;
@@ -194,12 +196,22 @@ void NetGame::fail(const std::string &title, const std::string &text) {
 
 bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 	opt_ = o;
-	host_ = net::EnetHost::listen(o.port, 16, error);
-	if (!host_) {
-		// WinSockService::ObjInitContents's notice (Core 0x7019e0b0), giving up on the port at once.
-		if (error) *error = "Couldn't activate listening port " + std::to_string(o.port) + " because it is already active.  Giving up on activating listening port.";
-		printf("net: cannot host on port %u\n", o.port);
-		return false;
+	for (int retry = 0;; ++retry) {
+		const int port = int(o.port) + retry;
+		bool in_use = false;
+		host_ = net::EnetHost::listen(uint16_t(port), 16, nullptr, &in_use);
+		if (host_) break;
+		if (!in_use) {
+			if (error) *error = "Unnable to create a socket.  This process cannot be a WinSock server.";
+			printf("net: cannot host on port %d\n", port);
+			return false;
+		}
+		if (retry + 1 > net::kPortRetries || port >= 65535) {
+			if (error) *error = "Couldn't activate listening port because it is already active.  Giving up on activating listening port.";
+			printf("net: cannot host on ports %u-%d\n", o.port, port);
+			return false;
+		}
+		printf("net: Couldn't activate listening port because it is already active.  Attempting connection on port %d\n", port + 1);
 	}
 	host_->set_delay(o.delay);
 	host_->set_kick_time(o.kick_ms);
@@ -288,7 +300,7 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 		net::EnetPeer *previous = nullptr;
 		if (reason.empty() && hosted_) {
 			for (auto &[old, cl] : accepted_) {
-				if (old != &p && old->address().ip == p.address().ip && cl->player_name == (name.empty() ? "Player" : name)) previous = old;
+				if (old != &p && old->address().ip == p.address().ip && cl->player_name == (name.empty() ? kUnnamed : name)) previous = old;
 			}
 		}
 		if (auto b = bans_.find(p.address().ip); reason.empty() && b != bans_.end() && steady_ms() < b->second) reason = "Banned From Server";
@@ -301,7 +313,7 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 			printf("net: refused %s (%s): %s\n", p.address().text().c_str(), name.c_str(), reason.c_str());
 			return;
 		}
-		if (name.empty()) name = "Player";
+		if (name.empty()) name = kUnnamed;
 		if (previous) {
 			// DE_CStandardClient::Reconnect (Session 0x45002670, FINDINGS 452).
 			SessionClient &c = *accepted_[previous];
