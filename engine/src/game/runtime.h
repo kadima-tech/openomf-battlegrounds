@@ -513,6 +513,8 @@ public:
 	// Animation banks named as behavior globals (World::global_reference), by bank object.
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::unique_ptr<de::AnimBank>> global_banks_;
 	explicit World(const std::filesystem::path &data_dir);
+	// Only the Data files `keep` accepts (de::World's filter).
+	World(const std::filesystem::path &data_dir, const std::function<bool(const std::string &stem)> &keep);
 
 	vm::Memory &memory() { return mem_; }
 	const de::World &data() const { return data_; }

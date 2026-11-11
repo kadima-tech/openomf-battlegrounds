@@ -42,6 +42,8 @@ public:
 	// resources (Core.ModuleDLL: COREMeshes -- fonts, primitives -- and COREImages) when the
 	// game's Engine directory sits next to it.
 	explicit World(const std::filesystem::path &data_dir);
+	// Only the Data files `keep` accepts by stem (add-ons and the engine's files always load).
+	World(const std::filesystem::path &data_dir, const std::function<bool(const std::string &stem)> &keep);
 
 	const std::filesystem::path &dir() const { return dir_; }
 	const ObjectsFile *file(const std::string &stem) const;

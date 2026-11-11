@@ -218,12 +218,15 @@ std::vector<std::filesystem::path> addon_paths() {
 	return out;
 }
 
-World::World(const std::filesystem::path &dir) : dir_(dir) {
+World::World(const std::filesystem::path &dir) : World(dir, nullptr) {}
+
+World::World(const std::filesystem::path &dir, const std::function<bool(const std::string &stem)> &keep) : dir_(dir) {
 	// The file agents in NTFS's order (names upper-cased; FINDINGS 192), whatever this file
 	// system lists: DE_CTransferAgent::FindMasterObject(GUID) asks the last agent first.
 	std::vector<std::pair<std::string, std::filesystem::path>> paths;
 	for (auto &e : std::filesystem::directory_iterator(dir)) {
 		if (e.path().extension() != ".DEObjects") continue;
+		if (keep && !keep(e.path().stem().string())) continue;
 		std::string upper = e.path().filename().string();
 		for (char &ch : upper) ch = char(toupper(uint8_t(ch)));
 		paths.emplace_back(upper, e.path());

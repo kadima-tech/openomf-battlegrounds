@@ -225,7 +225,9 @@ void *ObjectArena::take(size_t bytes) {
 	return p;
 }
 
-World::World(const std::filesystem::path &dir) : data_(dir) {
+World::World(const std::filesystem::path &dir) : World(dir, nullptr) {}
+
+World::World(const std::filesystem::path &dir, const std::function<bool(const std::string &stem)> &keep) : data_(dir, keep) {
 	particles = std::make_shared<ParticleSystem>(*this);
 	forces = std::make_shared<ForceSystem>(*this);
 	music = std::make_shared<MusicSystem>(*this);
