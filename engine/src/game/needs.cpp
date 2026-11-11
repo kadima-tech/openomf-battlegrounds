@@ -169,6 +169,7 @@ struct NeedSystem {
 		// results walked from the last.
 		(void)me;
 		GameObject *probe = w.create("NeedTestSphere", "Actor\\Affector\\Sphere");
+		if (probe->shape == GameObject::Shape::None) w.shapes_changed();
 		probe->shape = GameObject::Shape::Sphere;
 		probe->local = {};
 		probe->local.t = focal_point(*creature);

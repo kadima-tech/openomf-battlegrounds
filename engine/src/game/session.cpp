@@ -2,6 +2,7 @@
 // what the creature and pilot pickers build fighters and pilots from).
 #include "game/observer.h"
 #include "game/session.h"
+#include "game/perf.h"
 #include "game/netplay.h"
 #include "game/replay.h"
 
@@ -162,6 +163,7 @@ void World::add_executor_property(GameObject *o, const de::ObjectRef &executor) 
 }
 
 std::vector<Brain *> World::brain_list(GameObject *o) {
+	PERF_ZONE("w.brain_list");
 	std::vector<Brain *> out;
 	if (!o) return out;
 	auto own = [&](GameObject *x) {
