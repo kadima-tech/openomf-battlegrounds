@@ -21,6 +21,7 @@
 #include "validate.h"
 
 struct SDL_Window;
+class WorldEditor;
 
 struct Options {
 	std::filesystem::path data, project;
@@ -40,6 +41,10 @@ struct Options {
 	bool save = false;
 	bool launch = false;      // Launch Game once the start-up actions ran
 	std::string select;       // Outliner selection by object name
+	// The world side (world.h): open an arena, make a variant, set up the viewports, play.
+	std::string arena, select_node, camera, debug, move_to, light_colour;
+	bool variant = false, play = false, simulate = false, eject = false, inspector = false;
+	int play_ticks = 0, layout = 0, shading = -1;
 };
 
 class Editor;
@@ -128,6 +133,7 @@ public:
 	float time() const { return float(ImGui::GetTime()); }
 	const Options &options() const { return opt_; }
 	void draw_level();
+	WorldEditor *world() { return world_.get(); }
 
 private:
 	void load_settings();
@@ -248,6 +254,7 @@ private:
 
 	// Launched game.
 	std::unique_ptr<GameProcess> game_;
+	std::unique_ptr<WorldEditor> world_;
 	std::shared_ptr<std::mutex> game_mutex_ = std::make_shared<std::mutex>();
 	std::shared_ptr<std::vector<std::string>> game_lines_ = std::make_shared<std::vector<std::string>>();
 

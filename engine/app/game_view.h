@@ -3,6 +3,7 @@
 // camera. Shared by openbg-fight and the front end.
 #pragma once
 
+#include <functional>
 #include <set>
 
 #include <array>
@@ -75,6 +76,9 @@ public:
 	bool dragging = false;
 	// Draw from this camera actor with no HUD, leaving the HUD's projection alone (a capture).
 	game::GameObject *capture_camera = nullptr;
+	// Replaces the game's camera (an editor's free view): fills the projection, view and eye for dw x dh.
+	std::function<void(int dw, int dh, float *proj, float *view, float *eye)> camera_override;
+	std::array<float, 16> drawn_vp{};  // the last draw's view-projection
 
 	render::ArenaRenderer arena_r;
 	render::OverlayRenderer overlay;

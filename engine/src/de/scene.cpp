@@ -1,3 +1,4 @@
+#include <atomic>
 #include "de/scene.h"
 
 #include "de/lighting.h"
@@ -221,6 +222,8 @@ std::vector<std::filesystem::path> addon_paths() {
 World::World(const std::filesystem::path &dir) : World(dir, nullptr) {}
 
 World::World(const std::filesystem::path &dir, const std::function<bool(const std::string &stem)> &keep) : dir_(dir) {
+	static std::atomic<uint64_t> serials{0};
+	serial_ = ++serials;
 	// The file agents in NTFS's order (names upper-cased; FINDINGS 192), whatever this file
 	// system lists: DE_CTransferAgent::FindMasterObject(GUID) asks the last agent first.
 	std::vector<std::pair<std::string, std::filesystem::path>> paths;

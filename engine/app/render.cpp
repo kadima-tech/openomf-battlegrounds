@@ -191,9 +191,9 @@ bool g_specular_pass = false;        // drawing the specular glow passes: bind t
 
 // An Image\CubeEnvironment as a GL cube map (faces Top, Front, Bottom, Left, Right, Back).
 GLuint cube_texture(const de::ObjectRef &cube) {
-	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> cache;
+	static std::map<std::pair<uint64_t, uint32_t>, GLuint> cache;
 	if (!cube || !g_world) return 0;
-	auto k = std::make_pair(cube.file, cube.index);
+	auto k = std::make_pair(cube.file->serial(), cube.index);
 	if (auto it = cache.find(k); it != cache.end()) return it->second;
 	GLuint t = 0;
 	try {

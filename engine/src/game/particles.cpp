@@ -1225,8 +1225,9 @@ void register_particle_natives(World &w) {
 	// AssureInstanceCaller (Core 0x701d51e0) -> DE_CParticleGenerator::NewInstance(actor, time): the
 	// generator's instance for that actor (made if there is none yet). Its SpawningOff/On
 	// (InstanceSpawningOffCaller 0x701d5250: +0x58) switch that instance's spawning.
-	static std::map<uint32_t, std::pair<de::ObjectRef, GameObject *>> g_generator_instances;
+	static std::map<uint64_t, std::map<uint32_t, std::pair<de::ObjectRef, GameObject *>>> g_generator_instances_by_world;
 	reg("CParticleGenerator::class CInstance AssureInstance(class CActor,float)", [](const NativeContext &c) {
+		auto &g_generator_instances = g_generator_instances_by_world[c.world.data().serial()];
 		GameObject *g = c.self(), *a = c.arg_object(0);
 		if (!g || !g->file || !a) {
 			c.ret_u32(0);
@@ -1246,6 +1247,7 @@ void register_particle_natives(World &w) {
 	// InstanceCaller (Core 0x701d5190): the actor's instance (one is made when its renderer is
 	// prepared; ours are made at first use, so the handle stands for it until then).
 	reg("CParticleGenerator::class CInstance Instance(class CActor)", [](const NativeContext &c) {
+		auto &g_generator_instances = g_generator_instances_by_world[c.world.data().serial()];
 		GameObject *g = c.self(), *a = c.arg_object(0);
 		if (!g || !g->file || !a) {
 			c.ret_u32(0);
@@ -1264,11 +1266,13 @@ void register_particle_natives(World &w) {
 	});
 	// InstanceSetParticleSizeMultiplierCaller (Core 0x701d5280): the instance's +0x64.
 	reg("CParticleGenerator::CInstance::SetParticleSizeMultiplier(float)", [](const NativeContext &c) {
+		auto &g_generator_instances = g_generator_instances_by_world[c.world.data().serial()];
 		auto it = g_generator_instances.find(c.self_handle());
 		if (it != g_generator_instances.end()) c.world.particles->set_generator_size_multiplier(it->second.first, it->second.second, c.arg<float>(0));
 	});
 	for (auto [sig, on] : {std::pair{"CParticleGenerator::CInstance::SpawningOff()", false}, std::pair{"CParticleGenerator::CInstance::SpawningOn()", true}}) {
 		reg(sig, [on = on](const NativeContext &c) {
+			auto &g_generator_instances = g_generator_instances_by_world[c.world.data().serial()];
 			auto it = g_generator_instances.find(c.self_handle());
 			if (it != g_generator_instances.end()) c.world.particles->set_generator_spawning(it->second.first, it->second.second, on);
 		});

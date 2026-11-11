@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "editor.h"
+#include "world.h"
 #include "icons.h"
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
@@ -165,6 +166,10 @@ const std::vector<int> *Editor::parents_of(size_t file) {
 }
 
 void Editor::open_object(const ObjectRef &r) {
+	if (world_ && world_->open(r)) {
+		active_ = 0;
+		return;
+	}
 	for (size_t i = 1; i < docs_.size(); ++i) {
 		if (docs_[i]->shows(r)) {
 			active_ = i;

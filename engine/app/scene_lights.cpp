@@ -26,7 +26,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 		out.owners.insert(ow);
 	}
 	{
-		static std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::optional<de::LightInfo>> infos;
+		static std::map<std::pair<uint64_t, uint32_t>, std::optional<de::LightInfo>> infos;
 		static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> light_images;
 		g_lighting.lights.clear();
 		static uint32_t gatherings = 0;  // callers save and restore g_lighting around other views
@@ -51,7 +51,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 		}
 		for (auto &[lref, o, aff] : placed) {
 			if (aff->shape != game::GameObject::Shape::Sphere && aff->shape != game::GameObject::Shape::Cone) continue;
-			auto key = std::make_pair(lref.file, lref.index);
+			auto key = std::make_pair(lref.file->serial(), lref.index);
 			auto it = infos.find(key);
 			if (it == infos.end()) it = infos.emplace(key, de::read_light(world.data(), lref)).first;
 			if (!it->second) continue;
