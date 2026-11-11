@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <random>
 
 #include "addon.h"
 #include "content.h"
@@ -254,7 +255,7 @@ int main(int argc, char **argv) {
 	}
 	const fs::path data = argv[1];
 	const std::string which = argc > 2 ? argv[2] : "";
-	fs::path tmp = fs::temp_directory_path() / ("openbg-editor-assets-" + std::to_string(std::rand()) + std::to_string(time(nullptr)));
+	fs::path tmp = fs::temp_directory_path() / ("openbg-editor-assets-" + which + "-" + std::to_string(std::random_device{}()) + std::to_string(time(nullptr)));
 	fs::create_directories(tmp);
 	if (which.empty() || which == "tournament") tournament(data, tmp);
 	if (which.empty() || which == "har") har(data, tmp);
