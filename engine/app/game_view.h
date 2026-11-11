@@ -55,7 +55,8 @@ public:
 	// The session builds the fighters (World::make_fighter) and hands slot 0's to the player.
 	void wire_session();
 	// The arena whose static scene is drawn (its file stem); found from the scene when not set.
-	void load_arena(const std::string &stem);
+	// `environment`: the environment object in that file (-1: every one), for add-ons with several arenas.
+	void load_arena(const std::string &stem, int environment = -1);
 	int reflections_built_ = -1;  // the Reflections the arena and fighters were built with
 	bool has_arena() const { return !arena.empty(); }
 	// Draws into the bound viewport (dw x dh pixels). `fixed_step` (screenshot runs) snaps the
@@ -91,12 +92,13 @@ private:
 	game::GameObject *scene_camera() const;
 	Fighter *viewed_fighter() const;
 	void load_renderers();
-	std::string find_arena() const;
+	std::string find_arena(int *environment = nullptr) const;
 	bool shown(const game::GameObject *o) const;
 	std::function<std::optional<render::ActorMeshRenderer::LayerImage>(const de::ObjectRef &, const de::ObjectRef &, const de::ObjectRef &)>
 	images_of(const game::GameObject *o);
 
 	std::string arena;
+	int arena_environment = -1;
 	std::array<float, 16> screen_vp{};
 	float screen_wide_k = 1;  // 4:3 width over the screen width, below 1 on wide screens
 	float cam_base = 0;  // camera heading, trailing the fighter's facing

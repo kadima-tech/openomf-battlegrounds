@@ -244,13 +244,19 @@ bool PlaySession::ready() {
 	if (!error_.empty() || !world_) return false;
 	view_->init_gl();
 	std::string stem = setup_.arena_stem;
+	int environment = -1;
 	if (!setup_.addon.empty() && world_->data().file(setup_.addon.stem().string())) {
 		de::Guid g;
 		memcpy(g.bytes, setup_.environment_description.b, 16);
 		de::ObjectRef d = world_->data().by_guid(g);
-		if (d && d.file->master().name == world_->data().file(setup_.addon.stem().string())->master().name) stem = setup_.addon.stem().string();
+		const de::ObjectsFile *addon = world_->data().file(setup_.addon.stem().string());
+		if (d && d.file->master().name == addon->master().name) {
+			stem = setup_.addon.stem().string();
+			auto refs = game::passive_references(world_->data(), d);
+			if (!refs.empty() && refs[0] && refs[0].file == addon) environment = int(refs[0].index);
+		}
 	}
-	view_->load_arena(stem);
+	view_->load_arena(stem, environment);
 	if (!setup_.settings.mute && !setup_.fixed_step) {
 		mixer_ = std::make_unique<audio::Mixer>();
 		if (!mixer_->open()) mixer_.reset();

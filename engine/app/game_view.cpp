@@ -303,21 +303,23 @@ void GameView::wire_session() {
 	};
 }
 
-void GameView::load_arena(const std::string &stem) {
+void GameView::load_arena(const std::string &stem, int environment) {
 	arena = stem;
+	arena_environment = environment;
 	owners_set = false;
 	inherited_owner_.clear();
 	arena_r = render::ArenaRenderer();
-	arena_r.load(world.data(), stem);
+	arena_r.load(world.data(), stem, environment);
 	world.floor = [this](float x, float z, float from) { return arena_r.floor_height(x, z, from); };
 	if (auto *f = world.data().file(stem)) render::g_lighting.ambient = de::read_ambient(world.data(), *f);
 	printf("arena %s: %zu triangles\n", stem.c_str(), arena_r.triangles);
 }
 
 // The session's environment in the scene: its file is the arena.
-std::string GameView::find_arena() const {
+std::string GameView::find_arena(int *environment) const {
 	for (game::GameObject *o : world.scene_objects()) {
 		if (!o->file || o->class_path != "Actor\\Creature\\Environment" || !shown(o)) continue;
+		if (environment) *environment = int(o->index);
 		// The file's stem: Volcano's master object is named "Volcanoe".
 		for (auto &[stem, f] : world.data().files()) {
 			if (f.get() == o->file) return stem;
@@ -367,19 +369,20 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	render::g_reflections_enabled = world.reflections_enabled || (force_reflections && force_reflections->bits);
 	if (reflections_built_ != int(render::g_reflections_enabled)) {
 		reflections_built_ = int(render::g_reflections_enabled);
-		if (!arena.empty()) load_arena(arena);
+		if (!arena.empty()) load_arena(arena, arena_environment);
 		for (auto *fi : fighters) fi->renderer_loaded = false;
 	}
 	if (arena.empty() || follow_scene) {
 		// The session's environment came or went (a match began or ended).
-		std::string a = find_arena();
-		if (a != arena) {
+		int env = -1;
+		std::string a = find_arena(&env);
+		if (a != arena || (!a.empty() && env != arena_environment)) {
 			if (a.empty()) {
 				arena.clear();
 				fighters.clear();
 				player = nullptr;
 			} else {
-				load_arena(a);
+				load_arena(a, env);
 			}
 		}
 	}

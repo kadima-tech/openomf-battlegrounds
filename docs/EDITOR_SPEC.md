@@ -216,7 +216,10 @@ The editor exposes its operations as an **MCP server**, so AI assistants and scr
   an add-on chosen by the user (or named explicitly in a headless call). Each change is logged.
 
 ### 5.5 3D model import and export (glTF)
-Planned, not built in this iteration. glTF 2.0 (`.gltf` + `.bin`, or `.glb`) is the exchange format:
+Status (2026-11-11): export (meshes, LOD switchers, props, arenas, robots with skin and
+animations), prop import and arena import are built, with the Import dialog; robot (HAR) import is
+next, on the same reader (`engine/editor/core/gltf.h`) and dialog (a bone-mapping page through
+`register_import_step`). See "Built" at the end of this section and DEVELOPING.md. glTF 2.0 (`.gltf` + `.bin`, or `.glb`) is the exchange format:
 Blender, Maya and 3ds Max read and write it, it carries skins and animations, and its
 extensions take custom data (`extras`) for what DE needs beyond meshes.
 
@@ -267,6 +270,29 @@ the bone count (17), texture sizes and formats the game accepts, the navigation 
 names the scripts look up (bones, sequences, `DefaultCamera`, `Music`), and every reference the
 new objects make resolving. Imports keep their source files in the project's sidecar folder so
 they can be redone.
+
+**Built (2026-11-11).**
+- Scale: 10 DE units a metre (a robot is ~30 units tall, Grudge Match 770 across);
+  `asset.extras.de_units_per_metre` makes a re-import exact. Space: DE is left-handed, so z is
+  negated and triangles reversed; collision meshes keep the drawn winding (FINDINGS 543).
+- Export round trip: an exported mesh imports back with the same vertex order, faces, adjacency,
+  smoothing groups, mesh flags, MultiStage stages (version, mode, colour, stacked, flags), per-stage
+  UVs and pixels (`_DE_VERTEX`, `de_faces`, `de_face_flags`, `de_stages`; ctest `editor-gltf-import`).
+- New objects are written in the shipped layouts (FINDINGS 540-542): images RGB (mask 7, format 20)
+  or RGBA (mask 15, format 0) at power-of-two sizes up to 1024; TextureManagers with their UV count;
+  mesh affectors with no stored octree and a cell size, so the game builds one.
+- Arena import copies the environment of a template arena (lights, sky, music, cameras, values,
+  sounds; its geometry and gameplay objects are left out) and the gameplay templates from Grudge
+  Match (spawn point, pickup spawner, death box) and Desert (fighting-surface affector, jump pad,
+  nav area and link); the nav net is a grid over the floors, linked where a robot can walk (no wall,
+  no step over 12 units, no hole), at most 64 areas and 256 links (DesertRings ships 245 links).
+- Verified: a generated box arena and the Desert exported and re-imported play in the editor and in
+  `openbg-fight` (fighters stand on the floors, walls hold them, the AI walks the generated net to
+  its opponent); an imported prop placed in the arena draws in the viewport and in the game.
+- Not yet: robot import (bone mapping, weights to `Deform*VertexData`, sequences); props have no
+  collision; jump pad strength is the shared launcher's (only the direction follows `extras.impulse`);
+  an exported arena's death volume is written only when it is a box or mesh (Desert's is a passive
+  reference); vertex colours are exported for neither direction.
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the
@@ -416,4 +442,5 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
   Creature and fights. Not yet: fighter scripts do not compile with our compiler (the `master`
   statement), so a changed constant leaves the class's VMC2 stale (a validation error); the robot
   preview shows the base paint.
-- **§5.5** describes the planned glTF export and import.
+- **7 (started, 2026-11-11):** glTF export of meshes, props, arenas and robots; prop and arena
+  import through the Import dialog (§5.5 "Built"). Next: robot (HAR) import.

@@ -11,6 +11,7 @@
 #include "glow.h"
 #include "icons.h"
 #include "imgui_internal.h"
+#include "model_import.h"
 #include "pie.h"
 #include "render.h"
 #include "theme.h"
@@ -240,16 +241,36 @@ void WorldEditor::open_arena(const ed::ArenaEntry &a) {
 	if (a.addon && e_.project()) pool = e_.project()->file().guid_pool;
 	ArenaState *s = st.get();
 	std::string stem = a.stem;
-	s->loader = std::thread([s, base, pool, stem] {
+	std::string addon_stem;
+	ed::Bytes addon_bytes;
+	if (a.addon && e_.project()) {
+		addon_stem = e_.project()->path().stem().string();
+		addon_bytes = e_.project()->bytes();
+	}
+	s->render_stem = addon_stem.empty() ? stem : addon_stem;
+	ed::Guid env_guid = a.environment;
+	s->loader = std::thread([s, base, pool, stem, addon_stem, addon_bytes, env_guid] {
 		try {
 			deo::File pool_file;
 			pool_file.guid_pool = pool;
 			auto stems = ed::arena_files(*base, stem, pool.empty() ? nullptr : &pool_file);
 			std::set<std::string> keep(stems.begin(), stems.end());
 			s->world = std::make_unique<de::World>(base->dir(), [&](const std::string &st) { return keep.count(st) > 0; });
-			const de::ObjectsFile *f = s->world->file(stem);
-			if (!f) throw std::runtime_error("no arena file " + stem);
+			if (!addon_stem.empty()) s->world->set_file(addon_stem, addon_bytes);
+			const de::ObjectsFile *f = s->world->file(s->render_stem);
+			if (!f) throw std::runtime_error("no arena file " + s->render_stem);
+			if (!addon_stem.empty()) {
+				for (uint32_t i = 0; i < f->objects().size(); ++i) {
+					if (memcmp(f->objects()[i].guid.bytes, env_guid.b, 16) == 0) s->render_env = int(i);
+				}
+			}
+			auto parents = f->parents();
 			for (auto &item : de::collect_scene(*s->world, *f)) {
+				if (s->render_env >= 0) {
+					bool under = false;
+					for (int p = int(item.actor_index); p >= 0 && !under; p = parents[size_t(p)]) under = p == s->render_env;
+					if (!under) continue;
+				}
 				PickMesh pm;
 				pm.actor = item.actor_index;
 				for (auto &face : item.mesh.faces) {
@@ -287,7 +308,7 @@ void WorldEditor::finish_load() {
 	auto saved_ambient = render::g_lighting.ambient;
 	render::g_reflections_enabled = true;
 	s.renderer = std::make_unique<render::ArenaRenderer>();
-	s.renderer->load(*s.world, s.entry.stem);
+	s.renderer->load(*s.world, s.render_stem, s.render_env);
 	s.ambient = render::g_lighting.ambient;
 	render::g_lighting.ambient = saved_ambient;
 	render::g_live_values = saved_live;
@@ -496,6 +517,14 @@ void WorldEditor::run_script() {
 					}
 				}
 				refresh_scene();
+			}
+		}
+		if (!o.place_prop.empty() && arena_->entry.addon && p) {
+			for (uint32_t k : ed::prefabs(*p)) {
+				if (utf8(p->file().objects[k].info.name_text()) == o.place_prop) {
+					place_prefab(k);
+					break;
+				}
 			}
 		}
 		if (o.save) e_.save();
@@ -734,7 +763,7 @@ void WorldEditor::render_pane(Pane &p) {
 	if (s.renderer && p.shading != 2) {
 		auto saved_live = render::g_live_values;
 		auto saved_lights = render::g_lighting;
-		const de::ObjectsFile *arena_file = s.world->file(s.entry.stem);
+		const de::ObjectsFile *arena_file = s.world->file(s.render_stem);
 		const float scene_ms = float(ImGui::GetTime() * 1000.0);
 		render::g_live_values = [arena_file, scene_ms](const de::ObjectRef &r) -> std::optional<float> {
 			if (r.file == arena_file && r.info().name == "SceneTime") return scene_ms;
@@ -1305,7 +1334,7 @@ int WorldEditor::pick(int i, ImVec2 mouse) {
 				if (d > 0 && d < best_t) {
 					best_t = d;
 					int node = s.scene.node_for(pm.actor);
-					if (s.entry.addon) {
+					if (s.entry.addon && s.render_stem == s.entry.stem) {
 						// The variant draws the base arena: find the copy by tree position.
 						node = -1;
 						const de::ObjectsFile *bf = s.world->file(s.entry.stem);
@@ -1505,6 +1534,72 @@ void WorldEditor::place(const char *what) {
 	}
 }
 
+void WorldEditor::reload_addon_render() {
+	if (!arena_ || !arena_->entry.addon || !arena_->built || !arena_->world || !e_.project()) return;
+	ArenaState &s = *arena_;
+	s.render_stem = e_.project()->path().stem().string();
+	s.world->set_file(s.render_stem, e_.project()->bytes());
+	const de::ObjectsFile *f = s.world->file(s.render_stem);
+	if (!f) return;
+	s.render_env = -1;
+	for (uint32_t i = 0; i < f->objects().size(); ++i) {
+		if (memcmp(f->objects()[i].guid.bytes, s.entry.environment.b, 16) == 0) s.render_env = int(i);
+	}
+	s.picks.clear();
+	auto parents = f->parents();
+	for (auto &item : de::collect_scene(*s.world, *f)) {
+		bool under = s.render_env < 0;
+		for (int p = int(item.actor_index); p >= 0 && !under; p = parents[size_t(p)]) under = p == s.render_env;
+		if (!under) continue;
+		PickMesh pm;
+		pm.actor = item.actor_index;
+		for (auto &face : item.mesh.faces) {
+			for (int k = 0; k < 3; ++k) {
+				if (face.v[size_t(k)] < item.mesh.vertices.size()) pm.tris.push_back(item.world.apply(item.mesh.vertices[face.v[size_t(k)]]));
+			}
+		}
+		pm.tris.resize(pm.tris.size() / 3 * 3);
+		for (auto &v : pm.tris) {
+			for (int k = 0; k < 3; ++k) pm.lo[size_t(k)] = std::min(pm.lo[size_t(k)], v[size_t(k)]), pm.hi[size_t(k)] = std::max(pm.hi[size_t(k)], v[size_t(k)]);
+		}
+		if (!pm.tris.empty()) s.picks.push_back(std::move(pm));
+	}
+	auto saved_live = render::g_live_values;
+	auto saved_ambient = render::g_lighting.ambient;
+	s.renderer = std::make_unique<render::ArenaRenderer>();
+	s.renderer->load(*s.world, s.render_stem, s.render_env);
+	s.ambient = render::g_lighting.ambient;
+	render::g_lighting.ambient = saved_ambient;
+	render::g_live_values = saved_live;
+	refresh_scene();
+}
+
+void WorldEditor::place_prefab(uint32_t prefab) {
+	if (!arena_ || !arena_->entry.addon || !e_.project()) {
+		e_.log(LogLine::Warning, "Placing a prop needs an add-on arena open (Copy to Add-on on a base arena, or import one)");
+		return;
+	}
+	ArenaState &s = *arena_;
+	ed::Project &p = *e_.project();
+	int env = p.find(s.entry.environment);
+	if (env < 0 || prefab >= p.file().objects.size()) return;
+	Pane &pane = panes_[size_t(active_pane_)];
+	Vec3 at = pane.cam.mode == Camera::Perspective ? add(pane.cam.pos, mul(pane.cam.forward(), 400)) : pane.cam.centre;
+	if (auto y = s.scene.surface_below({at[0], 3000, at[2]}, 6000)) at[1] = *y;
+	const std::string name = utf8(p.file().objects[prefab].info.name_text());
+	try {
+		uint32_t made = ed::place_prefab(p, prefab, uint32_t(env), {1, 0, 0, 0, 1, 0, 0, 0, 1}, at);
+		ed::Guid g = p.file().objects[made].info.guid;
+		reload_addon_render();
+		for (size_t k = 0; k < s.scene.nodes.size(); ++k) {
+			if (s.scene.nodes[k].guid == g) select_node(int(k));
+		}
+		e_.log(LogLine::Ok, "Placed " + name + " at " + std::to_string(int(at[0])) + ", " + std::to_string(int(at[1])) + ", " + std::to_string(int(at[2])));
+	} catch (const std::exception &ex) {
+		e_.log(LogLine::Error, std::string("Cannot place: ") + ex.what());
+	}
+}
+
 void WorldEditor::delete_selected() {
 	if (!arena_ || !arena_->entry.addon || !e_.project() || arena_->selected < 0) return;
 	ArenaState &s = *arena_;
@@ -1566,5 +1661,27 @@ bool WorldEditor::draw_place() {
 	};
 	group("gameplay", ICON_GAMEPAD_2, "Gameplay", &open_g, gameplay, std::size(gameplay));
 	group("environment", ICON_SUN, "Environment", &open_e, env, std::size(env));
+	// Imported props (prefabs), placed where the selected view looks.
+	static bool open_p = true;
+	std::vector<uint32_t> props;
+	if (e_.project()) props = ed::prefabs(*e_.project());
+	ui::TreeRow pr;
+	pr.icon = ICON_BOXES, pr.label = "Imported Props", pr.has_children = true, pr.open = &open_p, pr.icon_colour = kTextMuted, pr.count = int(props.size());
+	ui::tree_row("props", pr);
+	if (open_p) {
+		if (props.empty()) {
+			ImGui::Indent(ui::px(22));
+			ui::dim_text("File > Import... a .glb as a prop", kTextFaint);
+			ImGui::Unindent(ui::px(22));
+		}
+		for (uint32_t k : props) {
+			std::string label = utf8(e_.project()->file().objects[k].info.name_text());
+			if (!arena_->place_filter.empty() && label.find(arena_->place_filter) == std::string::npos) continue;
+			ui::TreeRow c;
+			c.icon = ICON_BOX, c.label = label, c.depth = 1, c.icon_colour = 0xc3a6ff, c.disabled = !editable;
+			if (ui::tree_row(("prop" + std::to_string(k)).c_str(), c) && editable) place_prefab(k);
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", editable ? "Click to place a copy where the selected view looks" : "Copy the arena to an add-on first");
+		}
+	}
 	return true;
 }

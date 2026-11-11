@@ -110,6 +110,9 @@ private:
 	friend class PlaySession;
 	void finish_load();
 	void refresh_scene();
+	// After the add-on gained drawn objects (an import, a placed prefab): the add-on file in the
+	// world and the renderer are rebuilt.
+	void reload_addon_render();
 	void draw_pane(int i, ImVec2 p0, ImVec2 size);
 	void render_pane(Pane &p);
 	void pane_header(int i);
@@ -122,6 +125,7 @@ private:
 	int selected_node() const;
 	ObjectRef node_ref(int node) const;
 	void place(const char *what);
+	void place_prefab(uint32_t prefab);
 	void delete_selected();
 	void play_frame();
 	std::vector<std::string> play_files();

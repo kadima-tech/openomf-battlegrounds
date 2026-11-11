@@ -46,6 +46,8 @@ The editor is a development tool built from source and not part of the app downl
 | Component | Upstream / version | License |
 | --- | --- | --- |
 | Dear ImGui (docking branch) | [ocornut/imgui](https://github.com/ocornut/imgui), `v1.92.5-docking`, fetched by CMake | MIT |
+| cgltf | [jkuhlmann/cgltf](https://github.com/jkuhlmann/cgltf), `v1.15`, fetched by CMake (glTF reading) | MIT |
+| stb_image | [nothings/stb](https://github.com/nothings/stb), commit `f58f558c120e9b32c217290b80bad1a0729fbb2c`, fetched by CMake (JPEG textures) | MIT or public domain (Unlicense), at the user's choice |
 | Inter | [rsms/inter](https://github.com/rsms/inter), 4.1 (Regular, SemiBold); `engine/third_party/fonts/Inter-LICENSE.txt` | SIL Open Font License 1.1 |
 | JetBrains Mono | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono), 2.304 (Regular); `engine/third_party/fonts/JetBrainsMono-LICENSE.txt` | SIL Open Font License 1.1 |
 | Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 0.469.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |

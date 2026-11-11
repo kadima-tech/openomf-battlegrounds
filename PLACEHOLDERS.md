@@ -178,6 +178,19 @@ registration in the DLLs either, but their methods are in Session.ModuleDLL and 
 | Pilot stats | Ported | `DE_CPilot::ObjProcessContents` v4: three colour references (`CValueRGBA::CAdvancedReference`) each with a float, the four stats, then the 31 AI stat descriptors, read in order. The stats are read on the clocks the original uses (FINDINGS 367); the `GetStat*` natives add each pilot object's TimeAdd (7647.25 ms per pilot object made, FINDINGS 371), counted over the pilot loads and copies ours makes: pilot GUIDs the original's launcher or earlier screens resolved first are not known, so its count can start higher. |
 | VMC2 trailing bytes | Ported | `DE_CClass::LoadVMCode` seeks to the chunk end after the final instances: the 1–3 bytes there are never read by the original either. |
 
+## Content editor: glTF import and export
+
+| What | Kind | Notes |
+|---|---|---|
+| Scale | Approximation | 10 DE units a metre is our choice (a robot is ~30 units, FINDINGS 543); files the editor exported carry their own scale. |
+| Robot animation time | Approximation | Sequence times are normalised (0..1) in the bank; exported animations run 1 s each (`extras.de_normalised`). |
+| Jump pad strength | Stand-in | An imported jump pad is Desert's `JumpPad1` launcher turned so its +Y follows `extras.impulse`; the launch speed is the shared launcher class's, not the file's. |
+| Death volumes | Approximation | Each `Death` mesh and the `kill` collision become one Grudge Match death box over their bounds, not the exact shape. Exporting an arena whose death volume is a passive reference (Desert) writes no shape for it. |
+| Generated navigation net | Stand-in | A grid over the floors (walkable links only: no wall, no step over 12 units, no hole), not hand-placed areas; no jump links, so floors reachable only by jumping or jump pads get no path up. |
+| Prop collision | Missing | Imported props are drawn only; put blocking shapes in an arena's `Collision`. |
+| Vertex colours, morph targets, cameras, lights | Missing | Not read on import; vertex colours (stage colour channels) are not exported. |
+| Imported images | Approximation | Stored uncompressed (as the editor's photo import), resized to powers of two up to 1024 (FINDINGS 540). |
+
 ## Patch level
 
 | What | Kind | Notes |

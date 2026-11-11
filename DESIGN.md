@@ -222,5 +222,17 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   Inspector is a tab beside Details: a creature picker, State / Stats (health green, energy blue,
   stun amber bars) / Physics / Input buffer sections; with no match it shows the Play Mode form,
   which also opens from the toolbar's Play Mode combo ("Jaguar vs Katana").
+- **Import dialog** (File > Import 3D Model, or a file dropped on the window): a wide modal with no
+  title bar, its heading (download icon, SemiBold) and the source path dimmed. Left, a 190 px step
+  list on the panel-head colour: numbered circles (violet #6b5ce7 fill on the current step, a red x
+  on a step with errors) with icon and title, the current row on the selection colour, and error /
+  warning chips below. Middle, the page: SeparatorText sections, a 160 px label column, segmented
+  accent buttons for choices (Prop | Arena, +Y | +Z), tables with role dropdowns whose icon is
+  tinted by role (surfaces #b18cff, walls and jump pads #7fd1c7, death #ff5a5a, spawns #4fc3f7,
+  pickups #8fe3a8, ignored muted). Right, a turntable preview on the viewport colour (#121318):
+  visual meshes textured with a soft key light, collision and gameplay as 38 % tinted overlays and
+  marker rings in the role colours, Visual / Collision toggles under it. Footer: Cancel, Back and an
+  accent Next or Import. The Place panel lists imported props under "Imported Props" (violet box
+  icons).
 - **Not yet active** features (HAR and tournament editing) keep their place in
   the layout, greyed or with an empty state that says they arrive in a later iteration.

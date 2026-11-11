@@ -180,7 +180,9 @@ void update_animated_textures(const std::map<std::pair<const de::ObjectsFile *, 
 // Arena: every mesh drawn by the arena's actors, base x lightmap per material.
 class ArenaRenderer {
 public:
-	void load(const de::World &world, const std::string &stem);
+	// `environment` (an object index in the file, -1 for every one) keeps only that environment's
+	// branch and fighting surfaces, for files holding several arenas (add-ons).
+	void load(const de::World &world, const std::string &stem, int environment = -1);
 	void draw(const float *vp, const float *eye);
 	// Its glow-layer passes (into the bound glow target).
 	void draw_glow(const float *vp, const float *eye);
