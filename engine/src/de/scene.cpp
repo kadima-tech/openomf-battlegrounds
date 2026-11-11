@@ -201,6 +201,14 @@ void World::add(const std::string &stem, std::vector<uint8_t> data, bool overrid
 	files_[stem] = std::move(f);
 }
 
+void World::set_file(const std::string &stem, std::vector<uint8_t> data) {
+	if (auto it = files_.find(stem); it != files_.end()) {
+		for (auto g = guids_.begin(); g != guids_.end();) g = g->second.file == it->second.get() ? guids_.erase(g) : std::next(g);
+		files_.erase(it);
+	}
+	add(stem, std::move(data), true);
+}
+
 std::vector<std::filesystem::path> addon_paths() {
 	std::vector<std::filesystem::path> out;
 	const char *list = getenv("OPENBG_ADDONS");

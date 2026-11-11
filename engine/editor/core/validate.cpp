@@ -5,6 +5,8 @@
 #include <set>
 
 #include "pilot.h"
+#include "script.h"
+#include "vm/vmcode.h"
 
 namespace ed {
 
@@ -169,7 +171,41 @@ std::vector<Issue> validate(const Project &p) {
 		s.add(Issue::Warning, 6, -1, std::to_string(unknown_layouts) + " objects have references the editor does not decode yet (not checked)");
 	}
 	if (scripts) {
-		s.add(Issue::Warning, 9, -1, "Scripts are not compiled or checked against VMC2 yet (rules 9-10)");
+		// 9: VMC2 whose change information is the attached behaviors' revisions now.
+		int stale = 0, current = 0;
+		for (uint32_t c : addon_script_classes(p)) {
+			const deo::Object &o = f.objects[c];
+			std::vector<uint8_t> expect;
+			bool known = change_information(p, c, &expect);
+			const deo::Ex *vmc2 = nullptr;
+			for (auto &e : o.ex) {
+				if (text_of(e.key) == "VMC2") vmc2 = &e;
+			}
+			if (!vmc2) {
+				s.add(Issue::Error, 9, int(c), object_label(p, c) + " has no VMC2: compile it (the original would compile its source at load)"), ++stale;
+				continue;
+			}
+			std::vector<uint8_t> have;
+			try {
+				have = vm::VMClass::parse(vmc2->data, object_references("Class", o.references).size()).change_info;
+			} catch (const std::exception &) {
+			}
+			if (known && have != expect) {
+				s.add(Issue::Error, 9, int(c), object_label(p, c) + ": its VMC2 is older than its behaviors; compile it"), ++stale;
+			} else {
+				++current;
+			}
+		}
+		if (!stale && current) s.add(Issue::Ok, 9, -1, std::to_string(current) + " script class(es) carry current VMC2");
+		// 10: the sources compile (the last compile's messages).
+		const auto &errors = last_compile_errors(p);
+		for (auto &m : errors) {
+			Issue i{Issue::Error, 10, m.object, m.str()};
+			i.line = m.text_line;
+			s.out.push_back(i);
+			++s.errors;
+		}
+		if (errors.empty() && compiled_once(p)) s.add(Issue::Ok, 10, -1, "Every add-on script compiles with OpenBG's compiler");
 	}
 
 	// 11: pilots meant to be playable.

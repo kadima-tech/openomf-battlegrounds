@@ -375,6 +375,17 @@ const RefLayout kRefLayouts[] = {
     {"Description", 1, "LOOLLOR"},
     {"Image", 1, "*"},
     {"Value", 1, "*"},
+    {"Value\\ObjectReference", 2, "*"},
+    {"Class", 1, "*"},
+    {"ClassExecutor", 1, "O"},
+    {"ControlCreator", 1, "*"},
+    {"StateManager", 1, "*"},
+    {"StateManager", 2, "*"},
+    {"SessionModifier\\StandardSessionMaster", 1, "*"},
+    {"SessionModifier\\StandardSessionMaster", 2, "*"},
+    {"Description\\SessionMaster", 2, "*"},
+    {"Description\\SessionModifier", 2, "*"},
+    {"Behavior", 1, "B"},
 };
 
 const char *find_layout(const std::string &class_path, size_t index) {
@@ -431,6 +442,22 @@ bool map_reference_chunk(const std::string &class_path, size_t chunk_index, cons
 				if (r.pos() < end && !map_opt(r, w, map)) return false;
 				if (r.pos() != end) return false;
 				w.end_chunk(at, size);
+			} else if (*op == 'B') {
+				// Behavior: a chunk of globals (BOOL, reference each), the imports list, then
+				// one chunk per element.
+				deo::ChunkSize size;
+				size_t end;
+				uint8_t v = r.chunk(&end, &size);
+				size_t at = w.begin_chunk(v);
+				while (r.pos() < end) {
+					if (!map_opt(r, w, map)) return false;
+				}
+				w.end_chunk(at, size);
+				v = r.chunk(&end, &size);
+				at = w.begin_chunk(v);
+				if (!map_list(r, w, map) || r.pos() != end) return false;
+				w.end_chunk(at, size);
+				w.bytes(r.bytes(r.remaining()));
 			} else if (*op == 'R') {
 				w.bytes(r.bytes(r.remaining()));
 			} else if (*op == '*') {

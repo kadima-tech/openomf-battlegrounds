@@ -24,5 +24,7 @@ void write_png(const std::filesystem::path &path, int width, int height, const s
 
 // The centre square of an image, scaled (box filter down, bilinear up) to side x side.
 std::vector<uint8_t> crop_square_resize(int width, int height, const std::vector<uint8_t> &rgba, int side);
+// The whole image scaled (bilinear) to out_w x out_h.
+std::vector<uint8_t> resize_rgba(int width, int height, const std::vector<uint8_t> &rgba, int out_w, int out_h);
 
 }  // namespace ed

@@ -49,6 +49,8 @@ public:
 	ObjectRef resolve(const ObjectsFile &from, const Reference &r) const;
 	ObjectRef by_guid(const Guid &g) const;
 	// The first object of that class and name in any file (stems in order).
+	// Adds an objects file held in memory (an add-on being edited), replacing one of that stem.
+	void set_file(const std::string &stem, std::vector<uint8_t> data);
 	ObjectRef find(const std::string &class_path, const std::string &name) const {
 		for (auto &[stem, f] : files_) {
 			for (uint32_t i = 0; i < f->objects().size(); ++i) {
