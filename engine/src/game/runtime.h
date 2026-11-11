@@ -314,6 +314,7 @@ struct GameObject {
 	bool image_set = false;
 	GameObject *image_filter = nullptr;  // an image's fighter paint filter (CCreatureModel::Setup, AddFilter)
 	std::vector<de::ObjectRef> scaled_images;  // a paint filter's scaled list (+0x40)
+	std::vector<de::ObjectRef> static_images;  // its static list: RGBStatic* images, added unscaled
 	// DE_CPassiveActorReference::Create appends the reference's own properties to the actor's.
 	std::vector<de::ObjectRef> extra_properties;
 	bool executorless = false;  // COMF2Projectile::NewExecutorlessCopy: its data's executors are dropped

@@ -199,9 +199,9 @@ static gltf::Scene humanoid(Naming naming, float arm, float leg, bool with_anima
 	body.skin = 0;
 	s.add_node(body);
 	if (with_animation) {
-		// "Standing": the left arm raised and lowered, so a supplied sequence replaces the base's.
+		// "Winning1": the left arm waved, so a supplied sequence replaces the base's.
 		gltf::Animation a;
-		a.name = "Armature|Standing";
+		a.name = "Armature|Winning1";
 		gltf::Animation::Sampler smp;
 		int arm_joint = -1;
 		for (size_t i = 0; i < joints.size(); ++i) {
@@ -481,6 +481,15 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	CHECK(plan.har.mirror);  // the glTF convention's left is the game's mirror image
 	int supplied = 0;
 	for (auto &m : plan.har.sequences) supplied += m.animation >= 0;
+	// A base without the file's sequence name: the animation is named by hand (the Animations page).
+	std::string manual;
+	if (supplied == 0) {
+		for (auto &m : plan.har.sequences) {
+			if (manual.empty() && m.sequence.find("Win") != std::string::npos) m.animation = 0, m.source = ed::MapSource::Manual, manual = m.sequence, ++supplied;
+		}
+		ed::revalidate(plan, &base);
+		printf("  Winning1 named %s by hand\n", manual.c_str());
+	}
 	CHECK(supplied == 1);
 	ed::RobotBuild b = ed::build_robot(plan);
 	PoseStats ps = pose_stats(b, *plan.har.rig);
@@ -501,6 +510,9 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	ed::ImportPlan again = robot_plan(dir / "rig.glb", base, robot, name);
 	ed::apply_robot_mapping(again, saved);
 	CHECK(again.har.mirror == plan.har.mirror && again.har.turn == plan.har.turn);
+	for (auto &m : again.har.sequences) {
+		if (!manual.empty() && m.sequence == manual) CHECK(m.animation == 0 && m.source == ed::MapSource::Manual);
+	}
 	project->save();
 	check_engine_reads(data, dir / "HarGenerated.DEObjects", name, b.lods[0].faces.size());
 	if (!keep.empty()) {

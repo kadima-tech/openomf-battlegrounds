@@ -224,7 +224,7 @@ public:
 	struct LayerImage {
 		de::ObjectRef image;
 		std::optional<Paint> paint;
-		std::vector<de::ObjectRef> scaled;
+		std::vector<de::ObjectRef> scaled, statics;
 	};
 	struct Item {
 		de::ObjectRef actor;
@@ -275,8 +275,10 @@ private:
 class FighterRenderer {
 public:
 	using Paint = std::array<std::array<float, 3>, 3>;
-	// The FighterModel at `model` in `model_file` (a paint), else the file's first.
-	void load(const de::World &world, const de::ObjectsFile &model_file, const de::ObjectsFile *fighter_file, size_t model = SIZE_MAX);
+	// The FighterModel at `model` in `model_file` (a paint), else the file's first; the rig is the
+	// fighter file's bank and deform info at or after `fighter` (an add-on can hold several robots).
+	void load(const de::World &world, const de::ObjectsFile &model_file, const de::ObjectsFile *fighter_file, size_t model = SIZE_MAX, size_t fighter = 0);
+
 	// The pilot's colours (DE_CPilot::UserDefinedColor 0..2), taken once, as the images decode once.
 	void set_paint(const Paint &p);
 	// Pose `sequence` (index into bank, -1 = bind pose) at normalised time t, placed by `world`.
@@ -343,6 +345,7 @@ private:
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> textures_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> painted_textures_;
 	std::vector<de::Image> scaled_;  // the filter's scaled images (the model's RGBScaled*)
+	std::vector<de::Image> static_;  // and its static ones (RGBStatic*)
 	struct Attachment {
 		de::Mesh mesh;
 		std::vector<de::Material> materials;

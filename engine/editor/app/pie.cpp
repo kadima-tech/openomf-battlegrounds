@@ -157,7 +157,7 @@ void PlaySession::setup_world() {
 	auto make_fighter = [&](const std::string &who, bool user) -> app::Fighter & {
 		app::Fighter *made = nullptr;
 		world.make_fighter = [&](const de::ObjectRef &actor) -> game::GameObject * {
-			made = &app::setup_fighter(world, actor.info().name, user);
+			made = &app::setup_fighter(world, actor, user);
 			return made->actor;
 		};
 		de::ObjectRef fd = find_in(world.data(), who, "Description\\Creature\\Fighter", who);
