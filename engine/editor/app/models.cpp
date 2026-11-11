@@ -600,10 +600,10 @@ void page_materials(Editor &, ed::ImportPlan &plan) {
 			ImGui::TableNextColumn();
 			if (m.rebuilt) {
 				ImGui::PushStyleColor(ImGuiCol_Text, vec(kOk));
-				ImGui::Text(ICON_CIRCLE_CHECK " MultiStage, %zu stages as exported", m.stages);
+				ImGui::Text(ICON_CIRCLE_CHECK " %zu stages, as exported", m.stages);
 				ImGui::PopStyleColor();
 			} else {
-				ImGui::TextUnformatted("MultiStage, 1 stage (TextureManager)");
+				ImGui::TextUnformatted("1 stage (TextureManager)");
 			}
 			ImGui::TableNextColumn();
 			if (m.image >= 0 && size_t(m.image) < plan.images.size()) ImGui::TextUnformatted(plan.images[size_t(m.image)].name.c_str());
