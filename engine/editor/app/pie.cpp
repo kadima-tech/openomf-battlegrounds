@@ -148,7 +148,7 @@ void PlaySession::setup_world() {
 		for (size_t i = 0; i < picks.size(); ++i) {
 			pick(i, "SessionSlotSelectCreature", find_in(world.data(), picks[i].first, "Description\\Creature\\Fighter", picks[i].first));
 			pick(i, "SessionSlotSelectPilot", find_in(world.data(), "Pilots", "Description\\Pilot", picks[i].second));
-			game::add_client(world, i == 0 && !setup_.simulate, picks[i].second);
+			game::add_client(world, i == 0, picks[i].second);
 		}
 		return;
 	}

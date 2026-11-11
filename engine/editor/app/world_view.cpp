@@ -510,6 +510,14 @@ void WorldEditor::run_script() {
 		}
 		if (!play_->ready()) return;
 		if (o.play_ticks > 0) play_->run_ticks(o.play_ticks);
+		if (o.replay && !replayed_) {
+			// Stop and Play again in this process: the second match must run like the first.
+			e_.log(LogLine::Info, "Play: " + play_->summary());
+			replayed_ = true;
+			stop_play();
+			start_play(o.simulate);
+			return;
+		}
 		if (o.eject) {
 			play_->set_ejected(true);
 			if (!o.camera.empty()) {
@@ -898,7 +906,7 @@ void WorldEditor::pane_header(int i) {
 		ImGui::MenuItem(ICON_FILE_TEXT "  Labels", nullptr, &show_.labels);
 		ImGui::EndPopup();
 	}
-	if (arena_ && arena_->built) {
+	if (arena_ && arena_->built && p.size.x > ui::px(900) && !(play_ && i == active_pane_ && !play_->ejected())) {
 		ImGui::SameLine(0, ui::px(10));
 		ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ui::px(4));
 		std::string t = arena_->entry.name + (arena_->entry.addon ? "  (Variant)" : "  (Base, read-only)");

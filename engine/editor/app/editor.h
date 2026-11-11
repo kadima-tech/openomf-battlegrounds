@@ -43,7 +43,7 @@ struct Options {
 	std::string select;       // Outliner selection by object name
 	// The world side (world.h): open an arena, make a variant, set up the viewports, play.
 	std::string arena, select_node, camera, debug, move_to, light_colour;
-	bool variant = false, play = false, simulate = false, eject = false, inspector = false;
+	bool variant = false, play = false, simulate = false, eject = false, inspector = false, replay = false;
 	int play_ticks = 0, layout = 0, shading = -1;
 };
 

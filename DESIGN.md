@@ -188,5 +188,21 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   pilot's paint) with a "Preview (in-engine)" footer on the left, and on the right the heading, tabs
   (General / Attributes / AI Traits / Paint / Casts & Flags) over a violet underline, and a footer of
   validation chips.
-- **Not yet active** features (arena, HAR and tournament editing, Play, Simulate) keep their place in
+- **Arena viewports:** the game's renderer fills each pane (lit, unlit, or collision: flat-shaded
+  surfaces and affector meshes on #121318). Dark overlay buttons at the top left (layout, view,
+  shading, Show menu) and top right (move / rotate gizmo, magnet snap, maximise); the arena's name
+  dimmed beside them; a 2 px axis triad bottom left and the camera position bottom right. Overlay
+  colours by kind: spawn points #4fc3f7 (numbered discs with a facing line), pickup spawners #8fe3a8
+  (diamonds), nav links #f5d36b (lines, arrowheads, dots at the areas), surfaces #b18cff, force
+  affectors #7fd1c7, hazards #ff8f6b, death volumes #ff5a5a, lights #ffe08a. The selection is white
+  with an orange (#ff9f3a) outline; gizmo axes red / green / blue, yellow (#ffe066) under the mouse.
+  With 2 or 4 panes the selected one has a 1.5 px violet border. Labels show for the selected or
+  hovered marker only. "Copy to Add-on..." (accent) sits bottom right of a base arena.
+- **Play in editor:** the toolbar's Play and Simulate become Pause / Step / speed (0.25x, 0.5x, 1x) /
+  Eject / a green Stop while a match runs; the viewport gets a 3 px green (#2fbf5e) border, amber
+  (#ffc98a) and 2 px while ejected, with a status pill ("PAUSED", "EJECTED (F8)") at the top. The Live
+  Inspector is a tab beside Details: a creature picker, State / Stats (health green, energy blue,
+  stun amber bars) / Physics / Input buffer sections; with no match it shows the Play Mode form,
+  which also opens from the toolbar's Play Mode combo ("Jaguar vs Katana").
+- **Not yet active** features (HAR and tournament editing) keep their place in
   the layout, greyed or with an empty state that says they arrive in a later iteration.

@@ -805,8 +805,8 @@ void write_arena_description(Project &p, uint32_t description, const ArenaDescri
 	w.bytes(Bytes(c0.body.begin() + long(name_end), c0.body.end()));
 	c0.body = w.data();
 	if (dc.chunks.size() > 1 && dc.chunks[1].body.size() >= 8) {
-		put_i32(dc.chunks[1].body, 0, std::clamp(d.min_players, 1, 10));
-		put_i32(dc.chunks[1].body, 4, std::clamp(d.max_players, 1, 10));
+		put_i32(dc.chunks[1].body, 0, std::clamp(d.min_players, 1, 32));
+		put_i32(dc.chunks[1].body, 4, std::clamp(d.max_players, 1, 32));
 	}
 	o.contents = join_chunks(dc);
 	if (o.compressed()) o.packed.clear(), o.packed_as_is = false;
@@ -967,7 +967,7 @@ std::vector<Issue> validate_arena(const ArenaScene &s, int max_players) {
 		}
 	}
 	if (int(spawns.size()) < max_players) {
-		add(Issue::Error, "The arena takes up to " + std::to_string(max_players) + " players but has " + std::to_string(spawns.size()) + " spawn points");
+		add(int(spawns.size()) < 2 ? Issue::Error : Issue::Warning, "The arena takes up to " + std::to_string(max_players) + " players but has " + std::to_string(spawns.size()) + " spawn points");
 	}
 	// The nav net: every area reachable from every other over its links.
 	auto areas = s.of_kind(NodeKind::NavArea);

@@ -67,6 +67,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--play")) opt.play = true;
 		else if (!strcmp(argv[i], "--simulate")) opt.play = opt.simulate = true;
 		else if (!strcmp(argv[i], "--eject")) opt.eject = true;
+		else if (!strcmp(argv[i], "--replay")) opt.replay = true;
 		else if (!strcmp(argv[i], "--inspector")) opt.inspector = true;
 		else if (arg("--play-ticks")) opt.play_ticks = atoi(argv[++i]);
 		else if (arg("--debug")) opt.debug = argv[++i];

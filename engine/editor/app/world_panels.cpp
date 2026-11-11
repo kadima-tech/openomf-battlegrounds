@@ -227,7 +227,7 @@ bool WorldEditor::draw_details_header() {
 		ImGui::PopTextWrapPos();
 		if (changed && editable) {
 			int di = p->find(s.entry.description);
-			d.min_players = std::clamp(d.min_players, 1, 10), d.max_players = std::clamp(d.max_players, d.min_players, 10);
+			d.min_players = std::clamp(d.min_players, 1, 32), d.max_players = std::clamp(d.max_players, d.min_players, 32);
 			if (di >= 0 && !(d == s.description)) {
 				ed::write_arena_description(*p, uint32_t(di), d);
 				s.description = d;

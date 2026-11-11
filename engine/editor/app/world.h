@@ -145,5 +145,6 @@ private:
 	bool viewport_focused_ = false;
 	uint64_t live_revision_ = 0;
 	int script_step_ = 0;
+	bool replayed_ = false;
 	friend struct PlayAccess;
 };
