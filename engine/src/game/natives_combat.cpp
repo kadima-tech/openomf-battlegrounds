@@ -23,6 +23,7 @@
 #include "game/forces.h"
 #include "game/particles.h"
 #include "game/runtime.h"
+#include "game/perf.h"
 #include "game/session.h"
 #include "game/simple_physics.h"
 
@@ -415,9 +416,27 @@ void World::number_affectors(GameObject *root) {
 	if (root->shape != GameObject::Shape::None && !root->affector_seq) root->affector_seq = ++affector_seq_;
 }
 
+std::vector<GameObject *> &World::shaped() {
+	// Destroyed objects never come back (a copy is a new object), so they leave the list.
+	if (shaped_stale_) {
+		shaped_.clear();
+		shaped_upto_ = 0;
+		shaped_stale_ = false;
+	} else {
+		std::erase_if(shaped_, [](const GameObject *o) { return o->destroyed_seq != 0; });
+	}
+	for (; shaped_upto_ < objects_.size(); ++shaped_upto_) {
+		GameObject &o = objects_[shaped_upto_];
+		if (o.shape != GameObject::Shape::None && !o.destroyed_seq) shaped_.push_back(&o);
+	}
+	return shaped_;
+}
+
 std::vector<GameObject *> World::affectors() {
+	PERF_ZONE("w.affectors");
 	std::vector<GameObject *> out;
-	for (auto &o : objects_) {
+	for (GameObject *p : shaped()) {
+		GameObject &o = *p;
 		if (o.shape == GameObject::Shape::None) continue;
 		if (!in_scene(o)) {
 			o.affector_seq = 0;  // out of the list; joins at the end when added again
@@ -432,9 +451,11 @@ std::vector<GameObject *> World::affectors() {
 }
 
 float World::danger_at(const std::array<float, 3> &p, const GameObject *ignore_owner, GameObject **greatest, float *greatest_level) {
+	PERF_ZONE("w.danger_at");
 	float total = 0, best = 0;
 	GameObject *best_prop = nullptr;
-	for (auto &o : objects_) {
+	for (GameObject *candidate : shaped()) {
+		GameObject &o = *candidate;
 		if (o.shape == GameObject::Shape::None || !(o.groups & 0x1000) || !in_scene(o)) continue;
 		GameObject *prop = danger_property(o);
 		if (!prop || prop->danger_level <= 0) continue;
@@ -1034,11 +1055,13 @@ void register_combat_natives(World &w) {
 	// each query and then asked IsTouching(results). They are not in the scene themselves.
 	auto test_sphere = [](World &w) {
 		GameObject *g = w.create("SceneTestSphere", "Actor\\Affector\\Sphere");
+		if (g->shape == GameObject::Shape::None) w.shapes_changed();
 		g->shape = GameObject::Shape::Sphere;
 		return g;
 	};
 	auto test_cone = [](World &w) {
 		GameObject *g = w.create("SceneTestCone", "Actor\\Affector\\Cone");
+		if (g->shape == GameObject::Shape::None) w.shapes_changed();
 		g->shape = GameObject::Shape::Cone;
 		return g;
 	};

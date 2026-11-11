@@ -72,6 +72,7 @@ void Navigation::build() {
 // others, the sphere grows by 100 while under 500 (2.112 tested the same sphere again, forever).
 GameObject *Navigation::area_at(const Vec &p) {
 	GameObject *probe = w_.create("NavigationTestSphere", "Actor\\Affector\\Sphere");
+	if (probe->shape == GameObject::Shape::None) w_.shapes_changed();
 	probe->shape = GameObject::Shape::Sphere;
 	probe->local = {};
 	probe->local.t = p;

@@ -39,6 +39,7 @@
 #include "de/platform.h"
 #include "game/replay.h"
 #include "game/runtime.h"
+#include "game/perf.h"
 #include "game/session.h"
 #include "game/descriptions.h"
 #include "game/netgame.h"
@@ -699,8 +700,16 @@ int main(int argc, char **argv) {
 				world.tick_gui(0, game::World::kFrameMs);
 				if (dynamic_cast<game::ui::ModelPicker *>(app.current.get())) world.tick_gui(1, game::World::kFrameMs);
 				world.autopaused = app.autopaused();
-				world.tick(netgame.frame_ms(step));
+				{ PERF_ZONE("frame.world_tick"); world.tick(netgame.frame_ms(step)); }
 				netgame.update();
+				if (perf::enabled() && fr > 0 && fr % 600 == 0) {
+					static auto perf_t0 = std::chrono::steady_clock::now();
+					double perf_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perf_t0).count();
+					perf_t0 = std::chrono::steady_clock::now();
+					fprintf(stderr, "[counts %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
+					fprintf(stderr, "[hist %d] %s\n", fr, world.debug_histogram().c_str());
+					perf::report(fr, 600, perf_ms);
+				}
 				if (join_retry && !join.empty() && !joined_once && netgame.state() == game::NetGame::State::Closed && fr % 50 == 0) {
 					std::string error;
 					netgame.close();
@@ -900,13 +909,14 @@ int main(int argc, char **argv) {
 			if (shot && !(app.current && app.current->input_off)) held(world.input, fr);
 			app.update();
 			rules_displayed();
+			PERF_ZONE("frame.all_cpu");
 			world.tick_gui(0, frame_ms);
 			if (auto *picker = dynamic_cast<game::ui::ModelPicker *>(app.current.get())) {
 				world.tick_gui(1, picker->scene_paused ? 0 : frame_ms);
 				picker->scene_paused = false;
 			}
 			world.autopaused = app.autopaused();
-			world.tick(netgame.frame_ms(frame_ms));
+			{ PERF_ZONE("frame.world_tick"); world.tick(netgame.frame_ms(frame_ms)); }
 			netgame.update();
 			net_trace(fr);
 			if (join_retry && !join.empty() && !joined_once && netgame.state() == game::NetGame::State::Closed && fr % 50 == 0) {
@@ -923,6 +933,7 @@ int main(int argc, char **argv) {
 				Uint64 t = SDL_GetPerformanceCounter();
 				float ms = shot ? float(game::World::kFrameMs) : float(double(t - last_render) * 1000.0 / double(SDL_GetPerformanceFrequency()));
 				last_render = t;
+				PERF_ZONE("frame.render_tick");
 				game::render_tick(world, std::fmin(ms, 100.0f));
 			}
 
@@ -941,7 +952,7 @@ int main(int argc, char **argv) {
 			// A session's scene (DE_CSceneViewerControl3d over the whole window), then the GUI.
 			bool game_shown = world.session != nullptr;
 			if (game_shown) {
-				view.draw(dw, dh, fr, shot != nullptr);
+				{ PERF_ZONE("frame.view_draw"); view.draw(dw, dh, fr, shot != nullptr); }
 				game_shown = view.has_arena();
 			}
 			test_switches(fr);
@@ -1167,6 +1178,18 @@ int main(int argc, char **argv) {
 					if (l.find("," + std::to_string(fr) + ",") != std::string::npos) save(std::string(shot) + "-" + std::to_string(fr) + ".png");
 				}
 				continue;
+			}
+			if (perf::enabled()) {
+				{ PERF_ZONE("frame.gpu_finish"); glFinish(); }
+				static Uint64 perf_t0 = SDL_GetPerformanceCounter();
+				static int perf_f0 = fr;
+				double perf_ms = double(SDL_GetPerformanceCounter() - perf_t0) * 1000.0 / double(SDL_GetPerformanceFrequency());
+				if (perf_ms >= 5000) {
+					fprintf(stderr, "[counts %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
+					perf::report(fr, fr - perf_f0, perf_ms);
+					perf_t0 = SDL_GetPerformanceCounter();
+					perf_f0 = fr;
+				}
 			}
 			SDL_GL_SwapWindow(win);
 		}

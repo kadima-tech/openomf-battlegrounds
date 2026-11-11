@@ -1,4 +1,5 @@
 #include "game/runtime.h"
+#include "game/perf.h"
 #include "game/netplay.h"
 #include "game/impulses.h"
 
@@ -279,11 +280,15 @@ std::string World::class_path_of_handle(uint32_t h) {
 }
 
 std::vector<GameObject *> World::scene_objects() {
+	PERF_ZONE("w.scene_objects");
 	std::vector<GameObject *> out;
 	std::vector<GameObject *> todo(scene_roots.begin(), scene_roots.end());
-	std::set<GameObject *> seen;
+	// Each object once: a stamp per walk instead of a set of the visited.
+	const uint32_t walk = ++scene_walk_;
 	for (size_t i = 0; i < todo.size(); ++i) {
-		if (!todo[i] || !seen.insert(todo[i]).second || !by_handle_.count(todo[i]->handle)) continue;
+		if (!todo[i] || todo[i]->scene_walk == walk) continue;
+		todo[i]->scene_walk = walk;
+		if (!by_handle_.count(todo[i]->handle)) continue;
 		// Out of the scene with its branch: removed (CScene::Remove), not at this detail level, or
 		// (below a root) parked inactive.
 		if (todo[i]->removed || (todo[i]->is_actor && !de::shown_at_detail(todo[i]->actor_flags))) continue;
@@ -317,6 +322,7 @@ void World::housekeeping() {
 }
 
 void World::destroy(GameObject *o) {
+	PERF_ZONE("w.destroy");
 	if (!o) return;
 	replay_destroying(*this, *o);
 	end_session_object(*this, o);
@@ -382,8 +388,16 @@ GameObject *World::object(uint32_t h) const {
 }
 
 GameObject *World::create(const std::string &name, const std::string &class_path) {
+	// The first object without a file of that name: indexed as objects are made (the AI's probe
+	// spheres come here many times a tick), with a full search when the index has none.
+	for (; unfiled_upto_ < objects_.size(); ++unfiled_upto_) {
+		GameObject &o = objects_[unfiled_upto_];
+		if (!o.file) unfiled_by_name_.emplace(o.name, &o);
+	}
+	if (auto it = unfiled_by_name_.find(name); it != unfiled_by_name_.end() && !it->second->file && it->second->name == name) return it->second;
 	for (auto &o : objects_) {
 		if (!o.file && o.name == name) {
+			unfiled_by_name_[name] = &o;
 			return &o;
 		}
 	}
@@ -1038,6 +1052,7 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	Brain *made = b.get();
 	if (!owner->brain) owner->brain = made;
 	brains_.push_back(std::move(b));
+	unregistered_brains_.push_back(made);
 	return made;
 }
 
@@ -1464,6 +1479,7 @@ static bool is_creature_behaviour(World &w, const Brain &b) {
 // (DE_CCreature::ObjPrepare), executors with an interval (DE_CClassExecutorInstance::Setup 0x70144df0:
 // AddTemporal(scene, instance, executor +0x44) once it has resumed; none without one).
 void World::register_temporals() {
+	PERF_ZONE("tick.register_temporals");
 	if (!input_registered_) {
 		input_registered_ = true;
 		add_temporal(16, {Temporal::Input, 0, nullptr});  // DE_CJoystickInputManager +0x10c
@@ -1472,10 +1488,12 @@ void World::register_temporals() {
 		register_creature(o);
 		register_monitors(o);
 	}
-	for (auto &bp : brains_) {
-		Brain *b = bp.get();
+	// Every started brain not yet in its set, in creation order; a registered brain stays
+	// registered, so only the others are kept to look at.
+	for (Brain *b : unregistered_brains_) {
 		if (b->started) register_brain(b);
 	}
+	std::erase_if(unregistered_brains_, [](const Brain *b) { return b->temporal_registered; });
 }
 
 // DE_CPhysics::UpdateEnabled (Core 0x701d97f0): an enabled momentum monitor with a rate joins its set.
@@ -1501,7 +1519,10 @@ void World::register_monitors(GameObject *o) {
 void World::register_creature(GameObject *o) {
 	// DE_CJoystickInputManager::ObjPrepare (Creature): each manager (a fighter's controller copy)
 	// is a temporal of its +0x10c (16 ms).
-	if (o->is("CreatureController\\JoystickInputManager") && !o->temporal_registered) {
+	// Both kinds below join once: a registered object needs no class checks (this runs for every
+	// scene object before each temporal step).
+	if (o->temporal_registered) return;
+	if (o->is("CreatureController\\JoystickInputManager")) {
 		o->temporal_registered = true;
 		add_temporal(16, {Temporal::Input, o->handle, nullptr});
 		return;
@@ -1591,6 +1612,7 @@ static void pulse(World &w, Brain *b) {
 // fighter's guide and attack trailer points, and for a computer-controlled fighter every 64th
 // update a step of its attack-range base.
 void World::creature_tick(GameObject &o) {
+	PERF_ZONE("w.creature_tick");
 	if (o.fighter) {
 		validate_animation(o);  // as InternalWorldUpdate does when something needs positions
 		if (!temporal_updating) run_commands(o);
@@ -1601,12 +1623,8 @@ void World::creature_tick(GameObject &o) {
 		if (o.fighter) physics_step(o);
 		else simple_physics->creature_tick(o);
 	}
-	for (auto &bp : brains_) {
-		if (bp->owner == &o) {
-			if (!skip && is_creature_behaviour(*this, *bp)) pulse(*this, bp.get());
-			break;
-		}
-	}
+	// Its first brain (o.brain: the first made with it as owner).
+	if (Brain *bp = o.brain; bp && !skip && is_creature_behaviour(*this, *bp)) pulse(*this, bp);
 	if (object(o.handle)) run_state_hooks(o);
 	creature_state_tick_end(*this, o);
 	++o.creature_ticks;
@@ -1620,13 +1638,8 @@ void World::creature_tick(GameObject &o) {
 }
 
 void World::run_state_hooks(GameObject &o) {
-	Brain *b = nullptr;
-	for (auto &bp : brains_) {
-		if (bp->owner == &o) {
-			b = bp.get();
-			break;
-		}
-	}
+	PERF_ZONE("w.run_state_hooks");
+	Brain *b = o.brain;  // the first brain made with it as owner
 	if (!b || !b->exec || b->exec->state() == o.state_seen) return;
 	static const bool debug = getenv("OPENBG_DEBUG_STATE_HOOKS") != nullptr;
 	if (debug)
@@ -1870,9 +1883,9 @@ void World::pass_scene(const GameObject *session, uint32_t real_ms) {
 		const uint32_t at = first->next;
 		scene_ms_ = at - first->rate;
 		first->next += first->rate;
-		advance(*first);
+		{ PERF_ZONE("tick.advance"); advance(*first); }
 		scene_ms_ = at;
-		forces->tick();
+		{ PERF_ZONE("tick.forces"); forces->tick(); }
 		start_pending_brains();
 	}
 	scene_ms_ += left;
@@ -1967,6 +1980,27 @@ std::string World::debug_counts() {
 	return buf;
 }
 
+std::string World::debug_histogram(size_t top) {
+	auto list = [top](const std::map<std::string, size_t> &m) {
+		std::vector<std::pair<size_t, std::string>> v;
+		for (auto &[k, n] : m) v.push_back({n, k});
+		std::sort(v.rbegin(), v.rend());
+		std::string s;
+		for (size_t i = 0; i < v.size() && i < top; ++i) s += (i ? ", " : "") + v[i].second + " " + std::to_string(v[i].first);
+		return s;
+	};
+	std::map<std::string, size_t> scene, dead, creatures;
+	for (GameObject *o : scene_objects()) {
+		std::string key = o->name + (o->parent ? "<" + o->parent->name : std::string());
+		++scene[key];
+		if (o->is("Actor\\Creature")) ++creatures[o->name];
+	}
+	for (auto &o : objects_) {
+		if (o.destroyed_seq) ++dead[o.name];
+	}
+	return "scene: " + list(scene) + "\n  creatures in scene: " + list(creatures) + "\n  destroyed: " + list(dead);
+}
+
 void World::close_instance(vm::Executor &, uint32_t instance) { instances_closed_.push_back(instance); }
 
 // The arena never hands an instance's bytes out again, so destroying one only forgets its class.
@@ -2005,14 +2039,14 @@ void World::tick(uint32_t ms) {
 		}
 		if (window) fprintf(stderr, "[call] --- frame %u\n", frame_);
 	}
-	pass_scene(nullptr, ms);
+	{ PERF_ZONE("tick.pass_scene"); pass_scene(nullptr, ms); }
 	// Each session's update passes its own scene first (DE_CSession::Update's TemporalUpdate).
-	update_session(*this);
+	{ PERF_ZONE("tick.update_session"); update_session(*this); }
 	use_clock(session ? session->obj : nullptr);
-	simple_physics->tick();
-	particles->step();
-	start_pending_brains();
-	housekeeping();
+	{ PERF_ZONE("tick.simple_physics"); simple_physics->tick(); }
+	{ PERF_ZONE("tick.particles"); particles->step(); }
+	{ PERF_ZONE("tick.start_brains"); start_pending_brains(); }
+	{ PERF_ZONE("tick.housekeeping"); housekeeping(); }
 	use_clock(session ? session->obj : nullptr);
 }
 
@@ -2226,6 +2260,7 @@ void World::physics_step(GameObject &o) {
 }
 
 Brain *World::brain_of(vm::Executor &ex) const {
+	PERF_ZONE("w.brain_of");
 	for (auto &b : brains_) {
 		if (b->exec.get() == &ex) {
 			return b.get();

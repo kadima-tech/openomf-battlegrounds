@@ -306,6 +306,7 @@ struct GameObject {
 	bool system = false;       // DE_CObject +4 bits 1-2 clear (ObjIsSystem): never a reference's newest instance
 	const GameObject *entry = nullptr;  // a copy's loaded object, whose instance list it joined
 	uint64_t destroyed_seq = 0;
+	uint32_t scene_walk = 0;    // World::scene_objects()'s visit stamp
 	GameObject *replaced_by = nullptr;  // ReplaceWithThenDie re-pointed the references to it
 	uint64_t replaced_seq = 0;
 	// A texture manager's or mesh's image property as scripts set it (AddProperty,
@@ -334,7 +335,12 @@ struct GameObject {
 	uint32_t vec_world_pos = 0;  // arena CVector returned by WorldPosition()
 	uint32_t vec_local_pos = 0;
 
-	bool is(const char *path) const { return class_path == path || class_path.rfind(std::string(path) + "\\", 0) == 0; }
+	// The class or one under it ("Actor" is "Actor\\Creature" too), compared in place: called for
+	// every object many times a tick.
+	bool is(const char *path) const {
+		const size_t n = std::char_traits<char>::length(path);
+		return class_path.size() >= n && class_path.compare(0, n, path) == 0 && (class_path.size() == n || class_path[n] == '\\');
+	}
 	de::Transform world() const;
 };
 
@@ -521,11 +527,15 @@ public:
 	const de::World &data() const { return data_; }
 	// OPENBG_DEBUG_MEMORY: counts of what the world holds (objects, brains, temporals, effects).
 	std::string debug_counts();
+	// Diagnostic: the most common names among scene objects, and among destroyed objects.
+	std::string debug_histogram(size_t top = 12);
 
 	// Instantiate every object of a data file (and resolve its actor components).
 	GameObject *instantiate_file(const std::string &stem);
 	GameObject *object(uint32_t handle) const;
 	// A runtime-only object (scene, session, pilot stand-ins, ...), created once per name.
+	// A shape was set on an object that already existed: affectors() rebuilds its list.
+	void shapes_changed() { shaped_stale_ = true; }
 	GameObject *create(const std::string &name, const std::string &class_path);
 	// A new object (never shared by name) parented under `parent`.
 	GameObject *create_child(GameObject *parent, const std::string &name, const std::string &class_path);
@@ -1033,6 +1043,18 @@ private:
 	ObjectArena arena_;
 	std::deque<GameObject, ArenaAllocator<GameObject>> objects_{ArenaAllocator<GameObject>(&arena_)};
 	std::unordered_map<uint32_t, GameObject *> by_handle_;
+	// Objects with a collision shape, in creation order, without destroyed ones: what affectors()
+	// and danger_at() walk instead of every object ever made. Objects made since the last walk are
+	// appended (objects_ only grows at the end); a shape set on an older object rebuilds the list.
+	std::vector<GameObject *> shaped_;
+	size_t shaped_upto_ = 0;
+	bool shaped_stale_ = false;
+	std::vector<GameObject *> &shaped();
+	// create()'s lookup: the first object without a file of each name.
+	std::unordered_map<std::string, GameObject *> unfiled_by_name_;
+	size_t unfiled_upto_ = 0;
+	// scene_objects()'s visit stamp.
+	uint32_t scene_walk_ = 0;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, GameObject *> by_source_;
 	std::map<std::string, uint32_t> strings_;
 	std::map<std::string, Native> natives_;
@@ -1043,6 +1065,7 @@ private:
 	std::set<const GameObject *> activated_;  // objects whose executors were started
 	std::vector<Brain *> pending_starts_;      // attached by a deferred enter_scene, not yet started
 	std::deque<std::unique_ptr<Brain>> brains_;
+	std::vector<Brain *> unregistered_brains_;  // brains_ not yet in a temporal set (register_temporals)
 	std::vector<Brain *> dead_brains_;  // of destroyed objects, until their stacks are released
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;

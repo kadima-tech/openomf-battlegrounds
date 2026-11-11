@@ -13,6 +13,7 @@
 #include "de/contents.h"
 #include "de/lighting.h"
 #include "game/session.h"
+#include "game/perf.h"
 #include "gl_util.h"
 #include "scene_lights.h"
 
@@ -647,7 +648,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (dbg && live && fr == 900) fprintf(stderr, "[actor mesh] %s (%s) under %s\n", o->name.c_str(), o->class_path.c_str(), o->parent ? o->parent->name.c_str() : "-");
 		}
 		actors_r.texture_version = world.texture_override_version;
-		if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw(world.data(), items, vp, eye);
+		if (!getenv("OPENBG_NO_ACTORS")) { PERF_ZONE("draw.actors"); actors_r.draw(world.data(), items, vp, eye); }
 	}
 	load_renderers();
 	{
@@ -720,12 +721,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (!capture_camera) world.particles->process_trailers();
 	render::set_transparent_sink(nullptr);
 	render::set_top_sink(nullptr);
-	if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, false, &transparent);
+	if (!getenv("OPENBG_NO_PARTICLES")) { PERF_ZONE("draw.particles"); particles_r.draw(world, vp, view, eye, false, &transparent); }
 	else for (auto &t : transparent) t.draw();
 	overlay.draw_world(world, vp);
 	// The glow layer, added over the scene (OPENBG_NO_GLOW=1 leaves it out).
 	static const bool no_glow = getenv("OPENBG_NO_GLOW") != nullptr;
 	if (!no_glow && world.glow_enabled) {
+		PERF_ZONE("draw.glow");
 		glow_r.begin();
 		// Opaque meshes first, black with depth (DE_CClipVolume::DrawLayer into the glow target), then
 		// the glow passes; moved and run-time actors keep theirs (DE_CShader::GetShader is per mesh).
