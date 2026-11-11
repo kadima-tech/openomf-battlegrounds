@@ -89,6 +89,7 @@ struct Grammar {
 	size_t objects, pool;
 	std::vector<Ref> &out;
 	int budget = 20000;
+	std::vector<std::pair<size_t, size_t>> spans;  // each reference's bytes, with `out`
 
 	bool valid(const Ref &r) const {
 		if (r.kind == Ref::Local) return r.index < objects;
@@ -96,10 +97,16 @@ struct Grammar {
 		return true;
 	}
 	bool ref(deo::Reader &r, size_t end) {
+		size_t at = r.pos();
 		Ref f = read_ref(r);
 		if (r.pos() > end || !valid(f)) return false;
 		out.push_back(f);
+		spans.emplace_back(at, r.pos());
 		return true;
+	}
+	void undo(size_t mark) {
+		out.resize(mark);
+		spans.resize(mark);
 	}
 	// (List | Counted | Opt | Chunk)* filling [at, end) exactly.
 	bool seq(size_t at, size_t end, int depth) {
@@ -120,7 +127,7 @@ struct Grammar {
 			if (ok && seq(r.pos(), end, depth)) return true;
 		} catch (const deo::Error &) {
 		}
-		out.resize(mark);
+		undo(mark);
 		try {
 			deo::Reader r(b, at, end);
 			uint32_t n = r.u32();
@@ -131,13 +138,13 @@ struct Grammar {
 			}
 		} catch (const deo::Error &) {
 		}
-		out.resize(mark);
+		undo(mark);
 		try {
 			deo::Reader r(b, at, end);
 			if (r.u8() == 1 && ref(r, end) && seq(r.pos(), end, depth)) return true;
 		} catch (const deo::Error &) {
 		}
-		out.resize(mark);
+		undo(mark);
 		try {
 			deo::Reader r(b, at, end);
 			size_t e;
@@ -145,7 +152,7 @@ struct Grammar {
 			if (e <= end && seq(r.pos(), e, depth + 1) && seq(e, end, depth)) return true;
 		} catch (const deo::Error &) {
 		}
-		out.resize(mark);
+		undo(mark);
 		return false;
 	}
 };
@@ -172,6 +179,25 @@ std::vector<Ref> decode_references(const std::string &class_path, const Bytes &r
 	}
 	if (complete) *complete = ok && cs.tail.empty();
 	return out;
+}
+
+bool guess_map_reference_chunk(const RawChunk &in, RawChunk &out, size_t objects, size_t pool, const std::function<Ref(const Ref &)> &map) {
+	out = in;
+	std::vector<Ref> refs;
+	Grammar g{in.body, objects, pool, refs};
+	if (!g.seq(0, in.body.size(), 0)) return false;
+	deo::Writer w;
+	size_t at = 0;
+	for (size_t k = 0; k < refs.size(); ++k) {
+		w.bytes(Bytes(in.body.begin() + long(at), in.body.begin() + long(g.spans[k].first)));
+		Ref r = refs[k];
+		r.raw_form = false;
+		write_ref(w, map(r));
+		at = g.spans[k].second;
+	}
+	w.bytes(Bytes(in.body.begin() + long(at), in.body.end()));
+	out.body = w.data();
+	return true;
 }
 
 Guid ref_guid(const deo::File &file, const Ref &r) {

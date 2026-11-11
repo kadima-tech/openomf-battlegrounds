@@ -3,6 +3,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -19,6 +20,9 @@ namespace ed {
 // reject a parse. *complete is false when some bytes could not be explained.
 std::vector<Ref> decode_references(const std::string &class_path, const Bytes &references, size_t objects, size_t pool,
                                    bool *complete = nullptr);
+// A references chunk of no known layout, rewritten through the grammar decode_references uses
+// (a best guess: lists, counted lists, optional references, nested chunks).
+bool guess_map_reference_chunk(const RawChunk &in, RawChunk &out, size_t objects, size_t pool, const std::function<Ref(const Ref &)> &map);
 // The GUID a reference in `file` names (local object or pool entry); zero when it is null.
 Guid ref_guid(const deo::File &file, const Ref &r);
 

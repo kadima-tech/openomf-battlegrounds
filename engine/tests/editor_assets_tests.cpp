@@ -16,6 +16,7 @@
 #include "content.h"
 #include "de/scene.h"
 #include "game/descriptions.h"
+#include "game/runtime.h"
 #include "har.h"
 #include "script.h"
 #include "tournament.h"
@@ -174,17 +175,16 @@ static void har(const fs::path &data, const fs::path &tmp) {
 	auto proj = ed::Project::create(base, path);
 	uint32_t d = ed::create_har_variant(*proj, "Jaguar", "Jaguar Mk2");
 	ed::HarObjects o = ed::har_objects(*proj, d);
-	CHECK(o.fighter >= 0 && o.description >= 0 && o.model_description >= 0);
+	CHECK(o.fighter >= 0 && o.description >= 0 && !o.model_descriptions.empty() && o.inputs >= 0 && o.behavior >= 0);
 	ed::HarData h = ed::read_har(*proj, o);
-	CHECK(h.name == "Jaguar Mk2");
-	CHECK(h.stats.size() > 4);
-	CHECK(!h.inputs.empty() && !h.spheres.empty());
-	for (auto &s : h.stats) {
-		if (s.name == "WalkSpeed" || s.name == "m_WalkSpeed") s.value *= 1.5f;
-	}
-	float jump = 0;
-	if (!h.stats.empty()) h.stats[0].value += 1.0f, jump = h.stats[0].value;
-	if (!h.spheres.empty()) h.spheres[0].radius *= 2;
+	printf("HAR: %zu spheres, %zu input sequences, %zu sounds, %zu constants\n", h.spheres.size(), h.inputs.size(), h.sounds.size(), h.constants.size());
+	CHECK(h.name == "Jaguar Mk2" && h.listed && !h.locked);
+	CHECK(h.stats[6] > 0 && h.stats[26] > 0);
+	CHECK(!h.inputs.empty() && !h.spheres.empty() && !h.constants.empty());
+	const float walk = h.stats[6] * 1.5f, jump = h.stats[26] + 100;
+	h.stats[6] = walk, h.stats[26] = jump;
+	h.spheres[0].falloff *= 2;
+	h.inputs[0].steps[0].max_age += 3;
 	ed::write_har(*proj, o, h);
 	auto issues = ed::validate(*proj);
 	for (auto &i : issues) {
@@ -198,18 +198,23 @@ static void har(const fs::path &data, const fs::path &tmp) {
 	CHECK(list.size() == 1);
 	if (list.empty()) return;
 	ed::HarData h2 = ed::read_har(*again, ed::har_objects(*again, list[0]));
-	CHECK(h2.name == "Jaguar Mk2");
-	CHECK(!h2.stats.empty() && h2.stats[0].value == jump);
-	CHECK(!h2.spheres.empty() && h2.spheres[0].radius == h.spheres[0].radius);
+	CHECK(h2.name == "Jaguar Mk2" && h2.stats[6] == walk && h2.stats[26] == jump);
+	CHECK(h2.spheres[0].falloff == h.spheres[0].falloff && h2.inputs[0] == h.inputs[0]);
 	set_env("OPENBG_ADDONS", path.string());
 	{
-		de::World w(data);
-		de::ObjectRef desc = w.find("Description\\Creature\\Fighter", "Jaguar Mk2");
+		game::World w(data);
+		de::ObjectRef desc = w.data().find("Description\\Creature\\Fighter", "Jaguar Mk2");
 		CHECK(desc);
 		if (desc) {
-			game::DescriptionInfo info = game::read_description(w, desc);
+			game::DescriptionInfo info = game::read_description(w.data(), desc);
 			CHECK(info.listed && !info.locked_by_default);
-			CHECK(!game::fighter_models(w, desc).empty());
+			CHECK(!game::fighter_models(w.data(), desc).empty());
+			de::ObjectRef actor = w.data().by_guid(*reinterpret_cast<const de::Guid *>(again->file().objects[size_t(ed::har_objects(*again, list[0]).fighter)].info.guid.b));
+			CHECK(actor);
+			if (actor) {
+				auto st = game::read_fighter_stats(*actor.file, actor.info());
+				CHECK(st && st->walk == walk && st->jump_up == jump);
+			}
 		}
 	}
 	set_env("OPENBG_ADDONS", "");
