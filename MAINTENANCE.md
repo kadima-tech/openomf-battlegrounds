@@ -2,6 +2,7 @@
 
 ## Maintenance Log
 
+- **2026-11-11:** CI broke on Windows (MinGW) and Fedora: `engine/editor/app/assets.cpp` used `std::clamp` without `<algorithm>`. Apple's libc++ includes it indirectly, GCC's libstdc++ does not.
 - **2026-11-11:** made the asset tests' temporary folders unique.
   - `editor-har` and `editor-tournament` run the same `editor-assets-tests` binary.
   - Under `ctest -j`, both could create the same temp folder in the same second (an unseeded `rand()` plus the time), and one deleted it under the other.
@@ -11,4 +12,6 @@
 
 ## Recurring Patterns
 
-None yet.
+- **GCC-only build breaks from missing standard headers.** Code built only on macOS can use `std::` functions whose header libc++ pulls in indirectly. The GCC builds (Windows MinGW, Linux, Fedora) then fail in CI.
+  - Fix: add the header.
+  - Prevention: before merging, check new files for `std::` algorithms without `<algorithm>` (see the 2026-11-11 entry).
