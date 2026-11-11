@@ -1,2 +1,2 @@
 # Installed into the app bundle at build time, never fetched by players.
-bsdiff4==1.2.6
+bsdiff4==1.4.2

@@ -15,15 +15,15 @@ upstream texts, rather than this index, define each component's terms.
 | --- | --- | --- |
 | openomf-battlegrounds | This repository | MIT; `licenses/openomf-battlegrounds.txt` |
 | SDL2 | [libsdl-org/SDL](https://github.com/libsdl-org/SDL), commit `5d249570393f7a37e037abf22cd6012a4cc56a71` | zlib; `licenses/SDL2.txt` |
-| unshield | [twogood/unshield](https://github.com/twogood/unshield), 1.5.1 | MIT; `licenses/unshield.txt` |
+| unshield | [twogood/unshield](https://github.com/twogood/unshield), 1.6.2 | MIT; `licenses/unshield.txt` |
 | GothicKit dmusic | [GothicKit/dmusic](https://github.com/GothicKit/dmusic), vendored revision `b73b270b` with local changes | Upstream MIT modern variant; `licenses/dmusic.txt`; provenance and modifications in `licenses/dmusic.md` |
 | DirectMusic software synthesizer sample (DDKSynth) | Microsoft Windows Driver Kit 8.1 sample, ported to C in dmusic | MIT, Microsoft Corporation; `licenses/DDKSynth.txt` |
-| zlib (Windows only) | [madler/zlib](https://github.com/madler/zlib), 1.3.1 | zlib; `licenses/zlib.txt` (macOS uses the system zlib) |
+| zlib (Windows only) | [madler/zlib](https://github.com/madler/zlib), 1.4 | zlib; `licenses/zlib.txt` (macOS uses the system zlib) |
 | openindeo | [kadima-tech/openindeo](https://github.com/kadima-tech/openindeo), commit `5452df0c8900f0892e701253481bf5c311a9a9d7` | MIT; `licenses/openindeo.txt` |
 | ENet | [lsalzman/enet](https://github.com/lsalzman/enet), 1.3.18 (commit `2662c0de09e36f2a2030ccc2c528a3e4c9e8138a`) | MIT; `licenses/enet.txt` |
-| CPython runtime and included libraries | Python 3.12.12 from [python-build-standalone](https://github.com/astral-sh/python-build-standalone) (macOS: installed by [uv](https://github.com/astral-sh/uv); Windows: release `20251028`, including its Visual C++ runtime DLLs) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
-| bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.2.6 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.2.6.dist-info/` |
-| Tcl/Tk (Linux runtime only) | Included in the Linux CPython runtime ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)), which also links X11 client libraries into Tk; the launcher does not use Tk | Tcl/Tk BSD-style license; `licenses/Tcl-Tk.txt`; X.Org libraries under MIT/X11-style terms |
+| CPython runtime and included libraries | Python 3.15.2 from [python-build-standalone](https://github.com/astral-sh/python-build-standalone) release `20261026` (macOS and Linux: installed by [uv](https://github.com/astral-sh/uv) 0.13.7; Windows: the same release's archive, including its Visual C++ runtime DLLs) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
+| bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.4.2 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.4.2.dist-info/` |
+| Tcl/Tk (Linux runtime only) | Tk 9.0 included in the Linux CPython runtime ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)), which also links X11 client libraries into Tk; the launcher does not use Tk | Tcl/Tk BSD-style license; `licenses/Tcl-Tk.txt`; X.Org libraries under MIT/X11-style terms |
 
 The vendored dmusic source notices are also available in
 [`engine/third_party/dmusic/`](https://github.com/kadima-tech/openomf-battlegrounds/tree/main/engine/third_party/dmusic).
@@ -45,10 +45,10 @@ The editor is a development tool built from source and not part of the app downl
 
 | Component | Upstream / version | License |
 | --- | --- | --- |
-| Dear ImGui (docking branch) | [ocornut/imgui](https://github.com/ocornut/imgui), `v1.92.5-docking`, fetched by CMake | MIT |
+| Dear ImGui (docking branch) | [ocornut/imgui](https://github.com/ocornut/imgui), `v1.93.0-docking`, fetched by CMake | MIT |
 | Inter | [rsms/inter](https://github.com/rsms/inter), 4.1 (Regular, SemiBold); `engine/third_party/fonts/Inter-LICENSE.txt` | SIL Open Font License 1.1 |
 | JetBrains Mono | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono), 2.304 (Regular); `engine/third_party/fonts/JetBrainsMono-LICENSE.txt` | SIL Open Font License 1.1 |
-| Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 0.469.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |
+| Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 1.68.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |
 
 ## Original game and update data
 

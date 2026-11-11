@@ -48,8 +48,8 @@ FetchContent_MakeAvailable(sdl2)
 set(BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(USE_OUR_OWN_MD5 ON CACHE BOOL "" FORCE)
 FetchContent_Declare(unshield
-    URL https://codeload.github.com/twogood/unshield/tar.gz/refs/tags/1.5.1
-    URL_HASH SHA256=34cd97ff1e6f764436d71676e3d6842dc7bd8e2dd5014068da5c560fe4661f60)
+    URL https://codeload.github.com/twogood/unshield/tar.gz/refs/tags/1.6.2
+    URL_HASH SHA256=a937ef596ad94d16e7ed2c8553ad7be305798dcdcfd65ae60210b1e54ab51a2f)
 # unshield's bundled MD5 code uses K&R declarations, which C23 (GCC 15+'s default, as in MSYS2)
 # rejects. Build it as C17, what Apple clang defaults to (Fedora 42+ also has GCC 15+).
 set(CMAKE_C_STANDARD 17)
@@ -58,7 +58,10 @@ if(WIN32)
     # MSYS2 has a libiconv that would make unshield.exe need libiconv-2.dll; skip the probe.
     set(HAVE_ICONV "" CACHE INTERNAL "unshield: iconv disabled on Windows")
 endif()
+# unshield's own CTest suite downloads nothing, but it is not this project's tests.
+set(BUILD_TESTING OFF)
 FetchContent_MakeAvailable(unshield)
+unset(BUILD_TESTING)
 unset(CMAKE_C_STANDARD)
 
 set(OPENINDEO_GIT_TAG "5452df0c8900f0892e701253481bf5c311a9a9d7" CACHE STRING "" FORCE)

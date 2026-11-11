@@ -253,8 +253,8 @@ target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL Z
 # Inter, JetBrains Mono (SIL OFL 1.1) and Lucide icons (ISC) from third_party/fonts built in.
 include(FetchContent)
 FetchContent_Declare(imgui
-	URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.5-docking.tar.gz
-	URL_HASH SHA256=c816c20e8c75f3e15ae867350e79925502d1a6a85938bb1a73b8927e5f31f9cb
+	URL https://github.com/ocornut/imgui/archive/refs/tags/v1.93.0-docking.tar.gz
+	URL_HASH SHA256=746c265540bd3aa109570f29492ef4d8f5b421dd9fd0049c35ca35f21496f1a5
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(imgui)
 add_library(imgui STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp

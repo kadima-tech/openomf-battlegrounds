@@ -75,9 +75,20 @@ fi
 # Bundle a relocatable Python and decoder. Player setup is offline.
 bash "$here/bundle-setup.sh" "$resources"
 # Tk is not used on Linux; its notice ships with the runtime that contains it.
-if [ -f "$resources/python/lib/tk8.6/demos/license.terms" ]; then
-    cp "$resources/python/lib/tk8.6/demos/license.terms" "$resources/licenses/Tcl-Tk.txt"
+# python-build-standalone's stripped Linux runtime (3.15 / Tk 9) omits the Tk
+# demos, which used to be the only copy of this notice. Prefer the runtime's
+# file when it is there.
+tcl_license=""
+for candidate in \
+    "$resources/python/lib/tk8.6/demos/license.terms" \
+    "$resources/python/lib/tk9.0/demos/license.terms"
+do
+    if [ -f "$candidate" ]; then tcl_license=$candidate; break; fi
+done
+if [ -z "$tcl_license" ]; then
+    tcl_license="$here/licenses/tcl-tk-license.terms"
 fi
+cp "$tcl_license" "$resources/licenses/Tcl-Tk.txt"
 
 gtk_flags=$(pkg-config --cflags gtk+-3.0 gio-unix-2.0)
 gtk_libs=$(pkg-config --libs gtk+-3.0 gio-unix-2.0)
