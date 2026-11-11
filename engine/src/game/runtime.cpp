@@ -914,6 +914,8 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	auto d = cls_obj.file->object_data(cls_obj.info());
 	auto vmc2 = cls_obj.file->ex_payload(d, "VMC2");
 	auto behavior_refs = vm::class_behavior_refs(d.references);
+	static const std::string recompile = getenv("OPENBG_RECOMPILE") ? "," + std::string(getenv("OPENBG_RECOMPILE")) + "," : "";
+	if (vmc2 && !recompile.empty() && (recompile == ",all," || recompile.find("," + cls_obj.info().name + ",") != std::string::npos)) vmc2.reset();
 	vm::VMClass code;
 	if (vmc2) {
 		code = vm::VMClass::parse(vmc2->data, behavior_refs.size());

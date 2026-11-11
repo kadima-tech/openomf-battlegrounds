@@ -188,18 +188,32 @@ static void har(const fs::path &data, const fs::path &tmp) {
 	h.inputs[0].steps[0].max_age += 3;
 	ed::write_har(*proj, o, h);
 	{
-		// A script constant: the behavior's members line is rewritten (compiling fighter scripts
-		// waits for the compiler's "master" statements, so the edit is checked on a scratch copy).
-		ed::Project scratch(base, tmp / "Scratch.DEObjects", proj->file());
-		ed::HarData c = ed::read_har(scratch, o);
+		// A script constant: the behavior's members line is rewritten and the fighter's classes
+		// recompile; the folded constant (1.25f) is in the fighter class's VMC2.
+		ed::HarData c = ed::read_har(*proj, o);
 		bool damage = false;
 		for (auto &k : c.constants) {
 			if (k.name == "m_InitialMeleeAttackDamageMultiplier") k.value = 1.25, damage = true;
 		}
 		CHECK(damage);
-		ed::write_har(scratch, o, c);
-		CHECK(ed::script_text(ed::read_pcode(scratch.file().objects[size_t(o.behavior)])).text.find("m_InitialMeleeAttackDamageMultiplier=1.25;") != std::string::npos);
-		CHECK(ed::read_har(scratch, o).constants.front().name == "m_InitialMeleeAttackDamageMultiplier");
+		ed::write_har(*proj, o, c);
+		CHECK(ed::script_text(ed::read_pcode(proj->file().objects[size_t(o.behavior)])).text.find("m_InitialMeleeAttackDamageMultiplier=1.25;") != std::string::npos);
+		CHECK(ed::read_har(*proj, o).constants.front().name == "m_InitialMeleeAttackDamageMultiplier");
+		ed::ScriptCompiler compiler(data);
+		size_t fighter_classes = 0;
+		for (auto &[cls, res] : compiler.compile_all(*proj)) {
+			printf("compile %s: %s\n", proj->file().objects[cls].info.name_text().c_str(), res.ok ? "ok" : "FAILED");
+			for (auto &e : res.errors) printf("  %s\n", e.str().c_str());
+			CHECK(res.ok);
+			if (proj->file().objects[cls].info.name_text() != "PJaguar") continue;
+			++fighter_classes;
+			for (auto &e : proj->file().objects[cls].ex) {
+				if (e.key != ed::text_bytes("VMC2")) continue;
+				static const uint8_t k125[4] = {0x00, 0x00, 0xa0, 0x3f};
+				CHECK(std::search(e.data.begin(), e.data.end(), k125, k125 + 4) != e.data.end());
+			}
+		}
+		CHECK(fighter_classes == 1);
 	}
 	uint32_t paint = ed::create_paint_job(*proj, o, "Paint2");
 	auto images = ed::paint_images(*proj, paint);
@@ -254,7 +268,7 @@ int main(int argc, char **argv) {
 	}
 	const fs::path data = argv[1];
 	const std::string which = argc > 2 ? argv[2] : "";
-	fs::path tmp = fs::temp_directory_path() / ("openbg-editor-assets-" + std::to_string(std::rand()) + std::to_string(time(nullptr)));
+	fs::path tmp = fs::temp_directory_path() / ("openbg-editor-assets-" + which + "-" + std::to_string(std::rand()) + std::to_string(time(nullptr)));
 	fs::create_directories(tmp);
 	if (which.empty() || which == "tournament") tournament(data, tmp);
 	if (which.empty() || which == "har") har(data, tmp);

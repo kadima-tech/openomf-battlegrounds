@@ -21,6 +21,10 @@ de::PCode read_pcode(const deo::Object &behavior) {
 namespace {
 
 void text_block(deo::Writer &w, const std::string &s) { w.block(text_bytes(s)); }
+void optional_text_block(deo::Writer &w, const std::string &s) {
+	if (s.empty()) w.u32(0);
+	else text_block(w, s);
+}
 
 void write_method_chunk(deo::Writer &w, const de::PCodeElement &e) {
 	size_t at = w.begin_chunk(9);
@@ -29,8 +33,8 @@ void write_method_chunk(deo::Writer &w, const de::PCodeElement &e) {
 	text_block(w, e.source);
 	w.u8(e.virtual_ ? 0 : 1);
 	w.u8(e.excluded ? 1 : 0);
-	w.u32(0);
-	w.u32(0);  // an empty block: the name the method was copied from
+	optional_text_block(w, e.inherits);
+	optional_text_block(w, e.copied_from);
 	w.end_chunk(at);
 }
 
@@ -47,9 +51,9 @@ Bytes write_pcode(const de::PCode &p) {
 	size_t glob = w.begin_chunk(3);
 	text_block(w, "Global");
 	w.u32(uint32_t(p.global.globals.size()));
-	for (auto &g : p.global.globals) {
-		w.u32(0);
-		text_block(w, g);
+	for (size_t i = 0; i < p.global.globals.size(); ++i) {
+		w.u32(uint32_t(i < p.global.global_flags.size() ? p.global.global_flags[i] : 0));
+		text_block(w, p.global.globals[i]);
 	}
 	w.end_chunk(glob);
 	de::PCodeElement members = p.members;

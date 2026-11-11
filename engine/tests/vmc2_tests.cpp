@@ -1,6 +1,6 @@
 // VMC2 writer tests: every shipped Class's VMC2 parses and writes back byte for byte, and for the
 // classes our compiler reproduces, compile -> write equals the shipped payload.
-// Usage: vmc2-tests <Data dir> [-v]
+// Usage: vmc2-tests <Data dir> [-v | -vm (also each method: same, frame (differs only in the frame size) or differs)]
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -101,7 +101,8 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "usage: %s <Data dir> [-v]\n", argv[0]);
 		return 2;
 	}
-	bool verbose = argc > 2 && !strcmp(argv[2], "-v");
+	bool verbose = argc > 2 && (!strcmp(argv[2], "-v") || !strcmp(argv[2], "-vm"));
+	bool per_method = argc > 2 && !strcmp(argv[2], "-vm");
 	de::World w(argv[1]);
 	size_t classes = 0, round_trip = 0, compiled = 0, identical = 0, tables = 0, methods = 0, same_code = 0, same_but_frame = 0;
 	int failures = 0;
@@ -152,6 +153,8 @@ int main(int argc, char **argv) {
 					auto a = ms[m]->code, c = q->code;
 					if (a.size() >= 8 && c.size() >= 8) std::fill(a.begin() + 4, a.begin() + 8, 0), std::fill(c.begin() + 4, c.begin() + 8, 0);
 					same_but_frame += a == c && ms[m]->code != q->code;
+					if (per_method)
+						printf("method %s %s %s\n", ms[m]->code == q->code ? "same" : a == c ? "frame" : "differs", label.c_str(), q->signature.c_str());
 				}
 			}
 			std::string diff = first_difference(mine, shipped);
@@ -176,7 +179,7 @@ int main(int argc, char **argv) {
 	printf("  %zu more methods differ only in the frame size\n", same_but_frame);
 	for (auto &[r, n] : reasons) printf("  %zu: %s\n", n, r.c_str());
 	// Floors for the compiler's fidelity on 2.123's 255 compiled classes, so it can only improve.
-	if (classes == 0 || (classes == 255 && (compiled < 211 || tables < 56 || same_code < 283 || same_code + same_but_frame < 4505))) {
+	if (classes == 0 || (classes == 255 && (compiled < 239 || tables < 61 || same_code < 309 || same_code + same_but_frame < 6382))) {
 		fprintf(stderr, "compiler fidelity fell below the recorded floor\n");
 		++failures;
 	}

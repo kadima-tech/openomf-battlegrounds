@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 
+#include "de/anim.h"
 #include "de/contents.h"
 #include "de/objects_file.h"
 #include "de/pcode.h"
@@ -322,6 +323,15 @@ const NativeConstant kNativeConstants[] = {
 	    {"CCommand", "typeObserve", 8},
 	    {"CCommand", "typeAttack", 0x10},
 	    {"CCommand", "typeAquire", 0x20},
+	    {"CCreatureController", "orientationUp", 0},
+	    {"CCreatureController", "orientationUpRight", 1},
+	    {"CCreatureController", "orientationRight", 2},
+	    {"CCreatureController", "orientationDownRight", 3},
+	    {"CCreatureController", "orientationDown", 4},
+	    {"CCreatureController", "orientationDownLeft", 5},
+	    {"CCreatureController", "orientationLeft", 6},
+	    {"CCreatureController", "orientationUpLeft", 7},
+	    {"CCreatureController", "orientationMiddle", 8},
 };
 
 const NativeConstant *native_constant(const std::string &name, const std::string &cls = "") {
@@ -360,8 +370,8 @@ std::optional<uint32_t> native_field(const std::string &cls, const std::string &
 		static const std::map<std::string, uint32_t> f = {
 		    {"m_ReactionType", 0x44}, {"m_EffectType", 0x48}, {"m_AttackType", 0x4c}, {"m_User", 0x54},
 		    {"m_BlockPenetration", 0x58}, {"m_Damage", 0x5c}, {"m_StunDamage", 0x60}, {"m_EnergyDamage", 0x64},
-		    {"m_RecoveryTime", 0x68}, {"m_DiminishDamage", 0x6c}, {"m_RetainDamage", 0x70}, {"m_MomentumAdjustAmount", 0x74},
-		    {"m_GuideToLastHit", 0x78}, {"m_MaxNumberOfHits", 0xc0}, {"m_Flags", 0xc4}};
+		    {"m_RecoveryTime", 0x68}, {"m_DiminishDamageAmount", 0x6c}, {"m_RetainDamageMultiplier", 0x70}, {"m_MomentumAdjustAmount", 0x74},
+		    {"m_GuideToLastHitMultiplier", 0x78}, {"m_MaxNumberOfHits", 0xc0}, {"m_Flags", 0xc4}};
 		auto it = f.find(field);
 		if (it != f.end()) return it->second;
 	}
@@ -427,6 +437,7 @@ struct Code {
 
 struct MethodDecl {
 	size_t beh = 0;               // attached behavior index
+	size_t out = 0;               // the behavior whose method list holds it (an adopting one, see declare_methods)
 	size_t element = 0;           // PCode element index
 	std::string name;             // its own name ("BeginAction")
 	std::string qualified;        // pool name prefix for nested methods ("MatchX" / "MatchX.PlayerWon")
@@ -437,6 +448,7 @@ struct MethodDecl {
 	std::vector<Type> params;
 	Type ret;                     // None when no rparam
 	std::vector<std::string> param_names;
+	std::vector<bool> param_instance;  // "instance param": the frame holds a copy (a method instance, flag set)
 	uint32_t pool = 0;
 	int slot = -1;
 	std::vector<pc::StmtPtr> body;
@@ -493,11 +505,15 @@ public:
 		visible_ = visible_behaviors(data_, attached_);
 		code_.change_info = change_information(data_, attached_);
 		for (auto &b : visible_) infos_.push_back(read_behavior(b));
+		for (auto &info : infos_)
+			for (size_t i : compiled_elements(info.pcode)) info.methods.emplace_back(i, "");
 		for (size_t i = 0; i < infos_.size(); ++i) {
 			auto refs = behavior_globals(data_, visible_[i]);
 			for (size_t g = 0; g < refs.size(); ++g) {
 				std::string n = g < infos_[i].global_names.size() ? infos_[i].global_names[g] : "";
 				if (!n.empty()) globals_.emplace(n, uint32_t(global_count_ + g));
+				auto &flags = infos_[i].pcode.global.global_flags;
+				global_objs_.push_back({refs[g], g < flags.size() && flags[g] != 0});
 			}
 			global_count_ += uint32_t(refs.size());
 		}
@@ -522,6 +538,12 @@ public:
 		}
 		for (size_t m = 0; m < methods_.size(); ++m) compile_method(m);
 		for (auto &v : value_instances_) code_.behaviors[v.behavior].instances[v.index].class_index = class_index(v.cls);
+		for (auto &[b, list] : members_replicated_) {
+			for (auto &[r, cls] : list) {
+				code_.behaviors[b].replicated.push_back(r);
+				if (!cls.empty()) code_.behaviors[b].replicated.back().b = class_index(cls);
+			}
+		}
 		for (size_t i = 0; i < ref_member_classes_.size(); ++i) code_.ref_members[i] = class_index(ref_member_classes_[i]);
 		code_.classes.clear();
 		for (auto &c : classes_) {
@@ -543,6 +565,12 @@ private:
 	std::vector<BehaviorInfo> infos_;
 	std::map<std::string, uint32_t> globals_;
 	uint32_t global_count_ = 0;
+	struct GlobalObject {
+		de::ObjectRef ref;
+		bool resolves_names = false;  // DE_CPCodeGlobalEntry +8: answers bare names (g_Animation's sequences)
+	};
+	std::vector<GlobalObject> global_objs_;
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, std::set<std::string>> resolvable_names_;
 	std::map<std::string, std::map<std::string, int64_t>> enums_;  // enum type -> values
 	std::map<std::string, std::pair<std::string, int64_t>> enum_values_;  // value -> (enum, value)
 	std::map<std::string, Value> finals_;
@@ -553,6 +581,7 @@ private:
 	std::map<std::string, Member> members_;
 	uint32_t member_end_ = 0;
 	std::map<size_t, std::vector<ClassInstance>> members_instances_;
+	std::map<size_t, std::vector<std::pair<CompiledMethod::Replicated, std::string>>> members_replicated_;  // class named for type 2
 	struct ValueInstance {
 		size_t behavior, index;
 		std::string cls;
@@ -597,7 +626,6 @@ private:
 		de::Contents c(d.contents);
 		info.pcode = de::PCode::parse(c);
 		info.global_names = info.pcode.global.globals;
-		for (size_t i : compiled_elements(info.pcode)) info.methods.emplace_back(i, "");
 		return info;
 	}
 
@@ -647,7 +675,8 @@ private:
 			Type a = prim(Type::Arr);
 			a.elem = d.type;
 			bool prim_elem = t->k != Type::Obj;
-			a.name = prim_elem ? "CObject::CSingleDimensionPrimitiveArray" : "CObject::CSingleDimensionReferenceArray";
+			a.name = prim_elem ? "CObject::CSingleDimensionPrimitiveArray"
+			         : is_value_class(t->name) ? "CObject::CSingleDimensionClassInstanceArray" : "CObject::CSingleDimensionReferenceArray";
 			return a;
 		}
 		return *t;
@@ -765,7 +794,8 @@ private:
 			auto a = fold(*e.a, locals), b = fold(*e.b, locals);
 			if (!a || !b || !a->type.numeric() || !b->type.numeric()) return std::nullopt;
 			bool fl = a->type.k == Type::Float || b->type.k == Type::Float;
-			double x = a->type.k == Type::Float ? a->f : double(a->i), y = b->type.k == Type::Float ? b->f : double(b->i);
+			// In single precision, as the original folds (.75*.14 is 0x3dd70a3e, not 0.105's 0x3dd70a3d).
+			float x = a->type.k == Type::Float ? float(a->f) : float(a->i), y = b->type.k == Type::Float ? float(b->f) : float(b->i);
 			Value v;
 			v.type = fl ? prim(Type::Float) : a->type;
 			const std::string &o = e.text;
@@ -860,16 +890,19 @@ private:
 						m.offset = uint32_t(code_.ref_members.size());
 						code_.ref_members.push_back(0);
 						ref_member_classes_.push_back(m.type.name);
+						if (d.replicate) members_replicated_[bi].push_back({{4, 0, m.offset}, ""});
 						members_.emplace(m.name, m);
 						continue;
 					}
 					uint32_t size = m.iface || m.instance ? 4 : member_size(m.type);
-					member_end_ = (member_end_ + size - 1) / size * size;
 					m.offset = member_end_;
 					member_end_ += size;
 					if (dc.array) {
 						Type et = type_named(dc.array ? d.type : d.type).value_or(prim(Type::Int));
-						members_instances_[bi].push_back({class_index(m.type.name), m.offset, false, et.k == Type::Obj ? 4u : member_size(et), {}});
+						uint32_t ci = class_index(m.type.name);
+						std::optional<uint32_t> elem;
+						if (et.k == Type::Obj) elem = class_index(et.name);
+						members_instances_[bi].push_back({ci, m.offset, false, et.k == Type::Obj ? 4u : member_size(et), elem});
 					} else if (d.instance && !d.interface) {
 						members_instances_[bi].push_back({class_index(m.type.name), m.offset, false, 0, {}});
 					} else if (m.type.k == Type::Obj && implicit_instance(m.type.name) && !d.interface) {
@@ -881,6 +914,11 @@ private:
 					if (m.iface) {
 						int vi = visible_index(m.type.name);
 						code_.member_interfaces.push_back({m.offset, vi < 0 ? 0 : vi});
+					}
+					if (d.replicate) {
+						if (m.iface) members_replicated_[bi].push_back({{3, m.offset, uint32_t(std::max(0, visible_index(m.type.name)))}, ""});
+						else if (m.instance) members_replicated_[bi].push_back({{2, m.offset, 0}, m.type.name});
+						else members_replicated_[bi].push_back({{0, m.offset, size}, ""});
 					}
 					members_.emplace(m.name, m);
 				}
@@ -967,59 +1005,99 @@ private:
 		fi.data = floats(f);
 	}
 
-	// Method headers: every attached behavior's methods (elements in order), their parameters
-	// and their pool signatures; and the visible behaviors' method lists for interface calls.
+	MethodDecl method_decl(size_t bi, size_t ei) {
+		auto &info = infos_[bi];
+		auto &els = info.pcode.elements;
+		MethodDecl m;
+		m.beh = m.out = bi;
+		m.element = ei;
+		m.name = els[ei].name;
+		m.state = els[ei].method_id == 0;
+		std::string w = where(bi, info.pcode.qualified_name(ei));
+		try {
+			m.body = pc::parse(els[ei].source, w);
+			for (auto &s : m.body) {
+				if (s->kind != Stmt::DeclS || !(s->decl->param || s->decl->rparam)) continue;
+				for (auto &dc : s->decl->names) {
+					Type t = decl_type(*s->decl, dc.array, w);
+					if (s->decl->rparam) m.ret = t;
+					else m.params.push_back(t), m.param_names.push_back(dc.name), m.param_instance.push_back(s->decl->instance);
+				}
+			}
+		} catch (const CompileError &) {
+			if (bi < attached_.size()) throw;
+		}
+		std::string params;
+		for (size_t i = 0; i < m.params.size(); ++i) params += (i ? "," : "") + spell(m.params[i]);
+		m.short_sig = (m.ret.k != Type::None ? spell(m.ret) + " " : "") + m.name + "(" + params + ")";
+		if (els[ei].link >= 0) {
+			m.nested = true;
+			std::vector<std::string> chain;
+			for (int32_t up = els[ei].link; up >= 0 && size_t(up) < els.size(); up = els[size_t(up)].link) chain.push_back(els[size_t(up)].name);
+			std::reverse(chain.begin(), chain.end());
+			for (size_t i = 0; i < chain.size(); ++i) m.qualified += (i ? "." : "") + chain[i];
+		}
+		m.signature = info.ref.info().name + ":" + m.qualified + m.short_sig;
+		return m;
+	}
+
+	// Method headers: every attached behavior's methods, their parameters and their pool
+	// signatures; and the visible behaviors' method lists for interface calls. An attached
+	// behavior lists its method elements depth first, each followed by the methods nested in it
+	// and then by those nested in the element it inherits from, where that element is excluded or
+	// inside an excluded one, not in a template: BJaguar's Ground.Stand,
+	// inheriting BFighter's Ground.Misc.Stand1, is followed by Stand1's NoPrelude, compiled as
+	// BFighter's but listed in BJaguar's methods.
 	void declare_methods() {
 		for (size_t bi = 0; bi < infos_.size(); ++bi) {
 			auto &info = infos_[bi];
-			auto &els = info.pcode.elements;
-			std::map<size_t, int> method_of;
 			for (auto &[ei, sig] : info.methods) {
-				MethodDecl m;
-				m.beh = bi;
-				m.element = ei;
-				m.name = els[ei].name;
-				m.state = els[ei].method_id == 0;
-				std::string w = where(bi, info.pcode.qualified_name(ei));
-				try {
-					m.body = pc::parse(els[ei].source, w);
-					for (auto &s : m.body) {
-						if (s->kind != Stmt::DeclS || !(s->decl->param || s->decl->rparam)) continue;
-						for (auto &dc : s->decl->names) {
-							Type t = decl_type(*s->decl, dc.array, w);
-							if (s->decl->rparam) m.ret = t;
-							else m.params.push_back(t), m.param_names.push_back(dc.name);
-						}
-					}
-				} catch (const CompileError &) {
-					if (bi < attached_.size()) throw;
-				}
-				std::string params;
-				for (size_t i = 0; i < m.params.size(); ++i) params += (i ? "," : "") + spell(m.params[i]);
-				m.short_sig = (m.ret.k != Type::None ? spell(m.ret) + " " : "") + m.name + "(" + params + ")";
-				if (els[ei].link >= 0) {
-					m.nested = true;
-					std::vector<std::string> chain;
-					for (int32_t up = els[ei].link; up >= 0 && size_t(up) < els.size(); up = els[size_t(up)].link) chain.push_back(els[size_t(up)].name);
-					std::reverse(chain.begin(), chain.end());
-					for (size_t i = 0; i < chain.size(); ++i) m.qualified += (i ? "." : "") + chain[i];
-				}
-				m.signature = info.ref.info().name + ":" + m.qualified + m.short_sig;
+				MethodDecl m = method_decl(bi, ei);
 				sig = m.short_sig;
 				info.method_params.push_back(m.params);
 				info.method_rets.push_back(m.ret);
 				info.method_state.push_back(m.state);
-				if (bi < attached_.size()) {
-					method_of[ei] = int(methods_.size());
-					methods_.push_back(std::move(m));
+			}
+		}
+		std::vector<std::vector<std::vector<size_t>>> kids(attached_.size());
+		std::vector<std::vector<bool>> dead(attached_.size());  // excluded or inside an excluded element (not a template)
+		for (size_t bi = 0; bi < attached_.size(); ++bi) {
+			auto &els = infos_[bi].pcode.elements;
+			kids[bi].resize(els.size());
+			dead[bi].resize(els.size());
+			for (size_t i = 0; i < els.size(); ++i) {
+				if (els[i].link >= 0 && size_t(els[i].link) < els.size()) kids[bi][size_t(els[i].link)].push_back(i);
+				bool templ = false;
+				for (int32_t up = int32_t(i); up >= 0 && size_t(up) < els.size(); up = els[size_t(up)].link) {
+					dead[bi][i] = dead[bi][i] || els[size_t(up)].excluded;
+					templ = templ || els[size_t(up)].method_id > 1;
+				}
+				dead[bi][i] = dead[bi][i] && !templ;
+			}
+		}
+		std::function<void(size_t, size_t, size_t, int, int)> emit = [&](size_t out, size_t bi, size_t ei, int parent, int depth) {
+			auto &p = infos_[bi].pcode;
+			const de::PCodeElement &e = p.elements[ei];
+			if (e.type != de::PCodeElement::kMethod || e.method_id > 1 || e.excluded || depth > 32) return;
+			int self = int(methods_.size());
+			MethodDecl m = method_decl(bi, ei);
+			m.out = out;
+			m.parent = parent;
+			methods_.push_back(std::move(m));
+			for (size_t k : kids[bi][ei]) emit(out, bi, k, self, depth + 1);
+			if (e.inherits.empty()) return;
+			for (size_t sb = 0; sb < attached_.size(); ++sb) {
+				auto &sp = infos_[sb].pcode;
+				for (size_t si = 0; si < sp.elements.size(); ++si) {
+					if ((sb == bi && si == ei) || !dead[sb][si] || sp.qualified_name(si) != e.inherits) continue;
+					for (size_t k : kids[sb][si]) emit(out, sb, k, self, depth + 1);
 				}
 			}
-			for (auto &[ei, mi] : method_of) {
-				if (els[ei].link >= 0) {
-					auto p = method_of.find(size_t(els[ei].link));
-					if (p != method_of.end()) methods_[size_t(mi)].parent = p->second;
-				}
-			}
+		};
+		for (size_t bi = 0; bi < attached_.size(); ++bi) {
+			auto &els = infos_[bi].pcode.elements;
+			for (size_t i = 0; i < els.size(); ++i)
+				if (els[i].link < 0 || size_t(els[i].link) >= els.size()) emit(bi, bi, i, -1, 0);
 		}
 	}
 
@@ -1111,6 +1189,8 @@ private:
 		std::vector<std::vector<size_t>> breaks, continues;
 		std::string where;
 		uint32_t local_refs = 0;
+		std::map<const pc::Declarator *, uint32_t> decl_refs, decl_slots;
+		std::set<std::string> params;
 	};
 	Ctx *c_ = nullptr;
 
@@ -1121,7 +1201,30 @@ private:
 
 	void hoist(const pc::Decl &d) {
 		for (auto &dc : d.names) {
-			if (c_->locals.count(dc.name)) continue;  // redeclared (int t after float t): one slot
+			auto prev = c_->locals.find(dc.name);
+			if (prev != c_->locals.end() && c_->params.count(dc.name)) {
+				// A parameter declared again as a local gets an unused slot of its own; the name stays the
+				// parameter's (BFighter's AI.ComputeBouncingRayEndingPosition: float Length).
+				if (auto t = type_named(d.type)) c_->top += d.instance || d.interface ? 4 : member_size(*t);
+				continue;
+			}
+			if (prev != c_->locals.end()) {
+				// Redeclared: a numeric one shares the slot (int t after float t), an object one in a
+				// state gets a ref of its own.
+				if (prev->second.ref && c_->m->state && !d.instance && !d.interface && type_named(d.type) && type_named(d.type)->k == Type::Obj)
+					c_->decl_refs[&dc] = c_->local_refs++;
+				// ...and an instance or interface a slot of its own (ReceiveDamage's two CGenericEvent Event).
+				if (d.instance && !d.interface && !dc.array && prev->second.type.k == Type::Obj) {
+					c_->decl_slots[&dc] = c_->top;
+					c_->instances.push_back({class_index(prev->second.type.name), c_->top, false, 0, {}});
+					c_->top += 4;
+				} else if (d.interface && prev->second.type.k == Type::Iface) {
+					c_->decl_slots[&dc] = c_->top;
+					c_->interfaces.push_back({c_->top, visible_index(prev->second.type.name), false});
+					c_->top += 4;
+				}
+				continue;
+			}
 			Local l;
 			if (d.final_ && !d.instance && dc.init) {
 				if (auto v = fold(*dc.init, &c_->locals)) {
@@ -1134,7 +1237,7 @@ private:
 					}
 					l.type = l.value.type;
 					l.offset = c_->top;
-					c_->top += 4;
+					c_->top += member_size(l.type);
 					c_->locals.emplace(dc.name, l);
 					continue;
 				}
@@ -1143,18 +1246,26 @@ private:
 			if (c_->m->state && l.type.k == Type::Obj && !d.instance && !d.interface && !is_value_class(l.type.name)) {
 				l.ref = true;
 				l.offset = c_->local_refs++;
+				c_->decl_refs[&dc] = l.offset;
 				c_->locals.emplace(dc.name, l);
 				continue;
 			}
 			l.offset = c_->top;
-			c_->top += 4;
+			c_->top += dc.array || d.instance || d.interface ? 4 : member_size(l.type);
 			if (dc.array && !d.interface) {
 				Type et = type_named(d.type).value_or(prim(Type::Int));
-				c_->instances.push_back({class_index(l.type.name), l.offset, false, et.k == Type::Obj ? 4u : member_size(et), {}});
+				uint32_t ci = class_index(l.type.name);
+				std::optional<uint32_t> elem;
+				if (et.k == Type::Obj) elem = class_index(et.name);
+				c_->instances.push_back({ci, l.offset, false, et.k == Type::Obj ? 4u : member_size(et), elem});
 			} else if (d.instance && !d.interface) {
 				c_->instances.push_back({class_index(l.type.name), l.offset, false, 0, {}});
+				c_->decl_slots[&dc] = l.offset;
 			}
-			if (d.interface) c_->interfaces.push_back({l.offset, visible_index(l.type.name), false});
+			if (d.interface) {
+				c_->interfaces.push_back({l.offset, visible_index(l.type.name), false});
+				c_->decl_slots[&dc] = l.offset;
+			}
 			c_->locals.emplace(dc.name, l);
 		}
 	}
@@ -1181,19 +1292,39 @@ private:
 		for (auto &s : m.body) {
 			if (s->kind != Stmt::DeclS || !s->decl->rparam) continue;
 			for (auto &dc : s->decl->names) ctx.locals[dc.name] = {m.ret, 0, false, {}};
+			if (s->decl->instance && m.ret.k == Type::Obj) ctx.instances.push_back({class_index(m.ret.name), 0, false, 0, {}});
 		}
 		ctx.top = ret_size;
 		for (size_t i = 0; i < m.params.size(); ++i) {
 			Local l{m.params[i], ctx.top, false, {}};
 			ctx.locals[m.param_names[i]] = l;
-			ctx.top += 4;
+			ctx.params.insert(m.param_names[i]);
+			if (m.params[i].k == Type::Iface) ctx.interfaces.push_back({ctx.top, visible_index(m.params[i].name), true});
+			if (m.param_instance[i] && m.params[i].k == Type::Obj) ctx.instances.push_back({class_index(m.params[i].name), ctx.top, true, 0, {}});
+			ctx.top += member_size(m.params[i]);
 		}
 		uint32_t params_end = ctx.top;
+		// A state's object parameters are held in local refs, copied from the frame at entry.
+		std::vector<std::pair<uint32_t, uint32_t>> ref_params;
+		if (m.state) {
+			for (size_t i = 0; i < m.params.size(); ++i) {
+				Local &l = ctx.locals[m.param_names[i]];
+				if (l.type.k != Type::Obj || is_value_class(l.type.name)) continue;
+				ref_params.push_back({ctx.local_refs, l.offset});
+				l.ref = true;
+				l.offset = ctx.local_refs++;
+			}
+		}
 		hoist_all(m.body);
 		ctx.code.op(1, 0, int32_t(params_end - ret_size));
 		if (ctx.local_refs) {
 			ctx.code.op(20);
 			ctx.code.u16(uint16_t(ctx.local_refs));
+		}
+		for (auto &[ref, at] : ref_params) {
+			ctx.code.op(22);
+			ctx.code.u16(uint16_t(ref));
+			ctx.code.i32(int32_t(at));
 		}
 		use(ctx.top);
 		for (auto &s : m.body) stmt(*s);
@@ -1212,17 +1343,50 @@ private:
 		cm.interfaces = std::move(ctx.interfaces);
 		cm.counts[0] = frame;
 		cm.counts[1] = ctx.local_refs;
+		cm.replicated = replicated_locals(m.body);
 		cm.counts[2] = params_end - ret_size;
 		cm.counts[3] = ret_size;
 		cm.counts[4] = 4;
 		cm.signature = m.signature;
+		// The state named by the last `inherit` in this method or the nearest enclosing one that has one
+		// (BJaguar's Ground.Block inherits Ground.Stand, then Ground: Ground).
 		cm.v78 = -1;
+		for (int at = int(mi), guard = 0; at >= 0 && cm.v78 < 0 && guard < 32; at = methods_[size_t(at)].parent, ++guard) {
+			std::string name = last_inherit(methods_[size_t(at)].body);
+			if (int t = name.empty() ? -1 : inherited_state(name); t >= 0) cm.v78 = int32_t(methods_[size_t(t)].pool);
+		}
 		if (m.state) cm.base_methods = state_table(mi);
-		auto &bc = code_.behaviors[m.beh];
+		auto &bc = code_.behaviors[m.out];
 		bc.methods.push_back(std::move(cm));
 		if (m.parent >= 0) bc.base_links.push_back(methods_[size_t(m.parent)].pool);
 		else bc.base_links.push_back(std::nullopt);
 		c_ = nullptr;
+	}
+
+	// The replicate parameters and locals, in declaration order (GenerateStatus writes them): raw
+	// bytes (0: offset, size), a value instance (2: offset, class), an interface (3: offset,
+	// visible behavior), a local ref (4: 0, ref).
+	std::vector<CompiledMethod::Replicated> replicated_locals(const std::vector<pc::StmtPtr> &body) {
+		std::vector<CompiledMethod::Replicated> out;
+		std::function<void(const Stmt &)> walk = [&](const Stmt &st) {
+			if (st.kind == Stmt::DeclS && st.decl->replicate && !st.decl->final_) {
+				for (auto &dc : st.decl->names) {
+					auto l = c_->locals.find(dc.name);
+					if (l == c_->locals.end() || l->second.constant || l->second.type.k == Type::Enum) continue;
+					const Local &v = l->second;
+					auto r = c_->decl_refs.find(&dc);
+					if (v.ref) out.push_back({4, 0, r != c_->decl_refs.end() ? r->second : v.offset});
+					else if (v.type.k == Type::Iface) out.push_back({3, v.offset, uint32_t(std::max(0, visible_index(v.type.name)))});
+					else if (v.type.k == Type::Obj && (st.decl->instance || is_value_class(v.type.name))) out.push_back({2, v.offset, class_index(v.type.name)});
+					else out.push_back({0, v.offset, member_size(v.type)});
+				}
+			}
+			for (auto *p : {&st.init, &st.body, &st.other})
+				if (*p) walk(**p);
+			for (auto &x : st.list) walk(*x);
+		};
+		for (auto &st : body) walk(*st);
+		return out;
 	}
 
 	// A state's virtual table: per slot, the method its nested methods (or the states it
@@ -1237,20 +1401,55 @@ private:
 		for (auto &m : methods_) {
 			if (m.virt && !set[size_t(m.slot)]) table[size_t(m.slot)] = m.pool, set[size_t(m.slot)] = true;
 		}
+		// A state's `inherit` (its last) takes the place of its enclosing state.
 		std::function<void(size_t, int)> apply = [&](size_t s, int depth) {
-			if (depth > 8) return;
+			if (depth > 16) return;
 			const MethodDecl &st = methods_[s];
-			if (st.parent >= 0) apply(size_t(st.parent), depth + 1);
-			for (auto &x : st.body) {
-				if (x->kind != Stmt::Inherit) continue;
-				if (int t = find_state(x->name, st.beh); t >= 0) apply(size_t(t), depth + 1);
-			}
+			std::string inherit = last_inherit(st.body);
+			if (int t = inherit.empty() ? -1 : inherited_state(inherit); t >= 0) apply(size_t(t), depth + 1);
+			else if (inherit.empty() && st.parent >= 0) apply(size_t(st.parent), depth + 1);
 			for (auto &m : methods_) {
 				if (m.virt && m.parent == int(s)) table[size_t(m.slot)] = m.pool;
 			}
 		};
 		apply(mi, 0);
 		return table;
+	}
+
+	static std::string last_inherit(const std::vector<pc::StmtPtr> &body) {
+		std::string name;
+		std::function<void(const Stmt &)> walk = [&](const Stmt &st) {
+			if (st.kind == Stmt::Inherit) name = st.name;
+			for (auto *p : {&st.init, &st.body, &st.other})
+				if (*p) walk(**p);
+			for (auto &x : st.list) walk(*x);
+		};
+		for (auto &x : body) walk(*x);
+		return name;
+	}
+
+	// The class's most-derived state of an `inherit` path, or of its longest prefix naming one.
+	int inherited_state(std::string path) const {
+		auto exists = [&](const std::string &q) {
+			for (size_t b = 0; b < attached_.size(); ++b) {
+				auto &p = infos_[b].pcode;
+				for (size_t i = 0; i < p.elements.size(); ++i)
+					if (p.elements[i].type == de::PCodeElement::kMethod && p.qualified_name(i) == q) return true;
+			}
+			return false;
+		};
+		while (!path.empty() && !exists(path)) {
+			auto dot = path.rfind('.');
+			path = dot == std::string::npos ? "" : path.substr(0, dot);
+		}
+		int found = -1;
+		for (size_t i = 0; i < methods_.size() && !path.empty(); ++i) {
+			const MethodDecl &m = methods_[i];
+			if (m.state && (m.qualified.empty() ? m.name : m.qualified + "." + m.name) == path &&
+			    (found < 0 || m.beh >= methods_[size_t(found)].beh))
+				found = int(i);
+		}
+		return found;
 	}
 
 	int find_state(const std::string &name, size_t beh) const {
@@ -1306,6 +1505,8 @@ private:
 		case Stmt::DeclS: {
 			if (s.decl->param || s.decl->rparam || s.decl->final_) return;
 			for (auto &dc : s.decl->names) {
+				if (auto r = c_->decl_refs.find(&dc); r != c_->decl_refs.end()) c_->locals[dc.name].offset = r->second;
+				if (auto r = c_->decl_slots.find(&dc); r != c_->decl_slots.end()) c_->locals[dc.name].offset = r->second;
 				if (!dc.init) continue;
 				auto e = std::make_unique<Expr>();
 				e->kind = Expr::Ident;
@@ -1417,6 +1618,13 @@ private:
 			}
 			code.op(319);
 			return;
+		case Stmt::Master: {
+			code.op(113, 0);
+			size_t at = code.here() - 4;
+			stmt(*s.body);
+			code.patch(at, int32_t(code.here()));
+			return;
+		}
 		case Stmt::Break:
 			if (c_->breaks.empty()) throw CompileError(c_->where + ": break outside a loop");
 			jump(c_->breaks.back());
@@ -1487,7 +1695,7 @@ private:
 	}
 
 	struct Place {  // where a name lives
-		enum K { None, Local, Member, Global, Final, Constant, Method, Self } k = None;
+		enum K { None, Local, Member, Global, Final, Constant, Method, Self, GlobalRef, NativeName } k = None;
 		Type type;
 		uint32_t offset = 0;
 		struct Member *member = nullptr;
@@ -1588,7 +1796,63 @@ private:
 			p.type = prim(Type::MethodRef);
 			return p;
 		}
+		for (uint32_t g = 0; g < global_objs_.size(); ++g) {
+			if (!global_objs_[g].resolves_names) continue;
+			if (auto t = resolvable(g, n)) return global_ref_place(g, n, *t);
+		}
 		if (stray_final(n)) return lookup(n);
+		// BFighter's "if (IsRestingOnFloor)": a native method named without a call loads nothing (2.123
+		// tests whatever the slot held).
+		if (!candidates(self_class_, n, 0).empty()) {
+			p.k = Place::NativeName;
+			p.type = prim(Type::Int);
+		}
+		return p;
+	}
+
+	// DE_CClassBehaviorReference::ResolveGlobalReference (Core 0x70136150): a name the global's
+	// object answers (an animation group's "seq" + sequence, an input group's sequences), op 39.
+	std::optional<std::string> resolvable(uint32_t g, const std::string &n) {
+		const de::ObjectRef &r = global_objs_[g].ref;
+		if (!r || n.rfind("seq", 0) != 0) return std::nullopt;
+		const std::string &cp = r.info().class_path;
+		bool anim = cp == "AnimationSequenceGroup", input = cp == "JoystickInputSequenceGroup";
+		if (!anim && !input) return std::nullopt;
+		auto key = std::make_pair(r.file, r.index);
+		auto it = resolvable_names_.find(key);
+		if (it == resolvable_names_.end()) {
+			std::set<std::string> names;
+			try {
+				if (anim) {
+					for (auto &sq : de::read_anim_bank(*r.file, r.info()).sequences) names.insert(sq.name);
+				} else {
+					de::Contents c(r.file->object_data(r.info()).contents);
+					if (de::begin_chunk(c).version == 1) {
+						text(c);
+						int32_t count = c.i32();
+						for (int32_t i = 0; i < count; ++i) {
+							names.insert(text(c));
+							c.skip(size_t(c.i32()) * 14);
+						}
+					}
+				}
+			} catch (const std::exception &) {
+			}
+			it = resolvable_names_.emplace(key, std::move(names)).first;
+		}
+		if (!it->second.count(n.substr(3))) return std::nullopt;
+		return std::string(anim ? "CSequence" : "Sequence");
+	}
+
+	Place global_ref_place(uint32_t g, const std::string &n, const std::string &type) {
+		Place p;
+		p.k = Place::GlobalRef;
+		auto &refs = code_.global_refs;
+		auto it = std::find_if(refs.begin(), refs.end(), [&](const VMClass::GlobalRef &x) { return x.kind == g && x.name == n; });
+		if (it == refs.end()) it = refs.insert(refs.end(), {g, n});
+		p.offset = uint32_t(it - refs.begin());
+		p.type = prim(Type::Obj);
+		p.type.name = type;
 		return p;
 	}
 
@@ -1650,12 +1914,15 @@ private:
 	}
 
 	// The method a bare name calls.
-	int find_method(const std::string &n, size_t argc = SIZE_MAX) const {
+	int find_method(const std::string &name, size_t argc = SIZE_MAX) const {
 		int found = -1;
 		size_t beh = c_ ? c_->m->beh : 0;
+		bool up = !name.empty() && name[0] == '.';
+		const std::string n = up ? name.substr(1) : name;
 		// The methods nested in the running method and the states enclosing it come first.
 		if (c_) {
 			int scope = int(c_->m - methods_.data());
+			if (up) scope = c_->m->parent;
 			for (int guard = 0; scope >= 0 && guard < 16; ++guard) {
 				for (size_t i = 0; i < methods_.size(); ++i) {
 					const MethodDecl &m = methods_[i];
@@ -1684,7 +1951,8 @@ private:
 				code.u16(uint16_t(p.offset));
 				code.i32(int32_t(dst));
 			} else {
-				code.op(5, int32_t(dst), int32_t(p.offset), 4);
+				code.op(5, int32_t(dst), int32_t(p.offset), int32_t(member_size(p.type)));
+				if (member_size(p.type) < 4) convert(p.type, prim(Type::Int), dst);
 			}
 			break;
 		case Place::Member:
@@ -1715,6 +1983,11 @@ private:
 			break;
 		case Place::Method:
 			code.op(38, int32_t(methods_[size_t(p.method)].pool), int32_t(dst));
+			break;
+		case Place::GlobalRef:
+			code.op(39, int32_t(p.offset), int32_t(dst));
+			break;
+		case Place::NativeName:
 			break;
 		default:
 			fail(e, "unknown name " + e.text);
@@ -1815,6 +2088,11 @@ private:
 				constant(v, dst);
 				return v.type;
 			}
+			if (e.a->kind == Expr::Ident) {
+				Place gp = lookup(e.a->text);
+				if (gp.k == Place::Global)
+					if (auto rt = resolvable(gp.offset, e.text)) return load(global_ref_place(gp.offset, e.text, *rt), dst, e);
+			}
 			Type t = gen(*e.a, dst);
 			if (t.k == Type::Obj) {
 				if (auto off = native_field(short_name(t.name), e.text)) {
@@ -1872,7 +2150,8 @@ private:
 	Type field_type(const std::string &cls, const std::string &field) const {
 		if (cls == "CVector") return prim(Type::Float);
 		if (field == "m_Damage" || field == "m_StunDamage" || field == "m_EnergyDamage" || field == "m_RecoveryTime" ||
-		    field == "m_MomentumAdjustAmount" || field == "m_DiminishDamage" || field == "m_RetainDamage")
+		    field == "m_MomentumAdjustAmount" || field == "m_DiminishDamageAmount" || field == "m_RetainDamageMultiplier" ||
+		    field == "m_GuideToLastHitMultiplier")
 			return prim(Type::Float);
 		return prim(Type::Int);
 	}
@@ -1923,7 +2202,8 @@ private:
 		Place rp = e.b->kind == Expr::Ident ? lookup(e.b->text) : Place{};
 		auto lit = fold(*e.b, &c_->locals);
 		bool left_float = a.k == Type::Float;
-		if (rp.k == Place::Local && !rp.ref && rp.type.numeric() && a.numeric() && (rp.type.k == a.k || !(left_float || rp.type.k == Type::Float))) {
+		if (rp.k == Place::Local && !rp.ref && rp.type.numeric() && member_size(rp.type) == 4 && a.numeric() &&
+		    (rp.type.k == a.k || !(left_float || rp.type.k == Type::Float))) {
 			rhs = rp.offset;
 			b = rp.type;
 		} else if (lit && lit->type.numeric() && left_float && lit->type.k != Type::Float) {
@@ -1982,7 +2262,7 @@ private:
 				return;
 			}
 		}
-		if (p.k == Place::Local && !p.ref && p.type.numeric()) {
+		if (p.k == Place::Local && !p.ref && p.type.numeric() && member_size(p.type) == 4) {
 			code.op(p.type.k == Type::Float ? (inc ? 146 : 147) : (inc ? 126 : 127), int32_t(p.offset));
 			return;
 		}
@@ -2001,20 +2281,42 @@ private:
 		uint32_t t = temp();
 		if (lhs.kind == Expr::Ident) {
 			Place p = lookup(lhs.text);
+			if (p.k == Place::Constant) {
+				// A final assigned (BFighter's Air.HitEvade: AddSideSlideAmount*=(1.0-Frame)): no code;
+				// later uses read the folded result, 0 when it does not fold.
+				auto l = c_->locals.find(lhs.text);
+				auto fm = finals_.find(lhs.text);
+				if ((l == c_->locals.end() || !l->second.constant) && fm == finals_.end()) fail(lhs, "cannot assign to " + lhs.text);
+				Value &v = l != c_->locals.end() && l->second.constant ? l->second.value : fm->second;
+				auto f = fold(rhs, &c_->locals);
+				double x = f ? (f->type.k == Type::Float ? f->f : double(f->i)) : 0, cur = v.type.k == Type::Float ? v.f : double(v.i);
+				if (f && op != "=") {
+					char o = op[0];
+					x = o == '+' ? cur + x : o == '-' ? cur - x : o == '*' ? cur * x : o == '/' && x != 0 ? cur / x : 0;
+				}
+				v.f = x;
+				v.i = int64_t(x);
+				return;
+			}
 			bool value_type = p.type.k == Type::Obj && p.k != Place::Global && is_value_class(p.type.name) &&
 			                  !(p.k == Place::Member && !p.member->instance);
 			if (value_type || p.type.k == Type::Arr) {
+				std::string oname = op == "-=" ? "(opp -)" : "(opp " + op + ")";
+				if (op == "=" && candidates(p.type.name, oname, 1).empty()) {
+					// CAttackInfo has no (opp =): 2.123 evaluates the operand and assigns nothing.
+					gen(rhs, t);
+					return;
+				}
 				// instance: receiver, then the operand; (opp =)(...) etc.
 				load(p, t, lhs);
 				Type r = gen(rhs, t + 4);
-				std::string oname = op == "-=" ? "(opp -)" : "(opp " + op + ")";
 				const Sig *s = find_intrinsic_typed(p.type.name, oname, {r});
 				if (!s) fail(lhs, "no operator " + op + " on " + p.type.name);
 				coerce(r, s->params[0], t + 4);
 				code.op(30, int32_t(intrinsic(owner_of(p.type.name, s), s->full)), int32_t(t));
 				return;
 			}
-			if (op != "=" && p.k == Place::Local && !p.ref && p.type.numeric()) {
+			if (op != "=" && p.k == Place::Local && !p.ref && p.type.numeric() && member_size(p.type) == 4) {
 				// In place: the operand, converted, combined straight into the local.
 				Type r;
 				auto lit = fold(rhs, &c_->locals);
@@ -2155,8 +2457,10 @@ private:
 		fail(lhs, "cannot assign to this expression");
 	}
 
+	// Nested native classes are values, except CIncidentRecorder, made a reference target by
+	// DE_CSceneFactory::Init (class node +200).
 	bool is_value_class(const std::string &full) const {
-		return full.find("::") != std::string::npos;
+		return full.find("::") != std::string::npos && full != "CScene::CIncidentRecorder";
 	}
 	static bool implicit_instance(const std::string &full) { return full.rfind("CObject::", 0) == 0; }
 
@@ -2171,7 +2475,7 @@ private:
 			} else if (p.type.k == Type::Iface) code.op(25, int32_t(p.offset), int32_t(t));
 			else {
 				if (from.numeric() || p.type.numeric()) convert(from, p.type, t);
-				code.op(5, int32_t(p.offset), int32_t(t), 4);
+				code.op(5, int32_t(p.offset), int32_t(t), int32_t(member_size(p.type)));
 			}
 			return;
 		case Place::Member:
@@ -2333,7 +2637,9 @@ private:
 		auto icount = code_.intrinsics.size();
 		auto cls = classes_;
 		auto fin = finals_order_.size();
+		auto grefs = code_.global_refs.size();
 		Type t = gen(e, temp() + 64);
+		code_.global_refs.resize(grefs);
 		c_->code = std::move(saved);
 		c_->max = max;
 		c_->instances.resize(inst);
@@ -2362,9 +2668,11 @@ private:
 	}
 
 	// Arguments for a parameter list at `at` (4 bytes each), converted to the parameters.
+	// Arguments are packed (a byte takes one byte), for natives as for script methods.
 	void args_to(const std::vector<pc::ExprPtr> &args, const std::vector<std::string> &params, uint32_t at, bool copy_instances) {
+		uint32_t slot = at;
 		for (size_t i = 0; i < args.size(); ++i) {
-			uint32_t slot = at + uint32_t(i) * 4;
+			if (i) slot += member_size(param_type(params[i - 1]));
 			Type want = param_type(params[i]);
 			Type have;
 			const Expr &a = *args[i];
@@ -2414,6 +2722,18 @@ private:
 		}
 		if (n == "exKillCallers") {
 			code.op(315);
+			return prim(Type::Void);
+		}
+		static const std::map<std::string, int32_t> plain = {{"exWakeUp", 308}, {"exDie", 309}, {"exDisableMaster", 316}, {"exEnableMaster", 317}};
+		if (auto p = plain.find(n); p != plain.end() && e.args.empty()) {
+			code.op(p->second);
+			return prim(Type::Void);
+		}
+		if (n == "exSetAsDefaultState" && e.args.empty()) return prim(Type::Void);  // 2.123 emits nothing for it
+		if (n == "exSetAsDefaultState" && e.args.size() == 1) {
+			int mi = method_path(*e.args[0]);
+			if (mi < 0) fail(e, "exSetAsDefaultState needs a state");
+			code.op(318, int32_t(methods_[size_t(mi)].pool));
 			return prim(Type::Void);
 		}
 		if ((n == "IsValid" || n == "Owner") && e.args.size() == 1) {
@@ -2528,6 +2848,21 @@ private:
 			fail(e, "no method " + f.text);
 		}
 		if (f.kind == Expr::Member) {
+			// BFighter::Ground.Initialize(): that behavior's method of that path, called directly.
+			std::string path = f.text;
+			const Expr *root = f.a.get();
+			for (; root->kind == Expr::Member; root = root->a.get()) path = root->text + "." + path;
+			if (root->kind == Expr::Scoped) {
+				auto p = root->text.find("::");
+				std::string beh = root->text.substr(0, p);
+				path = root->text.substr(p + 2) + "." + path;
+				for (auto &m : methods_) {
+					if (visible_[m.beh].info().name == beh && (m.qualified.empty() ? m.name : m.qualified + "." + m.name) == path &&
+					    m.params.size() == e.args.size())
+						return call_script(m, e, dst, true);
+				}
+				fail(e, "no method " + root->text + "." + path);
+			}
 			if (int mi = method_path(f); mi >= 0) {
 				code.op(38, int32_t(methods_[size_t(mi)].pool), int32_t(dst));  // the path, evaluated (unused)
 				return call_script(methods_[size_t(mi)], e, dst, false);
@@ -2571,18 +2906,43 @@ private:
 
 	// A.B.C naming a method nested in another (".PlayerWon.PlayerDestroyed1"), or -1.
 	int method_path(const Expr &f) {
+		auto c = method_paths(f);
+		return c.empty() ? -1 : c[0];
+	}
+
+	// The methods a path may name, best first: for A.B, B nested in each method A may name (from
+	// Ground.AI.UpdateAIVariables, AI.UpdateAttackVariablesForFuture is the top-level AI's, not
+	// Ground.AI's), then B under the same path in another behavior (BFighter's Effects.GetHit
+	// where BJaguar's Effects hides BFighter's).
+	std::vector<int> method_paths(const Expr &f) {
+		std::vector<int> out;
 		if (f.kind == Expr::Ident) {
-			if (c_->locals.count(f.text) || members_.count(f.text)) return -1;
+			if (c_->locals.count(f.text) || members_.count(f.text)) return out;
 			Place p = lookup(f.text);
-			return p.k == Place::Method ? p.method : -1;
+			if (p.k != Place::Method) return out;
+			out.push_back(p.method);
+			if (f.text[0] == '.') return out;
+			for (size_t i = 0; i < methods_.size(); ++i)
+				if (!methods_[i].nested && methods_[i].name == f.text && int(i) != p.method) out.push_back(int(i));
+			return out;
 		}
-		if (f.kind != Expr::Member) return -1;
-		int parent = method_path(*f.a);
-		if (parent < 0) return -1;
-		for (size_t i = 0; i < methods_.size(); ++i) {
-			if (methods_[i].parent == parent && methods_[i].name == f.text) return int(i);
+		if (f.kind != Expr::Member) return out;
+		auto parents = method_paths(*f.a);
+		for (int parent : parents)
+			for (size_t i = 0; i < methods_.size(); ++i)
+				if (methods_[i].parent == parent && methods_[i].name == f.text) out.push_back(int(i));
+		for (int parent : parents) {
+			const MethodDecl &pm = methods_[size_t(parent)];
+			int found = -1;
+			for (size_t i = 0; i < methods_.size(); ++i) {
+				const MethodDecl &m = methods_[i];
+				if (m.name != f.text || m.parent < 0) continue;
+				const MethodDecl &q = methods_[size_t(m.parent)];
+				if (q.name == pm.name && q.qualified == pm.qualified && (found < 0 || m.beh >= methods_[size_t(found)].beh)) found = int(i);
+			}
+			if (found >= 0) out.push_back(found);
 		}
-		return -1;
+		return out;
 	}
 
 	Type call_interface(const Type &t, const Expr &e, const std::string &name, uint32_t dst) {
