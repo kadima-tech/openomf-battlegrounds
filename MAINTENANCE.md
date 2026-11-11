@@ -2,6 +2,7 @@
 
 ## Maintenance Log
 
+- **2026-11-11:** the Linux CI jobs timed out during `apt-get` while Ubuntu's mirrors were failing: 43 minutes against the usual 30 seconds, and DNS failures for ports.ubuntu.com on arm64. Added apt retries and timeouts, and a 15-minute limit on the install step.
 - **2026-11-11:** CI broke on Windows (MinGW) and Fedora: `engine/editor/app/assets.cpp` used `std::clamp` without `<algorithm>`. Apple's libc++ includes it indirectly, GCC's libstdc++ does not.
 - **2026-11-11:** made the asset tests' temporary folders unique.
   - `editor-har` and `editor-tournament` run the same `editor-assets-tests` binary.

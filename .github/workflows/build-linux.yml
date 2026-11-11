@@ -42,7 +42,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install build dependencies
+        timeout-minutes: 15
         run: |
+          echo 'Acquire::Retries "5"; Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-retries
           sudo apt-get update
           # SDL2 compiles in only the display/audio back ends whose headers exist;
           # build-linux.sh refuses to package an engine without X11, Wayland or sound.
