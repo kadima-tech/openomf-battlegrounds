@@ -108,7 +108,8 @@ struct RobotBuild {
 	size_t retargeted = 0, supplied = 0;
 	std::vector<std::string> notes;
 };
-RobotBuild build_robot(const ImportPlan &plan);
+// `lod0_only` (the preview) leaves out the generated LODs.
+RobotBuild build_robot(const ImportPlan &plan, bool lod0_only = false);
 
 // A new HAR variant with the imported model; ImportResult::root is its Description\Creature\Fighter.
 ImportResult import_robot(Project &p, const ImportPlan &plan);

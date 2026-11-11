@@ -8,7 +8,7 @@
 //                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
 //                 [--layout 1|2|4] [--shading 0|1|2] [--move-to x,y,z] [--light-colour r,g,b,i]
 //                 [--play | --simulate] [--play-ticks N] [--eject] [--inspector] [--debug hits,nav,energy]
-//                 [--import model.glb [--import-kind prop|arena] [--import-name N] [--import-template <arena>]
+//                 [--import model.glb [--import-kind prop|arena|robot] [--import-name N] [--import-template <arena>] [--import-base <robot>]
 //                  [--import-dialog | --import-step 0-3]] [--place-prop <prop>]
 //                 [--export <Class:Name or name> [--export-out file.glb|.gltf]]
 //                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]]
@@ -85,6 +85,7 @@ int main(int argc, char **argv) {
 		else if (arg("--import-kind")) opt.import_kind = argv[++i];
 		else if (arg("--import-name")) opt.import_name = argv[++i];
 		else if (arg("--import-template")) opt.import_template = argv[++i];
+		else if (arg("--import-base")) opt.import_base = argv[++i];
 		else if (!strcmp(argv[i], "--import-dialog")) opt.import_dialog = true;
 		else if (arg("--import-step")) opt.import_step = atoi(argv[++i]), opt.import_dialog = true;
 		else if (arg("--export")) opt.export_spec = argv[++i];

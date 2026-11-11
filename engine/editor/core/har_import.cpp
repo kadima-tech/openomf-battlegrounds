@@ -1301,7 +1301,7 @@ LodData decimate(const LodData &src, size_t target) {
 
 }  // namespace
 
-RobotBuild build_robot(const ImportPlan &plan) {
+RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	const HarPlan &h = plan.har;
 	if (!h.rig) throw std::runtime_error("no base robot");
 	const RobotRig &rig = *h.rig;
@@ -1804,7 +1804,7 @@ RobotBuild build_robot(const ImportPlan &plan) {
 		if (!normals) d.normals.clear();
 		return d;
 	};
-	const size_t lod_count = std::min<size_t>(3, rig.lods.size());
+	const size_t lod_count = lod0_only ? 1 : std::min<size_t>(3, rig.lods.size());
 	LodData lod0 = build_lod(0);
 	if (lod0.faces.empty()) throw std::runtime_error("LOD0 has no triangles");
 	size_t target0 = lod0.faces.size();

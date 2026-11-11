@@ -8,10 +8,12 @@
 
 #include "arena.h"
 #include "gl_util.h"
+#include "har_import.h"
 #include "icons.h"
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
 #include "model_export.h"
+#include "robot_import.h"
 #include "theme.h"
 #include "widgets.h"
 #include "world.h"
@@ -376,8 +378,12 @@ void load_plan(Editor &e, const fs::path &file, ed::ImportKind kind, bool kind_g
 			if (arena) {
 				set.kind = ed::ImportKind::Arena;
 				st.plan = ed::analyse(file, set);
+			} else if (!st.plan.scene.skins.empty()) {
+				set.kind = ed::ImportKind::Robot;
+				st.plan = ed::analyse(file, set);
 			}
 		}
+		if (st.plan.settings.kind == ed::ImportKind::Robot) robot_analyse(e, st.plan);
 		ed::revalidate(st.plan, e.base());
 		st.have_plan = true;
 		st.last_dir = path_text(file.parent_path());
@@ -398,8 +404,11 @@ void reanalyse_kind(Editor &e, ed::ImportKind kind) {
 	ed::ImportSettings set = st.plan.settings;
 	set.kind = kind;
 	fs::path src = st.plan.source;
+	std::string base_robot = st.plan.har.base_robot;
 	st.plan = ed::analyse(std::move(st.plan.scene), set);
 	st.plan.source = src;
+	st.plan.har.base_robot = base_robot;
+	if (kind == ed::ImportKind::Robot) robot_analyse(e, st.plan);
 	ed::revalidate(st.plan, e.base());
 }
 
@@ -407,6 +416,7 @@ bool commit(Editor &e) {
 	State &st = state();
 	ed::Project *p = e.project();
 	if (!p) return false;
+	if (st.plan.settings.kind == ed::ImportKind::Robot) return robot_commit(e, st.plan, &st.error);
 	try {
 		ed::ImportResult r = st.plan.settings.kind == ed::ImportKind::Prop ? ed::import_prop(*p, st.plan) : ed::import_arena(*p, st.plan);
 		fs::path kept;
@@ -464,8 +474,8 @@ void page_source(Editor &e, ed::ImportPlan &plan) {
 	section("Import as");
 	ui::form_label("Kind", lw);
 	int kind = int(plan.settings.kind);
-	const char *kinds[] = {ICON_BOX "  Prop", ICON_MOUNTAIN "  Arena"};
-	for (int k = 0; k < 2; ++k) {
+	const char *kinds[] = {ICON_BOX "  Prop", ICON_MOUNTAIN "  Arena", ICON_BOT "  Robot"};
+	for (int k = 0; k < 3; ++k) {
 		if (k) ImGui::SameLine(0, ui::px(6));
 		if (ui::toolbar_button(nullptr, kinds[k], kind == k ? ui::Tone::Accent : ui::Tone::Normal, true, nullptr, ui::px(28)) && kind != k) reanalyse_kind(e, ed::ImportKind(k));
 	}
@@ -485,6 +495,11 @@ void page_source(Editor &e, ed::ImportPlan &plan) {
 	if (ui::toolbar_button(nullptr, "+Y", !z ? ui::Tone::Accent : ui::Tone::Normal, true, nullptr, ui::px(28))) plan.settings.z_up = false;
 	ImGui::SameLine(0, ui::px(6));
 	if (ui::toolbar_button(nullptr, "+Z", z ? ui::Tone::Accent : ui::Tone::Normal, true, nullptr, ui::px(28))) plan.settings.z_up = true;
+	if (z != plan.settings.z_up && plan.settings.kind == ed::ImportKind::Robot) {
+		if (plan.har.auto_orient) ed::detect_orientation(plan);
+		ed::revalidate(plan, e.base());
+	}
+	if (plan.settings.kind == ed::ImportKind::Robot) robot_source_section(e, plan);
 	if (plan.settings.kind == ed::ImportKind::Arena) {
 		section("Arena");
 		ui::form_label("Lights and sky from", lw);
@@ -510,9 +525,9 @@ void page_source(Editor &e, ed::ImportPlan &plan) {
 }
 
 void page_contents(Editor &e, ed::ImportPlan &plan) {
-	ui::dim_text(plan.settings.kind == ed::ImportKind::Arena
-	                 ? "Roles come from the collections (Visual, Collision, Death, JumpPad, Spawn, Pickup) and the collision materials (floor, wall, kill)."
-	                 : "Every mesh becomes part of the prop's mesh; set a node to Ignore to leave it out.",
+	ui::dim_text(plan.settings.kind == ed::ImportKind::Arena   ? "Roles come from the collections (Visual, Collision, Death, JumpPad, Spawn, Pickup) and the collision materials (floor, wall, kill)."
+	             : plan.settings.kind == ed::ImportKind::Robot ? "Meshes named LOD0..LOD2 are the levels of detail; the rest is LOD0. Set a node to Ignore to leave it out."
+	                                                           : "Every mesh becomes part of the prop's mesh; set a node to Ignore to leave it out.",
 	             kTextMuted);
 	ImGui::Dummy(ImVec2(0, ui::px(4)));
 	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
@@ -546,9 +561,10 @@ void page_contents(Editor &e, ed::ImportPlan &plan) {
 		if (ui::begin_combo("##role", ed::role_name(it.role))) {
 			for (int r = 0; r < int(ed::Role::Count); ++r) {
 				ed::Role role = ed::Role(r);
-				if (plan.settings.kind == ed::ImportKind::Prop && role != ed::Role::Visual && role != ed::Role::Ignore) continue;
+				if (plan.settings.kind != ed::ImportKind::Arena && role != ed::Role::Visual && role != ed::Role::Ignore) continue;
 				if (!mesh && role != ed::Role::Spawn && role != ed::Role::Pickup && role != ed::Role::Ignore) continue;
 				if (ImGui::Selectable(ed::role_name(role), it.role == role)) it.role = role, changed = true;
+				if (changed && plan.settings.kind == ed::ImportKind::Robot) robot_analyse(e, plan);
 			}
 			ImGui::EndCombo();
 		}
@@ -572,6 +588,14 @@ void page_contents(Editor &e, ed::ImportPlan &plan) {
 			ImGui::SetNextItemWidth(-1);
 			if (ImGui::DragFloat3("##imp", it.impulse.data(), 0.01f, -1, 1, "%.2f")) it.has_impulse = true;
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Launch direction (glTF space, extras.impulse)");
+		} else if (plan.settings.kind == ed::ImportKind::Robot && it.role == ed::Role::Visual) {
+			ImGui::AlignTextToFramePadding();
+			int lod = 0;
+			for (int k = 0; k < 3; ++k) {
+				for (int n : plan.har.lods[size_t(k)]) lod = n == it.node ? k : lod;
+			}
+			const gltf::Node &nd = plan.scene.nodes[size_t(it.node)];
+			ui::dim_text(("LOD" + std::to_string(lod) + (nd.skin >= 0 ? ", skinned" : ", rigid on its joint")).c_str(), nd.skin >= 0 ? kTextSoft : kWarning);
 		} else if (it.vertices > ed::kMaxMeshVertices) {
 			ImGui::AlignTextToFramePadding();
 			ImGui::PushStyleColor(ImGuiCol_Text, vec(kWarning));
@@ -662,7 +686,15 @@ void page_review(Editor &e, ed::ImportPlan &plan) {
 	}
 	section("What it makes");
 	ImGui::PushTextWrapPos(0);
-	if (plan.settings.kind == ed::ImportKind::Prop) {
+	if (plan.settings.kind == ed::ImportKind::Robot) {
+		size_t from_file = 0;
+		for (auto &m : plan.har.sequences) from_file += m.animation >= 0;
+		ImGui::TextUnformatted(("A new HAR \"" + plan.settings.name + "\", a variant of " + plan.har.base_robot + " (its scripts, moves, inputs, sounds and hitboxes; listed, unlocked) whose model is this file's: " +
+		                        "three levels of detail skinned to " + std::to_string(plan.har.bones.size()) + " rig bones, the fighter material with a paint mask, and " +
+		                        std::to_string(plan.har.sequences.size()) + " sequences (" + std::to_string(from_file) + " from the file, the rest retargeted). It opens in the HAR editor, " +
+		                        "shows in Choose Creature and plays in the game.")
+		                           .c_str());
+	} else if (plan.settings.kind == ed::ImportKind::Prop) {
 		ImGui::TextUnformatted(("A folder \"" + plan.settings.name + "\" with the prefab actor, its mesh (Mesh\\Standard), " + std::to_string(plan.materials.size()) +
 		                        " material(s) (TextureProcess\\MultiStage) and their images, all with fresh GUIDs. Place copies from the Place panel.")
 		                           .c_str());
@@ -683,11 +715,16 @@ void page_review(Editor &e, ed::ImportPlan &plan) {
 
 }  // namespace
 
+static bool is_robot(const ed::ImportPlan &p) { return p.settings.kind == ed::ImportKind::Robot; }
+
 std::vector<ImportStep> &import_steps() {
 	static std::vector<ImportStep> steps = {
 	    {ICON_FILE_UP, "Source", page_source, nullptr, nullptr},
 	    {ICON_LIST_TREE, "Contents", page_contents, nullptr, nullptr},
 	    {ICON_PALETTE, "Materials", page_materials, nullptr, nullptr},
+	    {ICON_SPLINE, "Bones", robot_page_bones, is_robot, robot_bones_done},
+	    {ICON_VIDEO, "Animations", robot_page_animations, is_robot, nullptr},
+	    {ICON_CIRCLE_DOT, "Hitboxes", robot_page_hitboxes, is_robot, nullptr},
 	    {ICON_CIRCLE_CHECK, "Review", page_review, nullptr, [](const ed::ImportPlan &p) { return !p.errors(); }},
 	};
 	return steps;
@@ -825,14 +862,18 @@ void models_popups(Editor &e) {
 	ImGui::EndChild();
 	ImGui::SameLine(0, ui::px(12));
 	ImGui::BeginGroup();
-	if (st.preview.key != Preview::key_of(plan)) st.preview.build(plan);
-	ImVec2 psize(preview_w, body_h - ui::px(34));
-	st.preview.draw(psize);
-	ImGui::Checkbox("Visual", &st.preview.show_visual);
-	ImGui::SameLine();
-	ImGui::Checkbox("Collision and gameplay", &st.preview.show_collision);
-	ImGui::SameLine();
-	ui::dim_text("drag to turn, scroll to zoom", kTextFaint);
+	if (plan.settings.kind == ed::ImportKind::Robot) {
+		robot_preview(e, plan, ImVec2(preview_w, body_h));
+	} else {
+		if (st.preview.key != Preview::key_of(plan)) st.preview.build(plan);
+		ImVec2 psize(preview_w, body_h - ui::px(34));
+		st.preview.draw(psize);
+		ImGui::Checkbox("Visual", &st.preview.show_visual);
+		ImGui::SameLine();
+		ImGui::Checkbox("Collision and gameplay", &st.preview.show_collision);
+		ImGui::SameLine();
+		ui::dim_text("drag to turn, scroll to zoom", kTextFaint);
+	}
 	ImGui::EndGroup();
 	ImGui::Dummy(ImVec2(0, ui::px(8)));
 	if (!st.error.empty()) {
@@ -879,7 +920,7 @@ void models_startup(Editor &e) {
 		}
 	}
 	if (o.import_file.empty()) return;
-	ed::ImportKind kind = o.import_kind == "arena" ? ed::ImportKind::Arena : ed::ImportKind::Prop;
+	ed::ImportKind kind = o.import_kind == "arena" ? ed::ImportKind::Arena : o.import_kind == "robot" ? ed::ImportKind::Robot : ed::ImportKind::Prop;
 	load_plan(e, o.import_file, kind, !o.import_kind.empty());
 	State &st = state();
 	if (!st.have_plan) {
@@ -888,6 +929,10 @@ void models_startup(Editor &e) {
 	}
 	if (!o.import_name.empty()) st.plan.settings.name = o.import_name;
 	if (!o.import_template.empty()) st.plan.settings.template_arena = o.import_template;
+	if (st.plan.settings.kind == ed::ImportKind::Robot && (!o.import_base.empty() || !o.import_name.empty())) {
+		if (!o.import_base.empty()) st.plan.har.base_robot = o.import_base;
+		robot_analyse(e, st.plan);
+	}
 	ed::revalidate(st.plan, e.base());
 	if (o.import_dialog) {
 		st.scripted = true;
