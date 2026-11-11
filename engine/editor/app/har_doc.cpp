@@ -107,9 +107,17 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	ImVec2 p0 = ImGui::GetWindowPos(), p1 = p0 + ImVec2(size.x, size.y - footer);
 	dl->AddRectFilledMultiColor(p0 + ImVec2(1, 1), p1 - ImVec2(1, 0), rgb(0x2b2742), rgb(0x2b2742), rgb(0x15161c), rgb(0x15161c));
 	std::string base = o.fighter >= 0 ? e.project()->file().objects[size_t(o.fighter)].info.name_text() : "";
-	if (!base.empty() && loaded_ != base) {
-		loaded_ = base;
-		if (!robot_.load(e.base()->dir(), base, &error_)) e.log(LogLine::Error, "Preview: " + error_);
+	// An imported robot's model is the add-on's own: drawn from the add-on with its rig.
+	int own_model = -1;
+	if (!o.model_descriptions.empty()) {
+		int m = e.project()->find(ed::description_resource(e.project()->file().objects[size_t(o.model_descriptions[0])]));
+		if (m >= 0 && e.project()->file().objects[size_t(m)].info.class_text() == "FighterModel") own_model = m;
+	}
+	std::string key = own_model >= 0 ? "addon:" + std::to_string(own_model) + ":" + std::to_string(o.fighter) : base;
+	if (!base.empty() && loaded_ != key) {
+		loaded_ = key;
+		bool ok = own_model >= 0 ? robot_.load_addon(e.project()->bytes(), uint32_t(own_model), uint32_t(o.fighter), key, &error_) : robot_.load(e.base()->dir(), base, &error_);
+		if (!ok) e.log(LogLine::Error, "Preview: " + error_);
 		const auto &anims = robot_.animations();
 		for (size_t k = 0; k < anims.size(); ++k) {
 			if (anims[k] == "Standing") animation_ = int(k);
@@ -142,7 +150,7 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	ImGui::InvisibleButton("orbit", area);
 	if (ImGui::IsItemActive()) yaw_ += ImGui::GetIO().MouseDelta.x * 0.01f;
 	ImGui::PushFont(nullptr, kFontSmall);
-	dl->AddText(p0 + ImVec2(ui::px(12), ui::px(10)), rgb(kTextDim), (data_.name + "  (" + base + "'s model and rig)").c_str());
+	dl->AddText(p0 + ImVec2(ui::px(12), ui::px(10)), rgb(kTextDim), (data_.name + (loaded_.rfind("addon:", 0) == 0 ? "  (imported model on " + base + "'s rig)" : "  (" + base + "'s model and rig)")).c_str());
 	dl->AddText(p0 + ImVec2(ui::px(12), ui::px(28)), rgb(0xff6b6b), "\xe2\x97\x8f attack spheres");
 	dl->AddText(p0 + ImVec2(ui::px(130), ui::px(28)), rgb(0x6bb8ff), "\xe2\x97\x8f body / hit spheres");
 	ImGui::PopFont();
@@ -218,7 +226,7 @@ void HarDocument::general(Editor &e, const ed::HarObjects &o) {
 	row("Script", o.behavior >= 0 ? objs[size_t(o.behavior)].info.name_text() + ", " + std::to_string(data_.constants.size()) + " tunable constants" : "-");
 	ImGui::Dummy(ImVec2(0, ui::px(6)));
 	ui::dim_text("Every object is a copy with a fresh GUID, so the original game lists the variant next to the base robot; "
-	             "its animations, meshes and skeleton stay those of the base robot (glTF import: docs/EDITOR_SPEC.md \xc2\xa7" "5.5).",
+	             "its rig and moves are the base robot's, its model too unless it was imported (File > Import 3D Model, a robot: docs/EDITOR_SPEC.md \xc2\xa7" "5.5).",
 	             kTextMuted);
 }
 

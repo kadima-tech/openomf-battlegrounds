@@ -321,9 +321,21 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
     Grudge Match's; a navigation net is generated over the floors (areas where a robot can walk to
     each neighbour, at most 64 areas and 256 links). The new arena opens in the viewport, plays in
     the editor and with `openbg --addon`.
+  - A **robot** (a file with a skin; or Kind: Robot) becomes a new HAR variant of the chosen base
+    robot with the file's model (§5.5 "Built: robots"). Source picks the base robot, "Match <base>'s
+    size", facing (from the skeleton, or mirror and turn by hand), the floor and the paint (the
+    model's own colours, or the pilot's by material). **Bones** maps the base skin's bones to the
+    file's joints (Auto picks a preset: Mixamo, Rigify, Unreal, Biped, Generic; then the skeleton's
+    shape); each row has a searchable joint list, how it was found and a confidence; a click on a
+    joint in the preview gives it to the selected bone. **Animations** names file animations as
+    sequences (the rest are the base's, retargeted). **Hitboxes** lists the spheres (`Sphere:<name>`
+    empties in the file move them). The preview shows the new robot beside the base with both
+    skeletons, in the bind pose or playing any sequence. The new HAR opens in the HAR editor (its
+    preview draws the imported model) and the bone mapping is saved as
+    `<add-on>.assets/models/<name>/mapping.json` for re-imports.
   - The source file is copied to `<add-on>.assets/models/<name>/` so the import can be redone.
-- Scripted runs: `--import file.glb [--import-kind prop|arena] [--import-name N]
-  [--import-template <arena>]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
+- Scripted runs: `--import file.glb [--import-kind prop|arena|robot] [--import-name N]
+  [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
   instead), `--place-prop <name>` (with `--arena`), `--export "[file/][Class:]Name" --export-out
   out.glb`. Example: `openbg-editor --data <Data> mods/Box.DEObjects --import arena.glb --import-kind
   arena --import-name "Box Arena" --arena "Box Arena" --play`.
@@ -332,4 +344,11 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   skins and animations, a generated crate prop, a generated box arena imported, saved and read by
   the engine with its spawns on the floor and its nav net connected). `editor-gltf-tests --samples
   <dir>` writes the generated `prop.glb` and `arena.glb`.
+- `editor-har-import-tests` (ctest `editor-har-import`): Jaguar exported and imported back onto
+  Jaguar (vertices, binds, rest and poses equal), a generated humanoid with unknown joint names and
+  other proportions (mapped by shape) onto Jaguar, a Mixamo-named rig onto Katana (an animation named
+  by hand), each checked posed in every sequence (limbs along the base's, no stretching past the
+  base's), validated, saved and read by the engine. `--samples <dir>` writes the generated rigs
+  (`humanoid.glb`, `mixamo.glb`); `<Data> --keep <dir>` keeps the add-ons for
+  `OPENBG_ADDONS=<dir>/HarBoxBot.DEObjects openbg-fight <Data> "Box Bot"`.
 

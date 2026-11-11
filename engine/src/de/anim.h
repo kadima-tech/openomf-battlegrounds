@@ -13,6 +13,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,11 @@ struct AnimBank {
 };
 
 AnimBank read_anim_bank(const ObjectsFile &f, const ObjectInfo &o);
+
+// A robot's own object of `cls` (bank, deform info, input bank, class): the file's first, or in a
+// file holding several robots (an add-on's HAR variants, each copied with its fighter file) the
+// nearest to the robot (OMF2Fighter) at `robot`; -1 for none. `accept` narrows the choice.
+int robot_part(const ObjectsFile &f, size_t robot, const std::string &cls, const std::function<bool(const ObjectInfo &)> &accept = nullptr);
 
 // AnimationStreamPlayer (Core 0x701c1cb0) v1: [name][DE_CStream v1: position and orientation
 // keys]. Its loop flag (+0x48) is cleared by ObjInitContents and set by nothing, so times are

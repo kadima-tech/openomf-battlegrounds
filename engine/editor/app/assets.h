@@ -19,6 +19,8 @@ void assets_content_menu(Editor &e);
 void assets_play_menu(Editor &e);
 void assets_popups(Editor &e);
 bool assets_open(Editor &e, const ObjectRef &r);
+// The HAR editor on an add-on Description\Creature\Fighter.
+void assets_open_har(Editor &e, uint32_t description);
 void assets_startup(Editor &e);
 void assets_before_save(Editor &e);
 // A validation issue with a script line: opens the editor that shows that script at the line.

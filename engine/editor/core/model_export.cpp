@@ -619,6 +619,20 @@ struct Exporter {
 		}
 		if (lods.empty()) throw std::runtime_error(model.info().name + " has no meshes");
 		int root = node(model.info().name, -1);
+		// The model's images no stage names, so a re-import can restore them.
+		{
+			json::Value mi = json::Value::object();
+			std::function<void(uint32_t)> scan = [&](uint32_t i) {
+				for (uint32_t c : de::ObjectsFile::children(mf->object_data(mf->objects()[i]))) {
+					const auto &o = mf->objects()[c];
+					const char *key = o.name == "Bump" ? "Bump" : o.name.rfind("RGBScaled", 0) == 0 ? "RGBScaled" : nullptr;
+					if (o.class_path == "Image\\Standard" && key && !mi.has(key)) mi[key] = image({mf, c});
+					if (o.class_path == "Image\\Standard") scan(c);
+				}
+			};
+			scan(model.index);
+			if (mi.size()) s.extras["de_model_images"] = std::move(mi);
+		}
 		de::AnimBank bank;
 		const de::ObjectInfo *deform = nullptr;
 		if (ff) {

@@ -320,7 +320,7 @@ int main(int argc, char **argv) {
 			auto make_fighter = [&](const std::string &who, bool user) -> Fighter & {
 				Fighter *made = nullptr;
 				world.make_fighter = [&](const de::ObjectRef &actor) -> game::GameObject * {
-					made = &setup_fighter(world, actor.info().name, user);
+					made = &setup_fighter(world, actor, user);
 					return made->actor;
 				};
 				de::ObjectRef fd;

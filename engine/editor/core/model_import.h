@@ -16,6 +16,7 @@
 
 #include <array>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -29,7 +30,7 @@ namespace ed {
 enum class Role : uint8_t { Visual, Floor, Wall, Kill, Death, JumpPad, Spawn, Pickup, Ignore, Count };
 const char *role_name(Role r);
 
-enum class ImportKind : uint8_t { Prop, Arena };
+enum class ImportKind : uint8_t { Prop, Arena, Robot };
 
 struct ImportSettings {
 	ImportKind kind = ImportKind::Prop;
@@ -70,6 +71,52 @@ struct ImportImage {
 	bool used = false;
 };
 
+// Robots (har_import.h): how the file's skeleton, animations and hitboxes meet the base robot's rig.
+enum class MapSource : uint8_t { None, Name, Preset, Guess, Manual };
+const char *map_source_name(MapSource s);
+
+struct BoneMapping {
+	std::string bone;       // the rig's name (channel and bone actor)
+	int joint = -1;         // the file's node
+	MapSource source = MapSource::None;
+	float confidence = 0;   // 0..1
+	bool required = true;   // a bone of the base robot's skin; the others are placed from it when unmapped
+};
+
+struct SequenceMapping {
+	std::string sequence;   // the base bank's name, as the scripts use it
+	int animation = -1;     // the file's animation replacing it; -1: the base robot's, retargeted
+	MapSource source = MapSource::None;
+};
+
+struct SphereSource {
+	std::string sphere;     // the affector's name ("Sphere:<name>" in the file)
+	int node = -1;
+	std::string bone;       // the rig bone it ends up under
+	bool known = false;     // the base robot has an affector of that name
+};
+
+struct RobotRig;
+
+struct HarPlan {
+	std::string base_robot = "Jaguar";
+	std::string preset = "Auto";     // a rig_presets() name
+	std::string detected;            // the preset Auto chose
+	int skin = -1;
+	std::vector<BoneMapping> bones;
+	std::vector<SequenceMapping> sequences;
+	std::vector<SphereSource> spheres;
+	std::array<std::vector<int>, 3> lods;  // mesh nodes of LOD0..2 (LOD1 and LOD2 generated when empty)
+	bool auto_orient = true;  // facing and mirror from the skeleton
+	bool mirror = false;      // left and right swapped into the game's convention
+	int turn = 0;             // degrees about the up axis: 0, 90, 180, 270
+	bool ground = true;       // the lowest vertex on the floor
+	enum class Paint : uint8_t { Materials, Colours } paint = Paint::Colours;
+	bool decimate_lod0 = false;  // LOD0 to the base robot's budget as well
+	std::shared_ptr<const RobotRig> rig;
+	std::vector<std::string> notes;  // what the analysis found
+};
+
 struct ImportPlan {
 	std::filesystem::path source;
 	gltf::Scene scene;
@@ -79,6 +126,7 @@ struct ImportPlan {
 	std::vector<ImportImage> images;
 	std::vector<Issue> issues;  // validation: format limits, names, missing pieces
 	bool from_editor = false;   // written by our exporter (round trip)
+	HarPlan har;                // robots
 	bool errors() const;
 	size_t count(Role r) const;
 };
