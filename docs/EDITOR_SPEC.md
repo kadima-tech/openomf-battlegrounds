@@ -340,4 +340,11 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
 - **3 (done):** new pilot -> edit -> photo import -> save -> reopen, and the pilot shows in the game's
   Choose Pilot with its photo, stats, colours and bio. Validation runs §7 rules 1-8, 11 and 12, the
   original-only ones as warnings; rules 9-10 wait for script editing.
+- **2 and 6 (2026-11-11, world side):** arena viewports with the game's renderer (1/2/4 panes,
+  perspective / top / front / side, lit / unlit / collision, Show menu overlays, Outliner tree,
+  picking, move / rotate gizmo with snapping); play in editor (Play, Simulate, Pause, Step, speed,
+  Eject, Live Inspector, debug toggles) in the selected viewport; arena variants (description,
+  lights, spawn points, pickup spawners; arena checks) that play in the editor and in the game.
+  Not yet: prefabs from other arenas, placing hazards / surfaces / nav links / lights, a tournament
+  start in Play Mode, the network test, live light edits during play.
 

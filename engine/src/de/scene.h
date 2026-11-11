@@ -42,15 +42,19 @@ public:
 	// resources (Core.ModuleDLL: COREMeshes -- fonts, primitives -- and COREImages) when the
 	// game's Engine directory sits next to it.
 	explicit World(const std::filesystem::path &data_dir);
+	// Only the Data files `keep` accepts by stem (add-ons and the engine's files always load).
+	World(const std::filesystem::path &data_dir, const std::function<bool(const std::string &stem)> &keep);
 
 	const std::filesystem::path &dir() const { return dir_; }
+	// Unique in the process, never reused (a second world in one program starts fresh caches).
+	uint64_t serial() const { return serial_; }
 	const ObjectsFile *file(const std::string &stem) const;
 	const std::map<std::string, std::unique_ptr<ObjectsFile>> &files() const { return files_; }
 	ObjectRef resolve(const ObjectsFile &from, const Reference &r) const;
 	ObjectRef by_guid(const Guid &g) const;
-	// The first object of that class and name in any file (stems in order).
 	// Adds an objects file held in memory (an add-on being edited), replacing one of that stem.
 	void set_file(const std::string &stem, std::vector<uint8_t> data);
+	// The first object of that class and name in any file (stems in order).
 	ObjectRef find(const std::string &class_path, const std::string &name) const {
 		for (auto &[stem, f] : files_) {
 			for (uint32_t i = 0; i < f->objects().size(); ++i) {
@@ -65,6 +69,7 @@ private:
 	std::filesystem::path dir_;
 	std::map<std::string, std::unique_ptr<ObjectsFile>> files_;
 	std::map<std::array<uint8_t, 16>, ObjectRef> guids_;
+	uint64_t serial_ = 0;
 };
 
 // Row-major rotation (rows are the local X/Y/Z axes in parent space) plus translation.

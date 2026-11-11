@@ -1,3 +1,4 @@
+#include <atomic>
 #include "de/objects_file.h"
 
 #include <cstring>
@@ -48,6 +49,8 @@ Chunk begin_chunk(Contents &c) {
 size_t begin_sized(Contents &c) { return read_size(c); }
 
 ObjectsFile::ObjectsFile(std::vector<uint8_t> data) : file_(std::move(data)) {
+	static std::atomic<uint64_t> serials{0};
+	serial_ = ++serials;
 	std::string sig = file_.string();
 	if (sig == kSignature2) {
 		format_ = file_.u8();

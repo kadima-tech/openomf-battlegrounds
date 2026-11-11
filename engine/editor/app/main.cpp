@@ -5,6 +5,9 @@
 //                 [--photo image.png] [--content <type>] [--base-content] [--browse-file <file stem>]
 //                 [--open-base Class:Name] [--select-base Class:Name] [--copy-base <pilot>]
 //                 [--select <object name>] [--level] [--save] [--launch-game]
+//                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
+//                 [--layout 1|2|4] [--shading 0|1|2] [--move-to x,y,z] [--light-colour r,g,b,i]
+//                 [--play | --simulate] [--play-ticks N] [--eject] [--inspector] [--debug hits,nav,energy]
 //                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]]
 //
 // The add-on is created when it does not exist. --screenshot draws N frames (default 8) in a hidden
@@ -53,6 +56,21 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--save")) opt.save = true;
 		else if (!strcmp(argv[i], "--launch-game")) opt.launch = true;
 		else if (arg("--select")) opt.select = argv[++i];
+		else if (arg("--arena")) opt.arena = argv[++i];
+		else if (!strcmp(argv[i], "--variant")) opt.variant = true;
+		else if (arg("--select-node")) opt.select_node = argv[++i];
+		else if (arg("--camera")) opt.camera = argv[++i];
+		else if (arg("--layout")) opt.layout = atoi(argv[++i]);
+		else if (arg("--shading")) opt.shading = atoi(argv[++i]);
+		else if (arg("--move-to")) opt.move_to = argv[++i];
+		else if (arg("--light-colour")) opt.light_colour = argv[++i];
+		else if (!strcmp(argv[i], "--play")) opt.play = true;
+		else if (!strcmp(argv[i], "--simulate")) opt.play = opt.simulate = true;
+		else if (!strcmp(argv[i], "--eject")) opt.eject = true;
+		else if (!strcmp(argv[i], "--replay")) opt.replay = true;
+		else if (!strcmp(argv[i], "--inspector")) opt.inspector = true;
+		else if (arg("--play-ticks")) opt.play_ticks = atoi(argv[++i]);
+		else if (arg("--debug")) opt.debug = argv[++i];
 		else if (arg("--screenshot")) shot = argv[++i];
 		else if (arg("--frames")) frames = atoi(argv[++i]);
 		else if (arg("--size")) sscanf(argv[++i], "%dx%d", &shot_w, &shot_h);

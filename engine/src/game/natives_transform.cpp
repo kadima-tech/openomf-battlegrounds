@@ -155,9 +155,9 @@ std::array<float, 9> slerp_rotation(const std::array<float, 9> &a, const std::ar
 
 // The path of an AnimationStreamPlayer object, read on first use.
 static const de::AnimPath *path_of(const GameObject *o) {
-	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, de::AnimPath> cache;
+	static std::map<std::pair<uint64_t, uint32_t>, de::AnimPath> cache;
 	if (!o || !o->file || o->class_path != "AnimationStreamPlayer") return nullptr;
-	auto key = std::make_pair(o->file, o->index);
+	auto key = std::make_pair(o->file->serial(), o->index);
 	auto it = cache.find(key);
 	if (it == cache.end()) {
 		de::AnimPath p;

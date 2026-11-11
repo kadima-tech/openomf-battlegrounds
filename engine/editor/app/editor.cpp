@@ -18,6 +18,7 @@
 #include "preview.h"
 #include "theme.h"
 #include "widgets.h"
+#include "world.h"
 
 namespace fs = std::filesystem;
 using namespace theme;
@@ -77,6 +78,7 @@ Editor::Editor(Options options, SDL_Window *window) : opt_(std::move(options)), 
 	else ImGui::GetIO().IniFilename = nullptr;
 	if (!opt_.screenshot) load_settings();
 	docs_.push_back(std::make_unique<LevelDocument>());
+	world_ = std::make_unique<WorldEditor>(*this);
 	log(LogLine::Info, "DEObjects Editor started (Dear ImGui " IMGUI_VERSION ")");
 	if (!opt_.data.empty()) set_base(opt_.data);
 	if (!base_) data_prompt_ = true;
@@ -96,6 +98,7 @@ Editor::Editor(Options options, SDL_Window *window) : opt_(std::move(options)), 
 Editor::~Editor() {
 	if (!opt_.screenshot) save_settings();
 	stop_sound();
+	world_.reset();
 	for (auto &[k, v] : addon_thumbs_) delete_texture(v.first);
 	for (auto &[k, v] : base_thumbs_) delete_texture(v);
 	for (auto &[k, v] : thumbs_) delete_texture(v.texture);
@@ -297,6 +300,10 @@ void Editor::apply_startup() {
 void Editor::validate_now() {
 	if (!project_) return;
 	issues_ = ed::validate(*project_);
+	if (world_) {
+		auto more = world_->arena_issues();
+		issues_.insert(issues_.end(), more.begin(), more.end());
+	}
 	validated_revision_ = project_->revision();
 }
 
@@ -554,6 +561,7 @@ void Editor::copy_pilot_to_addon(const ed::BaseObject &pilot) {
 void Editor::frame() {
 	thumb_budget_ = opt_.screenshot ? 1000 : 6;
 	drain_game_output();
+	if (world_) world_->frame();
 	if (project_ && validated_revision_ != project_->revision() && !ImGui::IsAnyItemActive()) validate_now();
 	ImGuiIO &io = ImGui::GetIO();
 	if (!io.WantTextInput || io.KeyCtrl || io.KeySuper) {
@@ -688,7 +696,7 @@ void Editor::draw_menu() {
 	if (ImGui::BeginMenu("Content")) {
 		if (ImGui::MenuItem(ICON_USER "  New Pilot...", nullptr, false, base_ != nullptr)) new_pilot_dialog();
 		ImGui::MenuItem(ICON_BOT "  New HAR...", "later iteration", false, false);
-		ImGui::MenuItem(ICON_MOUNTAIN "  New Arena...", "later iteration", false, false);
+		if (world_) world_->draw_arena_menu();
 		ImGui::MenuItem(ICON_TROPHY "  New Tournament...", "later iteration", false, false);
 		ImGui::Separator();
 		if (ImGui::MenuItem(ICON_FOLDER "  Content Browser")) focus_content_ = true, active_ = 0;
@@ -697,7 +705,9 @@ void Editor::draw_menu() {
 	if (ImGui::BeginMenu("Build")) {
 		if (ImGui::MenuItem(ICON_CIRCLE_CHECK "  Validate", "F7", false, has_project)) validate_now();
 		if (ImGui::MenuItem(ICON_ROCKET "  Launch Game", "F5", false, has_project)) launch_game();
-		ImGui::MenuItem(ICON_PLAY "  Play in Editor", "later iteration", false, false);
+		if (ImGui::MenuItem(ICON_PLAY "  Play in Editor", "Alt+P", false, base_ && world_ && !world_->playing())) world_->start_play(false);
+		if (ImGui::MenuItem(ICON_CIRCLE_PLAY "  Simulate", nullptr, false, base_ && world_ && !world_->playing())) world_->start_play(true);
+		if (ImGui::MenuItem(ICON_SQUARE "  Stop", "Esc", false, world_ && world_->playing())) world_->stop_play();
 		ImGui::EndMenu();
 	}
 	if (ImGui::BeginMenu("Tools")) {
@@ -765,9 +775,7 @@ void Editor::draw_toolbar() {
 		ImGui::EndPopup();
 	}
 	ImGui::SameLine(0, ui::px(16));
-	ui::toolbar_button(ICON_PLAY, "Play", ui::Tone::Play, has, "Play in editor arrives in a later iteration; use Launch Game");
-	ImGui::SameLine();
-	ui::toolbar_button(ICON_CIRCLE_PLAY, "Simulate", ui::Tone::Normal, false, "Simulate arrives with play-in-editor (later iteration)");
+	world_->draw_toolbar_play();
 	ImGui::SameLine();
 	if (ui::toolbar_button(ICON_ROCKET, "Launch Game", ui::Tone::Normal, has, "Start openbg on the base data plus this add-on (F5)")) launch_game();
 	if (game_) {
@@ -785,10 +793,9 @@ void Editor::draw_toolbar() {
 	ImGui::SameLine(0, ui::px(10));
 	ImGui::SetCursorPosY((ImGui::GetWindowHeight() - ImGui::GetFrameHeight()) * 0.5f);
 	ImGui::SetNextItemWidth(combo_w);
-	if (ui::begin_combo("##playmode", play_mode_.c_str())) {
-		for (const char *m : {"Free Camera", "Selected Viewport", "New Window"}) {
-			if (ImGui::Selectable(m, play_mode_ == m)) play_mode_ = m;
-		}
+	ImGui::SetNextWindowSizeConstraints(ImVec2(ui::px(340), 0), ImVec2(ui::px(420), FLT_MAX));
+	if (ui::begin_combo("##playmode", world_->play_mode_label().c_str(), ImGuiComboFlags_HeightLargest)) {
+		world_->draw_play_menu();
 		ImGui::EndCombo();
 	}
 	ImGui::PopStyleVar();
@@ -945,6 +952,7 @@ void Editor::default_layout(ImGuiID id) {
 	ImGui::DockBuilderDockWindow("###Place", left);
 	ImGui::DockBuilderDockWindow("###Viewport", centre);
 	ImGui::DockBuilderDockWindow("###Outliner", right_top);
+	ImGui::DockBuilderDockWindow("###LiveInspector", right_bottom);
 	ImGui::DockBuilderDockWindow("###Details", right_bottom);
 	ImGui::DockBuilderDockWindow("###ContentBrowser", bottom);
 	ImGui::DockBuilderDockWindow("###OutputLog", bottom);
@@ -966,6 +974,7 @@ void Editor::draw_level() {
 	draw_place();
 	draw_viewport();
 	draw_outliner();
+	if (world_) world_->draw_inspector();
 	draw_details();
 	if (focus_content_) ImGui::SetNextWindowFocus(), focus_content_ = false;
 	draw_content_browser();
@@ -978,6 +987,10 @@ void Editor::draw_level() {
 
 void Editor::draw_place() {
 	if (!ImGui::Begin(window_name(ICON_PLUS, "Place", "Place").c_str())) {
+		ImGui::End();
+		return;
+	}
+	if (world_ && world_->draw_place()) {
 		ImGui::End();
 		return;
 	}
@@ -1016,6 +1029,10 @@ void Editor::draw_viewport() {
 	bool open = ImGui::Begin(window_name(ICON_VIDEO, "Viewport", "Viewport").c_str(), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 	ImGui::PopStyleVar();
 	if (!open) {
+		ImGui::End();
+		return;
+	}
+	if (world_ && world_->draw_viewport()) {
 		ImGui::End();
 		return;
 	}
@@ -1078,13 +1095,17 @@ void Editor::draw_viewport() {
 	ImGui::SetCursorScreenPos(c0);
 	ImGui::BeginChild("##empty", card, 0, ImGuiWindowFlags_NoBackground);
 	ui::centered_note(ICON_MOUNTAIN, "No arena open",
-	                  "Arena editing (spawns, pickups, lights, prefabs) arrives in a later iteration. Pilots open from the Content Browser below.");
+	                  "Open an arena from Content > Open Arena, or double-click one in the Content Browser (Arenas). Pilots open from the Content Browser too.");
 	ImGui::EndChild();
 	ImGui::End();
 }
 
 void Editor::draw_outliner() {
 	if (!ImGui::Begin(window_name(ICON_LIST_TREE, "Outliner", "Outliner").c_str())) {
+		ImGui::End();
+		return;
+	}
+	if (world_ && world_->draw_outliner()) {
 		ImGui::End();
 		return;
 	}
@@ -1166,7 +1187,8 @@ void Editor::draw_details() {
 		ImGui::End();
 		return;
 	}
-	if (!selection_) {
+	if (world_ && world_->draw_details_header()) {
+	} else if (!selection_) {
 		ui::centered_note(ICON_SLIDERS_HORIZONTAL, "Nothing selected", "Select an object in the Content Browser or the Outliner to see its details.");
 	} else {
 		draw_object_info(*this, selection_, false);

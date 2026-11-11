@@ -240,8 +240,8 @@ struct ImageMapValue {
 };
 
 const ImageMapValue &box_intensity(World &w, const GameObject &a) {
-	static std::map<std::pair<const de::ObjectsFile *, uint32_t>, ImageMapValue> cache;
-	auto key = std::make_pair(a.file, a.index);
+	static std::map<std::pair<uint64_t, uint32_t>, ImageMapValue> cache;
+	auto key = std::make_pair(a.file ? a.file->serial() : 0, a.index);
 	auto it = cache.find(key);
 	if (it != cache.end()) return it->second;
 	ImageMapValue &v = cache[key];
@@ -937,8 +937,8 @@ void register_combat_natives(World &w) {
 			c.ret_u32(0);
 			return;
 		}
-		static std::map<const GameObject *, uint32_t> keys;
-		uint32_t &key = keys[p];
+		static std::map<std::pair<uint64_t, const GameObject *>, uint32_t> keys;
+		uint32_t &key = keys[{c.world.data().serial(), p}];
 		if (!key) key = c.mem().alloc(4);
 		Tester &t = combat(c.world).testers[key];
 		t.results.clear();
