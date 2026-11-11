@@ -812,6 +812,7 @@ void Editor::draw_toolbar() {
 	ImGui::SetNextWindowSizeConstraints(ImVec2(ui::px(340), 0), ImVec2(ui::px(420), FLT_MAX));
 	if (ui::begin_combo("##playmode", world_->play_mode_label().c_str(), ImGuiComboFlags_HeightLargest)) {
 		world_->draw_play_menu();
+		assets_play_menu(*this);
 		ImGui::EndCombo();
 	}
 	ImGui::PopStyleVar();

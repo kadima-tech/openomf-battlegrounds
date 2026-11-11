@@ -15,6 +15,8 @@ int compile_scripts(Editor &e);
 void launch_tournament(Editor &e, const std::string &name, int match);
 
 void assets_content_menu(Editor &e);
+// Play Mode: the add-on's tournaments, each startable at a match (in the game).
+void assets_play_menu(Editor &e);
 void assets_popups(Editor &e);
 bool assets_open(Editor &e, const ObjectRef &r);
 void assets_startup(Editor &e);

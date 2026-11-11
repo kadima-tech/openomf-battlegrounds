@@ -181,13 +181,31 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   content, then Details' sections (SeparatorText headings, label / value tables, violet links).
 - **Code view:** JetBrains Mono 13 px on #16171d with faint line numbers; comments #6a9955, strings
   #ce9178, numbers #b5cea8, keywords #c586c0, types (C/E/B + capital) #4ec9b0, members and globals
-  (`m_`, `g_`) #9cdcfe.
+  (`m_`, `g_`) #9cdcfe. The tournament's script view: keywords #569cd6, calls #dcdcaa, globals
+  #4ec9b0, members #9cdcfe.
 - **Read-only pilot:** the pilot editor with a "BASE GAME - READ-ONLY" badge by the heading, a banner
   with "Copy to Add-on..." (accent), and dimmed, disabled fields.
 - **Asset editors:** the pilot editor puts a tall in-engine preview (photo, or the robot in the
   pilot's paint) with a "Preview (in-engine)" footer on the left, and on the right the heading, tabs
   (General / Attributes / AI Traits / Paint / Casts & Flags) over a violet underline, and a footer of
   validation chips.
+- **Tournament editor:** three columns. Left, a "SESSION MASTER" tree (the tournament with an amber
+  trophy, Matches (n) with M1... rows and a swords icon, Branches, Unlocks, Ending cinematic) with
+  + Match / move / delete under it. Middle, the selected item's form ("Match: M2 Wild Science" in
+  20 px SemiBold, 170 px labels; opponent pilot and robot dropdowns side by side, "Random ..." as the
+  empty choice; quote rows of a speaker dropdown, a two-line text box and an x; On Win / On Lose
+  dropdowns with an arrow icon) and a footer with a compile chip, Compile and a green "Play from
+  match". Right, tabs "Script (BSubSession)" | "Script (BMaster)" | "Quotes": the code view with
+  line numbers, `// <user ...>` blocks tinted #2e2a52 with their markers in the accent text colour,
+  compile errors as #5a2a2a rows with red line numbers (tooltip with the message), the line a
+  Validation link jumps to outlined in the accent; "Edit user blocks" turns it into a monospace text
+  box whose Apply refuses edits outside the blocks.
+- **HAR editor:** the pilot editor's shape: the robot (the game's fighter shader, drag to turn, an
+  animation dropdown in the footer) on the left with its spheres drawn on their bones (attack
+  spheres #ff6b6b, body spheres #6bb8ff, as 1 px outlines with a centre dot; the selected one
+  orange, filled and 2.5 px); tabs General / Movement / Inputs / Hitboxes / Sounds / Paint / Script
+  on the right. Inputs: a sequence list beside step cards of a 3 x 3 direction pad (lit cells
+  #3a3566), six button toggles (grey any, green pressed, dark red released) and four timing fields.
 - **Arena viewports:** the game's renderer fills each pane (lit, unlit, or collision: flat-shaded
   surfaces and affector meshes on #121318). Dark overlay buttons at the top left (layout, view,
   shading, Show menu) and top right (move / rotate gizmo, magnet snap, maximise); the arena's name

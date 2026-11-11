@@ -101,6 +101,25 @@ void assets_content_menu(Editor &e) {
 	if (ImGui::MenuItem(ICON_HAMMER "  Compile Scripts", nullptr, false, e.project() != nullptr)) compile_scripts(e);
 }
 
+void assets_play_menu(Editor &e) {
+	if (!e.project()) return;
+	auto list = ed::addon_tournaments(*e.project());
+	if (list.empty()) return;
+	ImGui::SeparatorText("Tournament (Launch Game at a match)");
+	for (uint32_t t : list) {
+		ed::Tournament tour = ed::read_tournament(*e.project(), ed::tournament_objects(*e.project(), t));
+		if (!ImGui::BeginMenu((std::string(ICON_TROPHY "  ") + tour.name).c_str())) continue;
+		for (size_t k = 0; k < tour.matches.size(); ++k) {
+			if (ImGui::MenuItem(ed::match_label(tour, int(k), false).c_str())) {
+				compile_scripts(e);
+				e.save();
+				launch_tournament(e, tour.name, int(k));
+			}
+		}
+		ImGui::EndMenu();
+	}
+}
+
 void assets_popups(Editor &e) {
 	if (g_dialogs.tournament_open) ImGui::OpenPopup("New Tournament"), g_dialogs.tournament_open = false;
 	if (g_dialogs.har_open) ImGui::OpenPopup("New HAR Variant"), g_dialogs.har_open = false;
