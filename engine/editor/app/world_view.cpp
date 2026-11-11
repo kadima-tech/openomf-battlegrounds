@@ -658,6 +658,8 @@ void WorldEditor::frame_selection(int pi) {
 
 bool WorldEditor::draw_viewport() {
 	if (!arena_ && !play_) return false;
+	if (focus_viewport_) ImGui::SetWindowFocus(), focus_viewport_ = false;
+	viewport_focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 	ImVec2 p0 = ImGui::GetCursorScreenPos(), size = ImGui::GetContentRegionAvail();
 	if (arena_ && !arena_->built) {
 		ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -848,6 +850,13 @@ void WorldEditor::draw_pane(int i, ImVec2 p0, ImVec2 size) {
 	if (playing_here) {
 		float t = ui::px(play_->ejected() ? 2 : 3);
 		dl->AddRect(p0 + ImVec2(t / 2, t / 2), p0 + size - ImVec2(t / 2, t / 2), rgb(play_->ejected() ? 0xffc98a : 0x2fbf5e), 0, 0, t);
+		if (!play_->ejected() && !viewport_focused_) {
+			const char *hint = "Click the viewport to control your fighter";
+			ImVec2 ts = ImGui::CalcTextSize(hint), pad(ui::px(12), ui::px(6));
+			ImVec2 b0(p0.x + (size.x - ts.x) * 0.5f - pad.x, p0.y + ui::px(48));
+			dl->AddRectFilled(b0, b0 + ts + pad * 2, rgb(0x16171d, 225), ui::px(6));
+			dl->AddText(b0 + pad, rgb(0xffffff), hint);
+		}
 	} else if (layout_ > 1 && i == active_pane_) {
 		dl->AddRect(p0, p0 + size, rgb(kAccentLine), 0, 0, ui::px(1.5f));
 	}

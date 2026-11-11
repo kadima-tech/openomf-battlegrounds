@@ -143,6 +143,7 @@ private:
 	std::string play_error_;
 	std::vector<std::string> robots_, pilots_, masters_;
 	bool viewport_focused_ = false;
+	bool focus_viewport_ = false;
 	uint64_t live_revision_ = 0;
 	int script_step_ = 0;
 	bool replayed_ = false;

@@ -292,18 +292,18 @@ void PlaySession::frame(double ms, bool input) {
 	game::World &world = *world_;
 	world.input = {};
 	if (input && !ejected_) {
-		const Uint8 *k = SDL_GetKeyboardState(nullptr);
-		world.input.up = k[SDL_SCANCODE_UP];
-		world.input.down = k[SDL_SCANCODE_DOWN];
-		world.input.left = k[SDL_SCANCODE_LEFT];
-		world.input.right = k[SDL_SCANCODE_RIGHT];
-		world.input.left_punch = k[SDL_SCANCODE_A];
-		world.input.right_punch = k[SDL_SCANCODE_S];
-		world.input.left_kick = k[SDL_SCANCODE_Z];
-		world.input.right_kick = k[SDL_SCANCODE_X];
-		world.input.jump = k[SDL_SCANCODE_SPACE];
-		world.input.evade = k[SDL_SCANCODE_LSHIFT];
-		world.input.duck = k[SDL_SCANCODE_C];
+		auto k = [](ImGuiKey key) { return ImGui::IsKeyDown(key); };
+		world.input.up = k(ImGuiKey_UpArrow);
+		world.input.down = k(ImGuiKey_DownArrow);
+		world.input.left = k(ImGuiKey_LeftArrow);
+		world.input.right = k(ImGuiKey_RightArrow);
+		world.input.left_punch = k(ImGuiKey_A);
+		world.input.right_punch = k(ImGuiKey_S);
+		world.input.left_kick = k(ImGuiKey_Z);
+		world.input.right_kick = k(ImGuiKey_X);
+		world.input.jump = k(ImGuiKey_Space);
+		world.input.evade = k(ImGuiKey_LeftShift);
+		world.input.duck = k(ImGuiKey_C);
 	}
 	if (paused) return;
 	if (setup_.fixed_step) {
@@ -635,6 +635,7 @@ void WorldEditor::start_play(bool simulate) {
 	play_ = std::make_unique<PlaySession>(std::move(st));
 	play_->debug = debug_;
 	if (simulate) play_->set_ejected(true);
+	else focus_viewport_ = true;
 	if (layout_ > 1 && active_pane_ != 0 && panes_[size_t(active_pane_)].cam.mode != Camera::Perspective) active_pane_ = 0;
 	play_->eject_camera() = panes_[size_t(active_pane_)].cam;
 	play_->eject_camera().mode = Camera::Perspective;
@@ -671,6 +672,7 @@ void WorldEditor::play_frame() {
 	}
 	if (play_->frame_number() == 0) e_.log(LogLine::Ok, std::string(simulate_ ? "Simulating" : "Playing") + " (" + std::to_string(int((ImGui::GetTime() - play_->started()) * 1000)) + " ms to start)");
 	const bool focus = viewport_focused_ && !play_->ejected();
+	viewport_focused_ = false;
 	if (focus) io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 	else io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 	if (ImGui::IsKeyPressed(ImGuiKey_F8, false)) play_->set_ejected(!play_->ejected());

@@ -264,7 +264,8 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   loaded as `--addon` would (written to `<user data>/openbg/editor/pie/`), only the files the match
   reaches unless "Load all game data" is set. Play Mode (toolbar) picks robots, pilots (add-on pilots
   too), AI or idle dummy (no session: the editor spawns both), difficulty, game type and wins. The
-  keyboard reaches the game only while the viewport has focus (arrows, A/S/Z/X, Space, Shift, C).
+  keyboard reaches the game only while the viewport has focus (arrows, A/S/Z/X, Space, Shift, C); Play
+  focuses it, and a hint shows when another panel takes focus.
   Pause, Step (one 20 ms frame), speed, Eject / F8 (free camera, click a fighter to inspect it),
   Esc or Stop. Debug: hit (blue) and attack (red) spheres, nav net and AI targets, full energy.
   An add-on pilot's attributes reach its running fighter at once; anything else on the next Play.

@@ -999,7 +999,7 @@ void Editor::draw_level() {
 	draw_validation();
 	draw_script_console();
 	ImGui::PopStyleVar();
-	if (opt_.screenshot && ImGui::GetFrameCount() < 3) ImGui::SetWindowFocus("###ContentBrowser");
+	if (opt_.screenshot && !opt_.play && ImGui::GetFrameCount() < 3) ImGui::SetWindowFocus("###ContentBrowser");
 }
 
 void Editor::draw_place() {
