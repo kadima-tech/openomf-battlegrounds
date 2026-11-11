@@ -499,7 +499,7 @@ std::optional<float> ArenaScene::surface_below(const std::array<float, 3> &p, fl
 			float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
 			if (std::fabs(ny) < 1e-6f) continue;
 			float y = a[1] - (nx * (p[0] - a[0]) + nz * (p[2] - a[2])) / ny;
-			if (y <= p[1] + 80.0f && p[1] - y <= drop && (!best || y > *best)) best = y;
+			if (y <= p[1] + 15.0f && p[1] - y <= drop && (!best || y > *best)) best = y;
 		}
 	}
 	return best;
@@ -686,6 +686,7 @@ std::vector<uint32_t> copy_tree(Project &p, const deo::File &src, bool src_is_ad
 		deo::Object o = src.objects[i];
 		const std::string cls = o.info.class_text();
 		o.info.guid = fresh[i];
+		const Bytes before = o.contents;
 		for (auto &[old, g] : fresh) {
 			Bytes from = guid_bytes(src_agent), to = guid_bytes(p.file().master.guid);
 			Bytes og = guid_bytes(src.objects[old].info.guid), ng = guid_bytes(g);
@@ -694,7 +695,7 @@ std::vector<uint32_t> copy_tree(Project &p, const deo::File &src, bool src_is_ad
 			replace_all(o.contents, from, to);
 			replace_all(o.contents, og, ng);
 		}
-		if (!o.contents.empty() && o.compressed()) o.packed.clear(), o.packed_as_is = false;
+		if (o.compressed() && o.contents != before) o.packed.clear(), o.packed_as_is = false;
 		Chunks rc = split_chunks(o.references);
 		for (size_t k = 0; k < rc.chunks.size(); ++k) {
 			RawChunk out;
@@ -730,7 +731,16 @@ uint32_t create_arena_variant(Project &p, const ArenaEntry &base, const std::str
 	const BaseObject *env = b.by_guid(base.environment);
 	if (!desc || !env) throw deo::Error("the arena's description or environment is missing");
 	const deo::File &env_file = b.model(env->file);
-	uint32_t new_env = copy_tree(p, env_file, false, {env->index})[0];
+	std::map<uint32_t, uint32_t> copied;
+	uint32_t new_env = copy_tree(p, env_file, false, {env->index}, &copied)[0];
+	// The fighting-surface collision mesh lives outside the environment, but the engine's floor
+	// (ArenaRenderer::floor_height) looks for it by name in the arena's own file.
+	for (uint32_t i = 0; i < env_file.objects.size(); ++i) {
+		const auto &info = env_file.objects[i].info;
+		if (info.class_text() == "Mesh\\Standard" && info.name_text().find("FightingSurfaceCollision") != std::string::npos && !copied.count(i)) {
+			copy_tree(p, env_file, false, {i});
+		}
+	}
 	const deo::File &desc_file = b.model(desc->file);
 	uint32_t new_desc = copy_tree(p, desc_file, false, {desc->index})[0];
 	deo::Object &d = p.file().objects[new_desc];

@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
 		CHECK(spawn >= 0 && light >= 0);
 		if (spawn >= 0) {
 			de::Transform t = ed::actor_local(p->file().objects[size_t(spawn)]);
-			t.t[0] += 40, t.t[2] -= 25;
+			t.t[0] += 40;
 			moved_to = t.t;
 			ed::set_actor_local(*p, uint32_t(spawn), t);
 			uint32_t made = ed::duplicate_actor(*p, uint32_t(spawn), "PlayerSpawnPoint17");
