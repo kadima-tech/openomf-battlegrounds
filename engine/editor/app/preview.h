@@ -16,6 +16,8 @@ public:
 	~RobotPreview();
 	// Loads <fighter>Model1.DEObjects and <fighter>.DEObjects from the Data folder.
 	bool load(const std::filesystem::path &data, const std::string &fighter, std::string *error);
+	// An add-on's robot: its FighterModel at `model` and the rig after the OMF2Fighter at `robot`.
+	bool load_addon(std::vector<uint8_t> bytes, uint32_t model, uint32_t robot, const std::string &key, std::string *error);
 	const std::string &fighter() const { return fighter_; }
 	const std::vector<std::string> &animations() const { return animations_; }
 	// Draws at `width` x `height` (pixels) and returns the texture.
@@ -26,6 +28,7 @@ public:
 
 private:
 	void ensure_target(int w, int h);
+	bool finish(const std::string &name);
 	std::string fighter_;
 	std::unique_ptr<de::ObjectsFile> model_file_, fighter_file_;
 	fighter::Model model_;
@@ -34,7 +37,7 @@ private:
 	std::vector<std::array<float, 3>> pos_;
 	std::vector<de::Transform> pose_;
 	float mvp_[16] = {}, pixel_scale_ = 0;
-	GLuint prog_ = 0, vao_ = 0, vbo_ = 0, skin_ = 0;
+	GLuint prog_ = 0, vao_ = 0, vbo_ = 0, skin_ = 0, static_ = 0;
 	GLuint fbo_ = 0, colour_ = 0, depth_ = 0;
 	int tw_ = 0, th_ = 0;
 };

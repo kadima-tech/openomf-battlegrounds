@@ -1949,13 +1949,8 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 	radius = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) + (hi[2] - lo[2]) * (hi[2] - lo[2])) / 2;
 	if (fighter) {
 		const de::ObjectInfo *bank_obj = nullptr, *deform = nullptr;
-		const auto &fo = fighter->objects();
-		for (size_t pass = 0; pass < 2; ++pass) {
-			for (size_t i = pass ? 0 : std::min(fighter_actor, fo.size()); i < fo.size(); ++i) {
-				if (!bank_obj && fo[i].class_path == "AnimationSequenceGroup") bank_obj = &fo[i];
-				if (!deform && fo[i].class_path == "ActorDeformInfo") deform = &fo[i];
-			}
-		}
+		if (int k = de::robot_part(*fighter, fighter_actor, "AnimationSequenceGroup"); k >= 0) bank_obj = &fighter->objects()[size_t(k)];
+		if (int k = de::robot_part(*fighter, fighter_actor, "ActorDeformInfo"); k >= 0) deform = &fighter->objects()[size_t(k)];
 		if (bank_obj && deform) {
 			bank = de::read_anim_bank(*fighter, *bank_obj);
 			bones_ = de::read_skin(*fighter, *deform, f, mesh_index);

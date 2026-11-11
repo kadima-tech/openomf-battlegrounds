@@ -392,6 +392,7 @@ const RefLayout kRefLayouts[] = {
     {"Mesh\\LODSwitchingMesh", 2, "D"},
     {"TextureProcess\\MultiStage", 1, "*"},
     {"TextureProcess\\MultiStage", 2, "S"},
+    {"ActorDeformInfo", 1, "R"},
 };
 
 const char *find_layout(const std::string &class_path, size_t index) {
@@ -448,6 +449,17 @@ bool map_reference_chunk(const std::string &class_path, size_t chunk_index, cons
 				if (r.pos() < end && !map_opt(r, w, map)) return false;
 				if (r.pos() != end) return false;
 				w.end_chunk(at, size);
+			} else if (*op == 'R') {
+				// ActorDeformInfo: one chunk per deformer, each an optional reference (its bone).
+				while (r.remaining()) {
+					deo::ChunkSize size;
+					size_t end;
+					uint8_t v = r.chunk(&end, &size);
+					size_t at = w.begin_chunk(v);
+					if (r.pos() < end && !map_opt(r, w, map)) return false;
+					if (r.pos() != end) return false;
+					w.end_chunk(at, size);
+				}
 			} else if (*op == 'B') {
 				// Behavior: a chunk of globals (BOOL, reference each), the imports list, then
 				// one chunk per element.

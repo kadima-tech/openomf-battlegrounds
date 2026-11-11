@@ -1407,15 +1407,20 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		int c = rig.channel(rig.skin[b].name);
 		out.binds.push_back(c >= 0 ? bn[size_t(c)] : rig.skin[b].bind);
 	}
-	// Channel offsets: the base's, moved by the change of each joint's place in its parent.
-	std::vector<V3> lb(nc), ln(nc);
+	// Channel offsets stay in their parent channel's frame, scaled by the bone's change of length,
+	// so every limb points where the base's does.
+	std::vector<float> k(nc, sc);
 	for (size_t c = 0; c < nc; ++c) {
-		int p = int(c) == body ? -1 : rig.bank.channels[c].parent;
-		if (p >= 0 && size_t(p) >= nc) p = -1;
-		lb[c] = p >= 0 ? affine_inverse(rig.bind[size_t(p)]).then(rig.bind[c]).t : rig.bind[c].t;
-		ln[c] = p >= 0 ? affine_inverse(bn[size_t(p)]).then(bn[c]).t : bn[c].t;
+		int p = rig.bank.channels[c].parent;
+		if (!rig.required(int(c))) continue;
+		if (p >= 0 && size_t(p) < nc && rig.required(p)) {
+			float l0 = length(sub(jb[c], jb[size_t(p)]));
+			if (l0 > 1e-3f) k[c] = length(sub(jn[c], jn[size_t(p)])) / l0;
+		} else if (jb[c][1] > 1e-3f && jn[c][1] > 1e-3f) {
+			k[c] = jn[c][1] / jb[c][1];
+		}
 	}
-	auto map_pos = [&](size_t c, const V3 &p) { return add(ln[c], mul(sub(p, lb[c]), sc)); };
+	auto map_pos = [&](size_t c, const V3 &p) { return mul(p, k[c]); };
 	out.bank = rig.bank;
 	for (size_t c = 0; c < nc; ++c) out.bank.channels[c].rest_pos = map_pos(c, rig.bank.channels[c].rest_pos);
 	auto retarget = [&](const de::AnimSequence &seq) {

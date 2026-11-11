@@ -52,7 +52,7 @@ struct Options {
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an
 	// object, place an imported prop in the open arena.
 	std::filesystem::path import_file, export_out;
-	std::string import_kind, import_name, import_template, import_base, export_spec, place_prop;
+	std::string import_kind, import_name, import_template, import_base, import_pose, export_spec, place_prop;
 	bool import_dialog = false;
 	int import_step = 0;
 };

@@ -75,6 +75,9 @@ Model load_fighter(const de::ObjectsFile &f, const char *spec, bool verbose) {
 	if (auto img = find_child(f, model, "Image\\Standard", "RGBMain")) {
 		out.skin = de::read_image(f, *img);
 	}
+	if (auto img = find_child(f, model, "Image\\Standard", "RGBStatic")) {
+		out.colours = de::read_image(f, *img);
+	}
 	float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
 	for (auto &v : out.mesh.vertices) {
 		for (int j = 0; j < 3; ++j) {
@@ -92,17 +95,11 @@ Model load_fighter(const de::ObjectsFile &f, const char *spec, bool verbose) {
 	return out;
 }
 
-std::unique_ptr<Rig> load_rig(const de::ObjectsFile &fighter, const de::ObjectsFile &model_file, uint32_t mesh_index, bool verbose) {
+std::unique_ptr<Rig> load_rig(const de::ObjectsFile &fighter, const de::ObjectsFile &model_file, uint32_t mesh_index, bool verbose, size_t robot) {
 	auto rig = std::make_unique<Rig>();
 	const de::ObjectInfo *bank = nullptr, *deform = nullptr;
-	for (auto &o : fighter.objects()) {
-		if (!bank && o.class_path == "AnimationSequenceGroup") {
-			bank = &o;
-		}
-		if (!deform && o.class_path == "ActorDeformInfo") {
-			deform = &o;
-		}
-	}
+	if (int k = de::robot_part(fighter, robot, "AnimationSequenceGroup"); k >= 0) bank = &fighter.objects()[size_t(k)];
+	if (int k = de::robot_part(fighter, robot, "ActorDeformInfo"); k >= 0) deform = &fighter.objects()[size_t(k)];
 	if (!bank || !deform) {
 		throw std::runtime_error("fighter file has no animation bank or deform info");
 	}
@@ -209,6 +206,7 @@ const char *const kFragmentShader = R"(#version 410 core
 in vec3 v_normal;
 in vec2 v_uv;
 uniform sampler2D skin;
+uniform sampler2D statics;  // RGBStatic, black when the model has none
 uniform vec3 light;
 uniform mat3 pilot;  // columns: colours for mask channels R, G, B
 out vec4 color;
@@ -217,7 +215,7 @@ void main() {
 	float d = abs(dot(n, normalize(light)));  // two-sided: winding not verified yet
 	// DE_COMF2FighterImageFilter::Filter (OMF 0x350350e0): out = r*C0 + g*C1 + b*C2, clamped;
 	// tables built by DE_CColorConversion::Update (0x35035ff0) as clamp(colour*256*i, 0, 65280).
-	vec3 base = min(pilot * texture(skin, v_uv).rgb, vec3(1.0));
+	vec3 base = min(pilot * texture(skin, v_uv).rgb + texture(statics, v_uv).rgb, vec3(1.0));
 	color = vec4(base * (0.35 + 0.75 * d), 1.0);
 }
 )";

@@ -127,18 +127,7 @@ Fighter &setup_fighter(game::World &world, const de::ObjectRef &robot, bool user
 	fi.name = name;
 	fi.file = ff;
 	fi.index = robot.index;
-	// A fighter file holds one robot; an add-on may hold several, each followed by its own
-	// objects: the first of each kind at or after the robot.
-	auto pick = [&](const std::function<bool(const de::ObjectInfo &)> &want) -> int {
-		const auto &objs = ff->objects();
-		for (size_t pass = 0; pass < 2; ++pass) {
-			for (uint32_t i = pass ? 0 : robot.index; i < objs.size(); ++i) {
-				if (want(objs[i])) return int(i);
-			}
-		}
-		return -1;
-	};
-	if (int k = pick([](const de::ObjectInfo &o) { return o.class_path == "JoystickInputSequenceGroup"; }); k >= 0) fi.inputs = game::read_input_bank(*ff, ff->objects()[size_t(k)]);
+	if (int k = de::robot_part(*ff, robot.index, "JoystickInputSequenceGroup"); k >= 0) fi.inputs = game::read_input_bank(*ff, ff->objects()[size_t(k)]);
 	if (auto *common = world.data().file("Fighter")) {
 		for (auto &o : common->objects()) {
 			if (o.class_path == "JoystickInputSequenceGroup" && o.name == "StandardInputSequenceBank") {
@@ -156,9 +145,9 @@ Fighter &setup_fighter(game::World &world, const de::ObjectRef &robot, bool user
 	// CFighterDescription::NewResource: the fighter is a copy of the file's robot (the file's own
 	// objects stay the template, as globals and copies refer to them).
 	if (game::GameObject *tpl = world.object_for(ff, robot.index)) fi.actor = world.copy_tree(*tpl);
-	if (int k = pick([](const de::ObjectInfo &o) { return o.class_path == "AnimationSequenceGroup"; }); k >= 0) fi.bank = de::read_anim_bank(*ff, ff->objects()[size_t(k)]);
+	if (int k = de::robot_part(*ff, robot.index, "AnimationSequenceGroup"); k >= 0) fi.bank = de::read_anim_bank(*ff, ff->objects()[size_t(k)]);
 	de::ObjectRef cls_obj;
-	if (int k = pick([&](const de::ObjectInfo &o) { return o.class_path == "Class" && o.name == "P" + name; }); k >= 0) cls_obj = {ff, uint32_t(k)};
+	if (int k = de::robot_part(*ff, robot.index, "Class", [&](const de::ObjectInfo &o) { return o.name == "P" + name; }); k >= 0) cls_obj = {ff, uint32_t(k)};
 	if (!fi.actor || !cls_obj) {
 		throw std::runtime_error("fighter actor or class not found");
 	}

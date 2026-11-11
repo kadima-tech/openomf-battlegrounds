@@ -249,7 +249,7 @@ static std::vector<V3> skin(const ed::RobotLod &lod, const std::vector<de::Trans
 
 // The worst edge stretch over every sequence (sampled), and the farthest vertex from the origin.
 struct PoseStats {
-	float stretch = 0, reach = 0;
+	float stretch = 0, reach = 0, direction = 1, mesh_direction = 1, base_mesh_direction = 1;
 	std::string worst;
 };
 static float stretch_of(const ed::RobotLod &lod, const std::vector<V3> &p) {
@@ -266,7 +266,7 @@ static float stretch_of(const ed::RobotLod &lod, const std::vector<V3> &p) {
 }
 
 // Stretch is measured against the base robot's own in the same sequence (some moves stretch it).
-static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig) {
+static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, const std::set<std::string> &supplied = {}) {
 	PoseStats st;
 	std::vector<std::string> bones;
 	for (auto &bone : rig.skin) bones.push_back(bone.name);
@@ -276,6 +276,45 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig) {
 	for (auto &bone : rig.skin) base_lod.weights.push_back(bone.weights), base_binds.push_back(bone.bind);
 	base_lod.faces = rig.mesh.faces;
 	const ed::RobotLod &lod = b.lods[0];
+	// The limbs point the base robot's way in every pose.
+	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
+		if (supplied.count(b.bank.sequences[q].name)) continue;
+		for (float t : {0.0f, 0.5f}) {
+			auto pn = b.bank.pose(b.bank.sequences[q], t), pb = rig.bank.pose(rig.bank.sequences[q], t);
+			for (const char *pair : {"LeftUpperArm:LeftLowerArm", "RightLowerArm:RightHand", "LeftUpperLeg:LeftLowerLeg", "Pelvis:Chest"}) {
+				std::string s = pair;
+				int a = rig.bank.channel(s.substr(0, s.find(':'))), c = rig.bank.channel(s.substr(s.find(':') + 1));
+				if (a < 0 || c < 0) continue;
+				V3 dn{pn[size_t(c)].t[0] - pn[size_t(a)].t[0], pn[size_t(c)].t[1] - pn[size_t(a)].t[1], pn[size_t(c)].t[2] - pn[size_t(a)].t[2]};
+				V3 db{pb[size_t(c)].t[0] - pb[size_t(a)].t[0], pb[size_t(c)].t[1] - pb[size_t(a)].t[1], pb[size_t(c)].t[2] - pb[size_t(a)].t[2]};
+				float d = (dn[0] * db[0] + dn[1] * db[1] + dn[2] * db[2]) / std::max(1e-6f, dist(dn, {0, 0, 0}) * dist(db, {0, 0, 0}));
+				st.direction = std::min(st.direction, d);
+				// And the mesh a limb carries lies along it (the pelvis's hangs below the chest's joint).
+				if (s.rfind("Pelvis", 0) == 0) continue;
+				size_t bi = 0;
+				for (size_t k2 = 0; k2 < rig.skin.size(); ++k2) bi = rig.skin[k2].name == rig.bank.channels[size_t(a)].name ? k2 : bi;
+				auto p = skin(lod, b.binds, bones, b.bank, b.bank.sequences[q], t);
+				V3 m{0, 0, 0};
+				float n = 0;
+				for (size_t v = 0; v < p.size(); ++v) {
+					if (lod.weights[bi][v] >= 120) m = {m[0] + p[v][0], m[1] + p[v][1], m[2] + p[v][2]}, n += 1;
+				}
+				if (n == 0) continue;
+				V3 dm{m[0] / n - pn[size_t(a)].t[0], m[1] / n - pn[size_t(a)].t[1], m[2] / n - pn[size_t(a)].t[2]};
+				float dd = (dm[0] * dn[0] + dm[1] * dn[1] + dm[2] * dn[2]) / std::max(1e-6f, dist(dm, {0, 0, 0}) * dist(dn, {0, 0, 0}));
+				st.mesh_direction = std::min(st.mesh_direction, dd);
+				auto pbm = skin(base_lod, base_binds, bones, rig.bank, rig.bank.sequences[q], t);
+				m = {0, 0, 0}, n = 0;
+				for (size_t v = 0; v < pbm.size(); ++v) {
+					if (base_lod.weights[bi].size() > v && base_lod.weights[bi][v] >= 120) m = {m[0] + pbm[v][0], m[1] + pbm[v][1], m[2] + pbm[v][2]}, n += 1;
+				}
+				if (n == 0) continue;
+				dm = {m[0] / n - pb[size_t(a)].t[0], m[1] / n - pb[size_t(a)].t[1], m[2] / n - pb[size_t(a)].t[2]};
+				dd = (dm[0] * db[0] + dm[1] * db[1] + dm[2] * db[2]) / std::max(1e-6f, dist(dm, {0, 0, 0}) * dist(db, {0, 0, 0}));
+				st.base_mesh_direction = std::min(st.base_mesh_direction, dd);
+			}
+		}
+	}
 	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
 		for (float t : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
 			auto p = skin(lod, b.binds, bones, b.bank, b.bank.sequences[q], t);
@@ -492,11 +531,17 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	}
 	CHECK(supplied == 1);
 	ed::RobotBuild b = ed::build_robot(plan);
-	PoseStats ps = pose_stats(b, *plan.har.rig);
-	printf("  scale %.2f, LODs %zu / %zu / %zu triangles, %zu sequences (%zu from the file); worst edge stretch %.2f (%s), reach %.1f units\n", b.scale, b.lods[0].faces.size(),
-	       b.lods.size() > 1 ? b.lods[1].faces.size() : 0, b.lods.size() > 2 ? b.lods[2].faces.size() : 0, b.bank.sequences.size(), b.supplied, ps.stretch, ps.worst.c_str(), ps.reach);
+	std::set<std::string> from_file;
+	for (auto &m : plan.har.sequences) {
+		if (m.animation >= 0) from_file.insert(m.sequence);
+	}
+	PoseStats ps = pose_stats(b, *plan.har.rig, from_file);
+	printf("  scale %.2f, LODs %zu / %zu / %zu triangles, %zu sequences (%zu from the file); worst edge stretch %.2f (%s), reach %.1f units, limbs within %.0f deg of the base, their meshes within %.0f deg of the limbs (base %.0f)\n", b.scale, b.lods[0].faces.size(),
+	       b.lods.size() > 1 ? b.lods[1].faces.size() : 0, b.lods.size() > 2 ? b.lods[2].faces.size() : 0, b.bank.sequences.size(), b.supplied, ps.stretch, ps.worst.c_str(), ps.reach, std::acos(std::clamp(ps.direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.mesh_direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.base_mesh_direction, -1.0f, 1.0f)) * 57.3f);
 	CHECK(b.supplied == 1);
 	CHECK(ps.stretch < 2.0f);
+	CHECK(ps.direction > 0.99f);
+	CHECK(std::acos(std::clamp(ps.mesh_direction, -1.0f, 1.0f)) <= std::acos(std::clamp(ps.base_mesh_direction, -1.0f, 1.0f)) + 0.5f);
 	CHECK(ps.reach < 60);
 	auto project = ed::Project::create(base, dir / "HarGenerated.DEObjects");
 	ed::ImportResult r = ed::import_robot(*project, plan);

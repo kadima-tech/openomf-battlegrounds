@@ -47,7 +47,7 @@ struct RobotState {
 	FlatMesh tris;
 	std::vector<std::string> robots;
 	std::string filter;
-	bool press_on_image = false;
+	bool press_on_image = false, pose_applied = false;
 };
 RobotState &rs() {
 	static RobotState s;
@@ -576,6 +576,12 @@ void robot_preview(Editor &e, ed::ImportPlan &plan, ImVec2 size) {
 		if (st.t > 1) st.t -= 1;
 	}
 	const ed::RobotRig *rig = h.rig.get();
+	if (st.build && !e.options().import_pose.empty() && !st.pose_applied) {
+		st.pose_applied = true;
+		for (size_t q = 0; q < st.build->bank.sequences.size(); ++q) {
+			if (st.build->bank.sequences[q].name == e.options().import_pose) st.sequence = int(q), st.t = 0.3f, st.playing = false;
+		}
+	}
 	int seq = st.build && st.sequence >= 0 && size_t(st.sequence) < st.build->bank.sequences.size() ? st.sequence : -1;
 	if (st.build) {
 		const auto &b = *st.build;

@@ -8,6 +8,7 @@ RobotPreview::~RobotPreview() {
 	if (vbo_) glDeleteBuffers(1, &vbo_);
 	if (vao_) glDeleteVertexArrays(1, &vao_);
 	if (skin_) glDeleteTextures(1, &skin_);
+	if (static_) glDeleteTextures(1, &static_);
 	if (colour_) glDeleteTextures(1, &colour_);
 	if (depth_) glDeleteRenderbuffers(1, &depth_);
 	if (fbo_) glDeleteFramebuffers(1, &fbo_);
@@ -24,6 +25,25 @@ bool RobotPreview::load(const std::filesystem::path &data, const std::string &na
 		rig_.reset();
 		return false;
 	}
+	return finish(name);
+}
+
+bool RobotPreview::load_addon(std::vector<uint8_t> bytes, uint32_t model, uint32_t robot, const std::string &key, std::string *error) {
+	try {
+		model_file_ = std::make_unique<de::ObjectsFile>(std::move(bytes));
+		fighter_file_.reset();
+		const std::string spec = "#" + std::to_string(model);
+		model_ = fighter::load_fighter(*model_file_, spec.c_str(), false);
+		rig_ = fighter::load_rig(*model_file_, *model_file_, model_.mesh_index, false, robot);
+	} catch (const std::exception &e) {
+		if (error) *error = e.what();
+		rig_.reset();
+		return false;
+	}
+	return finish(key);
+}
+
+bool RobotPreview::finish(const std::string &name) {
 	fighter_ = name;
 	animations_.clear();
 	for (auto &s : rig_->bank.sequences) animations_.push_back(s.name);
@@ -42,6 +62,9 @@ bool RobotPreview::load(const std::filesystem::path &data, const std::string &na
 	std::vector<uint8_t> grey{200, 200, 200, 255};
 	bool has_skin = !model_.skin.channels.empty();
 	skin_ = upload_texture(has_skin ? model_.skin.width : 1, has_skin ? model_.skin.height : 1, has_skin ? model_.skin.rgba() : grey, skin_);
+	std::vector<uint8_t> black{0, 0, 0, 255};
+	bool has_static = !model_.colours.channels.empty();
+	static_ = upload_texture(has_static ? model_.colours.width : 1, has_static ? model_.colours.height : 1, has_static ? model_.colours.rgba() : black, static_);
 	return true;
 }
 
@@ -111,6 +134,10 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "mvp"), 1, GL_FALSE, mvp);
 	glUniform3f(glGetUniformLocation(prog_, "light"), 0.4f, 0.7f, 0.6f);
 	glUniform1i(glGetUniformLocation(prog_, "skin"), 0);
+	glUniform1i(glGetUniformLocation(prog_, "statics"), 1);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, static_);
+	glActiveTexture(GL_TEXTURE0);
 	float m[9];
 	for (int k = 0; k < 3; ++k) {
 		for (int j = 0; j < 3; ++j) m[k * 3 + j] = colours[size_t(k)][size_t(j)];
