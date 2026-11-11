@@ -232,6 +232,29 @@ void assets_startup(Editor &e) {
 		for (uint32_t h : ed::addon_hars(*e.project())) exists |= tutf8(e.project()->file().objects[h].info.name_text()) == name;
 		if (!exists) make_har(e, from, name);
 	}
+	if (!o.har_constants.empty()) {
+		std::string target = o.open_har;
+		if (target.empty() && !o.new_har.empty()) {
+			std::string from;
+			split(o.new_har, &from, &target);
+		}
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			ed::HarObjects ho = ed::har_objects(*e.project(), h);
+			ed::HarData d = ed::read_har(*e.project(), ho);
+			for (auto &spec : o.har_constants) {
+				auto eq = spec.find('=');
+				bool found = false;
+				for (auto &c : d.constants) {
+					if (eq == std::string::npos || c.name != spec.substr(0, eq)) continue;
+					c.value = atof(spec.c_str() + eq + 1);
+					found = true;
+				}
+				e.log(found ? LogLine::Ok : LogLine::Error, (found ? "Set " : "No tunable constant ") + spec);
+			}
+			ed::write_har(*e.project(), ho, d);
+		}
+	}
 	if (o.compile) compile_scripts(e);
 	for (uint32_t t : ed::addon_tournaments(*e.project())) {
 		if (!o.open_tournament.empty() && tutf8(e.project()->file().objects[t].info.name_text()) == o.open_tournament) open_tournament(e, t);

@@ -36,7 +36,8 @@ struct Fighter {
 
 // A robot from its file: a copy of the file's OMF2Fighter with its brain (and, with `with_stats`,
 // PFighterStats under it). Fighters live as long as the program.
-Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats = true);
+// `file`: the robot's own file (an add-on's HAR variant); by default the base file named `name`.
+Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats = true, const de::ObjectsFile *file = nullptr);
 
 // A Camera property's lens (DE_CCamera contents v3/v4: field of view in degrees, near, far), with
 // the field of view set at run time (the observer's) when there is one.

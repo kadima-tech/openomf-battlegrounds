@@ -60,6 +60,7 @@ int main(int argc, char **argv) {
 		else if (arg("--open-tournament")) opt.open_tournament = argv[++i];
 		else if (arg("--new-har")) opt.new_har = argv[++i];
 		else if (arg("--open-har")) opt.open_har = argv[++i];
+		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
 		else if (arg("--asset-tab")) opt.asset_tab = atoi(argv[++i]);
 		else if (arg("--asset-select")) opt.asset_select = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--compile")) opt.compile = true;

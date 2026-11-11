@@ -100,12 +100,15 @@ GameView::images_of(const game::GameObject *o) {
 	};
 }
 
-Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats) {
-	const de::ObjectsFile *ff = world.data().file(name);
+Fighter &setup_fighter(game::World &world, const std::string &name, bool user, bool with_stats, const de::ObjectsFile *file) {
+	const de::ObjectsFile *ff = file ? file : world.data().file(name);
 	if (!ff) {
 		throw std::runtime_error("no fighter file " + name);
 	}
-	world.instantiate_file(name);
+	std::string stem = name;
+	for (auto &[n, f] : world.data().files())
+		if (f.get() == ff) stem = n;
+	world.instantiate_file(stem);
 	static std::deque<Fighter> keep;  // banks must outlive the world's pointers
 	Fighter &fi = keep.emplace_back();
 	fi.name = name;
@@ -290,7 +293,7 @@ void GameView::init_gl() {
 
 void GameView::wire_session() {
 	world.make_fighter = [this](const de::ObjectRef &actor) -> game::GameObject * {
-		Fighter &nf = setup_fighter(world, actor.info().name, false, false);
+		Fighter &nf = setup_fighter(world, actor.info().name, false, false, actor.file);
 		fighters.push_back(&nf);
 		return nf.actor;
 	};

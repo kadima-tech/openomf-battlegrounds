@@ -23,7 +23,12 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   `engine/build/openbg-viewer --data source/patched/v2123/Data --fighter Jaguar --anim LeftMediumPunch`
   (Left/Right cycles through the fighter's moves; `--list` prints them; Space pauses.)
 - `tools/pcc.cpp` (`pcc`): compiles a Class from its behaviors' sources (`vm/compiler.cpp`, for the classes the game ships without bytecode) and prints the code next to the shipped VMC2 where there is one:
-  `engine/build/pcc source/patched/v2123/Data SinglePlayer PSubSession 1`.
+  `engine/build/pcc source/patched/v2123/Data SinglePlayer PSubSession 1` (the class and
+  resolvable-reference tables, replicated lists, instances and inherit fields too; the shipped
+  code also after a compile error); `pcc <Data> <file> --source <Behavior>` prints a behavior's
+  2.123 source. `vmc2-tests <Data> -vm` lists every method as same, frame (differs only in the frame
+  size) or differs. `OPENBG_RECOMPILE=PJaguar,PKatana` (or `all`) makes the game run those classes
+  compiled from their sources instead of their VMC2, to compare runs (FINDINGS 527).
 - `app/arena.cpp` (`openbg-arena`): native arena fly-through:
   `engine/build/openbg-arena source/patched/v2123/Data Desert` (WASD/QE, drag to look), drawn with
   the fight's renderer (materials, the arena's lights, reflections, glow).
@@ -228,8 +233,8 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   fresh GUIDs; references of classes with no known layout go through the reference grammar
   (`ed::guess_map_reference_chunk`). New paint job copies the base model (~20 MB of meshes and
   images) so RGBMain / ReflectionMask / Bump can be replaced. Script constants rewrite the
-  behavior's `final` line; fighter scripts do not compile with our compiler yet (`master`), so that
-  leaves a stale-VMC2 validation error.
+  behavior's `final` line and Compile (or Save) rebuilds the fighter's classes (FINDINGS 527);
+  `--har-constant NAME=VALUE` (repeatable) sets one in the HAR made or opened at start-up.
 - More scripted options: `--new-tournament "<Base>:<Name>"` (`blank=<Base>:<Name>` for a blank ladder),
   `--open-tournament <Name>`, `--new-har "<Robot>:<Name>"`, `--open-har <Name>`, `--asset-tab N`,
   `--asset-select N` (the tournament tree's row: a match index, -1 settings, -2 ending, -3 branches,

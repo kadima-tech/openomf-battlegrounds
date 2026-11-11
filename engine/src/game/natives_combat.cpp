@@ -555,9 +555,9 @@ void register_combat_natives(World &w) {
 			if (add_potential_victim(c.world, a, st, col.owner)) {
 				write_vec(c.mem(), a + kConnectPoint, col.point);
 				if (getenv("OPENBG_DEBUG_HITS")) {
-					fprintf(stderr, "hit frame %u: %s -> %s (%s touched %s)\n", c.world.frame(),
+					fprintf(stderr, "hit frame %u: %s -> %s (%s touched %s), damage %.3f\n", c.world.frame(),
 					        st.owner ? st.owner->name.c_str() : "?", col.owner->name.c_str(), col.source->name.c_str(),
-					        col.touched->name.c_str());
+					        col.touched->name.c_str(), double(c.mem().get<float>(a + kDamage)));
 				}
 				c.ret_object(col.owner);
 				return;

@@ -934,7 +934,11 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	auto b = std::make_unique<Brain>();
 	b->owner = owner;
 	static const bool debug_attach = getenv("OPENBG_DEBUG_ATTACH") != nullptr;
-	if (debug_attach) fprintf(stderr, "[attach %u] %s on %s%s\n", frame_, cls_obj.info().name.c_str(), owner->name.c_str(), vmc2 ? "" : " (compiled)");
+	if (debug_attach) {
+		std::string stem;
+		for (auto &[n, f] : data_.files()) if (f.get() == cls_obj.file) stem = n;
+		fprintf(stderr, "[attach %u] %s (%s) on %s%s\n", frame_, cls_obj.info().name.c_str(), stem.c_str(), owner->name.c_str(), vmc2 ? "" : " (compiled)");
+	}
 	vm::load_class(b->cls, mem_, d.contents, std::move(code));
 	// The class's behaviors (Behavior objects, possibly in other files) and their global IDs.
 	for (auto &r : behavior_refs) {
