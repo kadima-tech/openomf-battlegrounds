@@ -1379,7 +1379,35 @@ GLuint load_environment(const de::World &world, const de::ObjectsFile &file) {
 	return 0;
 }
 
-void ArenaRenderer::load(const de::World &world, const std::string &stem) {
+// The meshes an environment's fighting-surface mesh affectors name (contents chunk 1: the groups,
+// 0x200000; references chunk 3: v2 { v1 { BOOL, mesh } }), in its own file.
+static std::set<uint32_t> surface_meshes(const de::ObjectsFile &file, uint32_t environment) {
+	std::set<uint32_t> out;
+	auto parents = file.parents();
+	for (uint32_t i = 0; i < file.objects().size(); ++i) {
+		if (file.objects()[i].class_path != "Actor\\Affector\\Mesh") continue;
+		bool under = false;
+		for (int p = int(i); p >= 0 && !under; p = parents[size_t(p)]) under = uint32_t(p) == environment;
+		if (!under) continue;
+		try {
+			auto d = file.object_data(file.objects()[i]);
+			de::Contents c(d.contents);
+			c.seek(de::begin_chunk(c).end);
+			de::begin_chunk(c);
+			if (!(c.u32() & 0x200000)) continue;
+			de::Contents r(d.references);
+			for (int k = 0; k < 3; ++k) r.seek(de::begin_chunk(r).end);
+			if (de::begin_chunk(r).version != 2) continue;
+			if (de::begin_chunk(r).version != 1 || !r.boolean()) continue;
+			de::Reference ref = de::Reference::read(r);
+			if (ref.kind == de::Reference::kLocal) out.insert(ref.index);
+		} catch (const std::exception &) {
+		}
+	}
+	return out;
+}
+
+void ArenaRenderer::load(const de::World &world, const std::string &stem, int environment) {
 	prog_ = glu::program(kArenaVS, kArenaFS);
 	const de::ObjectsFile *file = world.file(stem);
 	if (!file) {
@@ -1396,8 +1424,11 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 	g_lighting.ambient = de::read_ambient(world, *file);
 	load_projector_images(world);
 	// Floor: the fighting-surface collision mesh (world-space; it lives in a plain folder).
-	for (auto &o : file->objects()) {
-		if (o.class_path == "Mesh\\Standard" && o.name.find("FightingSurfaceCollision") != std::string::npos) {
+	std::set<uint32_t> surfaces;
+	if (environment >= 0) surfaces = surface_meshes(*file, uint32_t(environment));
+	for (uint32_t oi = 0; oi < file->objects().size(); ++oi) {
+		const auto &o = file->objects()[oi];
+		if (o.class_path == "Mesh\\Standard" && o.name.find("FightingSurfaceCollision") != std::string::npos && (environment < 0 || surfaces.count(oi))) {
 			auto m = de::read_mesh(*file, o);
 			for (auto &f : m.faces) {
 				floor_tris_.push_back({m.vertices[f.v[0]], m.vertices[f.v[1]], m.vertices[f.v[2]]});
@@ -1411,7 +1442,9 @@ void ArenaRenderer::load(const de::World &world, const std::string &stem) {
 		for (int p = int(item.actor_index); p >= 0; p = parents[size_t(p)]) chain.push_back(uint32_t(p));
 		// Only the environment's own branch is in the scene; the file's other actors (templates such
 		// as the Trophy Room's trophies) appear only as copies, drawn where they are.
-		if (std::none_of(chain.begin(), chain.end(), [&](uint32_t i) { return file->objects()[i].class_path == "Actor\\Creature\\Environment"; })) {
+		if (std::none_of(chain.begin(), chain.end(), [&](uint32_t i) {
+			    return environment >= 0 ? i == uint32_t(environment) : file->objects()[i].class_path == "Actor\\Creature\\Environment";
+		    })) {
 			if (getenv("OPENBG_DEBUG_MATERIALS")) fprintf(stderr, "[mesh] %s: outside the environment, not baked\n", item.actor.c_str());
 			continue;
 		}

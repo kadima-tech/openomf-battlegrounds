@@ -304,7 +304,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp
 add_executable(openbg-editor editor/app/main.cpp editor/app/editor.cpp editor/app/browser.cpp editor/app/object_view.cpp editor/app/pilot_doc.cpp editor/app/widgets.cpp
 	editor/app/theme.cpp editor/app/preview.cpp editor/app/launch.cpp editor/app/file_dialog.cpp app/fighter_model.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/generated/editor_fonts.cpp
-	editor/app/assets.cpp editor/app/code_view.cpp editor/app/tournament_doc.cpp editor/app/har_doc.cpp)
+	editor/app/assets.cpp editor/app/code_view.cpp editor/app/tournament_doc.cpp editor/app/har_doc.cpp editor/app/models.cpp)
 # The world side: arena viewports and play in editor, on the game's own renderer and runtime.
 target_sources(openbg-editor PRIVATE editor/app/world_view.cpp editor/app/world_panels.cpp editor/app/pie.cpp
 	app/game_view.cpp app/scene_lights.cpp app/shadows.cpp app/render.cpp app/overlay.cpp app/particles_gl.cpp app/audio.cpp

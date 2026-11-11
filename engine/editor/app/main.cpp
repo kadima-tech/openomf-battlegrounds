@@ -8,6 +8,9 @@
 //                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
 //                 [--layout 1|2|4] [--shading 0|1|2] [--move-to x,y,z] [--light-colour r,g,b,i]
 //                 [--play | --simulate] [--play-ticks N] [--eject] [--inspector] [--debug hits,nav,energy]
+//                 [--import model.glb [--import-kind prop|arena] [--import-name N] [--import-template <arena>]
+//                  [--import-dialog | --import-step 0-3]] [--place-prop <prop>]
+//                 [--export <Class:Name or name> [--export-out file.glb|.gltf]]
 //                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]]
 //
 // The add-on is created when it does not exist. --screenshot draws N frames (default 8) in a hidden
@@ -78,6 +81,15 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--inspector")) opt.inspector = true;
 		else if (arg("--play-ticks")) opt.play_ticks = atoi(argv[++i]);
 		else if (arg("--debug")) opt.debug = argv[++i];
+		else if (arg("--import")) opt.import_file = utf8_path(argv[++i]);
+		else if (arg("--import-kind")) opt.import_kind = argv[++i];
+		else if (arg("--import-name")) opt.import_name = argv[++i];
+		else if (arg("--import-template")) opt.import_template = argv[++i];
+		else if (!strcmp(argv[i], "--import-dialog")) opt.import_dialog = true;
+		else if (arg("--import-step")) opt.import_step = atoi(argv[++i]), opt.import_dialog = true;
+		else if (arg("--export")) opt.export_spec = argv[++i];
+		else if (arg("--export-out")) opt.export_out = utf8_path(argv[++i]);
+		else if (arg("--place-prop")) opt.place_prop = argv[++i];
 		else if (arg("--screenshot")) shot = argv[++i];
 		else if (arg("--frames")) frames = atoi(argv[++i]);
 		else if (arg("--size")) sscanf(argv[++i], "%dx%d", &shot_w, &shot_h);
@@ -155,6 +167,10 @@ int main(int argc, char **argv) {
 			while (SDL_PollEvent(&e)) {
 				ImGui_ImplSDL2_ProcessEvent(&e);
 				if (e.type == SDL_QUIT) editor.request_quit();
+				if (e.type == SDL_DROPFILE && e.drop.file) {
+					editor.drop_file(utf8_path(e.drop.file));
+					SDL_free(e.drop.file);
+				}
 				if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE && e.window.windowID == SDL_GetWindowID(window)) {
 					editor.request_quit();
 				}

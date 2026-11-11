@@ -20,6 +20,7 @@
 #include "widgets.h"
 #include "world.h"
 #include "assets.h"
+#include "models.h"
 
 namespace fs = std::filesystem;
 using namespace theme;
@@ -291,6 +292,7 @@ void Editor::apply_startup() {
 		}
 	}
 	assets_startup(*this);
+	models_startup(*this);
 	if (opt_.level) active_ = 0;
 	if (opt_.save) save();
 	if (opt_.launch) launch_game();
@@ -298,6 +300,8 @@ void Editor::apply_startup() {
 	settled_revision_ = project_->revision();
 	validate_now();
 }
+
+void Editor::drop_file(const std::filesystem::path &file) { models_drop(*this, file); }
 
 void Editor::validate_now() {
 	if (!project_) return;
@@ -639,6 +643,7 @@ void Editor::frame() {
 
 	draw_new_pilot_popup();
 	assets_popups(*this);
+	models_popups(*this);
 	draw_addon_chooser();
 	draw_data_prompt();
 	draw_about();
@@ -688,6 +693,8 @@ void Editor::draw_menu() {
 			ImGui::EndMenu();
 		}
 		if (ImGui::MenuItem(ICON_X "  Close Add-on", nullptr, false, has_project)) close_project();
+		ImGui::Separator();
+		models_file_menu(*this);
 		ImGui::Separator();
 		if (ImGui::MenuItem(ICON_SAVE "  Save", "Ctrl+S", false, has_project)) save();
 		if (ImGui::MenuItem("Save As...", nullptr, false, has_project)) {

@@ -10,6 +10,7 @@
 #include "editor.h"
 #include "world.h"
 #include "assets.h"
+#include "models.h"
 #include "icons.h"
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
@@ -673,6 +674,7 @@ void Editor::draw_browser_items() {
 				content_filter_.clear();
 			}
 		}
+		if (models_exportable(*this, r) && ImGui::MenuItem(ICON_UPLOAD "  Export to glTF...")) models_export_dialog(*this, r);
 		if (ImGui::MenuItem(ICON_HASH "  Copy GUID")) ImGui::SetClipboardText(r.guid.str().c_str());
 		ImGui::EndPopup();
 	};
