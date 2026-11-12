@@ -1726,22 +1726,23 @@ void ActorMeshRenderer::draw(const de::World &data, const std::vector<Item> &act
 				std::string pkey;
 				ref_key(pkey, r);
 				paint_key(pkey, *paint);
+				const std::vector<de::ObjectRef> none;
+				for (const de::ObjectRef &sc : scaled ? *scaled : none) ref_key(pkey, sc);
+				for (const de::ObjectRef &sc : statics ? *statics : none) ref_key(pkey, sc);
+				if (auto pt = painted_.find(pkey); pt != painted_.end()) return pt->second;
 				std::vector<de::Image> scaled_images, static_images;
-				for (const de::ObjectRef &sc : scaled ? *scaled : std::vector<de::ObjectRef>{}) {
-					ref_key(pkey, sc);
+				for (const de::ObjectRef &sc : scaled ? *scaled : none) {
 					try {
 						scaled_images.push_back(de::read_image(*sc.file, sc.info()));
 					} catch (const std::exception &) {
 					}
 				}
-				for (const de::ObjectRef &sc : statics ? *statics : std::vector<de::ObjectRef>{}) {
-					ref_key(pkey, sc);
+				for (const de::ObjectRef &sc : statics ? *statics : none) {
 					try {
 						static_images.push_back(de::read_image(*sc.file, sc.info()));
 					} catch (const std::exception &) {
 					}
 				}
-				if (auto pt = painted_.find(pkey); pt != painted_.end()) return pt->second;
 				GLuint t = 0;
 				try {
 					auto img = de::read_image(*r.file, r.info());
