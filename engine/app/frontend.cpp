@@ -1164,6 +1164,10 @@ int main(int argc, char **argv) {
 			}
 			if (perf::enabled()) {
 				{ PERF_ZONE("frame.gpu_finish"); glFinish(); }
+				static Uint64 perf_last = SDL_GetPerformanceCounter();
+				const Uint64 perf_now = SDL_GetPerformanceCounter();
+				perf::frame_time(double(perf_now - perf_last) * 1000.0 / double(SDL_GetPerformanceFrequency()));
+				perf_last = perf_now;
 				static Uint64 perf_t0 = SDL_GetPerformanceCounter();
 				static int perf_f0 = fr;
 				double perf_ms = double(SDL_GetPerformanceCounter() - perf_t0) * 1000.0 / double(SDL_GetPerformanceFrequency());

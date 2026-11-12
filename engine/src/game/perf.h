@@ -2,6 +2,7 @@
 // call to that zone; perf::report() prints every zone's ms per frame and calls per frame, then resets.
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -43,9 +44,27 @@ struct Scope {
 	}
 };
 
+struct Frames {
+	double worst = 0;
+	int over = 0;  // frames over 20 ms
+};
+
+inline Frames &frames() {
+	static Frames f;
+	return f;
+}
+
+inline void frame_time(double ms) {
+	Frames &f = frames();
+	f.worst = std::max(f.worst, ms);
+	f.over += ms > 20;
+}
+
 inline void report(int frame, int frames, double wall_ms) {
 	if (!enabled() || frames <= 0) return;
-	fprintf(stderr, "[perf %d] %.1f fps (%.2f ms a frame)", frame, wall_ms > 0 ? frames * 1000.0 / wall_ms : 0.0, wall_ms / frames);
+	fprintf(stderr, "[perf %d] %.1f fps (%.2f ms a frame, worst %.1f, %d over 20)", frame, wall_ms > 0 ? frames * 1000.0 / wall_ms : 0.0, wall_ms / frames,
+	        perf::frames().worst, perf::frames().over);
+	perf::frames() = Frames{};
 	for (auto &[name, z] : zones()) {
 		fprintf(stderr, ", %s %.3f ms x%.0f", name.c_str(), z.ms / frames, double(z.calls) / frames);
 		z = Zone{};
