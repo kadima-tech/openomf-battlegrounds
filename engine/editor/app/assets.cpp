@@ -273,6 +273,28 @@ void assets_startup(Editor &e) {
 			}
 		}
 	}
+	if (!o.har_title.empty() || !o.har_text.empty() || (!o.har_picture.empty() && o.har_picture != "render")) {
+		std::string target = o.open_har;
+		if (target.empty() && !o.new_har.empty()) {
+			std::string from;
+			split(o.new_har, &from, &target);
+		}
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			ed::HarObjects ho = ed::har_objects(*e.project(), h);
+			try {
+				ed::HarPresentation pr = ed::read_presentation(*e.project(), ho);
+				ed::write_presentation(*e.project(), ho, o.har_title.empty() ? pr.title : o.har_title, o.har_text.empty() ? pr.text : o.har_text);
+				if (!o.har_picture.empty() && o.har_picture != "render") {
+					ed::RgbaImage im = ed::load_image(o.har_picture);
+					ed::set_presentation_picture(*e.project(), ho, im.width, im.height, im.rgba, std::filesystem::path(o.har_picture).filename().string());
+				}
+				e.log(LogLine::Ok, "Set " + target + "'s Choose Creature panel");
+			} catch (const std::exception &ex) {
+				e.log(LogLine::Error, std::string("Choose Creature panel: ") + ex.what());
+			}
+		}
+	}
 	if (!o.har_constants.empty()) {
 		std::string target = o.open_har;
 		if (target.empty() && !o.new_har.empty()) {

@@ -457,6 +457,10 @@ static void check_engine_reads(const fs::path &data, const fs::path &file, const
 	size_t defaults = 0;
 	for (auto &m : models) defaults += game::read_description(w, m).flag_d8;
 	CHECK(defaults <= 1);
+	if (paint_jobs > 1) {
+		de::ObjectRef large = game::read_description(w, desc).large;
+		CHECK(large && large.file == f && large.info().class_path == "ControlCreator");
+	}
 	// The model's biggest mesh with its weights, and the fighter's bank.
 	const de::ObjectInfo *model = nullptr, *bank = nullptr, *deform = nullptr;
 	for (auto &o : f->objects()) {
@@ -654,6 +658,13 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 			colours = true;
 		}
 		CHECK(colours || plan.har.paint != ed::HarPlan::Paint::Colours);
+		// Choose Creature's panel: the base robot's until changed, then the add-on's own copy.
+		ed::HarPresentation before = ed::read_presentation(*project, o);
+		CHECK(before.found && !before.own && !before.text.empty() && before.width == 512 && before.height == 128);
+		ed::write_presentation(*project, o, "BOX BOT", "A robot of boxes.");
+		ed::set_presentation_picture(*project, o, 4, 1, std::vector<uint8_t>(16, 200), "test.png");
+		ed::HarPresentation after = ed::read_presentation(*project, o);
+		CHECK(after.own && after.title == "BOX BOT" && after.text == "A robot of boxes." && after.picture >= 0 && after.width == 512);
 	}
 	project->save();
 	check_engine_reads(data, dir / "HarGenerated.DEObjects", name, b.lods[0].faces.size(), 2);

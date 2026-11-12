@@ -49,6 +49,7 @@ struct Options {
 	std::string new_tournament, open_tournament, new_har, open_har;
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
+	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
 	int asset_tab = -1, asset_select = -100, paint_job = -1;
 	bool compile = false;
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an

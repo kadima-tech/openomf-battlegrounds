@@ -23,6 +23,10 @@ public:
 	const std::vector<std::string> &animations() const { return animations_; }
 	// Draws at `width` x `height` (pixels) and returns the texture.
 	GLuint render(int width, int height, const std::array<std::array<float, 3>, 3> &colours, int animation, float t, float yaw);
+	// Draws the robot this much closer than framing its whole bind pose (1).
+	void set_zoom(float zoom) { zoom_ = zoom; }
+	// The last render's pixels, RGBA rows top to bottom (alpha 0 where nothing was drawn).
+	std::vector<uint8_t> pixels(int *width, int *height) const;
 	// Where a bone's origin was in the last render (pixels from the top left) and how many pixels
 	// a model unit there spans; false for a bone the rig does not have.
 	bool bone_screen(const std::string &bone, float *x, float *y, float *pixels_per_unit) const;
@@ -37,7 +41,7 @@ private:
 	std::vector<std::string> animations_;
 	std::vector<std::array<float, 3>> pos_;
 	std::vector<de::Transform> pose_;
-	float mvp_[16] = {}, pixel_scale_ = 0;
+	float mvp_[16] = {}, pixel_scale_ = 0, zoom_ = 1;
 	GLuint prog_ = 0, vao_ = 0, vbo_ = 0, skin_ = 0, static_ = 0;
 	GLuint fbo_ = 0, colour_ = 0, depth_ = 0;
 	int tw_ = 0, th_ = 0;

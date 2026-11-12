@@ -1840,6 +1840,9 @@ bool DescriptionSelector::begin(AppManager &app) {
 	}
 	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
 	selected_ = entries_.empty() ? -1 : 0;
+	for (size_t k = 0; k < entries_.size(); ++k) {
+		if (std::find(highlight.begin(), highlight.end(), entries_[k].info().name) != highlight.end()) selected_ = int(k);
+	}
 	// Begin (2.123 0x201ec460): only a pool of one passes a Back on.
 	if (pool.size() == 1) {
 		choose(app, pool[0]);

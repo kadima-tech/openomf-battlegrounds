@@ -88,6 +88,24 @@ struct PaintImage {
 // The images of a paint job the add-on holds (RGBStatic, RGBMain, ReflectionMask, Bump; empty for
 // one that uses the base model).
 std::vector<PaintImage> paint_images(const Project &p, uint32_t model_description);
+// Choose Creature's panel for the robot: the description's large representation, a ControlCreator
+// (OMFHelp's <Robot>Creator) holding a title ControlCreator (its Value\String), spacers, the picture
+// (an Image\Standard, 512 x 128 in the shipped ones) and the description text (a Value\String).
+struct HarPresentation {
+	std::string title, text;   // UTF-8
+	int picture = -1;          // the add-on's image, when own
+	int width = 0, height = 0; // the picture's size
+	bool own = false;          // the add-on holds a copy (else the base robot's is shown)
+	bool found = false;        // the description has such a panel
+};
+HarPresentation read_presentation(const Project &p, const HarObjects &o);
+// Copies the base robot's panel into the add-on (once) and points the description at the copy.
+void own_presentation(Project &p, const HarObjects &o);
+// Title and text (copying the panel first when needed).
+void write_presentation(Project &p, const HarObjects &o, const std::string &title, const std::string &text);
+// The picture's pixels, scaled to its size (copying the panel first when needed).
+void set_presentation_picture(Project &p, const HarObjects &o, int width, int height, const std::vector<uint8_t> &rgba, const std::string &source);
+
 // The bone (nearest Actor above it) a sphere hangs from.
 std::string sphere_bone(const Project &p, int sphere);
 
