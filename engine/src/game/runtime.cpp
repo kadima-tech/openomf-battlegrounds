@@ -870,10 +870,16 @@ GameObject &World::make_object(const de::ObjectsFile *f, uint32_t i) {
 
 // A global entry's target (a template such as BFighter's DangerSphere): that object and its
 // children, kept out of the scene until a copy is parented into it.
+const std::vector<int32_t> &World::file_parents(const de::ObjectsFile *f) {
+	auto it = file_parents_.find(f);
+	if (it == file_parents_.end()) it = file_parents_.emplace(f, f->parents()).first;
+	return it->second;
+}
+
 GameObject *World::global_object(const de::ObjectRef &r) {
 	if (!r) return nullptr;
 	if (auto *o = object_for(r.file, r.index)) return o;
-	auto parents = r.file->parents();
+	const auto &parents = file_parents(r.file);
 	std::vector<GameObject *> made(parents.size(), nullptr);
 	made[r.index] = &make_object(r.file, r.index);
 	made[r.index]->detached = true;
@@ -903,7 +909,7 @@ GameObject *World::instantiate_file(const std::string &stem) {
 		return nullptr;
 	}
 	auto &objs = f->objects();
-	auto parents = f->parents();
+	const auto &parents = file_parents(f);
 	std::vector<GameObject *> made(objs.size());
 	for (uint32_t i = 0; i < objs.size(); ++i) {
 		if (auto *existing = object_for(f, i)) {
@@ -926,18 +932,22 @@ GameObject *World::instantiate_file(const std::string &stem) {
 	return root;
 }
 
-Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, const std::string &entry) {
+// Everything attach_brain reads from the Class object and its behaviors, once per class.
+const World::ClassTemplate &World::class_template(const de::ObjectRef &cls_obj) {
+	auto key = std::make_pair(cls_obj.file, cls_obj.index);
+	auto found = class_templates_.find(key);
+	if (found != class_templates_.end()) return found->second;
+	ClassTemplate t;
 	auto d = cls_obj.file->object_data(cls_obj.info());
 	auto vmc2 = cls_obj.file->ex_payload(d, "VMC2");
 	auto behavior_refs = vm::class_behavior_refs(d.references);
 	static const std::string recompile = getenv("OPENBG_RECOMPILE") ? "," + std::string(getenv("OPENBG_RECOMPILE")) + "," : "";
 	if (vmc2 && !recompile.empty() && (recompile == ",all," || recompile.find("," + cls_obj.info().name + ",") != std::string::npos)) vmc2.reset();
-	vm::VMClass code;
+	t.compiled = !vmc2;
 	if (vmc2) {
-		code = vm::VMClass::parse(vmc2->data, behavior_refs.size());
+		t.code = vm::VMClass::parse(vmc2->data, behavior_refs.size());
 	} else {
 		// DE_CClass::PrepareForExecution compiles a class shipped without VMC2 from its sources.
-		auto key = std::make_pair(cls_obj.file, cls_obj.index);
 		auto it = compiled_classes_.find(key);
 		if (it == compiled_classes_.end()) {
 			std::vector<std::string> notes;
@@ -945,67 +955,72 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 			for (auto &n : notes) log.push_back("compiler: " + n);
 			it = compiled_classes_.emplace(key, std::move(compiled)).first;
 		}
-		code = it->second;
+		t.code = it->second;
 	}
+	t.contents = std::move(d.contents);
+	// The class's visible behaviors (op 26 indexes them): the attached behaviors, then -- from the
+	// most-derived behavior back to the first -- every behavior they reference, depth first,
+	// each added once. (Recovered by aligning op 26 operands with the source's Interface(B...)
+	// calls: e.g. PJaguar 9 BLaser, 13 BLauncher, 15 BFighterStats, 20 BStandardOMFSession.)
+	auto &list = t.behaviors;
+	for (auto &r : behavior_refs) {
+		list.push_back(data_.resolve(*cls_obj.file, r));
+	}
+	auto known = [&](const de::ObjectRef &x) {
+		for (auto &y : list) {
+			if (y && y.file == x.file && y.index == x.index) return true;
+		}
+		return false;
+	};
+	std::function<void(const de::ObjectRef &)> visit = [&](const de::ObjectRef &beh) {
+		for (const de::ObjectRef &x : referenced_behaviors(beh)) {
+			if (!known(x)) {
+				list.push_back(x);
+				visit(x);
+			}
+		}
+	};
+	t.attached = list.size();
+	for (size_t i = t.attached; i-- > 0;) {
+		if (list[i]) visit(list[i]);
+	}
+	// Op 8 (DE_CClass::GlobalEntry) numbers the global entries of these behaviors in turn.
+	for (auto &beh : list) {
+		if (!beh) continue;
+		for (auto &g : behavior_globals(beh)) t.globals.push_back(g);
+	}
+	return class_templates_.emplace(key, std::move(t)).first->second;
+}
+
+Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, const std::string &entry) {
+	const ClassTemplate &t = class_template(cls_obj);
 	auto b = std::make_unique<Brain>();
 	b->owner = owner;
 	static const bool debug_attach = getenv("OPENBG_DEBUG_ATTACH") != nullptr;
 	if (debug_attach) {
 		std::string stem;
 		for (auto &[n, f] : data_.files()) if (f.get() == cls_obj.file) stem = n;
-		fprintf(stderr, "[attach %u] %s (%s) on %s%s\n", frame_, cls_obj.info().name.c_str(), stem.c_str(), owner->name.c_str(), vmc2 ? "" : " (compiled)");
+		fprintf(stderr, "[attach %u] %s (%s) on %s%s\n", frame_, cls_obj.info().name.c_str(), stem.c_str(), owner->name.c_str(), t.compiled ? " (compiled)" : "");
 	}
-	vm::load_class(b->cls, mem_, d.contents, std::move(code));
+	vm::load_class(b->cls, mem_, t.contents, t.code);
 	// The class's behaviors (Behavior objects, possibly in other files) and their global IDs.
-	for (auto &r : behavior_refs) {
-		de::ObjectRef br = data_.resolve(*cls_obj.file, r);
+	for (size_t i = 0; i < t.attached; ++i) {
+		const de::ObjectRef &br = t.behaviors[i];
 		b->behaviors.push_back(br ? behavior_id(br) : 0);
 		b->behavior_names.push_back(br ? br.info().name : "?");
 	}
-	// The class's visible behaviors (op 26 indexes them): the attached behaviors, then -- from the
-	// most-derived behavior back to the first -- every behavior they reference, depth first,
-	// each added once. (Recovered by aligning op 26 operands with the source's Interface(B...)
-	// calls: e.g. PJaguar 9 BLaser, 13 BLauncher, 15 BFighterStats, 20 BStandardOMFSession.)
-	{
-		std::vector<de::ObjectRef> list;
-		for (auto &r : behavior_refs) {
-			list.push_back(data_.resolve(*cls_obj.file, r));
-		}
-		auto known = [&](const de::ObjectRef &t) {
-			for (auto &x : list) {
-				if (x && x.file == t.file && x.index == t.index) return true;
-			}
-			return false;
-		};
-		std::function<void(const de::ObjectRef &)> visit = [&](const de::ObjectRef &beh) {
-			for (const de::ObjectRef &t : referenced_behaviors(beh)) {
-				if (!known(t)) {
-					list.push_back(t);
-					visit(t);
-				}
-			}
-		};
-		const size_t attached = list.size();
-		b->attached = attached;
-		for (size_t i = attached; i-- > 0;) {
-			if (list[i]) visit(list[i]);
-		}
-		for (size_t i = attached; i < list.size(); ++i) {
-			b->behaviors.push_back(behavior_id(list[i]));
-			b->behavior_names.push_back(list[i].info().name);
-		}
-		// Op 8 (DE_CClass::GlobalEntry) numbers the global entries of these behaviors in turn.
-		for (auto &beh : list) {
-			if (!beh) continue;
-			for (auto &g : behavior_globals(beh)) b->globals.push_back(g);
-		}
+	b->attached = t.attached;
+	for (size_t i = t.attached; i < t.behaviors.size(); ++i) {
+		b->behaviors.push_back(behavior_id(t.behaviors[i]));
+		b->behavior_names.push_back(t.behaviors[i].info().name);
 	}
+	b->globals = t.globals;
 	if (getenv("OPENBG_DEBUG_BEHAVIORS")) {
-		for (auto &r : behavior_refs) {
-			de::ObjectRef br = data_.resolve(*cls_obj.file, r);
+		for (size_t i = 0; i < t.attached; ++i) {
+			const de::ObjectRef &br = t.behaviors[i];
 			if (!br) continue;
 			fprintf(stderr, "  %s uses:", br.info().name.c_str());
-			for (auto &t : referenced_behaviors(br)) fprintf(stderr, " %s", t.info().name.c_str());
+			for (auto &x : referenced_behaviors(br)) fprintf(stderr, " %s", x.info().name.c_str());
 			fprintf(stderr, "\n");
 		}
 		for (size_t i = 0; i < b->behavior_names.size(); ++i) {
@@ -1013,23 +1028,26 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 			        b->behaviors[i]);
 		}
 	}
-	uint32_t extent = 0;
-	for (auto &m : b->cls.methods) {
-		for (auto &ins : vm::decode(m.cm->code)) {
-			if (ins.opcode == 65 && ins.args.size() >= 3) {
-				extent = std::max(extent, uint32_t(ins.args[0] + ins.args[2]));
-			} else if (ins.opcode == 66 && ins.args.size() >= 3) {
-				extent = std::max(extent, uint32_t(ins.args[1] + ins.args[2]));
-			} else if (((ins.opcode >= 53 && ins.opcode <= 59) || ins.opcode == 27 || ins.opcode == 29) && !ins.args.empty()) {
-				extent = std::max(extent, uint32_t(ins.args[0] + 4));
+	if (!t.extent) {
+		uint32_t extent = 0;
+		for (auto &m : b->cls.methods) {
+			for (auto &ins : vm::decode(m.cm->code)) {
+				if (ins.opcode == 65 && ins.args.size() >= 3) {
+					extent = std::max(extent, uint32_t(ins.args[0] + ins.args[2]));
+				} else if (ins.opcode == 66 && ins.args.size() >= 3) {
+					extent = std::max(extent, uint32_t(ins.args[1] + ins.args[2]));
+				} else if (((ins.opcode >= 53 && ins.opcode <= 59) || ins.opcode == 27 || ins.opcode == 29) && !ins.args.empty()) {
+					extent = std::max(extent, uint32_t(ins.args[0] + 4));
+				}
 			}
 		}
-	}
-	for (auto &beh : b->cls.code.behaviors) {
-		for (auto &ci : beh.instances) extent = std::max(extent, ci.value + 4);
+		for (auto &beh : b->cls.code.behaviors) {
+			for (auto &ci : beh.instances) extent = std::max(extent, ci.value + 4);
+		}
+		t.extent = extent + 64;
 	}
 	b->inst.cls = &b->cls;
-	b->inst.members_size = extent + 64;
+	b->inst.members_size = *t.extent;
 	b->inst.members = mem_.alloc(b->inst.members_size);
 	b->inst.self = owner->handle;
 	b->inst.handle = mem_.alloc(kObjectBlock);

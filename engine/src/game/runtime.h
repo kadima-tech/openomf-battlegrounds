@@ -675,6 +675,20 @@ public:
 	std::vector<std::string> log;
 	// Classes compiled from source (no VMC2), by Class object.
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, vm::VMClass> compiled_classes_;
+	struct ClassTemplate {
+		std::vector<uint8_t> contents;
+		vm::VMClass code;
+		bool compiled = false;
+		std::vector<de::ObjectRef> behaviors;  // the attached ones first
+		size_t attached = 0;
+		std::vector<de::ObjectRef> globals;
+		mutable std::optional<uint32_t> extent;  // the members' size, known after the first load
+	};
+	const ClassTemplate &class_template(const de::ObjectRef &cls_obj);
+	std::map<std::pair<const de::ObjectsFile *, uint32_t>, ClassTemplate> class_templates_;
+	// ObjectsFile::parents, read once per file.
+	const std::vector<int32_t> &file_parents(const de::ObjectsFile *f);
+	std::unordered_map<const de::ObjectsFile *, std::vector<int32_t>> file_parents_;
 
 	// --- Session support (session.cpp) ---
 	// Every live session (a single-player tournament's master and the sub-session of its current
