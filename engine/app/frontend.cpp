@@ -151,6 +151,7 @@ int main(int argc, char **argv) {
 	int frames = 60;
 	std::string join;  // --join: the server to join at once
 	int port = 0;      // --port
+	std::string lobby;  // --lobby: the lobby server, for this run
 	int shot_w = 1024, shot_h = 768;  // --size WxH: a screenshot run's frame
 	for (int i = 2; i < argc; ++i) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
@@ -162,6 +163,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
 		else if (!strcmp(argv[i], "--join") && i + 1 < argc) join = argv[++i];
 		else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--lobby") && i + 1 < argc) lobby = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
@@ -295,9 +297,16 @@ int main(int argc, char **argv) {
 			netgame.close();
 			if (!world.sessions.empty()) game::destroy_all_sessions(world);
 		};
+		app.lobby_override = lobby;
 		auto net_options = [&] {
+			// A host's identity key is made once and kept, so players can recognise the host.
+			if (!net::Identity::from_hex(app.registry_string("Network\\Host Key"))) {
+				std::string seed = net::Identity::new_seed_hex();
+				if (!seed.empty()) app.set_registry_string("Network\\Host Key", seed);
+			}
 			game::NetOptions o = game::net_options(world.registry);
 			if (port > 0 && port < 65536) o.port = uint16_t(port);
+			if (!lobby.empty()) o.lobby = lobby, o.lan_only = false;
 			return o;
 		};
 		app.join_server = [&](const std::string &address, const std::string &password, std::string *error) {
@@ -305,6 +314,13 @@ int main(int argc, char **argv) {
 			o.password = password;
 			netgame.close();
 			return netgame.join(address, o, error);
+		};
+		app.join_listed = [&](const net::LobbyEntry &entry, const std::string &password, std::string *error) {
+			game::NetOptions o = net_options();
+			o.password = password;
+			o.lobby = app.lobby_server();
+			netgame.close();
+			return netgame.join_listed(entry, o, error);
 		};
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).

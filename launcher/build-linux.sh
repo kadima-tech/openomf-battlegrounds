@@ -70,6 +70,8 @@ if [ "${1:-}" != "--ui-only" ]; then
     indeo="$runtime/_deps/openindeo-src"
     if [ ! -d "$indeo" ]; then indeo="$repo/../openindeo"; fi
     cp "$indeo/LICENSE" "$resources/licenses/openindeo.txt"
+    cp "$runtime/_deps/enet-src/LICENSE" "$resources/licenses/enet.txt"
+    cp "$runtime/_deps/monocypher-src/LICENCE.md" "$resources/licenses/Monocypher.txt"
 fi
 
 # Bundle a relocatable Python and decoder. Player setup is offline.

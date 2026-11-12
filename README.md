@@ -12,8 +12,8 @@ engine, so the game can be played on modern machines.
 > menus, robot and pilot selection, every robot and arena, the computer opponents, the HUD, sound,
 > music and replays. LAN and direct-IP play work for two players (Last Man Standing, one against
 > one): Host Game serves the match on UDP port 2002 (Options > Network > Listener Port), and Join
-> Game lists the sessions on your network or takes an address. Internet play through a lobby is not
-> supported yet. Expect bugs and rough edges.
+> Game lists the sessions on your network or takes an address. Internet play works through a lobby
+> server anyone can run (see [Playing online](#playing-online)). Expect bugs and rough edges.
 > [PLACEHOLDERS.md](PLACEHOLDERS.md) lists everything that is still missing or approximated.
 
 The port follows the game's final official patch, **2.123**.
@@ -203,6 +203,28 @@ engine/build/openbg-fight source/patched/v2123/Data Jaguar --opponent Katana --a
 
 Robots: Jaguar, Katana, Gargoyle, Chronos, Mantis, Pyros, Warlord, Force. Arenas: Desert, BladePit,
 Canyon, City, FirePit, Iceberg, PowerPlant, SpaceStation, Volcano.
+
+### Playing online
+
+Two players on one network need nothing more than **Host Game** (main menu) on one machine and
+**Join Game** on the other. Over the internet the game uses a *lobby server*, which lists hosted
+games and helps the two machines reach each other through home routers; when they cannot, it relays
+the game between them. There is no official lobby yet, so someone in your group runs one:
+
+1. **Run a lobby** on a machine both players can reach (a home server with UDP ports 27900-27964
+   forwarded, or a small cloud machine): `openbg-lobby` from `server/` (`go build ./cmd/openbg-lobby`),
+   or its container image (`docker build -t openbg-lobby server/`, then
+   `docker run --network host openbg-lobby`). [DEVELOPING.md](DEVELOPING.md) lists its settings.
+2. **Point the game at it:** Options > Network > Lobby Server, the lobby's address (`host` or
+   `host:port`). Leave LAN Only off.
+3. **Host:** Host Game on the main menu. Your game appears in the lobby's list; you do not need to forward
+   any ports.
+4. **Join:** Join Game on the main menu. Lobby games are listed with the LAN ones (the line under the
+   list shows the lobby's status); pick one and Join.
+
+All game traffic is encrypted, also on a LAN and with a typed address. Each host has an identity key;
+when you join from the lobby's list the game checks that the host is the one the lobby listed, so the
+relay cannot read or alter the game. Both players need the same game version and data.
 
 ## How it works
 

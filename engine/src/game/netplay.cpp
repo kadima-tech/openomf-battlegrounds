@@ -930,7 +930,11 @@ void NetSession::receive(Peer &p, const net::Packet &packet) {
 		std::string id = r.str();
 		if (!r.ok || server) break;
 		for (auto &m : net_managers(w_)) {
-			if (m.id == id && !m.server_id) {
+			// A client's own fighter is the server's to make too; asked for before the server has made
+			// it (a join during the server's load), it waits for its ID (FINDINGS 623).
+			bool own = false;
+			for (GameObject *o = m.owner; o && !own; o = o->parent) own = locally_controlled(w_, o);
+			if (m.id == id && !m.server_id && !own) {
 				w_.clean_later(m.owner);
 				++deletes;
 				w_.log.push_back("net: the server knows no " + m.owner->name + "; deleted");

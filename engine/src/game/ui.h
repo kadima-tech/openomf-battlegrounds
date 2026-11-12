@@ -14,6 +14,10 @@
 #include "de/scene.h"
 #include "game/controls.h"
 
+namespace net {
+struct LobbyEntry;
+}
+
 namespace game {
 
 class World;
@@ -255,6 +259,12 @@ public:
 	std::function<bool(const std::string &path)> launch_replay;
 	// Join Game's Join: connect to a server ("host:port"); false with `error` set.
 	std::function<bool(const std::string &address, const std::string &password, std::string *error)> join_server;
+	// Join Game's Join on a session the lobby lists.
+	std::function<bool(const net::LobbyEntry &entry, const std::string &password, std::string *error)> join_listed;
+	// The lobby Join Game lists and Host Game lists on: --lobby, else Network\Lobby Server unless
+	// Network\LAN Only; empty for none.
+	std::string lobby_server();
+	std::string lobby_override;  // --lobby
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 	// The "Client Browser" impulse (Tab): DE_CClientBrowserFactory::ProcessEvent.
