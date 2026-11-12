@@ -23,7 +23,7 @@ std::vector<std::vector<std::vector<de::ObjectRef>>> reference_lists(const de::W
 	std::vector<std::vector<std::vector<de::ObjectRef>>> out;
 	if (!r) return out;
 	try {
-		auto d = r.file->object_data(r.info());
+		auto d = r.file->object_links(r.info());
 		de::Contents c(d.references);
 		while (c.remaining() > 1) {
 			de::Chunk ch = de::begin_chunk(c);
@@ -558,7 +558,7 @@ void call_hook(World &w, const ScriptHook &h, uint32_t arg = 0, bool with_arg = 
 static std::pair<std::vector<de::ObjectRef>, std::vector<de::ObjectRef>> description_lists(World &w, const de::ObjectRef &d) {
 	std::vector<de::ObjectRef> components, replacements;
 	try {
-		de::Contents c(d.file->object_data(d.info()).references);
+		de::Contents c(d.file->object_links(d.info()).references);
 		c.seek(de::begin_chunk(c).end);  // DE_CObject's
 		if (c.remaining() < 2) return {};
 		de::Chunk ch = de::begin_chunk(c);

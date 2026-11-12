@@ -224,7 +224,7 @@ GLuint cube_texture(const de::ObjectRef &cube) {
 }
 
 const de::ObjectInfo *find_child(const de::ObjectsFile &f, size_t parent, const std::string &cls, const std::string &name = "") {
-	for (uint32_t c : de::ObjectsFile::children(f.object_data(f.objects()[parent]))) {
+	for (uint32_t c : de::ObjectsFile::children(f.object_links(f.objects()[parent]))) {
 		auto &o = f.objects()[c];
 		if (o.class_path == cls && (name.empty() || o.name == name)) {
 			return &o;
@@ -1336,7 +1336,7 @@ GLuint load_environment(const de::World &world, const de::ObjectsFile &file) {
 	for (uint32_t i = 0; i < file.objects().size(); ++i) {
 		if (file.objects()[i].class_path != "Actor\\Creature\\Environment") continue;
 		try {
-			de::Contents c(file.object_data(file.objects()[i]).references);
+			de::Contents c(file.object_links(file.objects()[i]).references);
 			size_t last = 0;
 			int version = 0;
 			while (c.remaining() > 1) {
@@ -1927,7 +1927,7 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 		throw std::runtime_error("no FighterModel found");
 	}
 	uint32_t mesh_index = 0;
-	for (uint32_t c : de::ObjectsFile::children(f.object_data(objs[model]))) {
+	for (uint32_t c : de::ObjectsFile::children(f.object_links(objs[model]))) {
 		if (objs[c].class_path != "Mesh\\Standard") {
 			continue;
 		}
@@ -1967,7 +1967,7 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 	scaled_.clear();
 	static_.clear();
 	if (model != SIZE_MAX) {
-		std::vector<uint32_t> todo = de::ObjectsFile::children(f.object_data(objs[model]));
+		std::vector<uint32_t> todo = de::ObjectsFile::children(f.object_links(objs[model]));
 		while (!todo.empty()) {
 			uint32_t i = todo.back();
 			todo.pop_back();
@@ -1977,7 +1977,7 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 				} catch (const std::exception &) {
 				}
 			}
-			for (uint32_t c : de::ObjectsFile::children(f.object_data(objs[i]))) todo.push_back(c);
+			for (uint32_t c : de::ObjectsFile::children(f.object_links(objs[i]))) todo.push_back(c);
 		}
 	}
 	prog_ = glu::program(kArenaVS, kArenaFS);
@@ -2191,11 +2191,11 @@ void FighterRenderer::load_attachments(const de::World &world, const de::Objects
 	std::map<uint32_t, uint32_t> parent;
 	for (uint32_t i = 0; i < fo.size(); ++i) {
 		try {
-			for (uint32_t c : de::ObjectsFile::children(fighter.object_data(fo[i]))) parent[c] = i;
+			for (uint32_t c : de::ObjectsFile::children(fighter.object_links(fo[i]))) parent[c] = i;
 		} catch (const std::exception &) {
 		}
 	}
-	auto model_children = de::ObjectsFile::children(f.object_data(f.objects()[model]));
+	auto model_children = de::ObjectsFile::children(f.object_links(f.objects()[model]));
 	for (auto &d : fo) {
 		if (d.class_path != "ActorDeformInfo" || &d == body_deform) continue;
 		Attachment at;

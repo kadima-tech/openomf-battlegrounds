@@ -415,7 +415,7 @@ GameObject *World::create(const std::string &name, const std::string &class_path
 std::vector<de::ObjectRef> World::referenced_behaviors(const de::ObjectRef &behavior) const {
 	std::vector<de::ObjectRef> out;
 	try {
-		auto d = behavior.file->object_data(behavior.info());
+		auto d = behavior.file->object_links(behavior.info());
 		de::Contents c(d.references);
 		de::Chunk obj = de::begin_chunk(c);
 		c.seek(obj.end);
@@ -440,7 +440,7 @@ std::vector<de::ObjectRef> World::referenced_behaviors(const de::ObjectRef &beha
 std::vector<de::ObjectRef> World::behavior_globals(const de::ObjectRef &behavior) const {
 	std::vector<de::ObjectRef> out;
 	try {
-		auto d = behavior.file->object_data(behavior.info());
+		auto d = behavior.file->object_links(behavior.info());
 		de::Contents c(d.references);
 		de::Chunk obj = de::begin_chunk(c);
 		c.seek(obj.end);
@@ -1295,7 +1295,7 @@ void read_affector(GameObject &g, const de::World &data, const de::ObjectsFile &
 			g.shape = GameObject::Shape::Mesh;
 			// DE_CMeshAffector::ObjProcessReferences: references chunk 3 (v2) holds a v1 chunk
 			// { BOOL, mesh reference }.
-			de::Contents r(f.object_data(o).references);
+			de::Contents r(f.object_links(o).references);
 			for (int k = 0; k < 3 && r.remaining() > 1; ++k) r.seek(de::begin_chunk(r).end);
 			de::Chunk mc = de::begin_chunk(r);
 			if (mc.version == 2) {
@@ -2079,7 +2079,7 @@ GameObject *World::encompasser_of(GameObject *a) {
 		a->data_encompasser_read = true;
 		if (a->file) {
 			try {
-				de::Contents c(a->file->object_data(a->file->objects()[a->index]).references);
+				de::Contents c(a->file->object_links(a->file->objects()[a->index]).references);
 				for (int k = 0; k < 2 && c.remaining() > 1; ++k) c.seek(de::begin_chunk(c).end);
 				if (c.remaining() > 1 && de::begin_chunk(c).version == 4) {
 					if (c.boolean()) de::Reference::read(c);

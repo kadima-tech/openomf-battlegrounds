@@ -27,7 +27,7 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) 
 	} catch (const std::exception &) {
 	}
 	try {
-		de::Contents c(d.file->object_data(d.info()).references);
+		de::Contents c(d.file->object_links(d.info()).references);
 		c.seek(de::begin_chunk(c).end);  // DE_CObject's
 		if (c.remaining() >= 2) {
 			de::Chunk ch = de::begin_chunk(c);

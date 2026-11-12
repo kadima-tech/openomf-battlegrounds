@@ -3,7 +3,7 @@
 namespace de {
 
 std::vector<FaceUV> read_texture_uvs(const ObjectsFile &f, const ObjectInfo &o) {
-	auto d = f.object_data(o);
+	auto d = f.object_links(o);
 	auto ext = f.ex_payload(d, "ObjExtCon");
 	std::vector<FaceUV> out;
 	if (!ext) {

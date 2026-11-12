@@ -271,7 +271,7 @@ std::vector<SkinBone> read_skin(const ObjectsFile &df, const ObjectInfo &di, con
 		}
 	}
 	// Weights: "Deform<Bone>VertexData" children of the mesh.
-	for (uint32_t ci : ObjectsFile::children(mf.object_data(mf.objects()[mesh_index]))) {
+	for (uint32_t ci : ObjectsFile::children(mf.object_links(mf.objects()[mesh_index]))) {
 		auto &o = mf.objects()[ci];
 		if (o.class_path != "DataChannel\\UnitFloats") {
 			continue;
