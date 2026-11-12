@@ -51,6 +51,7 @@ struct RobotRig {
 	};
 	std::vector<Sphere> spheres;  // in the fighter file's order
 	std::vector<std::string> script_sequences;  // "seq<Name>" globals of its scripts that name sequences
+	std::vector<std::string> sphere_prefixes;   // IsNamePrefix("...") names its scripts gather attack spheres by
 	float height = 0;                         // the skin bones' vertical span (DE units)
 	std::array<float, 3> forward{0, 0, 1}, left{1, 0, 0};  // where it faces and its left (DE space)
 	int channel(const std::string &name) const { return bank.channel(name); }
@@ -100,6 +101,8 @@ struct RobotBuild {
 	RobotImage mask, reflection, colours, bump, scaled;  // RGBMain, ReflectionMask, RGBStatic, Bump, RGBScaled
 	struct Sphere {
 		size_t index = 0;  // into RobotRig::spheres
+		bool added = false;  // a new sphere copying that one, named `name`
+		std::string name;
 		std::string bone;  // the bone actor it hangs from ("" keeps its parent)
 		de::Transform local;
 		float hotspot = 0, falloff = 0;

@@ -538,6 +538,21 @@ std::shared_ptr<RobotRig> read_rig(const BaseData &base, const std::string &robo
 		}
 	}
 	rig->script_sequences.assign(names.begin(), names.end());
+	// The shared fighter class gathers attack spheres by name prefix (BFighter's entry, FINDINGS 672).
+	std::set<std::string> prefixes;
+	for (const deo::File *src : {&fd, base.file("Fighter") ? &base.model(size_t(base.file("Fighter") - base.files().data())) : nullptr}) {
+		if (!src) continue;
+		for (auto &o : src->objects) {
+			if (o.info.class_text() != "Behavior") continue;
+			std::string text = behavior_source(o);
+			const std::string key = "IsNamePrefix(\"";
+			for (size_t at = text.find(key); at != std::string::npos; at = text.find(key, at + 1)) {
+				size_t from = at + key.size(), to = text.find('"', from);
+				if (to != std::string::npos && to > from) prefixes.insert(text.substr(from, to - from));
+			}
+		}
+	}
+	rig->sphere_prefixes.assign(prefixes.begin(), prefixes.end());
 	return rig;
 }
 
@@ -1130,8 +1145,34 @@ void analyse_robot(ImportPlan &plan, const BaseData &base) {
 				if (b.joint == p && b.required) sp.bone = b.bone;
 			}
 		}
-		for (auto &rs : h.rig->spheres) sp.known = sp.known || rs.name == sp.sphere;
 		h.spheres.push_back(sp);
+	}
+	// Each base sphere of a name is placed by the file's first, second, ... of that name (Blender's
+	// ".001" suffixes ignored); the rest are new: copies of a base sphere the scripts treat alike,
+	// a body sphere (GetHitAffector...) or an attack sphere named by a prefix the scripts gather.
+	std::map<std::string, std::vector<int>> base_named;
+	for (size_t i = 0; i < h.rig->spheres.size(); ++i) base_named[h.rig->spheres[i].name].push_back(int(i));
+	std::map<std::string, size_t> used;
+	for (auto &sp : h.spheres) {
+		std::string name = sp.sphere;
+		size_t dot = name.find_last_of('.');
+		if (dot != std::string::npos && dot + 1 < name.size() && name.find_first_not_of("0123456789", dot + 1) == std::string::npos) name = name.substr(0, dot);
+		size_t k = used[name]++;
+		if (auto it = base_named.find(name); it != base_named.end() && k < it->second.size()) {
+			sp.moves = it->second[k];
+		} else {
+			std::string like;
+			if (name.rfind("GetHitAffector", 0) == 0) like = "GetHitAffector";
+			for (auto &pre : h.rig->sphere_prefixes) {
+				if (name.rfind(pre, 0) == 0 && pre.size() > like.size()) like = pre;
+			}
+			for (size_t i = 0; i < h.rig->spheres.size() && !like.empty() && sp.copies < 0; ++i) {
+				if (h.rig->spheres[i].name.rfind(like, 0) == 0) sp.copies = int(i);
+			}
+			if (sp.copies < 0) sp.note = like.empty() ? "the scripts find spheres by name, and none of " + h.base_robot + "'s or their prefixes (GetHitAffector, " + (h.rig->sphere_prefixes.empty() ? std::string("...") : h.rig->sphere_prefixes.front()) + ", ...) starts it" : h.base_robot + " has no sphere like " + like + " to copy";
+		}
+		if (sp.bone.empty() && sp.note.empty()) sp.note = "it is not under a mapped joint";
+		sp.known = (sp.moves >= 0 || sp.copies >= 0) && !sp.bone.empty();
 	}
 	if (!h.detected.empty()) h.notes.push_back("Rig looks like " + h.detected);
 }
@@ -1197,8 +1238,7 @@ void robot_issues(const ImportPlan &plan, std::vector<Issue> &out) {
 		if (!have.count(n)) add(Issue::Error, "The scripts use sequence " + n + ", which the bank lacks");
 	}
 	for (auto &sp : h.spheres) {
-		if (!sp.known) add(Issue::Warning, "Sphere:" + sp.sphere + " names no hitbox of " + h.base_robot + " and is left out");
-		else if (sp.bone.empty()) add(Issue::Warning, "Sphere:" + sp.sphere + " is not under a mapped joint; the base robot's sphere is kept");
+		if (!sp.known) add(Issue::Warning, "Sphere:" + sp.sphere + " is left out: " + sp.note);
 	}
 	// Size against the base robot.
 	float lo = 1e30f, hi = -1e30f;
@@ -2207,6 +2247,20 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		}
 		return sc;
 	};
+	auto place = [&](RobotBuild::Sphere &o, const RobotRig::Sphere &rs, const SphereSource &file) {
+		int c = rig.channel(file.bone);
+		gltf::Mat4 wm = gltf::multiply(F, s.world(file.node));
+		V3 p = from_gltf(node_origin(wm), u);
+		gltf::Vec3 t, sz;
+		gltf::Vec4 r;
+		gltf::decompose(wm, &t, &r, &sz);
+		float scale = std::max({std::fabs(sz[0]), std::fabs(sz[1]), std::fabs(sz[2])}) * u;
+		o.bone = file.bone;
+		o.local.t = bn[size_t(c)].inverse().apply(p);
+		o.local.r = de::Transform{}.r;
+		o.hotspot = rs.falloff > 0 ? scale * rs.hotspot / rs.falloff : 0;
+		o.falloff = scale;
+	};
 	for (size_t i = 0; i < rig.spheres.size(); ++i) {
 		const RobotRig::Sphere &rs = rig.spheres[i];
 		RobotBuild::Sphere o;
@@ -2216,26 +2270,24 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		o.falloff = rs.falloff * sc;
 		const SphereSource *file = nullptr;
 		for (auto &sp : h.spheres) {
-			if (sp.sphere == rs.name && sp.known && !sp.bone.empty()) file = &sp;
+			if (sp.moves == int(i) && sp.known) file = &sp;
 		}
 		if (file) {
-			int c = rig.channel(file->bone);
-			gltf::Mat4 wm = gltf::multiply(F, s.world(file->node));
-			V3 p = from_gltf(node_origin(wm), u);
-			gltf::Vec3 t, sz;
-			gltf::Vec4 r;
-			gltf::decompose(wm, &t, &r, &sz);
-			float scale = std::max({std::fabs(sz[0]), std::fabs(sz[1]), std::fabs(sz[2])}) * u;
-			o.bone = file->bone;
-			o.local.t = bn[size_t(c)].inverse().apply(p);
-			o.local.r = de::Transform{}.r;
-			o.hotspot = rs.falloff > 0 ? scale * rs.hotspot / rs.falloff : 0;
-			o.falloff = scale;
+			place(o, rs, *file);
 		} else if (rs.channel >= 0 && rig.required(rs.channel)) {
 			o.local.t = mul(rs.local.t, bone_scale(rs.channel));
 		} else {
 			o.local.t = mul(rs.local.t, sc);
 		}
+		out.spheres.push_back(o);
+	}
+	for (auto &sp : h.spheres) {
+		if (!sp.known || sp.copies < 0) continue;
+		RobotBuild::Sphere o;
+		o.index = size_t(sp.copies);
+		o.added = true;
+		o.name = sp.sphere;
+		place(o, rig.spheres[size_t(sp.copies)], sp);
 		out.spheres.push_back(o);
 	}
 	return out;
@@ -2582,9 +2634,20 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 			}
 		};
 		find_bones(uint32_t(o.fighter));
+		size_t added = 0;
 		for (const auto &sp : b.spheres) {
 			uint32_t obj = spheres[sp.index];
 			if (objs[obj].info.name_text() != rig.spheres[sp.index].name) continue;
+			if (sp.added) {
+				// A copy of the template sphere (its affector groups and properties), on its bone.
+				if (sp.bone.empty() || !bones.count(sp.bone)) continue;
+				const deo::File snapshot = p.file();
+				obj = copy_tree(p, snapshot, true, {obj})[0];
+				build::rename(p, obj, sp.name);
+				build::add_child(p, bones[sp.bone], obj);
+				parents = object_parents(p.file());
+				++added;
+			}
 			if (!sp.bone.empty() && bones.count(sp.bone) && parents[obj] >= 0 && uint32_t(parents[obj]) != bones[sp.bone]) {
 				uint32_t old = uint32_t(parents[obj]);
 				auto kids = p.children(old);
@@ -2601,6 +2664,7 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 				touched(objs[obj]);
 			}
 		}
+		if (added) res.notes.push_back(std::to_string(added) + " new sphere(s) from the file");
 	} else {
 		res.notes.push_back("the copy's spheres differ from " + rig.robot + "'s; they are left as they were");
 	}

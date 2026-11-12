@@ -793,6 +793,8 @@ void set_presentation_picture(Project &p, const HarObjects &o, int width, int he
 	set_image_pixels(p, uint32_t(h.picture), w, hh, resize_rgba(width, height, rgba, w, hh), source);
 }
 
+bool attack_sphere(const std::string &name) { return name.find("HitDetector") != std::string::npos || name.find("AttackDetector") != std::string::npos; }
+
 std::string sphere_bone(const Project &p, int sphere) {
 	std::vector<int> parents = object_parents(p.file());
 	for (int up = parents[size_t(sphere)]; up >= 0; up = parents[size_t(up)]) {

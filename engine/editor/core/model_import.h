@@ -93,7 +93,10 @@ struct SphereSource {
 	std::string sphere;     // the affector's name ("Sphere:<name>" in the file)
 	int node = -1;
 	std::string bone;       // the rig bone it ends up under
-	bool known = false;     // the base robot has an affector of that name
+	bool known = false;     // it moves a base sphere or makes a new one
+	int moves = -1;         // the base sphere (RobotRig::spheres) of its name it places
+	int copies = -1;        // else a new sphere: a copy of this base sphere (its class, groups, effects)
+	std::string note;       // why it is left out
 };
 
 struct RobotRig;

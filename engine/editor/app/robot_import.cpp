@@ -524,13 +524,22 @@ void robot_page_hitboxes(Editor &, ed::ImportPlan &plan) {
 	auto &h = plan.har;
 	if (!h.rig) return;
 	ensure_build(plan);
-	ui::dim_text("Hit and attack spheres hang from the bones. An empty named Sphere:<affector> under a joint places one (its scale is the falloff in metres); the rest are the base robot's, "
-	             "moved and scaled with their bone.",
+	ImGui::PushTextWrapPos(0);
+	ui::dim_text("Hit and attack spheres hang from the bones. An empty named Sphere:<affector> under a joint places the base's sphere of that name (its scale is the falloff in "
+	             "metres; a second of a name places the second). The scripts find spheres by name, so a new one is a copy of a base sphere: name it GetHitAffector... "
+	             "(a body sphere) or after an attack prefix the scripts gather (LeftPunchMediumHitDetector..., RightKickHugeHitDetector...). The rest are the base's, moved and scaled with their bone.",
 	             kTextMuted);
+	ImGui::PopTextWrapPos();
 	ImGui::Dummy(ImVec2(0, ui::px(2)));
-	size_t from_file = 0;
-	for (auto &sp : h.spheres) from_file += sp.known && !sp.bone.empty();
-	ui::status_chip(ICON_CIRCLE_DOT, (std::to_string(from_file) + " from the file").c_str(), from_file ? kOk : kTextMuted);
+	size_t from_file = 0, added = 0, left_out = 0;
+	for (auto &sp : h.spheres) from_file += sp.known && sp.moves >= 0, added += sp.known && sp.copies >= 0, left_out += !sp.known;
+	ui::status_chip(ICON_CIRCLE_DOT, (std::to_string(from_file) + " placed from the file").c_str(), from_file ? kOk : kTextMuted);
+	ImGui::SameLine();
+	ui::status_chip(ICON_PLUS, (std::to_string(added) + " new").c_str(), added ? kOk : kTextMuted);
+	if (left_out) {
+		ImGui::SameLine();
+		ui::status_chip(ICON_TRIANGLE_ALERT, (std::to_string(left_out) + " left out").c_str(), kWarning);
+	}
 	ImGui::SameLine();
 	if (st.build) {
 		char b[64];
@@ -545,15 +554,39 @@ void robot_page_hitboxes(Editor &, ed::ImportPlan &plan) {
 	ImGui::TableSetupColumn("From", ImGuiTableColumnFlags_WidthStretch, 1);
 	ImGui::TableSetupColumn("Falloff", ImGuiTableColumnFlags_WidthFixed, ui::px(80));
 	ImGui::TableHeadersRow();
+	for (auto &sp : h.spheres) {
+		if (sp.known && sp.copies < 0) continue;
+		ImGui::TableNextRow(0, ui::px(26));
+		ImGui::TableNextColumn();
+		ImGui::PushStyleColor(ImGuiCol_Text, vec(!sp.known ? kWarning : ed::attack_sphere(sp.sphere) ? 0xff6b6b : 0x6bb8ff));
+		ImGui::TextUnformatted(sp.known ? ICON_PLUS : ICON_TRIANGLE_ALERT);
+		ImGui::PopStyleColor();
+		ImGui::SameLine();
+		ImGui::TextUnformatted(sp.sphere.c_str());
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(sp.bone.empty() ? "-" : sp.bone.c_str());
+		ImGui::TableNextColumn();
+		if (sp.known) ui::dim_text(("new, like " + h.rig->spheres[size_t(sp.copies)].name).c_str(), kOk);
+		else ui::dim_text(("left out: " + sp.note).c_str(), kWarning);
+		if (!sp.known && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", sp.note.c_str());
+		ImGui::TableNextColumn();
+		float f = 0;
+		if (st.build) {
+			for (auto &b : st.build->spheres) {
+				if (b.added && b.name == sp.sphere) f = b.falloff;
+			}
+		}
+		if (sp.known) ImGui::Text("%.1f", double(f));
+	}
 	for (size_t i = 0; i < h.rig->spheres.size(); ++i) {
 		const auto &rs0 = h.rig->spheres[i];
 		const ed::SphereSource *file = nullptr;
 		for (auto &sp : h.spheres) {
-			if (sp.sphere == rs0.name && sp.known && !sp.bone.empty()) file = &sp;
+			if (sp.moves == int(i) && sp.known) file = &sp;
 		}
 		ImGui::TableNextRow(0, ui::px(26));
 		ImGui::TableNextColumn();
-		bool attack = rs0.name.find("Hit") != std::string::npos || rs0.name.find("Leap") != std::string::npos;
+		bool attack = ed::attack_sphere(rs0.name);
 		ImGui::PushStyleColor(ImGuiCol_Text, vec(attack ? 0xff6b6b : 0x6bb8ff));
 		ImGui::TextUnformatted(ICON_CIRCLE_DOT);
 		ImGui::PopStyleColor();

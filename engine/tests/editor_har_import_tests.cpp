@@ -200,6 +200,18 @@ static gltf::Scene humanoid(Naming naming, float arm, float leg, bool with_anima
 	body.mesh = 0;
 	body.skin = 0;
 	s.add_node(body);
+	if (naming == Naming::Unknown) {
+		// Spheres: a new body sphere on the left forearm, a new attack sphere on the right hand, and
+		// one whose name no script looks for.
+		for (auto [name, joint] : {std::pair<const char *, const char *>{"Sphere:GetHitAffectorForearm", "joint9"}, {"Sphere:RightPunchMediumHitDetector3", "joint21"}, {"Sphere:Antenna", "joint5"}}) {
+			gltf::Node n;
+			n.name = name;
+			n.scale = {0.4f, 0.4f, 0.4f};
+			for (size_t i = 0; i < joints.size(); ++i) {
+				if (joints[i].name == joint) s.add_node(n, node[i]);
+			}
+		}
+	}
 	if (with_animation) {
 		// "Winning1": the left arm waved, so a supplied sequence replaces the base's.
 		gltf::Animation a;
@@ -593,6 +605,17 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 		CHECK(ok);
 	}
 	CHECK(plan.har.mirror);  // the glTF convention's left is the game's mirror image
+	size_t new_spheres = 0;
+	if (naming == Naming::Unknown) {
+		CHECK(plan.har.spheres.size() == 3);
+		for (auto &sp : plan.har.spheres) {
+			if (sp.sphere == "Antenna") CHECK(!sp.known && !sp.note.empty());
+			else {
+				CHECK(sp.known && sp.copies >= 0 && !sp.bone.empty());
+				++new_spheres;
+			}
+		}
+	}
 	int supplied = 0;
 	for (auto &m : plan.har.sequences) supplied += m.animation >= 0;
 	// A base without the file's sequence name: the animation is named by hand (the Animations page).
@@ -628,6 +651,13 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	auto project = ed::Project::create(base, dir / "HarGenerated.DEObjects");
 	ed::ImportResult r = ed::import_robot(*project, plan);
 	CHECK(ed::addon_hars(*project).size() == 1);
+	{
+		ed::HarData hd = ed::read_har(*project, ed::har_objects(*project, r.root));
+		CHECK(hd.spheres.size() == plan.har.rig->spheres.size() + new_spheres);
+		size_t found = 0;
+		for (auto &sp : hd.spheres) found += (sp.name == "GetHitAffectorForearm" && sp.bone == "LeftLowerArm") || (sp.name == "RightPunchMediumHitDetector3" && sp.bone == "RightHand");
+		CHECK(found == new_spheres);
+	}
 	for (auto &i : ed::validate(*project)) {
 		if (i.severity == ed::Issue::Error) fprintf(stderr, "  validation: %s\n", i.text.c_str());
 		CHECK(i.severity != ed::Issue::Error);

@@ -106,6 +106,8 @@ void write_presentation(Project &p, const HarObjects &o, const std::string &titl
 // The picture's pixels, scaled to its size (copying the panel first when needed).
 void set_presentation_picture(Project &p, const HarObjects &o, int width, int height, const std::vector<uint8_t> &rgba, const std::string &source);
 
+// An attack sphere (hit detectors, the leap attack's) rather than a body one, by its name.
+bool attack_sphere(const std::string &name);
 // The bone (nearest Actor above it) a sphere hangs from.
 std::string sphere_bone(const Project &p, int sphere);
 

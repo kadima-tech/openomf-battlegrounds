@@ -160,7 +160,7 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 			ImVec2 c = p0 + ImVec2(x / scale, y / scale);
 			float r = std::max(2.0f, s.falloff * ppu / scale);
 			bool sel = tab_ == 3 && int(k) == pick_;
-			bool hit = s.name.find("Hit") != std::string::npos || s.name.find("Leap") != std::string::npos;
+			bool hit = ed::attack_sphere(s.name);
 			unsigned col = sel ? kWarningStrong : hit ? 0xff6b6b : 0x6bb8ff;
 			if (sel) dl->AddCircleFilled(c, r, rgb(col, 60), 32);
 			dl->AddCircle(c, r, rgb(col, sel ? 255 : 110), 32, sel ? 2.5f : 1.0f);
