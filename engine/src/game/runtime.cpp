@@ -942,7 +942,10 @@ const World::ClassTemplate &World::class_template(const de::ObjectRef &cls_obj) 
 	auto vmc2 = cls_obj.file->ex_payload(d, "VMC2");
 	auto behavior_refs = vm::class_behavior_refs(d.references);
 	static const std::string recompile = getenv("OPENBG_RECOMPILE") ? "," + std::string(getenv("OPENBG_RECOMPILE")) + "," : "";
-	if (vmc2 && !recompile.empty() && (recompile == ",all," || recompile.find("," + cls_obj.info().name + ",") != std::string::npos)) vmc2.reset();
+	const std::string &cn = cls_obj.info().name;
+	if (vmc2 && !recompile.empty() && recompile.find(",-" + cn + ",") == std::string::npos &&
+	    (recompile.rfind(",all,", 0) == 0 || recompile.find("," + cn + ",") != std::string::npos))
+		vmc2.reset();
 	t.compiled = !vmc2;
 	if (vmc2) {
 		t.code = vm::VMClass::parse(vmc2->data, behavior_refs.size());
@@ -950,8 +953,9 @@ const World::ClassTemplate &World::class_template(const de::ObjectRef &cls_obj) 
 		// DE_CClass::PrepareForExecution compiles a class shipped without VMC2 from its sources.
 		auto it = compiled_classes_.find(key);
 		if (it == compiled_classes_.end()) {
-			std::vector<std::string> notes;
-			vm::VMClass compiled = vm::compile_class(data_, cls_obj, &notes);
+			std::vector<std::string> notes, errors;
+			vm::VMClass compiled = vm::compile_class(data_, cls_obj, &notes, &errors);
+			for (auto &e : errors) log.push_back("compiler: error (compiled past, as 2.123): " + e);
 			for (auto &n : notes) log.push_back("compiler: " + n);
 			it = compiled_classes_.emplace(key, std::move(compiled)).first;
 		}

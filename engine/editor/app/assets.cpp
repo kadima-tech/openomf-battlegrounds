@@ -358,4 +358,9 @@ void assets_open_issue(Editor &e, const ed::Issue &issue) {
 		tournament_document_jump(e.active_document(), issue.object, issue.line, e);
 		return;
 	}
+	// Any other script (a HAR variant's fighter behavior): its source, at the line.
+	const deo::Object &o = e.project()->file().objects.at(size_t(issue.object));
+	if (o.info.class_text() != "Behavior") return;
+	e.open_object(ObjectRef::addon(o.info.guid));
+	object_document_jump(e.active_document(), issue.line);
 }

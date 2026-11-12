@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <utility>
 
 #include "de/anim.h"
 #include "de/contents.h"
@@ -351,6 +352,11 @@ std::optional<std::pair<uint32_t, const char *>> native_embedded(const std::stri
 		auto it = f.find(field);
 		if (it != f.end()) return std::make_pair(it->second, "CObject::CVector");
 	}
+	if (cls == "CColorRGBA") {
+		static const std::map<std::string, uint32_t> f = {{"r", 0}, {"g", 4}, {"b", 8}, {"a", 12}};
+		auto it = f.find(field);
+		if (it != f.end()) return std::make_pair(it->second, "CObject::FLOATPrimitive");
+	}
 	if (cls == "CCoordinateSystem") {
 		if (field == "AxisX") return std::make_pair(0u, "CObject::CVector");
 		if (field == "AxisY") return std::make_pair(12u, "CObject::CVector");
@@ -365,6 +371,12 @@ std::optional<uint32_t> native_field(const std::string &cls, const std::string &
 		if (field == "x") return 0;
 		if (field == "y") return 4;
 		if (field == "z") return 8;
+	}
+	if (cls == "CColorRGBA") {
+		if (field == "r") return 0;
+		if (field == "g") return 4;
+		if (field == "b") return 8;
+		if (field == "a") return 12;
 	}
 	if (cls == "CAttackInfo") {
 		static const std::map<std::string, uint32_t> f = {
@@ -467,6 +479,7 @@ struct FinalInst {
 	std::vector<uint8_t> data;
 	int index = -1;   // in the class finals table once used
 	std::vector<std::string> init_intrinsics;  // the initialiser calls' signatures
+	bool pending = false;  // in pending_finals_
 };
 
 struct BehaviorInfo {
@@ -490,7 +503,8 @@ struct Local {
 
 class Compiler {
 public:
-	Compiler(const de::World &data, const de::ObjectRef &cls) : data_(data), api_(native_api(data)), cls_(cls) {}
+	Compiler(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *errors)
+	    : data_(data), api_(native_api(data)), cls_(cls), errors_(errors) {}
 
 	const std::vector<std::string> &notes() const { return notes_; }
 
@@ -574,6 +588,7 @@ private:
 	std::map<std::string, std::map<std::string, int64_t>> enums_;  // enum type -> values
 	std::map<std::string, std::pair<std::string, int64_t>> enum_values_;  // value -> (enum, value)
 	std::map<std::string, Value> finals_;
+	std::map<std::string, size_t> final_rank_;
 	std::map<std::string, FinalInst> final_insts_;
 	std::vector<FinalInst *> finals_order_;
 	std::vector<std::pair<FinalInst *, bool>> pending_finals_;
@@ -594,6 +609,12 @@ private:
 	std::map<std::string, int> slots_;  // short signature -> virtual slot
 	std::set<std::string> stray_tried_;
 	std::vector<std::string> notes_;
+	std::vector<std::string> *errors_ = nullptr;  // compile past errors as 2.123 did (null: throw)
+	std::set<std::string> errors_seen_;
+
+	void recovered(const std::string &e) {
+		if (errors_seen_.insert(e).second) errors_->push_back(e);
+	}
 
 	// --- class and behavior data -----------------------------------------------------------
 
@@ -812,6 +833,7 @@ private:
 			return v;
 		}
 		case Expr::Cast: {
+			if (c_ && c_->emitting) return std::nullopt;  // 2.123 folds no cast in code: (float)(m_AIConeAngleNormal)
 			auto a = fold(*e.a, locals);
 			auto t = type_named(e.text);
 			if (!a || !t || !t->numeric()) return std::nullopt;
@@ -864,7 +886,9 @@ private:
 							else if (t->k != Type::Float && v->type.k == Type::Float) v->i = int64_t(v->f), v->type = *t;
 							else v->type = *t;
 						}
-						finals_.emplace(dc.name, *v);
+						// The most-derived attached behavior's value, then the other attached ones', then the imported ones'.
+						size_t rank = bi < attached_.size() ? attached_.size() - 1 - bi : bi;
+						if (auto [it, fresh] = final_rank_.emplace(dc.name, rank); fresh || rank < it->second) it->second = rank, finals_.insert_or_assign(dc.name, *v);
 						continue;
 					}
 					if (d.final_ && (d.instance || class_final)) {
@@ -875,8 +899,15 @@ private:
 						if (dc.init && dc.init->kind == Expr::String) fi.data = string_instance(fi.cls, dc.init->text);
 						else fi.data = default_instance(fi.cls);
 						bool by_string = dc.init && dc.init->kind == Expr::String;
+						// Another final's copy (BWaitFor1Fighter's m_RequestEventToDelay=g_OMFSessionRequestBeginMatch).
+						if (auto from = dc.init && dc.init->kind == Expr::Ident ? final_insts_.find(dc.init->text) : final_insts_.end(); from != final_insts_.end()) {
+							fi.data = from->second.data;
+							for (const Sig *s : candidates(fi.cls, "(opp =)", 1))
+								if (s->params[0] == "class " + short_name(fi.cls)) fi.init_intrinsics.push_back(s->full);
+						}
 						auto ins = final_insts_.emplace(dc.name, std::move(fi));
-						if (ins.second) pending_finals_.push_back({&ins.first->second, by_string});
+						// Only an initialised one is tabled now (a bare declaration, as BMantis's m_RightHandHoldingRotation, when used).
+						if (ins.second && dc.init) ins.first->second.pending = true, pending_finals_.push_back({&ins.first->second, by_string});
 						continue;
 					}
 					if (!attached) continue;
@@ -957,7 +988,8 @@ private:
 	std::vector<uint8_t> default_instance(const std::string &cls) const {
 		if (cls == "CObject::CCoordinateSystem") return floats({1, 0, 0, 0, 1, 0, 0, 0, 1});
 		if (cls == "CObject::CVector") return floats({0, 0, 0});
-		if (cls == "CObject::CColorRGBA") return floats({0, 0, 0, 0});
+		if (cls == "CObject::CColorRGBA") return floats({1, 1, 1, 1});  // ColorRGBANewInstanceCaller: opaque white
+		if (cls == "CGenericEvent::CNamedHandle") return string_instance(cls, "Unknown");
 		return {};
 	}
 
@@ -968,6 +1000,7 @@ private:
 		auto it = final_insts_.find(e.a->a->text);
 		if (it == final_insts_.end()) return;
 		FinalInst &fi = it->second;
+		if (!fi.pending) fi.pending = true, pending_finals_.push_back({&fi, false});
 		std::vector<double> args;
 		for (auto &a : e.args) {
 			auto v = fold(*a);
@@ -986,11 +1019,13 @@ private:
 		}
 		std::vector<float> f(fi.data.size() / 4);
 		memcpy(f.data(), fi.data.data(), f.size() * 4);
-		if ((fi.cls == "CObject::CVector" || fi.cls == "CObject::CColorRGBA") && m == "Set" && args.size() == f.size()) {
-			for (size_t i = 0; i < f.size(); ++i) f[i] = float(args[i]);
+		if ((fi.cls == "CObject::CVector" || fi.cls == "CObject::CColorRGBA") && m == "Set" && (args.size() == f.size() || (f.size() == 4 && args.size() == 3))) {
+			for (size_t i = 0; i < args.size(); ++i) f[i] = float(args[i]);
+		} else if (fi.cls == "CObject::CCoordinateSystem" && m == "Reset" && args.empty()) {
+			f = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 		} else if (fi.cls == "CObject::CCoordinateSystem" && args.size() == 1 && (m == "RotateXDeg" || m == "RotateYDeg" || m == "RotateZDeg")) {
 			int axis = m[6] - 'X';
-			float a = float(args[0]) * 0.017453292f, c = std::cos(a), s = std::sin(a);
+			float a = float(args[0]) * 0.0174533f, c = std::cos(a), s = std::sin(a);  // DE_TCoord3D's degrees: 0.0174533
 			for (int i = 0; i < 3; ++i) {
 				float x = f[size_t(i * 3)], y = f[size_t(i * 3 + 1)], z = f[size_t(i * 3 + 2)];
 				float r[3];
@@ -1015,7 +1050,9 @@ private:
 		m.state = els[ei].method_id == 0;
 		std::string w = where(bi, info.pcode.qualified_name(ei));
 		try {
-			m.body = pc::parse(els[ei].source, w);
+			std::string syntax;
+			m.body = pc::parse(els[ei].source, w, errors_ && bi < attached_.size() ? &syntax : nullptr);
+			if (!syntax.empty()) recovered(syntax);
 			for (auto &s : m.body) {
 				if (s->kind != Stmt::DeclS || !(s->decl->param || s->decl->rparam)) continue;
 				for (auto &dc : s->decl->names) {
@@ -1189,45 +1226,68 @@ private:
 		std::vector<std::vector<size_t>> breaks, continues;
 		std::string where;
 		uint32_t local_refs = 0;
-		std::map<const pc::Declarator *, uint32_t> decl_refs, decl_slots;
+		std::map<const pc::Declarator *, Local> decl_locals;  // each declaration's own, bound where it stands
 		std::set<std::string> params;
+		// DE_CPCNode's blocks (the method and each { }): a block's plain locals follow its enclosing
+		// blocks' (instances and interfaces go to the method's), its temporaries follow its locals, and the
+		// frame is the method's peak plus the deepest chain of nested blocks' peaks (FullMaxStackSize).
+		struct Block {
+			int parent = -1;
+			uint32_t base = 0, size = 0;  // absolute start; plain locals' bytes
+		};
+		std::vector<Block> blocks;
+		std::map<const Stmt *, int> block_of;
+		std::vector<std::pair<const pc::Declarator *, int>> placed;  // plain locals by block, offsets relative until placed
+		int hoisting = 0;
+		struct Open {
+			int block;
+			uint32_t peak, chain;  // relative to the block's base; the deepest nested chain
+		};
+		std::vector<Open> open;
+		// The stack's top as 2.123's compiler grows it while making an expression (IncreaseStackSize):
+		// each value made in place reaches its size above it; a value made at the top holds its bytes.
+		uint32_t sp = 0;
+		bool at_top = false;  // the next value is made at the top (VMEvaluate(-1)), already held
+		bool emitting = false;
+		std::vector<uint8_t> head;  // code 2.123 put at the method's start (see the unknown member in gen)
+		bool head_seeded = false;
 	};
 	Ctx *c_ = nullptr;
 
 	[[noreturn]] void fail(const Expr &e, const std::string &m) const {
 		throw CompileError(c_->where + ":" + std::to_string(e.line) + ": " + m);
 	}
-	void use(uint32_t end) { c_->max = std::max(c_->max, end); }
+	void use(uint32_t end) {
+		c_->max = std::max(c_->max, end);
+		if (c_->open.empty()) return;
+		Ctx::Open &o = c_->open.back();
+		uint32_t base = c_->blocks[size_t(o.block)].base;
+		if (end > base) o.peak = std::max(o.peak, end - base);
+	}
+
+	// A plain local's place in its block (fixed once every block's base is known); the method's
+	// instances and interfaces go straight to the method's block.
+	uint32_t place(const pc::Declarator &dc, uint32_t size, bool to_method) {
+		Ctx::Block &b = c_->blocks[size_t(to_method ? 0 : c_->hoisting)];
+		uint32_t at = b.size;
+		b.size += size;
+		if (!to_method && c_->hoisting) c_->placed.push_back({&dc, c_->hoisting});
+		return at;
+	}
 
 	void hoist(const pc::Decl &d) {
 		for (auto &dc : d.names) {
-			auto prev = c_->locals.find(dc.name);
-			if (prev != c_->locals.end() && c_->params.count(dc.name)) {
+			if (c_->params.count(dc.name)) {
 				// A parameter declared again as a local gets an unused slot of its own; the name stays the
 				// parameter's (BFighter's AI.ComputeBouncingRayEndingPosition: float Length).
-				if (auto t = type_named(d.type)) c_->top += d.instance || d.interface ? 4 : member_size(*t);
-				continue;
-			}
-			if (prev != c_->locals.end()) {
-				// Redeclared: a numeric one shares the slot (int t after float t), an object one in a
-				// state gets a ref of its own.
-				if (prev->second.ref && c_->m->state && !d.instance && !d.interface && type_named(d.type) && type_named(d.type)->k == Type::Obj)
-					c_->decl_refs[&dc] = c_->local_refs++;
-				// ...and an instance or interface a slot of its own (ReceiveDamage's two CGenericEvent Event).
-				if (d.instance && !d.interface && !dc.array && prev->second.type.k == Type::Obj) {
-					c_->decl_slots[&dc] = c_->top;
-					c_->instances.push_back({class_index(prev->second.type.name), c_->top, false, 0, {}});
-					c_->top += 4;
-				} else if (d.interface && prev->second.type.k == Type::Iface) {
-					c_->decl_slots[&dc] = c_->top;
-					c_->interfaces.push_back({c_->top, visible_index(prev->second.type.name), false});
-					c_->top += 4;
-				}
+				if (auto t = type_named(d.type)) place(dc, d.instance || d.interface ? 4 : member_size(*t), d.instance || d.interface);
 				continue;
 			}
 			Local l;
 			if (d.final_ && !d.instance && dc.init) {
-				if (auto v = fold(*dc.init, &c_->locals)) {
+				std::map<std::string, Local> visible = c_->locals;
+				for (auto &[decl, local] : c_->decl_locals) visible.insert_or_assign(decl->name, local);
+				if (auto v = fold(*dc.init, &visible)) {
 					l.constant = true;
 					l.value = *v;
 					if (auto t = type_named(d.type); t && t->numeric() && v->type.numeric()) {
@@ -1236,9 +1296,8 @@ private:
 						l.value.type = *t;
 					}
 					l.type = l.value.type;
-					l.offset = c_->top;
-					c_->top += member_size(l.type);
-					c_->locals.emplace(dc.name, l);
+					l.offset = place(dc, member_size(l.type), false);
+					c_->decl_locals[&dc] = l;
 					continue;
 				}
 			}
@@ -1246,12 +1305,11 @@ private:
 			if (c_->m->state && l.type.k == Type::Obj && !d.instance && !d.interface && !is_value_class(l.type.name)) {
 				l.ref = true;
 				l.offset = c_->local_refs++;
-				c_->decl_refs[&dc] = l.offset;
-				c_->locals.emplace(dc.name, l);
+				c_->decl_locals[&dc] = l;
 				continue;
 			}
-			l.offset = c_->top;
-			c_->top += dc.array || d.instance || d.interface ? 4 : member_size(l.type);
+			bool to_method = dc.array || d.instance || d.interface;
+			l.offset = place(dc, to_method ? 4 : member_size(l.type), to_method);
 			if (dc.array && !d.interface) {
 				Type et = type_named(d.type).value_or(prim(Type::Int));
 				uint32_t ci = class_index(l.type.name);
@@ -1260,13 +1318,9 @@ private:
 				c_->instances.push_back({ci, l.offset, false, et.k == Type::Obj ? 4u : member_size(et), elem});
 			} else if (d.instance && !d.interface) {
 				c_->instances.push_back({class_index(l.type.name), l.offset, false, 0, {}});
-				c_->decl_slots[&dc] = l.offset;
 			}
-			if (d.interface) {
-				c_->interfaces.push_back({l.offset, visible_index(l.type.name), false});
-				c_->decl_slots[&dc] = l.offset;
-			}
-			c_->locals.emplace(dc.name, l);
+			if (d.interface) c_->interfaces.push_back({l.offset, visible_index(l.type.name), false});
+			c_->decl_locals[&dc] = l;
 		}
 	}
 
@@ -1274,36 +1328,63 @@ private:
 		for (auto &s : list) hoist_stmt(*s);
 	}
 	void hoist_stmt(const Stmt &s) {
+		int outer = c_->hoisting;
+		if (s.kind == Stmt::Block) {
+			c_->blocks.push_back({outer, 0, 0});
+			c_->hoisting = int(c_->blocks.size() - 1);
+			c_->block_of[&s] = c_->hoisting;
+		}
 		if (s.kind == Stmt::DeclS && !s.decl->param && !s.decl->rparam) hoist(*s.decl);
 		if (s.init) hoist_stmt(*s.init);
 		if (s.body) hoist_stmt(*s.body);
 		if (s.other) hoist_stmt(*s.other);
 		for (auto &x : s.list) hoist_stmt(*x);
+		c_->hoisting = outer;
 	}
 
-	void compile_method(size_t mi) {
-		MethodDecl &m = methods_[mi];
-		Ctx ctx;
+	// Every block's base, then the plain locals of nested blocks where they land; each name starts
+	// bound to its first declaration (rebound at each declaration as the code is made).
+	void place_blocks(const std::vector<pc::StmtPtr> &body) {
+		for (size_t b = 1; b < c_->blocks.size(); ++b) {
+			const Ctx::Block &up = c_->blocks[size_t(c_->blocks[b].parent)];
+			c_->blocks[b].base = up.base + up.size;
+		}
+		for (auto &[dc, b] : c_->placed) c_->decl_locals[dc].offset += c_->blocks[size_t(b)].base;
+		std::function<void(const Stmt &)> walk = [&](const Stmt &st) {
+			if (st.kind == Stmt::DeclS)
+				for (auto &dc : st.decl->names)
+					if (auto it = c_->decl_locals.find(&dc); it != c_->decl_locals.end()) c_->locals.emplace(dc.name, it->second);
+			for (auto *p : {&st.init, &st.body, &st.other})
+				if (*p) walk(**p);
+			for (auto &x : st.list) walk(*x);
+		};
+		for (auto &st : body) walk(*st);
+	}
+
+	// The method's code, with `head` after its prologue.
+	void method_body(Ctx &ctx, MethodDecl &m, bool seeded, const std::vector<uint8_t> &head, uint32_t &ret_size, uint32_t &params_end) {
+		ctx.head_seeded = seeded;
 		ctx.m = &m;
 		ctx.where = where(m.beh, infos_[m.beh].pcode.qualified_name(m.element));
 		c_ = &ctx;
-		uint32_t ret_size = m.ret.k != Type::None ? 4 : 0;
+		ret_size = m.ret.k != Type::None ? 4 : 0;
 		// rparam at 0, then the params, then every other declaration of the body.
 		for (auto &s : m.body) {
 			if (s->kind != Stmt::DeclS || !s->decl->rparam) continue;
 			for (auto &dc : s->decl->names) ctx.locals[dc.name] = {m.ret, 0, false, {}};
 			if (s->decl->instance && m.ret.k == Type::Obj) ctx.instances.push_back({class_index(m.ret.name), 0, false, 0, {}});
 		}
-		ctx.top = ret_size;
+		ctx.blocks.push_back({-1, 0, ret_size});
+		uint32_t &top = ctx.blocks[0].size;
 		for (size_t i = 0; i < m.params.size(); ++i) {
-			Local l{m.params[i], ctx.top, false, {}};
+			Local l{m.params[i], top, false, {}};
 			ctx.locals[m.param_names[i]] = l;
 			ctx.params.insert(m.param_names[i]);
-			if (m.params[i].k == Type::Iface) ctx.interfaces.push_back({ctx.top, visible_index(m.params[i].name), true});
-			if (m.param_instance[i] && m.params[i].k == Type::Obj) ctx.instances.push_back({class_index(m.params[i].name), ctx.top, true, 0, {}});
-			ctx.top += member_size(m.params[i]);
+			if (m.params[i].k == Type::Iface) ctx.interfaces.push_back({top, visible_index(m.params[i].name), true});
+			if (m.param_instance[i] && m.params[i].k == Type::Obj) ctx.instances.push_back({class_index(m.params[i].name), top, true, 0, {}});
+			top += member_size(m.params[i]);
 		}
-		uint32_t params_end = ctx.top;
+		params_end = top;
 		// A state's object parameters are held in local refs, copied from the frame at entry.
 		std::vector<std::pair<uint32_t, uint32_t>> ref_params;
 		if (m.state) {
@@ -1316,6 +1397,8 @@ private:
 			}
 		}
 		hoist_all(m.body);
+		place_blocks(m.body);
+		ctx.open.push_back({0, 0, 0});
 		ctx.code.op(1, 0, int32_t(params_end - ret_size));
 		if (ctx.local_refs) {
 			ctx.code.op(20);
@@ -1326,9 +1409,23 @@ private:
 			ctx.code.u16(uint16_t(ref));
 			ctx.code.i32(int32_t(at));
 		}
-		use(ctx.top);
+		ctx.code.bytes.insert(ctx.code.bytes.end(), head.begin(), head.end());
+		use(temp());
+		ctx.emitting = true;
 		for (auto &s : m.body) stmt(*s);
-		uint32_t frame = (ctx.max + 7) / 8 * 8 + 8;
+	}
+
+	void compile_method(size_t mi) {
+		MethodDecl &m = methods_[mi];
+		Ctx ctx;
+		uint32_t ret_size = 0, params_end = 0;
+		method_body(ctx, m, false, {}, ret_size, params_end);
+		if (!ctx.head.empty()) {
+			std::vector<uint8_t> head = std::move(ctx.head);
+			ctx = Ctx{};
+			method_body(ctx, m, true, head, ret_size, params_end);
+		}
+		uint32_t frame = ctx.open[0].peak + ctx.open[0].chain;
 		ctx.code.patch(4, int32_t(frame));
 
 		CompiledMethod cm;
@@ -1371,11 +1468,13 @@ private:
 		std::function<void(const Stmt &)> walk = [&](const Stmt &st) {
 			if (st.kind == Stmt::DeclS && st.decl->replicate && !st.decl->final_) {
 				for (auto &dc : st.decl->names) {
-					auto l = c_->locals.find(dc.name);
-					if (l == c_->locals.end() || l->second.constant || l->second.type.k == Type::Enum) continue;
-					const Local &v = l->second;
-					auto r = c_->decl_refs.find(&dc);
-					if (v.ref) out.push_back({4, 0, r != c_->decl_refs.end() ? r->second : v.offset});
+					const Local *found = nullptr;  // a parameter is the method's, a local its declaration's
+					if (auto l = c_->decl_locals.find(&dc); l != c_->decl_locals.end()) found = &l->second;
+					else if (auto p = c_->locals.find(dc.name); p != c_->locals.end() && c_->params.count(dc.name)) found = &p->second;
+					if (!found || found->constant || found->type.k == Type::Enum) continue;
+					if (!found->ref && found->type.k == Type::Obj && !st.decl->instance && !is_value_class(found->type.name)) continue;  // a plain object parameter (BFireballLauncher's Fire)
+					const Local &v = *found;
+					if (v.ref) out.push_back({4, 0, v.offset});
 					else if (v.type.k == Type::Iface) out.push_back({3, v.offset, uint32_t(std::max(0, visible_index(v.type.name)))});
 					else if (v.type.k == Type::Obj && (st.decl->instance || is_value_class(v.type.name))) out.push_back({2, v.offset, class_index(v.type.name)});
 					else out.push_back({0, v.offset, member_size(v.type)});
@@ -1467,10 +1566,13 @@ private:
 
 	// --- statements --------------------------------------------------------------------------
 
-	uint32_t temp() const { return c_->top; }
+	uint32_t temp() const {
+		const Ctx::Block &b = c_->blocks[size_t(c_->open.back().block)];
+		return b.base + b.size;
+	}
 
-	void jump_if_false(uint32_t slot, std::vector<size_t> &patches) {
-		c_->code.op(109, int32_t(slot), 0);
+	void jump_if_false(uint32_t slot, std::vector<size_t> &patches, const Type &t = prim(Type::Int)) {
+		c_->code.op(t.k == Type::Byte ? 111 : t.k == Type::Word ? 110 : 109, int32_t(slot), 0);
 		patches.push_back(c_->code.here() - 4);
 	}
 	void jump(std::vector<size_t> &patches) {
@@ -1482,8 +1584,9 @@ private:
 		patches.clear();
 	}
 
-	void condition(const Expr &e, uint32_t t) {
-		Type ty = gen(e, t);
+	// A test's value at t, and the type its jump reads (a byte or word value is tested as such).
+	Type condition(const Expr &e, uint32_t t) {
+		Type ty = t == c_->sp ? gen_top(e) : gen(e, t);
 		if (ty.k == Type::Iface) c_->code.op(88, int32_t(t));
 		else if (ty.k == Type::Float) {
 			// A float tests non-zero: compare with 0.0.
@@ -1493,21 +1596,22 @@ private:
 			c_->code.op(115, int32_t(t));
 			use(t + 12);
 		}
+		return ty.k == Type::Byte || ty.k == Type::Word ? ty : prim(Type::Int);
 	}
 
 	void stmt(const Stmt &s) {
 		Code &code = c_->code;
+		if (s.kind != Stmt::Block) c_->sp = temp();
 		switch (s.kind) {
 		case Stmt::Empty:
 		case Stmt::Inherit:
 		case Stmt::Enum:
 			return;
 		case Stmt::DeclS: {
-			if (s.decl->param || s.decl->rparam || s.decl->final_) return;
+			if (s.decl->param || s.decl->rparam) return;
 			for (auto &dc : s.decl->names) {
-				if (auto r = c_->decl_refs.find(&dc); r != c_->decl_refs.end()) c_->locals[dc.name].offset = r->second;
-				if (auto r = c_->decl_slots.find(&dc); r != c_->decl_slots.end()) c_->locals[dc.name].offset = r->second;
-				if (!dc.init) continue;
+				if (auto r = c_->decl_locals.find(&dc); r != c_->decl_locals.end()) c_->locals[dc.name] = r->second;
+				if (!dc.init || s.decl->final_) continue;
 				auto e = std::make_unique<Expr>();
 				e->kind = Expr::Ident;
 				e->text = dc.name;
@@ -1519,13 +1623,25 @@ private:
 		case Stmt::ExprS:
 			expr_stmt(*s.e);
 			return;
-		case Stmt::Block:
+		case Stmt::Block: {
+			auto it = c_->block_of.find(&s);
+			if (it == c_->block_of.end()) {
+				for (auto &x : s.list) stmt(*x);
+				return;
+			}
+			auto scope = c_->locals;
+			c_->open.push_back({it->second, c_->blocks[size_t(it->second)].size, 0});
+			use(temp());
 			for (auto &x : s.list) stmt(*x);
+			Ctx::Open done = c_->open.back();
+			c_->open.pop_back();
+			c_->open.back().chain = std::max(c_->open.back().chain, done.peak + done.chain);
+			c_->locals = std::move(scope);
 			return;
+		}
 		case Stmt::If: {
 			std::vector<size_t> to_else, to_end;
-			condition(*s.cond, temp());
-			jump_if_false(temp(), to_else);
+			jump_if_false(temp(), to_else, condition(*s.cond, temp()));
 			stmt(*s.body);
 			if (s.other) {
 				jump(to_end);
@@ -1543,14 +1659,13 @@ private:
 			size_t top = code.here();
 			std::vector<size_t> to_end;
 			if (s.cond) {
-				condition(*s.cond, temp());
-				jump_if_false(temp(), to_end);
+				jump_if_false(temp(), to_end, condition(*s.cond, temp()));
 			}
 			c_->breaks.emplace_back();
 			c_->continues.emplace_back();
 			stmt(*s.body);
 			land(c_->continues.back());
-			if (s.step) expr_stmt(*s.step);
+			if (s.step) c_->sp = temp(), expr_stmt(*s.step);
 			code.op(112, int32_t(top));
 			land(to_end);
 			land(c_->breaks.back());
@@ -1565,8 +1680,7 @@ private:
 			stmt(*s.body);
 			land(c_->continues.back());
 			std::vector<size_t> to_end;
-			condition(*s.cond, temp());
-			jump_if_false(temp(), to_end);
+			jump_if_false(temp(), to_end, condition(*s.cond, temp()));
 			code.op(112, int32_t(top));
 			land(to_end);
 			land(c_->breaks.back());
@@ -1612,7 +1726,7 @@ private:
 		case Stmt::Return:
 			if (s.e) {
 				if (c_->m->ret.k == Type::None) throw CompileError(c_->where + ":" + std::to_string(s.line) + ": return value without rparam");
-				Type t = gen(*s.e, temp());
+				Type t = gen_top(*s.e);
 				convert(t, c_->m->ret, temp());
 				code.op(5, 0, int32_t(temp()), 4);
 			}
@@ -1654,25 +1768,34 @@ private:
 
 	// --- expressions -------------------------------------------------------------------------
 
-	void convert(const Type &from, const Type &to, uint32_t at) {
-		Code &code = c_->code;
-		if (to.k == Type::Float && from.k != Type::Float && from.numeric()) {
-			if (from.k == Type::DWord) code.op(73, int32_t(at));
-			else if (from.k == Type::Word) code.op(74, int32_t(at));
-			else if (from.k == Type::Byte) code.op(76, int32_t(at));
-			else code.op(72, int32_t(at));
-		} else if (to.k != Type::Float && to.numeric() && from.k == Type::Float) {
-			if (to.k == Type::Word) code.op(93, int32_t(at));
-			else if (to.k == Type::Byte) code.op(103, int32_t(at));
-			else code.op(82, int32_t(at));
-		} else if ((to.k == Type::Int || to.k == Type::DWord || to.k == Type::Bool || to.k == Type::Enum) && from.k == Type::Word) {
-			code.op(78, int32_t(at));
-		} else if ((to.k == Type::Int || to.k == Type::DWord || to.k == Type::Bool || to.k == Type::Enum) && from.k == Type::Byte) {
-			code.op(80, int32_t(at));
-		}
+	// DE_CPCNode::VMCastToType (Core): the in-place conversion op from one numeric type to another,
+	// 0 for none (int and dword, dword and bool share their bits).
+	static int cast_op(const Type &from, const Type &to) {
+		auto id = [](const Type &t) {
+			switch (t.k) {
+			case Type::Byte: return 3;
+			case Type::Word: return 5;
+			case Type::Int:
+			case Type::Enum: return 6;
+			case Type::DWord: return 7;
+			case Type::Float: return 8;
+			case Type::Bool: return 9;
+			default: return 0;
+			}
+		};
+		static const std::map<std::pair<int, int>, int> ops = {  // (to, from)
+		    {{3, 5}, 101}, {{3, 6}, 99}, {{3, 7}, 100}, {{3, 8}, 103}, {{3, 9}, 100}, {{5, 3}, 91}, {{5, 6}, 89}, {{5, 7}, 90},
+		    {{5, 8}, 93},  {{5, 9}, 90}, {{6, 3}, 80},  {{6, 5}, 78},  {{6, 8}, 82},  {{7, 3}, 85}, {{7, 5}, 83}, {{7, 8}, 87},
+		    {{8, 3}, 76},  {{8, 5}, 74}, {{8, 6}, 72},  {{8, 7}, 73},  {{9, 3}, 85},  {{9, 5}, 83}, {{9, 8}, 87}};
+		auto it = ops.find({id(to), id(from)});
+		return it == ops.end() ? 0 : it->second;
 	}
 
-	void constant(const Value &v, uint32_t dst) {
+	void convert(const Type &from, const Type &to, uint32_t at) {
+		if (int op = cast_op(from, to)) c_->code.op(op, int32_t(at));
+	}
+
+	void constant(const Value &v, uint32_t dst, uint32_t size = 4) {
 		Code &code = c_->code;
 		if (v.type.k == Type::Str) {
 			std::string s = v.s;
@@ -1680,6 +1803,10 @@ private:
 			code.op(3, int32_t(dst), int32_t(s.size() + 1));
 			code.bytes.insert(code.bytes.end(), s.begin(), s.end());
 			code.u8(0);
+		} else if (size < 4) {
+			code.op(2, int32_t(dst), int32_t(size));
+			code.u8(uint8_t(v.i));
+			if (size == 2) code.u8(uint8_t(v.i >> 8));
 		} else {
 			code.op(2, int32_t(dst), 4);
 			if (v.type.k == Type::Float) {
@@ -1952,7 +2079,6 @@ private:
 				code.i32(int32_t(dst));
 			} else {
 				code.op(5, int32_t(dst), int32_t(p.offset), int32_t(member_size(p.type)));
-				if (member_size(p.type) < 4) convert(p.type, prim(Type::Int), dst);
 			}
 			break;
 		case Place::Member:
@@ -1963,10 +2089,6 @@ private:
 				break;
 			}
 			code.op(66, int32_t(dst), int32_t(p.offset), int32_t(p.member->iface || p.member->instance ? 4 : member_size(p.type)));
-			if (!p.member->iface && !p.member->instance) {
-				Type to = p.type;
-				convert(p.type, to.k == Type::Byte || to.k == Type::Word ? prim(Type::Int) : to, dst);
-			}
 			break;
 		case Place::Global:
 			code.op(8, int32_t(dst), int32_t(p.offset));
@@ -1976,7 +2098,7 @@ private:
 			code.u16(uint16_t(p.offset));
 			break;
 		case Place::Constant:
-			constant(p.value, dst);
+			constant(p.value, dst, p.value.type.k == Type::Byte || p.value.type.k == Type::Word ? member_size(p.value.type) : 4);  // a byte final is a byte
 			break;
 		case Place::Self:
 			code.op(9, int32_t(dst));
@@ -1993,11 +2115,29 @@ private:
 			fail(e, "unknown name " + e.text);
 		}
 		use(dst + 4);
-		if (p.type.k == Type::Byte || p.type.k == Type::Word) return prim(Type::Int);
 		return p.type;
 	}
 
 	Type gen(const Expr &e, uint32_t dst) {
+		bool held = std::exchange(c_->at_top, false);
+		uint32_t sp = c_->sp;
+		Type t = gen_value(e, dst);
+		if (!held && t.k != Type::Void && t.k != Type::None) use(sp + member_size(t));
+		return t;
+	}
+
+	// A value made at the stack's top, which holds it while its parts are made.
+	Type gen_top(const Expr &e, uint32_t size = 4) {
+		uint32_t at = c_->sp;
+		c_->sp += size;
+		use(c_->sp);
+		c_->at_top = true;
+		Type t = gen(e, at);
+		c_->sp -= size;
+		return t;
+	}
+
+	Type gen_value(const Expr &e, uint32_t dst) {
 		Code &code = c_->code;
 		use(dst + 4);
 		switch (e.kind) {
@@ -2037,29 +2177,22 @@ private:
 			}
 			Type t = gen(*e.a, dst);
 			if (e.text == "!") {
-				if (t.k == Type::Iface) {
-					code.op(88, int32_t(dst));
-				} else if (t.k == Type::Float) {
-					code.op(2, int32_t(dst + 8), 4);
-					code.i32(0);
-					code.op(118, int32_t(dst), int32_t(dst + 8));
-					use(dst + 12);
-					return prim(Type::Bool);
-				}
-				code.op(115, int32_t(dst));
-				return prim(Type::Bool);
+				if (t.k == Type::Iface) code.op(88, int32_t(dst));
+				code.op(t.k == Type::Byte ? 186 : t.k == Type::Word ? 157 : 115, int32_t(dst));  // a float's bits too (BText's !FadeTime)
+				return t.k == Type::Byte || t.k == Type::Word ? t : prim(Type::Bool);
 			}
 			if (e.text == "-") {
 				if (t.k == Type::Float) {
 					code.op(67, int32_t(dst));
 					return t;
 				}
+				convert(t, prim(Type::Int), dst);
 				code.op(5, int32_t(dst + 8), int32_t(dst), 4);
 				code.op(2, int32_t(dst), 4);
 				code.i32(0);
 				code.op(141, int32_t(dst), int32_t(dst + 8));
 				use(dst + 12);
-				return t;
+				return t.k == Type::Byte || t.k == Type::Word ? prim(Type::Int) : t;
 			}
 			fail(e, "unsupported operator " + e.text);
 		}
@@ -2067,8 +2200,7 @@ private:
 			return binary(e, dst);
 		case Expr::Ternary: {
 			std::vector<size_t> to_else, to_end;
-			condition(*e.a, dst);
-			jump_if_false(dst, to_else);
+			jump_if_false(dst, to_else, condition(*e.a, dst));
 			Type t = gen(*e.b, dst);
 			jump(to_end);
 			land(to_else);
@@ -2106,7 +2238,21 @@ private:
 					return et;
 				}
 			}
-			fail(e, "unknown member " + e.text);
+			if (!errors_ || t.k != Type::Obj) fail(e, "unknown member " + e.text);
+			// 2.123 reports it, and leaves the receiver's code at the method's start too, over the
+			// first slot (BCrowdResponse's Session().SlotInFocus: the Event parameter).
+			recovered(c_->where + ":" + std::to_string(e.line) + ": unknown member " + e.text);
+			if (!c_->head_seeded && c_->head.empty()) {
+				Code saved = std::move(c_->code);
+				c_->code = Code{};
+				gen(*e.a, 0);
+				c_->head = std::move(c_->code.bytes);
+				c_->code = std::move(saved);
+			}
+			code.op(229, int32_t(dst), 0);
+			Type ot = prim(Type::Obj);
+			ot.name = "CObject";
+			return ot;
 		}
 		case Expr::Assign:
 			assign(*e.a, e.text, *e.b);
@@ -2148,8 +2294,8 @@ private:
 	}
 
 	Type field_type(const std::string &cls, const std::string &field) const {
-		if (cls == "CVector") return prim(Type::Float);
-		if (field == "m_Damage" || field == "m_StunDamage" || field == "m_EnergyDamage" || field == "m_RecoveryTime" ||
+		if (cls == "CVector" || cls == "CColorRGBA") return prim(Type::Float);
+		if (field == "m_BlockPenetration" || field == "m_Damage" || field == "m_StunDamage" || field == "m_EnergyDamage" || field == "m_RecoveryTime" ||
 		    field == "m_MomentumAdjustAmount" || field == "m_DiminishDamageAmount" || field == "m_RetainDamageMultiplier" ||
 		    field == "m_GuideToLastHitMultiplier")
 			return prim(Type::Float);
@@ -2157,6 +2303,14 @@ private:
 	}
 
 	int binop(const std::string &o, const Type &t) const {
+		if (t.k == Type::Byte || t.k == Type::Word) {
+			// The byte and word blocks: ! ++ -- . . == != . & . | * / % + - >= <= > <, from 186 and 157.
+			static const std::map<std::string, int> at = {{"==", 5}, {"!=", 6}, {"&", 8}, {"|", 10}, {"*", 11}, {"/", 12},
+			                                              {"+", 14}, {"-", 15}, {">=", 16}, {"<=", 17}, {">", 18}, {"<", 19}};
+			auto it = at.find(o);
+			if (it == at.end()) return -1;
+			return (t.k == Type::Byte ? 186 : 157) + it->second;
+		}
 		bool f = t.k == Type::Float;
 		bool u = t.k == Type::DWord || t.k == Type::Enum;
 		if (o == "+") return f ? 151 : u ? 131 : 140;
@@ -2176,6 +2330,16 @@ private:
 		return -1;
 	}
 
+	// A right operand used where it lives: a plain 4-byte numeric local whose type needs no conversion.
+	std::optional<Local> in_place(const Expr &e, const Type &left) {
+		if (e.kind != Expr::Ident) return std::nullopt;
+		Place rp = lookup(e.text);
+		if (rp.k != Place::Local || rp.ref || !rp.type.numeric() || !left.numeric()) return std::nullopt;
+		if (member_size(rp.type) != 4 && rp.type.k != left.k) return std::nullopt;
+		if (rp.type.k != left.k && (left.k == Type::Float || rp.type.k == Type::Float)) return std::nullopt;
+		return Local{rp.type, rp.offset, false, {}};
+	}
+
 	Type binary(const Expr &e, uint32_t dst) {
 		Code &code = c_->code;
 		if (auto v = fold(e, &c_->locals)) {
@@ -2184,28 +2348,33 @@ private:
 		}
 		const std::string &o = e.text;
 		Type a = gen(*e.a, dst);
+		uint32_t sp = c_->sp;
+		c_->sp += 4;
+		use(c_->sp);
+		struct Restore {
+			uint32_t &sp, was;
+			~Restore() { sp = was; }
+		} restore{c_->sp, sp};
 		if (o == "&&") {
 			// Short-circuits: a false left operand skips the right (|| evaluates both).
 			if (a.k == Type::Iface) code.op(88, int32_t(dst));
 			std::vector<size_t> skip;
 			jump_if_false(dst, skip);
-			Type b = gen(*e.b, dst + 8);
-			use(dst + 12);
-			if (b.k == Type::Iface) code.op(88, int32_t(dst + 8));
-			code.op(124, int32_t(dst), int32_t(dst + 8));
+			uint32_t rhs = c_->sp;
+			Type b = gen_top(*e.b);
+			if (b.k == Type::Iface) code.op(88, int32_t(rhs));
+			code.op(124, int32_t(dst), int32_t(rhs));
 			land(skip);
 			return prim(Type::Bool);
 		}
 		// A plain local on the right is used in place.
-		uint32_t rhs = dst + 8;
+		uint32_t rhs = c_->sp;
 		Type b;
-		Place rp = e.b->kind == Expr::Ident ? lookup(e.b->text) : Place{};
 		auto lit = fold(*e.b, &c_->locals);
 		bool left_float = a.k == Type::Float;
-		if (rp.k == Place::Local && !rp.ref && rp.type.numeric() && member_size(rp.type) == 4 && a.numeric() &&
-		    (rp.type.k == a.k || !(left_float || rp.type.k == Type::Float))) {
-			rhs = rp.offset;
-			b = rp.type;
+		if (auto in = in_place(*e.b, a)) {
+			rhs = in->offset;
+			b = in->type;
 		} else if (lit && lit->type.numeric() && left_float && lit->type.k != Type::Float) {
 			Value v = *lit;
 			v.f = double(v.i);
@@ -2218,10 +2387,14 @@ private:
 			v.type = prim(Type::Int);
 			constant(v, rhs);
 			b = v.type;
+		} else if (lit && lit->type.integral() && (a.k == Type::Byte || a.k == Type::Word)) {
+			// A literal against a byte or word is written as one (op 2 of 1 or 2 bytes).
+			constant(*lit, rhs, member_size(a));
+			use(rhs + member_size(a));
+			b = a;
 		} else {
-			b = gen(*e.b, rhs);
+			b = gen_top(*e.b);
 		}
-		use(dst + 12);
 		if (o == "||") {
 			if (a.k == Type::Iface) code.op(88, int32_t(dst));
 			if (b.k == Type::Iface) code.op(88, int32_t(rhs));
@@ -2242,7 +2415,7 @@ private:
 		// The left operand's type decides; the right is converted to it.
 		Type t = a;
 		if (a.k == Type::Bool || a.k == Type::Null || a.k == Type::Obj || a.k == Type::Iface) t = prim(Type::Int);
-		if (b.numeric() && rhs == dst + 8) convert(b, t, rhs);
+		if (b.numeric() && rhs == c_->sp) convert(b, t, rhs);
 		int op = binop(o, t);
 		if (op < 0) fail(e, "unsupported operator " + o);
 		code.op(op, int32_t(dst), int32_t(rhs));
@@ -2262,8 +2435,9 @@ private:
 				return;
 			}
 		}
-		if (p.k == Place::Local && !p.ref && p.type.numeric() && member_size(p.type) == 4) {
-			code.op(p.type.k == Type::Float ? (inc ? 146 : 147) : (inc ? 126 : 127), int32_t(p.offset));
+		if (p.k == Place::Local && !p.ref && p.type.numeric()) {
+			int op = p.type.k == Type::Float ? 146 : p.type.k == Type::Byte ? 187 : p.type.k == Type::Word ? 158 : 126;
+			code.op(op + (inc ? 0 : 1), int32_t(p.offset));
 			return;
 		}
 		// General: x = x +/- 1.
@@ -2309,6 +2483,7 @@ private:
 				}
 				// instance: receiver, then the operand; (opp =)(...) etc.
 				load(p, t, lhs);
+				c_->sp = t + 8;
 				Type r = gen(rhs, t + 4);
 				const Sig *s = find_intrinsic_typed(p.type.name, oname, {r});
 				if (!s) fail(lhs, "no operator " + op + " on " + p.type.name);
@@ -2317,8 +2492,12 @@ private:
 				return;
 			}
 			if (op != "=" && p.k == Place::Local && !p.ref && p.type.numeric() && member_size(p.type) == 4) {
-				// In place: the operand, converted, combined straight into the local.
+				// In place: the operand, converted, combined straight into the local; 2.123 makes the sum at
+				// the local and holds its 4 bytes on the stack meanwhile, so the operand comes after them.
 				Type r;
+				c_->sp = t + 4;
+				use(c_->sp);
+				t = c_->sp;
 				auto lit = fold(rhs, &c_->locals);
 				if (lit && lit->type.numeric() && (lit->type.k == Type::Float) != (p.type.k == Type::Float)) {
 					Value v = *lit;
@@ -2335,7 +2514,7 @@ private:
 						code.op(o, int32_t(p.offset), int32_t(rp.offset));
 						return;
 					}
-					r = gen(rhs, t);
+					r = gen_top(rhs);
 				}
 				convert(r, p.type, t);
 				int o = binop(op.substr(0, op.size() - 1), p.type);
@@ -2348,18 +2527,22 @@ private:
 				bin.kind = Expr::Binary;
 				bin.text = op.substr(0, op.size() - 1);
 				bin.line = lhs.line;
+				c_->sp = t + 4;
 				Type a = load(p, t, lhs);
-				Type b = gen(rhs, t + 8);
-				use(t + 12);
+				c_->sp = t + 8;
+				uint32_t r = t + 8;
+				Type b;
+				if (auto in = in_place(rhs, a)) r = in->offset, b = in->type;
+				else b = gen_top(rhs);
 				Type ty = a.k == Type::Bool ? prim(Type::Int) : a;
-				if (b.numeric()) convert(b, ty, t + 8);
+				if (b.numeric() && r == t + 8) convert(b, ty, r);
 				int o = binop(bin.text, ty);
 				if (o < 0) fail(lhs, "unsupported operator " + op);
-				code.op(o, int32_t(t), int32_t(t + 8));
+				code.op(o, int32_t(t), int32_t(r));
 				store(p, ty, t, lhs);
 				return;
 			}
-			Type r = gen(rhs, t);
+			Type r = gen_top(rhs);
 			store(p, r, t, lhs);
 			return;
 		}
@@ -2381,7 +2564,7 @@ private:
 				}
 			}
 			// A native field: the value, then the instance pointer, then op 50.
-			Type r = gen(rhs, t);
+			Type r = gen_top(rhs);
 			uint32_t ptr = t + 4;
 			if (op == "=" && ot0.k == Type::Obj) {
 				if (native_field(short_name(ot0.name), lhs.text)) {
@@ -2457,10 +2640,11 @@ private:
 		fail(lhs, "cannot assign to this expression");
 	}
 
-	// Nested native classes are values, except CIncidentRecorder, made a reference target by
-	// DE_CSceneFactory::Init (class node +200).
+	// Nested native classes are values, except reference targets (DE_CPCNodeClass::IsRefTarget: the
+	// root class node's +200): CIncidentRecorder (DE_CSceneFactory::Init sets it) and the primitive
+	// generator's primitives (the shipped VMC2 holds them in ref members).
 	bool is_value_class(const std::string &full) const {
-		return full.find("::") != std::string::npos && full != "CScene::CIncidentRecorder";
+		return full.find("::") != std::string::npos && full != "CScene::CIncidentRecorder" && full.rfind("CPrimitiveGeneratorMesh::", 0) != 0;
 	}
 	static bool implicit_instance(const std::string &full) { return full.rfind("CObject::", 0) == 0; }
 
@@ -2632,6 +2816,7 @@ private:
 	Type arg_type(const Expr &e) {
 		Code saved = c_->code;
 		uint32_t max = c_->max;
+		auto open = c_->open;
 		size_t inst = c_->instances.size();
 		auto ints = intrinsic_index_;
 		auto icount = code_.intrinsics.size();
@@ -2642,6 +2827,7 @@ private:
 		code_.global_refs.resize(grefs);
 		c_->code = std::move(saved);
 		c_->max = max;
+		c_->open = std::move(open);
 		c_->instances.resize(inst);
 		intrinsic_index_ = std::move(ints);
 		code_.intrinsics.resize(icount);
@@ -2677,16 +2863,21 @@ private:
 			Type have;
 			const Expr &a = *args[i];
 			if (want.k == Type::BehLit && a.kind == Expr::Ident && is_behavior(a.text)) {
+				c_->sp += 4;
+				use(c_->sp + 4);
 				c_->code.op(26, int32_t(slot), visible_index(a.text));
 				have = prim(Type::BehLit);
 			} else if ((want.k == Type::Obj || want.k == Type::ClassLit) && a.kind == Expr::Ident && lookup(a.text).k == Place::None && type_named(a.text)) {
 				std::string full = type_named(a.text)->name;
+				c_->sp += 4;
+				use(c_->sp + 4);
 				c_->code.op(44, int32_t(slot));
 				c_->code.bytes.resize(c_->code.bytes.size() - 4);
 				c_->code.u16(uint16_t(class_index(full)));
 				c_->code.i32(int32_t(slot));
 				have = prim(Type::ClassLit);
 			} else {
+				c_->sp += member_size(want.k == Type::None ? prim(Type::Int) : want);
 				have = gen(a, slot);
 			}
 			use(slot + 4);
@@ -2760,7 +2951,8 @@ private:
 			for (size_t i = 0; i < e.args.size(); ++i) {
 				uint32_t slot = dst + uint32_t(i) * 4;
 				Type t = gen(*e.args[i], slot);
-				int8_t type = t.k == Type::Str ? 1 : t.k == Type::Float ? 8 : t.k == Type::Bool ? 9 : t.k == Type::DWord || t.k == Type::Enum ? 7 : 6;
+				int8_t type = t.k == Type::Str ? 1 : t.k == Type::Float ? 8 : t.k == Type::Bool ? 9 : t.k == Type::DWord || t.k == Type::Enum ? 7
+				              : t.k == Type::Byte ? 3 : t.k == Type::Word ? 5 : 6;
 				if (t.k == Type::Obj) type = t.name == "CObject::CText" ? 4 : 10;
 				code.op(313);
 				code.u16(uint16_t(i));
@@ -2783,6 +2975,7 @@ private:
 		if (e.args.size() != m.params.size()) fail(e, m.signature + " takes " + std::to_string(m.params.size()) + " arguments");
 		std::vector<std::string> spelled;
 		for (auto &p : m.params) spelled.push_back(spell(p));
+		c_->sp += ret;
 		args_to(e.args, spelled, dst + ret, m.state);
 		if (m.virt && !direct) code.op(36, m.slot, int32_t(dst));
 		else code.op(34, int32_t(m.pool), int32_t(dst));
@@ -2826,6 +3019,13 @@ private:
 	}
 
 	Type call(const Expr &e, uint32_t dst) {
+		uint32_t sp = c_->sp;
+		Type t = call_value(e, dst);
+		c_->sp = sp;
+		return t;
+	}
+
+	Type call_value(const Expr &e, uint32_t dst) {
 		Code &code = c_->code;
 		const Expr &f = *e.a;
 		if (f.kind == Expr::Ident) {
@@ -2834,6 +3034,8 @@ private:
 			if (handled) return b;
 			std::string n = f.text[0] == '.' ? f.text.substr(1) : f.text;
 			if (int mi = find_method_typed(n, e); mi >= 0) return call_script(methods_[size_t(mi)], e, dst, false);
+			c_->sp += 4;
+			use(c_->sp + 4);
 			code.op(9, int32_t(dst));
 			return call_intrinsic(self_class_, e, f.text, dst);
 		}
@@ -2864,9 +3066,11 @@ private:
 				fail(e, "no method " + root->text + "." + path);
 			}
 			if (int mi = method_path(f); mi >= 0) {
-				code.op(38, int32_t(methods_[size_t(mi)].pool), int32_t(dst));  // the path, evaluated (unused)
+				// The path, evaluated and unused: once per dot (Ground.AI.UpdateAIVariables() has two).
+				for (const Expr *x = &f; x->kind == Expr::Member; x = x->a.get()) code.op(38, int32_t(methods_[size_t(mi)].pool), int32_t(dst));
 				return call_script(methods_[size_t(mi)], e, dst, false);
 			}
+			c_->sp += 4;
 			Type t = gen(*f.a, dst);
 			if (t.k == Type::Iface) return call_interface(t, e, f.text, dst);
 			if (t.k == Type::Obj || t.k == Type::Arr || t.k == Type::Null) return call_intrinsic(t.k == Type::Null ? "CObject" : t.name, e, f.text, dst);
@@ -2959,8 +3163,9 @@ private:
 			uint32_t ret = info.method_rets[k].k != Type::None ? 4 : 0;
 			std::vector<std::string> spelled;
 			for (auto &p : info.method_params[k]) spelled.push_back(spell(p));
-			args_to(e.args, spelled, dst + 4 + ret, info.method_state[k]);
-			c_->code.op(37, int32_t(dst), int32_t(k), int32_t(dst + 4));
+			args_to(e.args, spelled, dst + 4, info.method_state[k]);
+			// The callee's frame starts at its return value: over the handle when it has one, after it otherwise.
+			c_->code.op(37, int32_t(dst), int32_t(k), int32_t(dst + 4 - ret));
 			use(dst + 8 + ret + 4 * uint32_t(e.args.size()));
 			return info.method_rets[k].k != Type::None ? info.method_rets[k] : prim(Type::Void);
 		}
@@ -2970,8 +3175,8 @@ private:
 
 }  // namespace
 
-VMClass compile_class(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *notes) {
-	Compiler c(data, cls);
+VMClass compile_class(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *notes, std::vector<std::string> *errors) {
+	Compiler c(data, cls, errors);
 	VMClass out = c.run();
 	if (notes) *notes = c.notes();
 	return out;

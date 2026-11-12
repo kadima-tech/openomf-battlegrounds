@@ -1,6 +1,8 @@
 // VMC2 writer tests: every shipped Class's VMC2 parses and writes back byte for byte, and for the
 // classes our compiler reproduces, compile -> write equals the shipped payload.
-// Usage: vmc2-tests <Data dir> [-v | -vm (also each method: same, frame (differs only in the frame size) or differs)]
+// Usage: vmc2-tests <Data dir> [-v | -vm (also each method: same, frame (differs only in the frame size) or differs)
+//                                 | -vd (-vm, and both codes of each method that differs)]
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,9 +12,40 @@
 #include "de/platform.h"
 #include "de/scene.h"
 #include "vm/compiler.h"
+#include "vm/disasm.h"
 #include "vm/vmcode.h"
 
 namespace {
+
+// The highest frame byte a method's instructions name as a slot (the frame must cover it: a callee's
+// frame starts where the caller's ends).
+uint32_t slot_extent(const std::vector<uint8_t> &code) {
+	uint32_t end = 0;
+	auto put = [&](int64_t at, int64_t size) {
+		if (at >= 0 && size >= 0) end = std::max<uint32_t>(end, uint32_t(at + size));
+	};
+	for (auto &in : vm::decode(code)) {
+		const auto &a = in.args;
+		switch (in.opcode) {
+		case 2: put(a[0], a[1]); break;
+		case 3: case 4: case 8: case 9: case 10: case 26: case 47: case 61: case 88: case 229: case 306: put(a[0], 4); break;
+		case 5: put(a[0], a[2]), put(a[1], a[2]); break;
+		case 7: put(a[0], a[2]), put(a[1], 4); break;
+		case 21: case 22: case 27: case 29: case 30: case 34: case 36: case 38: case 39: case 42: case 44: case 62: case 64: put(a[1], 4); break;
+		case 23: case 24: case 25: put(a[0], 4), put(a[1], 4); break;
+		case 37: put(a[0], 4); break;
+		case 50: put(a[0], 4), put(a[3], a[2]); break;
+		case 65: put(a[1], a[2]); break;
+		case 66: put(a[0], a[2]); break;
+		case 109: case 110: case 111: put(a[0], 1); break;
+		case 313: put(a[1], 1); break;
+		default:
+			if ((in.opcode >= 67 && in.opcode <= 108) || (in.opcode >= 114 && in.opcode <= 205))
+				for (auto x : a) put(x, in.opcode >= 186 || (in.opcode >= 99 && in.opcode <= 108) ? 1 : in.opcode >= 157 || (in.opcode >= 89 && in.opcode <= 98) ? 2 : 4);
+		}
+	}
+	return end;
+}
 
 // Field-level difference between two VMClasses, for the report.
 std::string first_difference(const vm::VMClass &a, const vm::VMClass &b) {
@@ -101,10 +134,11 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "usage: %s <Data dir> [-v]\n", argv[0]);
 		return 2;
 	}
-	bool verbose = argc > 2 && (!strcmp(argv[2], "-v") || !strcmp(argv[2], "-vm"));
-	bool per_method = argc > 2 && !strcmp(argv[2], "-vm");
+	bool dump = argc > 2 && !strcmp(argv[2], "-vd");
+	bool per_method = dump || (argc > 2 && !strcmp(argv[2], "-vm"));
+	bool verbose = per_method || (argc > 2 && !strcmp(argv[2], "-v"));
 	de::World w(argv[1]);
-	size_t classes = 0, round_trip = 0, compiled = 0, identical = 0, tables = 0, methods = 0, same_code = 0, same_but_frame = 0;
+	size_t classes = 0, round_trip = 0, compiled = 0, identical = 0, tables = 0, methods = 0, same_code = 0, same_but_frame = 0, finals = 0;
 	int failures = 0;
 	std::map<std::string, size_t> reasons;
 	for (auto &[stem, f] : w.files()) {
@@ -129,19 +163,30 @@ int main(int argc, char **argv) {
 			}
 			vm::VMClass mine;
 			try {
-				mine = vm::compile_class(w, {f.get(), i});
+				std::vector<std::string> errors;
+				mine = vm::compile_class(w, {f.get(), i}, nullptr, &errors);
+				if (verbose) for (auto &e : errors) printf("compiled past   %s: %s\n", label.c_str(), e.c_str());
 			} catch (const std::exception &e) {
 				if (verbose) printf("compile error   %s: %s\n", label.c_str(), e.what());
 				++reasons["compile error"];
 				continue;
 			}
 			++compiled;
+			for (auto &b : mine.behaviors)
+				for (auto &m : b.methods)
+					if (m && slot_extent(m->code) > m->counts[0]) {
+						fprintf(stderr, "frame %u below the slots its code names (%u): %s %s\n", m->counts[0], slot_extent(m->code), label.c_str(), m->signature.c_str());
+						++failures;
+					}
 			bool same_tables = mine.classes.size() == shipped.classes.size() && mine.intrinsics.size() == shipped.intrinsics.size();
 			for (size_t k = 0; same_tables && k < mine.classes.size(); ++k)
 				same_tables = mine.classes[k].name == shipped.classes[k].name && mine.classes[k].layout_pos == shipped.classes[k].layout_pos;
 			for (size_t k = 0; same_tables && k < mine.intrinsics.size(); ++k)
 				same_tables = mine.intrinsics[k].class_index == shipped.intrinsics[k].class_index && mine.intrinsics[k].signature == shipped.intrinsics[k].signature;
 			tables += same_tables;
+			finals += mine.finals.size() == shipped.finals.size() && std::equal(mine.finals.begin(), mine.finals.end(), shipped.finals.begin(), [&](const auto &x, const auto &y) {
+				          return x.data == y.data && mine.classes[x.class_index].name == shipped.classes[y.class_index].name;
+			          });
 			for (size_t b = 0; b < shipped.behaviors.size() && b < mine.behaviors.size(); ++b) {
 				for (size_t m = 0; m < shipped.behaviors[b].methods.size(); ++m) {
 					auto &q = shipped.behaviors[b].methods[m];
@@ -150,12 +195,32 @@ int main(int argc, char **argv) {
 					auto &ms = mine.behaviors[b].methods;
 					if (m >= ms.size() || !ms[m] || ms[m]->signature != q->signature) continue;
 					same_code += ms[m]->code == q->code;
+					bool same_repl = ms[m]->replicated.size() == q->replicated.size() &&
+					                 std::equal(q->replicated.begin(), q->replicated.end(), ms[m]->replicated.begin(), [](const auto &x, const auto &y) { return x.type == y.type && x.a == y.a && (x.type == 2 || x.b == y.b); });
+					if (!same_repl) {
+						fprintf(stderr, "replicated list differs: %s %s\n", label.c_str(), q->signature.c_str());
+						++failures;
+					}
 					auto a = ms[m]->code, c = q->code;
 					if (a.size() >= 8 && c.size() >= 8) std::fill(a.begin() + 4, a.begin() + 8, 0), std::fill(c.begin() + 4, c.begin() + 8, 0);
 					same_but_frame += a == c && ms[m]->code != q->code;
 					if (per_method)
-						printf("method %s %s %s\n", ms[m]->code == q->code ? "same" : a == c ? "frame" : "differs", label.c_str(), q->signature.c_str());
+						printf("method %s %s %s (frame %u, shipped %u)\n", ms[m]->code == q->code ? "same" : a == c ? "frame" : "differs", label.c_str(), q->signature.c_str(), ms[m]->counts[0], q->counts[0]);
+					if (dump && a != c) {
+						for (auto *side : {&ms[m]->code, &q->code}) {
+							printf("  %s\n", side == &q->code ? "shipped:" : "ours:");
+							try {
+								for (auto &ins : vm::decode(*side)) printf("    %s\n", vm::format(ins).c_str());
+							} catch (const std::exception &) {
+							}
+						}
+					}
 				}
+			}
+			for (size_t k = 0; per_method && k < mine.finals.size() && k < shipped.finals.size(); ++k) {
+				auto &x = mine.finals[k], &y = shipped.finals[k];
+				(void)y;
+				if (std::none_of(shipped.finals.begin(), shipped.finals.end(), [&](const auto &z) { return z.data == x.data; })) printf("final unknown %s %zu %s\n", label.c_str(), k, mine.classes[x.class_index].name.c_str());
 			}
 			std::string diff = first_difference(mine, shipped);
 			bool same_bytes = mine.write() == vmc2->data;
@@ -176,10 +241,10 @@ int main(int argc, char **argv) {
 	       round_trip, compiled, identical);
 	printf("  of those compiled: %zu with the shipped class and intrinsic tables; %zu of %zu methods with identical bytecode\n",
 	       tables, same_code, methods);
-	printf("  %zu more methods differ only in the frame size\n", same_but_frame);
+	printf("  %zu more methods differ only in the frame size; %zu classes with the shipped finals\n", same_but_frame, finals);
 	for (auto &[r, n] : reasons) printf("  %zu: %s\n", n, r.c_str());
 	// Floors for the compiler's fidelity on 2.123's 255 compiled classes, so it can only improve.
-	if (classes == 0 || (classes == 255 && (compiled < 239 || tables < 61 || same_code < 309 || same_code + same_but_frame < 6382))) {
+	if (classes == 0 || (classes == 255 && (compiled < 255 || identical < 26 || tables < 63 || finals < 246 || same_code < 5837 || same_code + same_but_frame < 7781))) {
 		fprintf(stderr, "compiler fidelity fell below the recorded floor\n");
 		++failures;
 	}

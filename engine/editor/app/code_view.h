@@ -15,6 +15,7 @@ struct CodeView {
 	std::string buffer, error;
 };
 
-// Returns true when an edit is applied; *blocks then holds the user blocks' new contents.
+// Returns true when an edit is applied; *blocks then holds the user blocks' new contents. Without
+// blocks the view is read-only.
 bool code_view(const char *id, CodeView &v, const std::string &text, ImVec2 size, const std::vector<std::pair<int, std::string>> &errors,
                std::map<std::string, std::string> *blocks);

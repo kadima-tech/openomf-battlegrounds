@@ -38,10 +38,13 @@ shared). Status: draft, 2026-11-06.
   - **Script:** moves, damage, stun and supers (`BJaguar` alone is 13.7k lines).
 - **Scripts ship as source plus VMC2 bytecode.** `vm::VMClass::write()` writes VMC2 exactly as the
   original saves it (all 255 shipped payloads round-trip, FINDINGS 430), and our compiler emits what
-  the original's loader checks (FINDINGS 431). Its code is not yet byte-identical to the original
-  compiler's (frame sizes, table order; FINDINGS 432), which does not matter for running it. The
-  original compiles a class whose VMC2 is missing or stale, and **quits** if that compile has an
-  error (FINDINGS 436).
+  the original's loader checks (FINDINGS 431). It compiles all 255 shipped classes, and every one
+  runs as its 2.123 VMC2 does (FINDINGS 650-656); 26 payloads and 5,837 of 11,027 methods are
+  byte-identical, the rest differing in the class and intrinsic table order, a few frame sizes and
+  temporary slots, none of which matters for running it. The original compiles a class whose VMC2
+  is missing or stale, and **quits** if that compile has an error (FINDINGS 436); so the editor
+  compiles strictly: the four errors 2.123's own tools compiled past in shipped classes (FINDINGS 651)
+  are errors there.
 - **Assets:**
   - images and WAVs: decode and encode are easy;
   - meshes and skeletal animation: decode yes, import moderate to hard (per-face UVs, 3 LODs, a named
@@ -441,6 +444,9 @@ on any compile error**.
    and whose class names and layout positions are 2.123's. Rebuild it on every behavior change.
 10. Every Behavior's source also compiles without error with our compiler (a stand-in for the
     original's, which would otherwise quit the game).
+    Validation lists each error at its line; selecting it opens the tournament's script tab, or for
+    any other add-on behavior (a HAR variant's fighter script) its source in the object view, at that
+    line with the error marked.
 11. Descriptions meant to be playable: `listed` set, `locked_by_default` clear (locks are keyed by
     GUID in the registry, so a new GUID starts in its default state), and in the casts the screen
     gathers (`PilotSPLadder`, `MultiplayerPilot`, …).
