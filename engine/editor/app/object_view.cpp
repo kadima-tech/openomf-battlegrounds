@@ -6,12 +6,14 @@
 #include <set>
 #include <sstream>
 
+#include "code_view.h"
 #include "editor.h"
 #include "icons.h"
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
 #include "pilot.h"
 #include "preview.h"
+#include "script.h"
 #include "theme.h"
 #include "widgets.h"
 
@@ -334,11 +336,12 @@ public:
 	bool addon_content() const override { return ref_.kind == ObjectRef::Addon; }
 	bool shows(const ObjectRef &r) const override { return r == ref_; }
 	void draw(Editor &e) override;
+	void jump(int line) { code_.jump_line = line; }
 
 private:
 	void preview(Editor &e, const deo::Object &o, ImVec2 size);
 	void image(Editor &e, ImVec2 p0, ImVec2 p1);
-	void script(const deo::Object &o, ImVec2 size);
+	void script(Editor &e, const deo::Object &o, ImVec2 size);
 	void sound(Editor &e, const deo::Object &o, ImVec2 p0, ImVec2 p1);
 	void robot(Editor &e, const std::string &fighter, ImVec2 p0, ImVec2 p1);
 
@@ -352,7 +355,8 @@ private:
 	bool channels_applied_[4] = {false, false, false, false};
 	bool fit_ = true;
 	GLuint texture_ = 0;
-	std::vector<std::string> lines_;
+	std::string script_;
+	CodeView code_;
 	bool script_read_ = false;
 	ed::Bytes wave_;
 	std::vector<float> peaks_;
@@ -419,7 +423,7 @@ void ObjectDocument::draw(Editor &e) {
 void ObjectDocument::preview(Editor &e, const deo::Object &o, ImVec2 size) {
 	const std::string cls = o.info.class_text();
 	if (cls == "Behavior") {
-		script(o, size);
+		script(e, o, size);
 		return;
 	}
 	ui::begin_panel("preview", size, kPanel, true, 8);
@@ -533,20 +537,25 @@ void ObjectDocument::image(Editor &e, ImVec2 p0, ImVec2 p1) {
 	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Fit to the panel / actual pixels");
 }
 
-void ObjectDocument::script(const deo::Object &o, ImVec2 size) {
+void ObjectDocument::script(Editor &e, const deo::Object &o, ImVec2 size) {
 	if (!script_read_) {
 		script_read_ = true;
-		std::string text = ed::behavior_source(o);
-		if (text.empty()) text = "// This Behavior's source does not parse.";
-		std::istringstream in(text);
-		std::string l;
-		while (std::getline(in, l)) {
-			std::string expanded;
-			for (char c : l) {
-				if (c == '\t') expanded.append(4 - expanded.size() % 4, ' ');
-				else expanded += c;
+		try {
+			// The text the compiler's error lines count in (ed::locate).
+			for (char c : ed::script_text(ed::read_pcode(o)).text) {
+				uint8_t u = uint8_t(c);
+				if (u >= 0x80) script_ += char(0xc0 | (u >> 6)), script_ += char(0x80 | (u & 0x3f));
+				else if (u == '\t' || u == '\n' || (u >= 0x20 && u != 0x7f)) script_ += c;
+				else if (u != '\r') script_ += ' ';
 			}
-			lines_.push_back(std::move(expanded));
+		} catch (const std::exception &) {
+			script_ = "// This Behavior's source does not parse.";
+		}
+	}
+	std::vector<std::pair<int, std::string>> errors;
+	if (int self = ref_.kind == ObjectRef::Addon && e.project() ? e.addon_index(ref_) : -1; self >= 0) {
+		for (auto &m : ed::last_compile_errors(*e.project())) {
+			if (m.object == self) errors.emplace_back(m.text_line, m.text);
 		}
 	}
 	ui::begin_panel("script", size, kPanel, true, 8, ImVec2(ui::px(12), ui::px(10)));
@@ -555,8 +564,7 @@ void ObjectDocument::script(const deo::Object &o, ImVec2 size) {
 	ImGui::TextUnformatted((ICON_FILE_CODE "  " + name_).c_str());
 	ImGui::PopFont();
 	ImGui::SameLine(0, ui::px(12));
-	ui::dim_text((std::to_string(lines_.size()) + " lines, read-only. Script editing (compile, diff against the base class) comes later.").c_str(), kTextMuted);
-	ui::code_view("code", lines_, ImGui::GetContentRegionAvail() - ImVec2(0, ui::px(2)));
+	code_view("code", code_, script_, ImGui::GetContentRegionAvail() - ImVec2(0, ui::px(2)), errors, nullptr);
 	ui::end_panel();
 }
 
@@ -655,3 +663,9 @@ void ObjectDocument::robot(Editor &e, const std::string &fighter, ImVec2 p0, ImV
 }  // namespace
 
 std::unique_ptr<Document> make_object_document(Editor &e, const ObjectRef &r) { return std::make_unique<ObjectDocument>(e, r); }
+
+bool object_document_jump(Document *d, int line) {
+	auto *o = dynamic_cast<ObjectDocument *>(d);
+	if (o) o->jump(line);
+	return o != nullptr;
+}

@@ -107,7 +107,10 @@ bool code_view(const char *id, CodeView &v, const std::string &text, ImVec2 size
 	bool applied = false;
 	ImGui::PushID(id);
 	const float bar = ImGui::GetFrameHeight() + ui::px(8);
-	if (!v.editing) {
+	if (!blocks) {
+		ImGui::AlignTextToFramePadding();
+		ui::dim_text(errors.empty() ? "Read-only" : (std::to_string(errors.size()) + " compile error(s)").c_str(), errors.empty() ? kTextMuted : kError);
+	} else if (!v.editing) {
 		if (ui::toolbar_button(ICON_CODE, "Edit user blocks", ui::Tone::Normal, true,
 		                       "Hand-written code goes between \"// <user ...>\" and \"// </user>\"; regenerating keeps it", ImGui::GetFrameHeight())) {
 			v.editing = true, v.buffer = text, v.error.clear();
@@ -126,10 +129,12 @@ bool code_view(const char *id, CodeView &v, const std::string &text, ImVec2 size
 		ImGui::SameLine();
 		if (ui::toolbar_button(ICON_X, "Cancel", ui::Tone::Ghost, true, nullptr, ImGui::GetFrameHeight())) v.editing = false;
 	}
-	ImGui::SameLine(0, ui::px(14));
-	ImGui::AlignTextToFramePadding();
-	if (!v.error.empty()) ui::dim_text(v.error.c_str(), kError);
-	else ui::dim_text(errors.empty() ? "Generated from the form" : (std::to_string(errors.size()) + " compile error(s)").c_str(), errors.empty() ? kTextMuted : kError);
+	if (blocks) {
+		ImGui::SameLine(0, ui::px(14));
+		ImGui::AlignTextToFramePadding();
+		if (!v.error.empty()) ui::dim_text(v.error.c_str(), kError);
+		else ui::dim_text(errors.empty() ? "Generated from the form" : (std::to_string(errors.size()) + " compile error(s)").c_str(), errors.empty() ? kTextMuted : kError);
+	}
 	ImVec2 area(size.x, size.y - bar);
 	if (v.editing) {
 		ImGui::PushFont(fonts.mono, kFontSmall);

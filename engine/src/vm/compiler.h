@@ -35,7 +35,11 @@ std::vector<de::ObjectRef> behavior_globals(const de::World &data, const de::Obj
 std::vector<size_t> compiled_elements(const de::PCode &p);
 
 // Compile `cls` (a Class object). Throws pc::CompileError naming the behavior and line; `notes`
-// gets what was resolved outside the class (see Compiler::stray_final).
-VMClass compile_class(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *notes = nullptr);
+// gets what was resolved outside the class (see Compiler::stray_final). With `errors`, the errors
+// 2.123's compiler reports but compiles past (a syntax error, an unknown member: shipped classes
+// were saved so by its tools; the game quits on them when it compiles at load, FINDINGS 436) are
+// listed there instead, and the class compiles as 2.123's did.
+VMClass compile_class(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *notes = nullptr,
+                      std::vector<std::string> *errors = nullptr);
 
 }  // namespace vm

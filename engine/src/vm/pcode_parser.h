@@ -75,7 +75,9 @@ struct Stmt {
 };
 
 // A method's or members section's statements. The text ends at its first NUL (the stored sources
-// carry editor bytes after it).
-std::vector<StmtPtr> parse(const std::string &source, const std::string &where);
+// carry editor bytes after it). Throws CompileError on a syntax error, unless `syntax_error` is
+// given: then it is set and the result is what 2.123's parser had compiled when it stopped (the
+// first statement, the expressions completed in the failing one, then the statements between).
+std::vector<StmtPtr> parse(const std::string &source, const std::string &where, std::string *syntax_error = nullptr);
 
 }  // namespace vm::pc

@@ -351,6 +351,11 @@ std::optional<std::pair<uint32_t, const char *>> native_embedded(const std::stri
 		auto it = f.find(field);
 		if (it != f.end()) return std::make_pair(it->second, "CObject::CVector");
 	}
+	if (cls == "CColorRGBA") {
+		static const std::map<std::string, uint32_t> f = {{"r", 0}, {"g", 4}, {"b", 8}, {"a", 12}};
+		auto it = f.find(field);
+		if (it != f.end()) return std::make_pair(it->second, "CObject::FLOATPrimitive");
+	}
 	if (cls == "CCoordinateSystem") {
 		if (field == "AxisX") return std::make_pair(0u, "CObject::CVector");
 		if (field == "AxisY") return std::make_pair(12u, "CObject::CVector");
@@ -365,6 +370,12 @@ std::optional<uint32_t> native_field(const std::string &cls, const std::string &
 		if (field == "x") return 0;
 		if (field == "y") return 4;
 		if (field == "z") return 8;
+	}
+	if (cls == "CColorRGBA") {
+		if (field == "r") return 0;
+		if (field == "g") return 4;
+		if (field == "b") return 8;
+		if (field == "a") return 12;
 	}
 	if (cls == "CAttackInfo") {
 		static const std::map<std::string, uint32_t> f = {
@@ -467,6 +478,7 @@ struct FinalInst {
 	std::vector<uint8_t> data;
 	int index = -1;   // in the class finals table once used
 	std::vector<std::string> init_intrinsics;  // the initialiser calls' signatures
+	bool pending = false;  // in pending_finals_
 };
 
 struct BehaviorInfo {
@@ -490,7 +502,8 @@ struct Local {
 
 class Compiler {
 public:
-	Compiler(const de::World &data, const de::ObjectRef &cls) : data_(data), api_(native_api(data)), cls_(cls) {}
+	Compiler(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *errors)
+	    : data_(data), api_(native_api(data)), cls_(cls), errors_(errors) {}
 
 	const std::vector<std::string> &notes() const { return notes_; }
 
@@ -594,6 +607,12 @@ private:
 	std::map<std::string, int> slots_;  // short signature -> virtual slot
 	std::set<std::string> stray_tried_;
 	std::vector<std::string> notes_;
+	std::vector<std::string> *errors_ = nullptr;  // compile past errors as 2.123 did (null: throw)
+	std::set<std::string> errors_seen_;
+
+	void recovered(const std::string &e) {
+		if (errors_seen_.insert(e).second) errors_->push_back(e);
+	}
 
 	// --- class and behavior data -----------------------------------------------------------
 
@@ -875,8 +894,15 @@ private:
 						if (dc.init && dc.init->kind == Expr::String) fi.data = string_instance(fi.cls, dc.init->text);
 						else fi.data = default_instance(fi.cls);
 						bool by_string = dc.init && dc.init->kind == Expr::String;
+						// Another final's copy (BWaitFor1Fighter's m_RequestEventToDelay=g_OMFSessionRequestBeginMatch).
+						if (auto from = dc.init && dc.init->kind == Expr::Ident ? final_insts_.find(dc.init->text) : final_insts_.end(); from != final_insts_.end()) {
+							fi.data = from->second.data;
+							for (const Sig *s : candidates(fi.cls, "(opp =)", 1))
+								if (s->params[0] == "class " + short_name(fi.cls)) fi.init_intrinsics.push_back(s->full);
+						}
 						auto ins = final_insts_.emplace(dc.name, std::move(fi));
-						if (ins.second) pending_finals_.push_back({&ins.first->second, by_string});
+						// Only an initialised one is tabled now (a bare declaration, as BMantis's m_RightHandHoldingRotation, when used).
+						if (ins.second && dc.init) ins.first->second.pending = true, pending_finals_.push_back({&ins.first->second, by_string});
 						continue;
 					}
 					if (!attached) continue;
@@ -957,7 +983,8 @@ private:
 	std::vector<uint8_t> default_instance(const std::string &cls) const {
 		if (cls == "CObject::CCoordinateSystem") return floats({1, 0, 0, 0, 1, 0, 0, 0, 1});
 		if (cls == "CObject::CVector") return floats({0, 0, 0});
-		if (cls == "CObject::CColorRGBA") return floats({0, 0, 0, 0});
+		if (cls == "CObject::CColorRGBA") return floats({1, 1, 1, 1});  // ColorRGBANewInstanceCaller: opaque white
+		if (cls == "CGenericEvent::CNamedHandle") return string_instance(cls, "Unknown");
 		return {};
 	}
 
@@ -968,6 +995,7 @@ private:
 		auto it = final_insts_.find(e.a->a->text);
 		if (it == final_insts_.end()) return;
 		FinalInst &fi = it->second;
+		if (!fi.pending) fi.pending = true, pending_finals_.push_back({&fi, false});
 		std::vector<double> args;
 		for (auto &a : e.args) {
 			auto v = fold(*a);
@@ -986,11 +1014,13 @@ private:
 		}
 		std::vector<float> f(fi.data.size() / 4);
 		memcpy(f.data(), fi.data.data(), f.size() * 4);
-		if ((fi.cls == "CObject::CVector" || fi.cls == "CObject::CColorRGBA") && m == "Set" && args.size() == f.size()) {
-			for (size_t i = 0; i < f.size(); ++i) f[i] = float(args[i]);
+		if ((fi.cls == "CObject::CVector" || fi.cls == "CObject::CColorRGBA") && m == "Set" && (args.size() == f.size() || (f.size() == 4 && args.size() == 3))) {
+			for (size_t i = 0; i < args.size(); ++i) f[i] = float(args[i]);
+		} else if (fi.cls == "CObject::CCoordinateSystem" && m == "Reset" && args.empty()) {
+			f = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 		} else if (fi.cls == "CObject::CCoordinateSystem" && args.size() == 1 && (m == "RotateXDeg" || m == "RotateYDeg" || m == "RotateZDeg")) {
 			int axis = m[6] - 'X';
-			float a = float(args[0]) * 0.017453292f, c = std::cos(a), s = std::sin(a);
+			float a = float(args[0]) * 0.0174533f, c = std::cos(a), s = std::sin(a);  // DE_TCoord3D's degrees: 0.0174533
 			for (int i = 0; i < 3; ++i) {
 				float x = f[size_t(i * 3)], y = f[size_t(i * 3 + 1)], z = f[size_t(i * 3 + 2)];
 				float r[3];
@@ -1015,7 +1045,9 @@ private:
 		m.state = els[ei].method_id == 0;
 		std::string w = where(bi, info.pcode.qualified_name(ei));
 		try {
-			m.body = pc::parse(els[ei].source, w);
+			std::string syntax;
+			m.body = pc::parse(els[ei].source, w, errors_ && bi < attached_.size() ? &syntax : nullptr);
+			if (!syntax.empty()) recovered(syntax);
 			for (auto &s : m.body) {
 				if (s->kind != Stmt::DeclS || !(s->decl->param || s->decl->rparam)) continue;
 				for (auto &dc : s->decl->names) {
@@ -1190,7 +1222,10 @@ private:
 		std::string where;
 		uint32_t local_refs = 0;
 		std::map<const pc::Declarator *, uint32_t> decl_refs, decl_slots;
+		std::map<const pc::Declarator *, Local> decl_locals;  // redeclared with another type: bound at the declaration
 		std::set<std::string> params;
+		std::vector<uint8_t> head;  // code 2.123 put at the method's start (see the unknown member in gen)
+		bool head_seeded = false;
 	};
 	Ctx *c_ = nullptr;
 
@@ -1198,6 +1233,11 @@ private:
 		throw CompileError(c_->where + ":" + std::to_string(e.line) + ": " + m);
 	}
 	void use(uint32_t end) { c_->max = std::max(c_->max, end); }
+
+	void bind(const pc::Declarator &dc, const Local &l, bool retyped) {
+		if (retyped) c_->decl_locals[&dc] = l;
+		else c_->locals.emplace(dc.name, l);
+	}
 
 	void hoist(const pc::Decl &d) {
 		for (auto &dc : d.names) {
@@ -1208,7 +1248,13 @@ private:
 				if (auto t = type_named(d.type)) c_->top += d.instance || d.interface ? 4 : member_size(*t);
 				continue;
 			}
-			if (prev != c_->locals.end()) {
+			bool retyped = false;  // redeclared with another kind of type: a local of its own (BDefaultHUD's Render: a CVector, then a float Position)
+			if (prev != c_->locals.end() && !prev->second.constant) {
+				auto nt = type_named(d.type);
+				const Type &pt = prev->second.type;
+				retyped = nt && !d.interface && !dc.array && !(nt->numeric() && pt.numeric()) && (nt->k != pt.k || nt->name != pt.name);
+			}
+			if (prev != c_->locals.end() && !retyped) {
 				// Redeclared: a numeric one shares the slot (int t after float t), an object one in a
 				// state gets a ref of its own.
 				if (prev->second.ref && c_->m->state && !d.instance && !d.interface && type_named(d.type) && type_named(d.type)->k == Type::Obj)
@@ -1238,7 +1284,7 @@ private:
 					l.type = l.value.type;
 					l.offset = c_->top;
 					c_->top += member_size(l.type);
-					c_->locals.emplace(dc.name, l);
+					bind(dc, l, retyped);
 					continue;
 				}
 			}
@@ -1247,7 +1293,7 @@ private:
 				l.ref = true;
 				l.offset = c_->local_refs++;
 				c_->decl_refs[&dc] = l.offset;
-				c_->locals.emplace(dc.name, l);
+				bind(dc, l, retyped);
 				continue;
 			}
 			l.offset = c_->top;
@@ -1266,7 +1312,7 @@ private:
 				c_->interfaces.push_back({l.offset, visible_index(l.type.name), false});
 				c_->decl_slots[&dc] = l.offset;
 			}
-			c_->locals.emplace(dc.name, l);
+			bind(dc, l, retyped);
 		}
 	}
 
@@ -1281,13 +1327,13 @@ private:
 		for (auto &x : s.list) hoist_stmt(*x);
 	}
 
-	void compile_method(size_t mi) {
-		MethodDecl &m = methods_[mi];
-		Ctx ctx;
+	// The method's code, with `head` after its prologue.
+	void method_body(Ctx &ctx, MethodDecl &m, bool seeded, const std::vector<uint8_t> &head, uint32_t &ret_size, uint32_t &params_end) {
+		ctx.head_seeded = seeded;
 		ctx.m = &m;
 		ctx.where = where(m.beh, infos_[m.beh].pcode.qualified_name(m.element));
 		c_ = &ctx;
-		uint32_t ret_size = m.ret.k != Type::None ? 4 : 0;
+		ret_size = m.ret.k != Type::None ? 4 : 0;
 		// rparam at 0, then the params, then every other declaration of the body.
 		for (auto &s : m.body) {
 			if (s->kind != Stmt::DeclS || !s->decl->rparam) continue;
@@ -1303,7 +1349,7 @@ private:
 			if (m.param_instance[i] && m.params[i].k == Type::Obj) ctx.instances.push_back({class_index(m.params[i].name), ctx.top, true, 0, {}});
 			ctx.top += member_size(m.params[i]);
 		}
-		uint32_t params_end = ctx.top;
+		params_end = ctx.top;
 		// A state's object parameters are held in local refs, copied from the frame at entry.
 		std::vector<std::pair<uint32_t, uint32_t>> ref_params;
 		if (m.state) {
@@ -1326,8 +1372,21 @@ private:
 			ctx.code.u16(uint16_t(ref));
 			ctx.code.i32(int32_t(at));
 		}
+		ctx.code.bytes.insert(ctx.code.bytes.end(), head.begin(), head.end());
 		use(ctx.top);
 		for (auto &s : m.body) stmt(*s);
+	}
+
+	void compile_method(size_t mi) {
+		MethodDecl &m = methods_[mi];
+		Ctx ctx;
+		uint32_t ret_size = 0, params_end = 0;
+		method_body(ctx, m, false, {}, ret_size, params_end);
+		if (!ctx.head.empty()) {
+			std::vector<uint8_t> head = std::move(ctx.head);
+			ctx = Ctx{};
+			method_body(ctx, m, true, head, ret_size, params_end);
+		}
 		uint32_t frame = (ctx.max + 7) / 8 * 8 + 8;
 		ctx.code.patch(4, int32_t(frame));
 
@@ -1507,6 +1566,7 @@ private:
 			for (auto &dc : s.decl->names) {
 				if (auto r = c_->decl_refs.find(&dc); r != c_->decl_refs.end()) c_->locals[dc.name].offset = r->second;
 				if (auto r = c_->decl_slots.find(&dc); r != c_->decl_slots.end()) c_->locals[dc.name].offset = r->second;
+				if (auto r = c_->decl_locals.find(&dc); r != c_->decl_locals.end()) c_->locals[dc.name] = r->second;
 				if (!dc.init) continue;
 				auto e = std::make_unique<Expr>();
 				e->kind = Expr::Ident;
@@ -2037,16 +2097,8 @@ private:
 			}
 			Type t = gen(*e.a, dst);
 			if (e.text == "!") {
-				if (t.k == Type::Iface) {
-					code.op(88, int32_t(dst));
-				} else if (t.k == Type::Float) {
-					code.op(2, int32_t(dst + 8), 4);
-					code.i32(0);
-					code.op(118, int32_t(dst), int32_t(dst + 8));
-					use(dst + 12);
-					return prim(Type::Bool);
-				}
-				code.op(115, int32_t(dst));
+				if (t.k == Type::Iface) code.op(88, int32_t(dst));
+				code.op(115, int32_t(dst));  // a float's bits too (BText's !FadeTime)
 				return prim(Type::Bool);
 			}
 			if (e.text == "-") {
@@ -2106,7 +2158,21 @@ private:
 					return et;
 				}
 			}
-			fail(e, "unknown member " + e.text);
+			if (!errors_ || t.k != Type::Obj) fail(e, "unknown member " + e.text);
+			// 2.123 reports it, and leaves the receiver's code at the method's start too, over the
+			// first slot (BCrowdResponse's Session().SlotInFocus: the Event parameter).
+			recovered(c_->where + ":" + std::to_string(e.line) + ": unknown member " + e.text);
+			if (!c_->head_seeded && c_->head.empty()) {
+				Code saved = std::move(c_->code);
+				c_->code = Code{};
+				gen(*e.a, 0);
+				c_->head = std::move(c_->code.bytes);
+				c_->code = std::move(saved);
+			}
+			code.op(229, int32_t(dst), 0);
+			Type ot = prim(Type::Obj);
+			ot.name = "CObject";
+			return ot;
 		}
 		case Expr::Assign:
 			assign(*e.a, e.text, *e.b);
@@ -2148,7 +2214,7 @@ private:
 	}
 
 	Type field_type(const std::string &cls, const std::string &field) const {
-		if (cls == "CVector") return prim(Type::Float);
+		if (cls == "CVector" || cls == "CColorRGBA") return prim(Type::Float);
 		if (field == "m_Damage" || field == "m_StunDamage" || field == "m_EnergyDamage" || field == "m_RecoveryTime" ||
 		    field == "m_MomentumAdjustAmount" || field == "m_DiminishDamageAmount" || field == "m_RetainDamageMultiplier" ||
 		    field == "m_GuideToLastHitMultiplier")
@@ -2176,6 +2242,15 @@ private:
 		return -1;
 	}
 
+	// A right operand used where it lives: a plain 4-byte numeric local whose type needs no conversion.
+	std::optional<Local> in_place(const Expr &e, const Type &left) {
+		if (e.kind != Expr::Ident) return std::nullopt;
+		Place rp = lookup(e.text);
+		if (rp.k != Place::Local || rp.ref || !rp.type.numeric() || member_size(rp.type) != 4 || !left.numeric()) return std::nullopt;
+		if (rp.type.k != left.k && (left.k == Type::Float || rp.type.k == Type::Float)) return std::nullopt;
+		return Local{rp.type, rp.offset, false, {}};
+	}
+
 	Type binary(const Expr &e, uint32_t dst) {
 		Code &code = c_->code;
 		if (auto v = fold(e, &c_->locals)) {
@@ -2199,13 +2274,11 @@ private:
 		// A plain local on the right is used in place.
 		uint32_t rhs = dst + 8;
 		Type b;
-		Place rp = e.b->kind == Expr::Ident ? lookup(e.b->text) : Place{};
 		auto lit = fold(*e.b, &c_->locals);
 		bool left_float = a.k == Type::Float;
-		if (rp.k == Place::Local && !rp.ref && rp.type.numeric() && member_size(rp.type) == 4 && a.numeric() &&
-		    (rp.type.k == a.k || !(left_float || rp.type.k == Type::Float))) {
-			rhs = rp.offset;
-			b = rp.type;
+		if (auto in = in_place(*e.b, a)) {
+			rhs = in->offset;
+			b = in->type;
 		} else if (lit && lit->type.numeric() && left_float && lit->type.k != Type::Float) {
 			Value v = *lit;
 			v.f = double(v.i);
@@ -2349,13 +2422,16 @@ private:
 				bin.text = op.substr(0, op.size() - 1);
 				bin.line = lhs.line;
 				Type a = load(p, t, lhs);
-				Type b = gen(rhs, t + 8);
+				uint32_t r = t + 8;
+				Type b;
+				if (auto in = in_place(rhs, a)) r = in->offset, b = in->type;
+				else b = gen(rhs, r);
 				use(t + 12);
 				Type ty = a.k == Type::Bool ? prim(Type::Int) : a;
-				if (b.numeric()) convert(b, ty, t + 8);
+				if (b.numeric() && r == t + 8) convert(b, ty, r);
 				int o = binop(bin.text, ty);
 				if (o < 0) fail(lhs, "unsupported operator " + op);
-				code.op(o, int32_t(t), int32_t(t + 8));
+				code.op(o, int32_t(t), int32_t(r));
 				store(p, ty, t, lhs);
 				return;
 			}
@@ -2457,10 +2533,11 @@ private:
 		fail(lhs, "cannot assign to this expression");
 	}
 
-	// Nested native classes are values, except CIncidentRecorder, made a reference target by
-	// DE_CSceneFactory::Init (class node +200).
+	// Nested native classes are values, except reference targets (DE_CPCNodeClass::IsRefTarget: the
+	// root class node's +200): CIncidentRecorder (DE_CSceneFactory::Init sets it) and the primitive
+	// generator's primitives (the shipped VMC2 holds them in ref members).
 	bool is_value_class(const std::string &full) const {
-		return full.find("::") != std::string::npos && full != "CScene::CIncidentRecorder";
+		return full.find("::") != std::string::npos && full != "CScene::CIncidentRecorder" && full.rfind("CPrimitiveGeneratorMesh::", 0) != 0;
 	}
 	static bool implicit_instance(const std::string &full) { return full.rfind("CObject::", 0) == 0; }
 
@@ -2959,8 +3036,9 @@ private:
 			uint32_t ret = info.method_rets[k].k != Type::None ? 4 : 0;
 			std::vector<std::string> spelled;
 			for (auto &p : info.method_params[k]) spelled.push_back(spell(p));
-			args_to(e.args, spelled, dst + 4 + ret, info.method_state[k]);
-			c_->code.op(37, int32_t(dst), int32_t(k), int32_t(dst + 4));
+			args_to(e.args, spelled, dst + 4, info.method_state[k]);
+			// The callee's frame starts at its return value: over the handle when it has one, after it otherwise.
+			c_->code.op(37, int32_t(dst), int32_t(k), int32_t(dst + 4 - ret));
 			use(dst + 8 + ret + 4 * uint32_t(e.args.size()));
 			return info.method_rets[k].k != Type::None ? info.method_rets[k] : prim(Type::Void);
 		}
@@ -2970,8 +3048,8 @@ private:
 
 }  // namespace
 
-VMClass compile_class(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *notes) {
-	Compiler c(data, cls);
+VMClass compile_class(const de::World &data, const de::ObjectRef &cls, std::vector<std::string> *notes, std::vector<std::string> *errors) {
+	Compiler c(data, cls, errors);
 	VMClass out = c.run();
 	if (notes) *notes = c.notes();
 	return out;

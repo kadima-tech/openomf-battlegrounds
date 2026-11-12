@@ -1,6 +1,8 @@
 // VMC2 writer tests: every shipped Class's VMC2 parses and writes back byte for byte, and for the
 // classes our compiler reproduces, compile -> write equals the shipped payload.
-// Usage: vmc2-tests <Data dir> [-v | -vm (also each method: same, frame (differs only in the frame size) or differs)]
+// Usage: vmc2-tests <Data dir> [-v | -vm (also each method: same, frame (differs only in the frame size) or differs)
+//                                 | -vd (-vm, and both codes of each method that differs)]
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +12,7 @@
 #include "de/platform.h"
 #include "de/scene.h"
 #include "vm/compiler.h"
+#include "vm/disasm.h"
 #include "vm/vmcode.h"
 
 namespace {
@@ -101,10 +104,11 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "usage: %s <Data dir> [-v]\n", argv[0]);
 		return 2;
 	}
-	bool verbose = argc > 2 && (!strcmp(argv[2], "-v") || !strcmp(argv[2], "-vm"));
-	bool per_method = argc > 2 && !strcmp(argv[2], "-vm");
+	bool dump = argc > 2 && !strcmp(argv[2], "-vd");
+	bool per_method = dump || (argc > 2 && !strcmp(argv[2], "-vm"));
+	bool verbose = per_method || (argc > 2 && !strcmp(argv[2], "-v"));
 	de::World w(argv[1]);
-	size_t classes = 0, round_trip = 0, compiled = 0, identical = 0, tables = 0, methods = 0, same_code = 0, same_but_frame = 0;
+	size_t classes = 0, round_trip = 0, compiled = 0, identical = 0, tables = 0, methods = 0, same_code = 0, same_but_frame = 0, finals = 0;
 	int failures = 0;
 	std::map<std::string, size_t> reasons;
 	for (auto &[stem, f] : w.files()) {
@@ -129,7 +133,9 @@ int main(int argc, char **argv) {
 			}
 			vm::VMClass mine;
 			try {
-				mine = vm::compile_class(w, {f.get(), i});
+				std::vector<std::string> errors;
+				mine = vm::compile_class(w, {f.get(), i}, nullptr, &errors);
+				if (verbose) for (auto &e : errors) printf("compiled past   %s: %s\n", label.c_str(), e.c_str());
 			} catch (const std::exception &e) {
 				if (verbose) printf("compile error   %s: %s\n", label.c_str(), e.what());
 				++reasons["compile error"];
@@ -142,6 +148,9 @@ int main(int argc, char **argv) {
 			for (size_t k = 0; same_tables && k < mine.intrinsics.size(); ++k)
 				same_tables = mine.intrinsics[k].class_index == shipped.intrinsics[k].class_index && mine.intrinsics[k].signature == shipped.intrinsics[k].signature;
 			tables += same_tables;
+			finals += mine.finals.size() == shipped.finals.size() && std::equal(mine.finals.begin(), mine.finals.end(), shipped.finals.begin(), [&](const auto &x, const auto &y) {
+				          return x.data == y.data && mine.classes[x.class_index].name == shipped.classes[y.class_index].name;
+			          });
 			for (size_t b = 0; b < shipped.behaviors.size() && b < mine.behaviors.size(); ++b) {
 				for (size_t m = 0; m < shipped.behaviors[b].methods.size(); ++m) {
 					auto &q = shipped.behaviors[b].methods[m];
@@ -154,8 +163,22 @@ int main(int argc, char **argv) {
 					if (a.size() >= 8 && c.size() >= 8) std::fill(a.begin() + 4, a.begin() + 8, 0), std::fill(c.begin() + 4, c.begin() + 8, 0);
 					same_but_frame += a == c && ms[m]->code != q->code;
 					if (per_method)
-						printf("method %s %s %s\n", ms[m]->code == q->code ? "same" : a == c ? "frame" : "differs", label.c_str(), q->signature.c_str());
+						printf("method %s %s %s (frame %u, shipped %u)\n", ms[m]->code == q->code ? "same" : a == c ? "frame" : "differs", label.c_str(), q->signature.c_str(), ms[m]->counts[0], q->counts[0]);
+					if (dump && a != c) {
+						for (auto *side : {&ms[m]->code, &q->code}) {
+							printf("  %s\n", side == &q->code ? "shipped:" : "ours:");
+							try {
+								for (auto &ins : vm::decode(*side)) printf("    %s\n", vm::format(ins).c_str());
+							} catch (const std::exception &) {
+							}
+						}
+					}
 				}
+			}
+			for (size_t k = 0; per_method && k < mine.finals.size() && k < shipped.finals.size(); ++k) {
+				auto &x = mine.finals[k], &y = shipped.finals[k];
+				(void)y;
+				if (std::none_of(shipped.finals.begin(), shipped.finals.end(), [&](const auto &z) { return z.data == x.data; })) printf("final unknown %s %zu %s\n", label.c_str(), k, mine.classes[x.class_index].name.c_str());
 			}
 			std::string diff = first_difference(mine, shipped);
 			bool same_bytes = mine.write() == vmc2->data;
@@ -176,7 +199,7 @@ int main(int argc, char **argv) {
 	       round_trip, compiled, identical);
 	printf("  of those compiled: %zu with the shipped class and intrinsic tables; %zu of %zu methods with identical bytecode\n",
 	       tables, same_code, methods);
-	printf("  %zu more methods differ only in the frame size\n", same_but_frame);
+	printf("  %zu more methods differ only in the frame size; %zu classes with the shipped finals\n", same_but_frame, finals);
 	for (auto &[r, n] : reasons) printf("  %zu: %s\n", n, r.c_str());
 	// Floors for the compiler's fidelity on 2.123's 255 compiled classes, so it can only improve.
 	if (classes == 0 || (classes == 255 && (compiled < 239 || tables < 61 || same_code < 309 || same_code + same_but_frame < 6382))) {

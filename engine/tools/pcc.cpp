@@ -2,7 +2,7 @@
 // the shipped VMC2, if any, for comparison.
 //
 //   pcc <Data dir> <file stem> <Class> [nth class of that name] [-o <VMC2 payload out>]
-//   pcc <Data dir> <file stem> --source <Behavior>
+//   pcc <Data dir> <file stem> --source <Behavior> [nth behavior of that name]
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +23,12 @@ namespace {
 void print(const vm::VMClass &c, const char *label) {
 	printf("==== %s: %zu classes, %zu intrinsics, %zu finals\n", label, c.classes.size(), c.intrinsics.size(), c.finals.size());
 	for (size_t i = 0; i < c.classes.size(); ++i) printf("  class %zu: %s layout %u\n", i, c.classes[i].name.c_str(), c.classes[i].layout_pos);
+	for (size_t i = 0; i < c.intrinsics.size(); ++i) printf("  intrinsic %zu: %s::%s\n", i, c.classes[c.intrinsics[i].class_index].name.c_str(), c.intrinsics[i].signature.c_str());
+	for (size_t i = 0; i < c.finals.size(); ++i) {
+		printf("  final %zu: %s", i, c.classes[c.finals[i].class_index].name.c_str());
+		for (uint8_t b : c.finals[i].data) printf(" %02x", b);
+		printf("\n");
+	}
 	for (size_t i = 0; i < c.global_refs.size(); ++i) printf("  global ref %zu: kind %u %s\n", i, c.global_refs[i].kind, c.global_refs[i].name.c_str());
 	for (size_t b = 0; b < c.behaviors.size(); ++b) {
 		auto &bc = c.behaviors[b];
@@ -67,8 +73,9 @@ int main(int argc, char **argv) {
 	const de::ObjectsFile *f = w.file(argv[2]);
 	if (!f) return 1;
 	if (!strcmp(argv[3], "--source") && argc > 4) {
+		int which = argc > 5 ? atoi(argv[5]) : 0, seen = 0;
 		for (auto &o : f->objects()) {
-			if (o.name != argv[4] || o.class_path != "Behavior") continue;
+			if (o.name != argv[4] || o.class_path != "Behavior" || seen++ != which) continue;
 			de::Contents c(f->object_data(o).contents);
 			std::string t = de::PCode::parse(c).text();
 			fwrite(t.data(), 1, t.size(), stdout);
@@ -88,9 +95,10 @@ int main(int argc, char **argv) {
 		if (o.class_path != "Class" || o.name != argv[3] || seen++ != which) continue;
 		int rc = 0;
 		try {
-			std::vector<std::string> notes;
-			vm::VMClass c = vm::compile_class(w, {f, i}, &notes);
+			std::vector<std::string> notes, errors;
+			vm::VMClass c = vm::compile_class(w, {f, i}, &notes, &errors);
 			for (auto &n : notes) fprintf(stderr, "note: %s\n", n.c_str());
+			for (auto &e : errors) fprintf(stderr, "error (compiled past, as 2.123): %s\n", e.c_str());
 			print(c, "compiled");
 			if (out) {
 				auto bytes = c.write();

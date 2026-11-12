@@ -931,7 +931,10 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	auto vmc2 = cls_obj.file->ex_payload(d, "VMC2");
 	auto behavior_refs = vm::class_behavior_refs(d.references);
 	static const std::string recompile = getenv("OPENBG_RECOMPILE") ? "," + std::string(getenv("OPENBG_RECOMPILE")) + "," : "";
-	if (vmc2 && !recompile.empty() && (recompile == ",all," || recompile.find("," + cls_obj.info().name + ",") != std::string::npos)) vmc2.reset();
+	const std::string &cn = cls_obj.info().name;
+	if (vmc2 && !recompile.empty() && recompile.find(",-" + cn + ",") == std::string::npos &&
+	    (recompile.rfind(",all,", 0) == 0 || recompile.find("," + cn + ",") != std::string::npos))
+		vmc2.reset();
 	vm::VMClass code;
 	if (vmc2) {
 		code = vm::VMClass::parse(vmc2->data, behavior_refs.size());
@@ -940,8 +943,9 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 		auto key = std::make_pair(cls_obj.file, cls_obj.index);
 		auto it = compiled_classes_.find(key);
 		if (it == compiled_classes_.end()) {
-			std::vector<std::string> notes;
-			vm::VMClass compiled = vm::compile_class(data_, cls_obj, &notes);
+			std::vector<std::string> notes, errors;
+			vm::VMClass compiled = vm::compile_class(data_, cls_obj, &notes, &errors);
+			for (auto &e : errors) log.push_back("compiler: error (compiled past, as 2.123): " + e);
 			for (auto &n : notes) log.push_back("compiler: " + n);
 			it = compiled_classes_.emplace(key, std::move(compiled)).first;
 		}

@@ -283,6 +283,8 @@ std::unique_ptr<Document> make_pilot_document(Editor &e, const ed::Guid &pilot);
 std::unique_ptr<Document> make_base_pilot_document(Editor &e, const ed::BaseObject &pilot);
 bool pilot_document_is(const Document *d, const ed::Guid &pilot);
 std::unique_ptr<Document> make_object_document(Editor &e, const ObjectRef &r);
+// Scrolls an object document showing a script to that line of its text; false for other documents.
+bool object_document_jump(Document *d, int line);
 // The Details panel's body for any object: identity, decoded fields, references, chunks.
 void draw_object_info(Editor &e, const ObjectRef &r, bool in_document);
 const char *class_icon(const std::string &class_path);

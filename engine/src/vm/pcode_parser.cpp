@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <set>
 
 namespace vm::pc {
 
@@ -141,15 +143,59 @@ bool looks_like_class(const std::string &s) {
 	return s.size() > 1 && (s[0] == 'C' || s[0] == 'B' || s[0] == 'E') && isupper(uint8_t(s[1]));
 }
 
+bool keyword(const std::string &s) {
+	static const char *words[] = {"if", "else", "while", "for", "do", "switch", "case", "default", "return", "break", "continue", nullptr};
+	for (const char **p = words; *p; ++p) {
+		if (s == *p) return true;
+	}
+	return false;
+}
+
+ExprPtr clone(const Expr &e) {
+	auto c = std::make_unique<Expr>();
+	c->kind = e.kind;
+	c->line = e.line;
+	c->ival = e.ival;
+	c->fval = e.fval;
+	c->text = e.text;
+	if (e.a) c->a = clone(*e.a);
+	if (e.b) c->b = clone(*e.b);
+	if (e.c) c->c = clone(*e.c);
+	for (auto &x : e.args) c->args.push_back(clone(*x));
+	return c;
+}
+
 class Parser {
 public:
-	Parser(std::vector<Token> t, std::string where) : t_(std::move(t)), where_(std::move(where)) {}
+	Parser(std::vector<Token> t, std::string where, bool recover) : t_(std::move(t)), where_(std::move(where)), recover_(recover) {}
 
-	std::vector<StmtPtr> statements() {
+	std::vector<StmtPtr> statements(std::string *syntax_error) {
 		std::vector<StmtPtr> out;
 		while (!at_end()) {
 			if (accept("}")) continue;  // a stray closing brace (some stored sources have one)
-			out.push_back(statement());
+			done_.clear();
+			try {
+				out.push_back(statement());
+			} catch (const CompileError &e) {
+				if (!recover_) throw;
+				*syntax_error = e.what();
+				// 2.123's parser emits expressions as it reduces them, at the method's start or after its
+				// first statement; the later statements are placed only once the whole method parses.
+				auto first = std::find_if(out.begin(), out.end(), [](const StmtPtr &s) {
+					return s->kind != Stmt::DeclS || !(s->decl->param || s->decl->rparam);
+				});
+				if (first != out.end()) ++first;
+				std::vector<StmtPtr> partial;
+				for (auto &x : partial_) {
+					auto s = std::make_unique<Stmt>();
+					s->kind = Stmt::ExprS;
+					s->line = x->line;
+					s->e = std::move(x);
+					partial.push_back(std::move(s));
+				}
+				out.insert(first, std::make_move_iterator(partial.begin()), std::make_move_iterator(partial.end()));
+				return out;
+			}
 		}
 		return out;
 	}
@@ -158,12 +204,41 @@ private:
 	std::vector<Token> t_;
 	std::string where_;
 	size_t p_ = 0;
+	bool recover_ = false;
+	// The expressions completed in the statement being parsed (children first), and what a syntax
+	// error leaves of them: those not inside a later one, a call's callee standing for its receiver.
+	std::vector<const Expr *> done_;
+	std::vector<ExprPtr> dropped_, partial_;
+
+	void done(const ExprPtr &e) {
+		if (recover_) done_.push_back(e.get());
+	}
+	void salvage() {
+		std::set<const Expr *> covered;
+		std::function<void(const Expr *)> cover = [&](const Expr *e) {
+			if (!e || !covered.insert(e).second) return;
+			cover(e->a.get()), cover(e->b.get()), cover(e->c.get());
+			for (auto &x : e->args) cover(x.get());
+		};
+		std::vector<const Expr *> frontier;
+		for (size_t i = done_.size(); i-- > 0;) {
+			if (covered.count(done_[i])) continue;
+			frontier.push_back(done_[i]);
+			cover(done_[i]);
+		}
+		std::reverse(frontier.begin(), frontier.end());
+		for (const Expr *e : frontier) {
+			if (e->kind == Expr::Member) e = e->a.get();
+			if (e) partial_.push_back(clone(*e));
+		}
+	}
 
 	const Token &peek(size_t k = 0) const { return t_[std::min(p_ + k, t_.size() - 1)]; }
 	bool at_end() const { return peek().kind == Token::End; }
 	bool is(const char *punct, size_t k = 0) const { return peek(k).kind == Token::Punct && peek(k).text == punct; }
 	bool is_word(const char *w, size_t k = 0) const { return peek(k).kind == Token::Ident && peek(k).text == w; }
-	[[noreturn]] void fail(const std::string &m) const {
+	[[noreturn]] void fail(const std::string &m) {
+		if (recover_ && partial_.empty()) salvage();
 		throw CompileError(where_ + ":" + std::to_string(peek().line) + ": " + m + " near '" + peek().text + "'");
 	}
 	void expect(const char *punct) {
@@ -385,6 +460,7 @@ private:
 		auto e = assignment();
 		while (is(",")) {  // comma expressions: keep the last (rare)
 			++p_;
+			dropped_.push_back(std::move(e));
 			e = assignment();
 		}
 		return e;
@@ -400,6 +476,7 @@ private:
 				++p_;
 				e->a = std::move(lhs);
 				e->b = assignment();
+				done(e);
 				return e;
 			}
 		}
@@ -415,6 +492,7 @@ private:
 		e->b = assignment();
 		expect(":");
 		e->c = assignment();
+		done(e);
 		return e;
 	}
 
@@ -440,6 +518,7 @@ private:
 			e->a = std::move(lhs);
 			// PCParser's arithmetic is right-associative (a-b+c is a-(b+c)); && and || are not.
 			e->b = binary(p >= 9 ? p - 1 : p);
+			done(e);
 			lhs = std::move(e);
 		}
 	}
@@ -461,14 +540,17 @@ private:
 			auto e = node(Expr::Unary);
 			e->text = peek().text;
 			++p_;
-			e->a = unary();
+			// A unary minus binds as the additive operators do: -a-b is -(a-b) (BSpike's -TotalSpikeMovement-RecessSpikeAmount).
+			e->a = e->text == "-" ? binary(8) : unary();
 			if (e->text == "+") return std::move(e->a);
+			done(e);
 			return e;
 		}
 		if (is("++") || is("--")) {
 			auto e = node(is("++") ? Expr::PreInc : Expr::PreDec);
 			++p_;
 			e->a = unary();
+			done(e);
 			return e;
 		}
 		if (cast_ahead()) {
@@ -478,6 +560,7 @@ private:
 			while (accept("::")) e->text += "::" + ident();
 			expect(")");
 			e->a = unary();
+			done(e);
 			return e;
 		}
 		return postfix();
@@ -517,10 +600,17 @@ private:
 			} else {
 				return e;
 			}
+			done(e);
 		}
 	}
 
 	ExprPtr primary() {
+		auto e = primary_();
+		done(e);
+		return e;
+	}
+
+	ExprPtr primary_() {
 		const Token &t = peek();
 		if (t.kind == Token::Int) {
 			auto e = node(Expr::Int);
@@ -553,7 +643,7 @@ private:
 			e->text += ident();
 			return e;
 		}
-		if (t.kind == Token::Ident) {
+		if (t.kind == Token::Ident && !keyword(t.text)) {
 			if (t.text == "null") {
 				++p_;
 				return node(Expr::Null);
@@ -574,9 +664,9 @@ private:
 
 }  // namespace
 
-std::vector<StmtPtr> parse(const std::string &source, const std::string &where) {
-	Parser p(lex(source, where), where);
-	return p.statements();
+std::vector<StmtPtr> parse(const std::string &source, const std::string &where, std::string *syntax_error) {
+	Parser p(lex(source, where), where, syntax_error != nullptr);
+	return p.statements(syntax_error);
 }
 
 }  // namespace vm::pc
