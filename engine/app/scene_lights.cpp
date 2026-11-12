@@ -28,6 +28,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 	{
 		static std::map<std::pair<uint64_t, uint32_t>, std::optional<de::LightInfo>> infos;
 		static std::map<std::pair<const de::ObjectsFile *, uint32_t>, GLuint> light_images;
+		static std::map<std::pair<uint64_t, uint32_t>, std::vector<uint32_t>> data_children;
 		g_lighting.lights.clear();
 		static uint32_t gatherings = 0;  // callers save and restore g_lighting around other views
 		g_lighting.serial = ++gatherings;
@@ -41,11 +42,13 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 			if (in_scene_layer && !in_scene_layer(o)) continue;
 			if (o->class_path == "Light" && o->file && game::in_scene(*o) && o->parent) placed.emplace_back(de::ObjectRef{o->file, o->index}, o, o->parent);
 			if ((o->shape == game::GameObject::Shape::Sphere || o->shape == game::GameObject::Shape::Cone) && o->file && game::in_scene(*o)) {
-				// A particle's light is its Light child (with the particle's own intensity and colour),
-				// not the property it was made from as well.
-				bool has_child_light = std::any_of(o->children.begin(), o->children.end(), [](const game::GameObject *c) { return c->class_path == "Light"; });
 				for (const de::ObjectRef &p : world.properties_of(*o)) {
-					if (p && p.info().class_path == "Light" && !has_child_light) placed.emplace_back(p, nullptr, o);
+					if (!p || p.info().class_path != "Light") continue;
+					// A Light that is also the actor's hierarchy child lights only as that child, deleted or not.
+					auto kids = data_children.find({o->file->serial(), o->index});
+					if (kids == data_children.end()) kids = data_children.emplace(std::make_pair(o->file->serial(), o->index), de::ObjectsFile::children(o->file->object_data(o->file->objects()[o->index]))).first;
+					if (p.file == o->file && std::find(kids->second.begin(), kids->second.end(), p.index) != kids->second.end()) continue;
+					placed.emplace_back(p, nullptr, o);
 				}
 			}
 		}
