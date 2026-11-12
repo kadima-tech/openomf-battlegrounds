@@ -86,6 +86,8 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--replay")) opt.replay = true;
 		else if (!strcmp(argv[i], "--inspector")) opt.inspector = true;
 		else if (arg("--play-ticks")) opt.play_ticks = atoi(argv[++i]);
+		else if (arg("--play-robot")) opt.play_robot = argv[++i];
+		else if (arg("--play-opponent")) opt.play_opponent = argv[++i];
 		else if (arg("--debug")) opt.debug = argv[++i];
 		else if (arg("--import")) opt.import_file = utf8_path(argv[++i]);
 		else if (arg("--import-kind")) opt.import_kind = argv[++i];

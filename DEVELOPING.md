@@ -286,7 +286,7 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
 - Scripted runs: `--arena <name|stem>`, `--variant`, `--select-node <name>`, `--move-to x,y,z`,
   `--light-colour r,g,b,intensity`, `--camera x,y,z,yaw,pitch`, `--layout 1|2|4`, `--shading 0|1|2`,
   `--play`, `--simulate`, `--play-ticks N`, `--replay` (Stop and Play again), `--eject`,
-  `--inspector`, `--debug hits,nav,energy`.
+  `--inspector`, `--debug hits,nav,energy`, `--play-robot <name>`, `--play-opponent <name>`.
 - `editor-arena-tests` (ctest `editor-arena`): the arena list, Desert's tree (16 spawn points, nav
   links resolved, checks pass), a variant -> description, spawn moved and duplicated, light recoloured
   -> save -> reopen, and the engine reading the saved variant: same counts, and for 431 copied

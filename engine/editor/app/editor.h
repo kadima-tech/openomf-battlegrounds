@@ -45,6 +45,7 @@ struct Options {
 	std::string arena, select_node, camera, debug, move_to, light_colour;
 	bool variant = false, play = false, simulate = false, eject = false, inspector = false, replay = false;
 	int play_ticks = 0, layout = 0, shading = -1;
+	std::string play_robot, play_opponent;  // Play Mode's robots
 	// The asset side (assets.h): tournaments and HAR variants.
 	std::string new_tournament, open_tournament, new_har, open_har;
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
