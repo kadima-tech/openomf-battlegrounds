@@ -122,7 +122,7 @@ const MeshShape *mesh_shape(const de::ObjectRef &r) {
 			s.centre = mul(add(lo, hi), 0.5f);
 			s.radius = len(sub(hi, s.centre));
 		}
-		for (uint32_t ci : de::ObjectsFile::children(r.file->object_data(r.info()))) {
+		for (uint32_t ci : de::ObjectsFile::children(r.file->object_links(r.info()))) {
 			auto &co = r.file->objects()[ci];
 			if (co.class_path != "DataChannel\\Generic") continue;
 			de::Contents c(r.file->object_data(co).contents);

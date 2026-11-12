@@ -1162,6 +1162,22 @@ int main(int argc, char **argv) {
 				glu::write_png(out.c_str(), dw, dh, px);
 				printf("snapshot %s\n", out.c_str());
 			}
+			if (perf::enabled()) {
+				{ PERF_ZONE("frame.gpu_finish"); glFinish(); }
+				static Uint64 perf_last = SDL_GetPerformanceCounter();
+				const Uint64 perf_now = SDL_GetPerformanceCounter();
+				perf::frame_time(fr, double(perf_now - perf_last) * 1000.0 / double(SDL_GetPerformanceFrequency()));
+				perf_last = perf_now;
+				static Uint64 perf_t0 = SDL_GetPerformanceCounter();
+				static int perf_f0 = fr;
+				double perf_ms = double(SDL_GetPerformanceCounter() - perf_t0) * 1000.0 / double(SDL_GetPerformanceFrequency());
+				if (perf_ms >= 5000) {
+					fprintf(stderr, "[counts %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
+					perf::report(fr, fr - perf_f0, perf_ms);
+					perf_t0 = SDL_GetPerformanceCounter();
+					perf_f0 = fr;
+				}
+			}
 			if (shot) {
 				auto save = [&](const std::string &out) {
 					std::vector<uint8_t> px(size_t(W) * H * 4);
@@ -1178,18 +1194,6 @@ int main(int argc, char **argv) {
 					if (l.find("," + std::to_string(fr) + ",") != std::string::npos) save(std::string(shot) + "-" + std::to_string(fr) + ".png");
 				}
 				continue;
-			}
-			if (perf::enabled()) {
-				{ PERF_ZONE("frame.gpu_finish"); glFinish(); }
-				static Uint64 perf_t0 = SDL_GetPerformanceCounter();
-				static int perf_f0 = fr;
-				double perf_ms = double(SDL_GetPerformanceCounter() - perf_t0) * 1000.0 / double(SDL_GetPerformanceFrequency());
-				if (perf_ms >= 5000) {
-					fprintf(stderr, "[counts %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
-					perf::report(fr, fr - perf_f0, perf_ms);
-					perf_t0 = SDL_GetPerformanceCounter();
-					perf_f0 = fr;
-				}
 			}
 			SDL_GL_SwapWindow(win);
 		}

@@ -121,10 +121,21 @@ ObjectInfo ObjectsFile::read_object_info(Contents &c) const {
 }
 
 ObjectsFile::ObjectData ObjectsFile::object_data(const ObjectInfo &info) const {
+	ObjectData d = read_blocks(info, true);
+	if (info.flags & kFlagCompressed) {
+		d.contents = Contents::decompress(d.contents);
+	}
+	return d;
+}
+
+ObjectsFile::ObjectData ObjectsFile::object_links(const ObjectInfo &info) const { return read_blocks(info, false); }
+
+ObjectsFile::ObjectData ObjectsFile::read_blocks(const ObjectInfo &info, bool contents) const {
 	size_t saved = file_.pos();
 	file_.seek(info.data_offset);
 	ObjectData d;
-	d.contents = file_.block();
+	if (contents) d.contents = file_.block();
+	else file_.skip(file_.u32());
 	d.references = file_.block();
 	d.hierarchy = file_.block();
 	uint32_t n = file_.u32();
@@ -133,9 +144,6 @@ ObjectsFile::ObjectData ObjectsFile::object_data(const ObjectInfo &info) const {
 		d.ex.push_back({std::move(header), file_.u32()});
 	}
 	file_.seek(saved);
-	if (info.flags & kFlagCompressed) {
-		d.contents = Contents::decompress(d.contents);
-	}
 	return d;
 }
 
@@ -160,7 +168,7 @@ std::vector<uint32_t> ObjectsFile::children(const ObjectData &d) {
 std::vector<int32_t> ObjectsFile::parents() const {
 	std::vector<int32_t> p(objects_.size(), -1);
 	for (size_t i = 0; i < objects_.size(); ++i) {
-		for (uint32_t ch : children(object_data(objects_[i]))) {
+		for (uint32_t ch : children(object_links(objects_[i]))) {
 			if (ch < p.size()) {
 				p[ch] = int32_t(i);
 			}

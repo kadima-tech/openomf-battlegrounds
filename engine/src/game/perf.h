@@ -2,6 +2,7 @@
 // call to that zone; perf::report() prints every zone's ms per frame and calls per frame, then resets.
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -43,13 +44,42 @@ struct Scope {
 	}
 };
 
+struct Frames {
+	double worst = 0;
+	int over = 0;  // frames over 20 ms
+};
+
+inline Frames &frames() {
+	static Frames f;
+	return f;
+}
+
+// A frame over 50 ms prints the zones that took more than 5 ms of it.
+inline void frame_time(int frame, double ms) {
+	Frames &f = frames();
+	f.worst = std::max(f.worst, ms);
+	f.over += ms > 20;
+	static std::map<std::string, double> before;
+	if (ms > 50) {
+		fprintf(stderr, "[spike %d] %.1f ms:", frame, ms);
+		for (auto &[name, z] : zones()) {
+			if (z.ms - before[name] > 5) fprintf(stderr, " %s %.1f", name.c_str(), z.ms - before[name]);
+		}
+		fprintf(stderr, "\n");
+	}
+	for (auto &[name, z] : zones()) before[name] = z.ms;
+}
+
 inline void report(int frame, int frames, double wall_ms) {
 	if (!enabled() || frames <= 0) return;
-	fprintf(stderr, "[perf %d] %.1f fps (%.2f ms a frame)", frame, wall_ms > 0 ? frames * 1000.0 / wall_ms : 0.0, wall_ms / frames);
+	fprintf(stderr, "[perf %d] %.1f fps (%.2f ms a frame, worst %.1f, %d over 20)", frame, wall_ms > 0 ? frames * 1000.0 / wall_ms : 0.0, wall_ms / frames,
+	        perf::frames().worst, perf::frames().over);
+	perf::frames() = Frames{};
 	for (auto &[name, z] : zones()) {
 		fprintf(stderr, ", %s %.3f ms x%.0f", name.c_str(), z.ms / frames, double(z.calls) / frames);
-		z = Zone{};
 	}
+	for (auto &[name, z] : zones()) z = Zone{};
+	frame_time(frame, 0);
 	fprintf(stderr, "\n");
 	fflush(stderr);
 }

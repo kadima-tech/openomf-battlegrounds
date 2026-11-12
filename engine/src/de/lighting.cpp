@@ -158,7 +158,7 @@ std::array<ObjectRef, 6> read_cube_faces(const World &w, const ObjectRef &cube) 
 	std::array<ObjectRef, 6> out;
 	if (!cube) return out;
 	try {
-		Contents c(cube.file->object_data(cube.info()).references);
+		Contents c(cube.file->object_links(cube.info()).references);
 		auto refs = chunks_of(c);
 		if (refs.size() < 3) return out;
 		c.seek(refs[2].second);
@@ -171,7 +171,7 @@ std::array<ObjectRef, 6> read_cube_faces(const World &w, const ObjectRef &cube) 
 
 ObjectRef specular_cube(const ObjectRef &owner) {
 	if (!owner) return {};
-	for (uint32_t c : ObjectsFile::children(owner.file->object_data(owner.info()))) {
+	for (uint32_t c : ObjectsFile::children(owner.file->object_links(owner.info()))) {
 		const ObjectInfo &o = owner.file->objects()[c];
 		if (o.name == "HighRangeSpecular" && o.class_path == "Image\\CubeEnvironment") return {owner.file, c};
 	}
@@ -180,7 +180,7 @@ ObjectRef specular_cube(const ObjectRef &owner) {
 
 std::vector<std::array<float, 3>> read_corner_colours(const ObjectsFile &f, uint32_t texture_manager) {
 	std::vector<std::array<float, 3>> out;
-	for (uint32_t ci : ObjectsFile::children(f.object_data(f.objects()[texture_manager]))) {
+	for (uint32_t ci : ObjectsFile::children(f.object_links(f.objects()[texture_manager]))) {
 		auto &o = f.objects()[ci];
 		if (o.class_path != "DataChannel\\UnitFloats") continue;
 		try {

@@ -184,7 +184,7 @@ void read_math_function(const World &w, const ObjectRef &r, Contents &c, FloatVa
 	Chunk ch = begin_chunk(c);
 	if (ch.version == 1 && ch.end - c.pos() >= 4) v.op = int(c.u32());
 	c.seek(ch.end);
-	Contents rc(r.file->object_data(r.info()).references);
+	Contents rc(r.file->object_links(r.info()).references);
 	size_t last = 0;
 	while (rc.remaining() > 1) {
 		last = rc.pos();
@@ -299,7 +299,7 @@ ColorValue read_color_value(const World &w, const ObjectRef &r) {
 
 std::optional<float> child_float(const World &w, const ObjectRef &parent, const std::string &name) {
 	if (!parent) return std::nullopt;
-	for (uint32_t c : ObjectsFile::children(parent.file->object_data(parent.info()))) {
+	for (uint32_t c : ObjectsFile::children(parent.file->object_links(parent.info()))) {
 		const ObjectInfo &o = parent.file->objects()[c];
 		if (o.name == name && o.class_path.rfind("Value\\FLOAT", 0) == 0) return read_float_value(w, {parent.file, c}).eval(0);
 	}
@@ -308,7 +308,7 @@ std::optional<float> child_float(const World &w, const ObjectRef &parent, const 
 
 bool child_bool(const ObjectRef &parent, const std::string &name) {
 	if (!parent) return false;
-	for (uint32_t c : ObjectsFile::children(parent.file->object_data(parent.info()))) {
+	for (uint32_t c : ObjectsFile::children(parent.file->object_links(parent.info()))) {
 		const ObjectInfo &o = parent.file->objects()[c];
 		if (o.name != name || o.class_path.rfind("Value\\BOOL", 0) != 0) continue;
 		try {
