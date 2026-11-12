@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <utility>
 
 #include "de/anim.h"
 #include "de/contents.h"
@@ -832,6 +833,7 @@ private:
 			return v;
 		}
 		case Expr::Cast: {
+			if (c_ && c_->emitting) return std::nullopt;  // 2.123 folds no cast in code: (float)(m_AIConeAngleNormal)
 			auto a = fold(*e.a, locals);
 			auto t = type_named(e.text);
 			if (!a || !t || !t->numeric()) return std::nullopt;
@@ -1242,6 +1244,11 @@ private:
 			uint32_t peak, chain;  // relative to the block's base; the deepest nested chain
 		};
 		std::vector<Open> open;
+		// The stack's top as 2.123's compiler grows it while making an expression (IncreaseStackSize):
+		// each value made in place reaches its size above it; a value made at the top holds its bytes.
+		uint32_t sp = 0;
+		bool at_top = false;  // the next value is made at the top (VMEvaluate(-1)), already held
+		bool emitting = false;
 		std::vector<uint8_t> head;  // code 2.123 put at the method's start (see the unknown member in gen)
 		bool head_seeded = false;
 	};
@@ -1404,6 +1411,7 @@ private:
 		}
 		ctx.code.bytes.insert(ctx.code.bytes.end(), head.begin(), head.end());
 		use(temp());
+		ctx.emitting = true;
 		for (auto &s : m.body) stmt(*s);
 	}
 
@@ -1460,9 +1468,12 @@ private:
 		std::function<void(const Stmt &)> walk = [&](const Stmt &st) {
 			if (st.kind == Stmt::DeclS && st.decl->replicate && !st.decl->final_) {
 				for (auto &dc : st.decl->names) {
-					auto l = c_->decl_locals.find(&dc);
-					if (l == c_->decl_locals.end() || l->second.constant || l->second.type.k == Type::Enum) continue;
-					const Local &v = l->second;
+					const Local *found = nullptr;  // a parameter is the method's, a local its declaration's
+					if (auto l = c_->decl_locals.find(&dc); l != c_->decl_locals.end()) found = &l->second;
+					else if (auto p = c_->locals.find(dc.name); p != c_->locals.end() && c_->params.count(dc.name)) found = &p->second;
+					if (!found || found->constant || found->type.k == Type::Enum) continue;
+					if (!found->ref && found->type.k == Type::Obj && !st.decl->instance && !is_value_class(found->type.name)) continue;  // a plain object parameter (BFireballLauncher's Fire)
+					const Local &v = *found;
 					if (v.ref) out.push_back({4, 0, v.offset});
 					else if (v.type.k == Type::Iface) out.push_back({3, v.offset, uint32_t(std::max(0, visible_index(v.type.name)))});
 					else if (v.type.k == Type::Obj && (st.decl->instance || is_value_class(v.type.name))) out.push_back({2, v.offset, class_index(v.type.name)});
@@ -1575,7 +1586,7 @@ private:
 
 	// A test's value at t, and the type its jump reads (a byte or word value is tested as such).
 	Type condition(const Expr &e, uint32_t t) {
-		Type ty = gen(e, t);
+		Type ty = t == c_->sp ? gen_top(e) : gen(e, t);
 		if (ty.k == Type::Iface) c_->code.op(88, int32_t(t));
 		else if (ty.k == Type::Float) {
 			// A float tests non-zero: compare with 0.0.
@@ -1590,16 +1601,17 @@ private:
 
 	void stmt(const Stmt &s) {
 		Code &code = c_->code;
+		if (s.kind != Stmt::Block) c_->sp = temp();
 		switch (s.kind) {
 		case Stmt::Empty:
 		case Stmt::Inherit:
 		case Stmt::Enum:
 			return;
 		case Stmt::DeclS: {
-			if (s.decl->param || s.decl->rparam || s.decl->final_) return;
+			if (s.decl->param || s.decl->rparam) return;
 			for (auto &dc : s.decl->names) {
 				if (auto r = c_->decl_locals.find(&dc); r != c_->decl_locals.end()) c_->locals[dc.name] = r->second;
-				if (!dc.init) continue;
+				if (!dc.init || s.decl->final_) continue;
 				auto e = std::make_unique<Expr>();
 				e->kind = Expr::Ident;
 				e->text = dc.name;
@@ -1653,7 +1665,7 @@ private:
 			c_->continues.emplace_back();
 			stmt(*s.body);
 			land(c_->continues.back());
-			if (s.step) expr_stmt(*s.step);
+			if (s.step) c_->sp = temp(), expr_stmt(*s.step);
 			code.op(112, int32_t(top));
 			land(to_end);
 			land(c_->breaks.back());
@@ -1714,7 +1726,7 @@ private:
 		case Stmt::Return:
 			if (s.e) {
 				if (c_->m->ret.k == Type::None) throw CompileError(c_->where + ":" + std::to_string(s.line) + ": return value without rparam");
-				Type t = gen(*s.e, temp());
+				Type t = gen_top(*s.e);
 				convert(t, c_->m->ret, temp());
 				code.op(5, 0, int32_t(temp()), 4);
 			}
@@ -2086,7 +2098,7 @@ private:
 			code.u16(uint16_t(p.offset));
 			break;
 		case Place::Constant:
-			constant(p.value, dst);
+			constant(p.value, dst, p.value.type.k == Type::Byte || p.value.type.k == Type::Word ? member_size(p.value.type) : 4);  // a byte final is a byte
 			break;
 		case Place::Self:
 			code.op(9, int32_t(dst));
@@ -2103,12 +2115,29 @@ private:
 			fail(e, "unknown name " + e.text);
 		}
 		use(dst + 4);
-		// A byte or word variable stays one (2.123's byte and word operations); a constant is an int.
-		if (p.k == Place::Constant && (p.type.k == Type::Byte || p.type.k == Type::Word)) return prim(Type::Int);
 		return p.type;
 	}
 
 	Type gen(const Expr &e, uint32_t dst) {
+		bool held = std::exchange(c_->at_top, false);
+		uint32_t sp = c_->sp;
+		Type t = gen_value(e, dst);
+		if (!held && t.k != Type::Void && t.k != Type::None) use(sp + member_size(t));
+		return t;
+	}
+
+	// A value made at the stack's top, which holds it while its parts are made.
+	Type gen_top(const Expr &e, uint32_t size = 4) {
+		uint32_t at = c_->sp;
+		c_->sp += size;
+		use(c_->sp);
+		c_->at_top = true;
+		Type t = gen(e, at);
+		c_->sp -= size;
+		return t;
+	}
+
+	Type gen_value(const Expr &e, uint32_t dst) {
 		Code &code = c_->code;
 		use(dst + 4);
 		switch (e.kind) {
@@ -2266,7 +2295,7 @@ private:
 
 	Type field_type(const std::string &cls, const std::string &field) const {
 		if (cls == "CVector" || cls == "CColorRGBA") return prim(Type::Float);
-		if (field == "m_Damage" || field == "m_StunDamage" || field == "m_EnergyDamage" || field == "m_RecoveryTime" ||
+		if (field == "m_BlockPenetration" || field == "m_Damage" || field == "m_StunDamage" || field == "m_EnergyDamage" || field == "m_RecoveryTime" ||
 		    field == "m_MomentumAdjustAmount" || field == "m_DiminishDamageAmount" || field == "m_RetainDamageMultiplier" ||
 		    field == "m_GuideToLastHitMultiplier")
 			return prim(Type::Float);
@@ -2319,20 +2348,27 @@ private:
 		}
 		const std::string &o = e.text;
 		Type a = gen(*e.a, dst);
+		uint32_t sp = c_->sp;
+		c_->sp += 4;
+		use(c_->sp);
+		struct Restore {
+			uint32_t &sp, was;
+			~Restore() { sp = was; }
+		} restore{c_->sp, sp};
 		if (o == "&&") {
 			// Short-circuits: a false left operand skips the right (|| evaluates both).
 			if (a.k == Type::Iface) code.op(88, int32_t(dst));
 			std::vector<size_t> skip;
 			jump_if_false(dst, skip);
-			Type b = gen(*e.b, dst + 8);
-			use(dst + 12);
-			if (b.k == Type::Iface) code.op(88, int32_t(dst + 8));
-			code.op(124, int32_t(dst), int32_t(dst + 8));
+			uint32_t rhs = c_->sp;
+			Type b = gen_top(*e.b);
+			if (b.k == Type::Iface) code.op(88, int32_t(rhs));
+			code.op(124, int32_t(dst), int32_t(rhs));
 			land(skip);
 			return prim(Type::Bool);
 		}
 		// A plain local on the right is used in place.
-		uint32_t rhs = dst + 8;
+		uint32_t rhs = c_->sp;
 		Type b;
 		auto lit = fold(*e.b, &c_->locals);
 		bool left_float = a.k == Type::Float;
@@ -2354,11 +2390,11 @@ private:
 		} else if (lit && lit->type.integral() && (a.k == Type::Byte || a.k == Type::Word)) {
 			// A literal against a byte or word is written as one (op 2 of 1 or 2 bytes).
 			constant(*lit, rhs, member_size(a));
+			use(rhs + member_size(a));
 			b = a;
 		} else {
-			b = gen(*e.b, rhs);
+			b = gen_top(*e.b);
 		}
-		use(dst + 12);
 		if (o == "||") {
 			if (a.k == Type::Iface) code.op(88, int32_t(dst));
 			if (b.k == Type::Iface) code.op(88, int32_t(rhs));
@@ -2379,7 +2415,7 @@ private:
 		// The left operand's type decides; the right is converted to it.
 		Type t = a;
 		if (a.k == Type::Bool || a.k == Type::Null || a.k == Type::Obj || a.k == Type::Iface) t = prim(Type::Int);
-		if (b.numeric() && rhs == dst + 8) convert(b, t, rhs);
+		if (b.numeric() && rhs == c_->sp) convert(b, t, rhs);
 		int op = binop(o, t);
 		if (op < 0) fail(e, "unsupported operator " + o);
 		code.op(op, int32_t(dst), int32_t(rhs));
@@ -2447,6 +2483,7 @@ private:
 				}
 				// instance: receiver, then the operand; (opp =)(...) etc.
 				load(p, t, lhs);
+				c_->sp = t + 8;
 				Type r = gen(rhs, t + 4);
 				const Sig *s = find_intrinsic_typed(p.type.name, oname, {r});
 				if (!s) fail(lhs, "no operator " + op + " on " + p.type.name);
@@ -2455,8 +2492,12 @@ private:
 				return;
 			}
 			if (op != "=" && p.k == Place::Local && !p.ref && p.type.numeric() && member_size(p.type) == 4) {
-				// In place: the operand, converted, combined straight into the local.
+				// In place: the operand, converted, combined straight into the local; 2.123 makes the sum at
+				// the local and holds its 4 bytes on the stack meanwhile, so the operand comes after them.
 				Type r;
+				c_->sp = t + 4;
+				use(c_->sp);
+				t = c_->sp;
 				auto lit = fold(rhs, &c_->locals);
 				if (lit && lit->type.numeric() && (lit->type.k == Type::Float) != (p.type.k == Type::Float)) {
 					Value v = *lit;
@@ -2473,7 +2514,7 @@ private:
 						code.op(o, int32_t(p.offset), int32_t(rp.offset));
 						return;
 					}
-					r = gen(rhs, t);
+					r = gen_top(rhs);
 				}
 				convert(r, p.type, t);
 				int o = binop(op.substr(0, op.size() - 1), p.type);
@@ -2486,12 +2527,13 @@ private:
 				bin.kind = Expr::Binary;
 				bin.text = op.substr(0, op.size() - 1);
 				bin.line = lhs.line;
+				c_->sp = t + 4;
 				Type a = load(p, t, lhs);
+				c_->sp = t + 8;
 				uint32_t r = t + 8;
 				Type b;
 				if (auto in = in_place(rhs, a)) r = in->offset, b = in->type;
-				else b = gen(rhs, r);
-				use(t + 12);
+				else b = gen_top(rhs);
 				Type ty = a.k == Type::Bool ? prim(Type::Int) : a;
 				if (b.numeric() && r == t + 8) convert(b, ty, r);
 				int o = binop(bin.text, ty);
@@ -2500,7 +2542,7 @@ private:
 				store(p, ty, t, lhs);
 				return;
 			}
-			Type r = gen(rhs, t);
+			Type r = gen_top(rhs);
 			store(p, r, t, lhs);
 			return;
 		}
@@ -2522,7 +2564,7 @@ private:
 				}
 			}
 			// A native field: the value, then the instance pointer, then op 50.
-			Type r = gen(rhs, t);
+			Type r = gen_top(rhs);
 			uint32_t ptr = t + 4;
 			if (op == "=" && ot0.k == Type::Obj) {
 				if (native_field(short_name(ot0.name), lhs.text)) {
@@ -2821,16 +2863,21 @@ private:
 			Type have;
 			const Expr &a = *args[i];
 			if (want.k == Type::BehLit && a.kind == Expr::Ident && is_behavior(a.text)) {
+				c_->sp += 4;
+				use(c_->sp + 4);
 				c_->code.op(26, int32_t(slot), visible_index(a.text));
 				have = prim(Type::BehLit);
 			} else if ((want.k == Type::Obj || want.k == Type::ClassLit) && a.kind == Expr::Ident && lookup(a.text).k == Place::None && type_named(a.text)) {
 				std::string full = type_named(a.text)->name;
+				c_->sp += 4;
+				use(c_->sp + 4);
 				c_->code.op(44, int32_t(slot));
 				c_->code.bytes.resize(c_->code.bytes.size() - 4);
 				c_->code.u16(uint16_t(class_index(full)));
 				c_->code.i32(int32_t(slot));
 				have = prim(Type::ClassLit);
 			} else {
+				c_->sp += member_size(want.k == Type::None ? prim(Type::Int) : want);
 				have = gen(a, slot);
 			}
 			use(slot + 4);
@@ -2928,6 +2975,7 @@ private:
 		if (e.args.size() != m.params.size()) fail(e, m.signature + " takes " + std::to_string(m.params.size()) + " arguments");
 		std::vector<std::string> spelled;
 		for (auto &p : m.params) spelled.push_back(spell(p));
+		c_->sp += ret;
 		args_to(e.args, spelled, dst + ret, m.state);
 		if (m.virt && !direct) code.op(36, m.slot, int32_t(dst));
 		else code.op(34, int32_t(m.pool), int32_t(dst));
@@ -2971,6 +3019,13 @@ private:
 	}
 
 	Type call(const Expr &e, uint32_t dst) {
+		uint32_t sp = c_->sp;
+		Type t = call_value(e, dst);
+		c_->sp = sp;
+		return t;
+	}
+
+	Type call_value(const Expr &e, uint32_t dst) {
 		Code &code = c_->code;
 		const Expr &f = *e.a;
 		if (f.kind == Expr::Ident) {
@@ -2979,6 +3034,8 @@ private:
 			if (handled) return b;
 			std::string n = f.text[0] == '.' ? f.text.substr(1) : f.text;
 			if (int mi = find_method_typed(n, e); mi >= 0) return call_script(methods_[size_t(mi)], e, dst, false);
+			c_->sp += 4;
+			use(c_->sp + 4);
 			code.op(9, int32_t(dst));
 			return call_intrinsic(self_class_, e, f.text, dst);
 		}
@@ -3013,6 +3070,7 @@ private:
 				for (const Expr *x = &f; x->kind == Expr::Member; x = x->a.get()) code.op(38, int32_t(methods_[size_t(mi)].pool), int32_t(dst));
 				return call_script(methods_[size_t(mi)], e, dst, false);
 			}
+			c_->sp += 4;
 			Type t = gen(*f.a, dst);
 			if (t.k == Type::Iface) return call_interface(t, e, f.text, dst);
 			if (t.k == Type::Obj || t.k == Type::Arr || t.k == Type::Null) return call_intrinsic(t.k == Type::Null ? "CObject" : t.name, e, f.text, dst);

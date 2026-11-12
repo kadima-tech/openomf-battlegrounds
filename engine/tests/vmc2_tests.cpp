@@ -195,6 +195,12 @@ int main(int argc, char **argv) {
 					auto &ms = mine.behaviors[b].methods;
 					if (m >= ms.size() || !ms[m] || ms[m]->signature != q->signature) continue;
 					same_code += ms[m]->code == q->code;
+					bool same_repl = ms[m]->replicated.size() == q->replicated.size() &&
+					                 std::equal(q->replicated.begin(), q->replicated.end(), ms[m]->replicated.begin(), [](const auto &x, const auto &y) { return x.type == y.type && x.a == y.a && (x.type == 2 || x.b == y.b); });
+					if (!same_repl) {
+						fprintf(stderr, "replicated list differs: %s %s\n", label.c_str(), q->signature.c_str());
+						++failures;
+					}
 					auto a = ms[m]->code, c = q->code;
 					if (a.size() >= 8 && c.size() >= 8) std::fill(a.begin() + 4, a.begin() + 8, 0), std::fill(c.begin() + 4, c.begin() + 8, 0);
 					same_but_frame += a == c && ms[m]->code != q->code;
@@ -238,7 +244,7 @@ int main(int argc, char **argv) {
 	printf("  %zu more methods differ only in the frame size; %zu classes with the shipped finals\n", same_but_frame, finals);
 	for (auto &[r, n] : reasons) printf("  %zu: %s\n", n, r.c_str());
 	// Floors for the compiler's fidelity on 2.123's 255 compiled classes, so it can only improve.
-	if (classes == 0 || (classes == 255 && (compiled < 239 || tables < 61 || same_code < 309 || same_code + same_but_frame < 6382))) {
+	if (classes == 0 || (classes == 255 && (compiled < 255 || identical < 26 || tables < 63 || finals < 246 || same_code < 5837 || same_code + same_but_frame < 7781))) {
 		fprintf(stderr, "compiler fidelity fell below the recorded floor\n");
 		++failures;
 	}

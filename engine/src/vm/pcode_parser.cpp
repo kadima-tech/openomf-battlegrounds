@@ -536,6 +536,14 @@ private:
 	}
 
 	ExprPtr unary() {
+		if (is("-") && (peek(1).kind == Token::Int || peek(1).kind == Token::Float)) {
+			// A negative number is one literal: -90*x is (-90)*x.
+			++p_;
+			auto e = primary();
+			e->ival = -e->ival;
+			e->fval = -e->fval;
+			return e;
+		}
 		if (is("!") || is("-") || is("~") || is("+")) {
 			auto e = node(Expr::Unary);
 			e->text = peek().text;
