@@ -23,12 +23,15 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   `engine/build/openbg-viewer --data source/patched/v2123/Data --fighter Jaguar --anim LeftMediumPunch`
   (Left/Right cycles through the fighter's moves; `--list` prints them; Space pauses.)
 - `tools/pcc.cpp` (`pcc`): compiles a Class from its behaviors' sources (`vm/compiler.cpp`, for the classes the game ships without bytecode) and prints the code next to the shipped VMC2 where there is one:
-  `engine/build/pcc source/patched/v2123/Data SinglePlayer PSubSession 1` (the class and
-  resolvable-reference tables, replicated lists, instances and inherit fields too; the shipped
-  code also after a compile error); `pcc <Data> <file> --source <Behavior>` prints a behavior's
-  2.123 source. `vmc2-tests <Data> -vm` lists every method as same, frame (differs only in the frame
-  size) or differs. `OPENBG_RECOMPILE=PJaguar,PKatana` (or `all`) makes the game run those classes
-  compiled from their sources instead of their VMC2, to compare runs (FINDINGS 527).
+  `engine/build/pcc source/patched/v2123/Data SinglePlayer PSubSession 1` (the class, intrinsic,
+  final and resolvable-reference tables, replicated lists, instances and inherit fields too; the
+  shipped code also after a compile error, and the errors 2.123's compiler compiled past, FINDINGS
+  651); `pcc <Data> <file> --source <Behavior> [n]` prints the n-th behavior of that name's 2.123
+  source. `vmc2-tests <Data> -vm` lists every method as same, frame (differs only in the frame
+  size) or differs, with both frame sizes (`-vd` also prints both codes of each method that
+  differs). All 255 shipped classes compile. `OPENBG_RECOMPILE=PJaguar,PKatana` (or `all`, and
+  `all,-PText` leaves a class out) makes the game run those classes compiled from their sources
+  instead of their VMC2, to compare runs (FINDINGS 527, 656).
 - `app/arena.cpp` (`openbg-arena`): native arena fly-through:
   `engine/build/openbg-arena source/patched/v2123/Data Desert` (WASD/QE, drag to look), drawn with
   the fight's renderer (materials, the arena's lights, reflections, glow).

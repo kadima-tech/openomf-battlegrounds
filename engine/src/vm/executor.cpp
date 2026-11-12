@@ -513,7 +513,8 @@ int Executor::continue_execution() {
 			case 78: case 83: { uint32_t s = u32(); set<uint32_t>(s, get<uint16_t>(s)); break; }
 			case 80: case 85: { uint32_t s = u32(); set<uint32_t>(s, get<uint8_t>(s)); break; }
 			case 82: case 87: { uint32_t s = u32(); set<int32_t>(s, int32_t(get<float>(s))); break; }  // __ftol
-			case 89: case 90: case 94: case 99: case 100: u32(); break;  // narrowing: no-op on little endian
+			case 89: case 90: case 94: case 99: case 100: case 101: u32(); break;  // narrowing: no-op on little endian
+			case 91: { uint32_t s = u32(); set<uint16_t>(s, get<uint8_t>(s)); break; }
 			case 93: { uint32_t s = u32(); set<int16_t>(s, int16_t(int32_t(get<float>(s)))); break; }
 			case 103: { uint32_t s = u32(); set<uint8_t>(s, uint8_t(int32_t(get<float>(s)))); break; }
 			case 88: {  // interface has a target brain and behavior
@@ -573,7 +574,15 @@ int Executor::continue_execution() {
 			case 155: { uint32_t a = u32(), b = u32(); b4(a, !(get<float>(a) <= get<float>(b))); break; }
 			case 156: { uint32_t a = u32(), b = u32(); b4(a, !(get<float>(b) <= get<float>(a))); break; }
 			// Short ops.
+			case 157: { uint32_t s = u32(); set<uint16_t>(s, get<uint16_t>(s) == 0 ? 1 : 0); break; }
+			case 158: { uint32_t s = u32(); set<int16_t>(s, int16_t(get<int16_t>(s) + 1)); break; }
 			case 159: { uint32_t s = u32(); set<int16_t>(s, int16_t(get<int16_t>(s) - 1)); break; }
+			case 163: { uint32_t a = u32(), b = u32(); b4(a, get<int16_t>(a) != get<int16_t>(b)); break; }
+			case 165: { uint32_t a = u32(), b = u32(); set<uint16_t>(a, get<uint16_t>(a) & get<uint16_t>(b)); break; }
+			case 167: { uint32_t a = u32(), b = u32(); set<uint16_t>(a, get<uint16_t>(a) | get<uint16_t>(b)); break; }
+			case 173: { uint32_t a = u32(), b = u32(); b4(a, get<uint16_t>(a) >= get<uint16_t>(b)); break; }
+			case 174: { uint32_t a = u32(), b = u32(); b4(a, get<uint16_t>(a) <= get<uint16_t>(b)); break; }
+			case 176: { uint32_t a = u32(), b = u32(); b4(a, get<uint16_t>(a) < get<uint16_t>(b)); break; }
 			case 162: { uint32_t a = u32(), b = u32(); b4(a, get<int16_t>(a) == get<int16_t>(b)); break; }
 			case 168: { uint32_t a = u32(), b = u32(); set<int16_t>(a, int16_t(get<int16_t>(a) * get<int16_t>(b))); break; }
 			case 169: { uint32_t a = u32(), b = u32(); uint16_t d = get<uint16_t>(b); set<uint16_t>(a, d ? uint16_t(get<uint16_t>(a) / d) : 0); break; }
@@ -592,6 +601,10 @@ int Executor::continue_execution() {
 			case 202: { uint32_t a = u32(), b = u32(); b4(a, get<uint8_t>(a) >= get<uint8_t>(b)); break; }
 			case 204: { uint32_t a = u32(), b = u32(); b4(a, get<uint8_t>(a) > get<uint8_t>(b)); break; }
 			case 205: { uint32_t a = u32(), b = u32(); b4(a, get<uint8_t>(a) < get<uint8_t>(b)); break; }
+			case 196: { uint32_t a = u32(), b = u32(); set<uint8_t>(a, get<uint8_t>(a) | get<uint8_t>(b)); break; }
+			case 197: { uint32_t a = u32(), b = u32(); set<uint8_t>(a, uint8_t(get<uint8_t>(a) * get<uint8_t>(b))); break; }
+			case 198: { uint32_t a = u32(), b = u32(); uint8_t d = get<uint8_t>(b); set<uint8_t>(a, d ? uint8_t(get<uint8_t>(a) / d) : 0); break; }
+			case 203: { uint32_t a = u32(), b = u32(); b4(a, get<uint8_t>(a) <= get<uint8_t>(b)); break; }
 			case 229: {  // pointer += offset (if non-null)
 				uint32_t s = u32(), off = u32();
 				uint32_t p = get<uint32_t>(s);

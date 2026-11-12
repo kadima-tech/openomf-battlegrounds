@@ -17,6 +17,36 @@
 
 namespace {
 
+// The highest frame byte a method's instructions name as a slot (the frame must cover it: a callee's
+// frame starts where the caller's ends).
+uint32_t slot_extent(const std::vector<uint8_t> &code) {
+	uint32_t end = 0;
+	auto put = [&](int64_t at, int64_t size) {
+		if (at >= 0 && size >= 0) end = std::max<uint32_t>(end, uint32_t(at + size));
+	};
+	for (auto &in : vm::decode(code)) {
+		const auto &a = in.args;
+		switch (in.opcode) {
+		case 2: put(a[0], a[1]); break;
+		case 3: case 4: case 8: case 9: case 10: case 26: case 47: case 61: case 88: case 229: case 306: put(a[0], 4); break;
+		case 5: put(a[0], a[2]), put(a[1], a[2]); break;
+		case 7: put(a[0], a[2]), put(a[1], 4); break;
+		case 21: case 22: case 27: case 29: case 30: case 34: case 36: case 38: case 39: case 42: case 44: case 62: case 64: put(a[1], 4); break;
+		case 23: case 24: case 25: put(a[0], 4), put(a[1], 4); break;
+		case 37: put(a[0], 4); break;
+		case 50: put(a[0], 4), put(a[3], a[2]); break;
+		case 65: put(a[1], a[2]); break;
+		case 66: put(a[0], a[2]); break;
+		case 109: case 110: case 111: put(a[0], 1); break;
+		case 313: put(a[1], 1); break;
+		default:
+			if ((in.opcode >= 67 && in.opcode <= 108) || (in.opcode >= 114 && in.opcode <= 205))
+				for (auto x : a) put(x, in.opcode >= 186 || (in.opcode >= 99 && in.opcode <= 108) ? 1 : in.opcode >= 157 || (in.opcode >= 89 && in.opcode <= 98) ? 2 : 4);
+		}
+	}
+	return end;
+}
+
 // Field-level difference between two VMClasses, for the report.
 std::string first_difference(const vm::VMClass &a, const vm::VMClass &b) {
 	if (a.change_info != b.change_info) return "change_info";
@@ -142,6 +172,12 @@ int main(int argc, char **argv) {
 				continue;
 			}
 			++compiled;
+			for (auto &b : mine.behaviors)
+				for (auto &m : b.methods)
+					if (m && slot_extent(m->code) > m->counts[0]) {
+						fprintf(stderr, "frame %u below the slots its code names (%u): %s %s\n", m->counts[0], slot_extent(m->code), label.c_str(), m->signature.c_str());
+						++failures;
+					}
 			bool same_tables = mine.classes.size() == shipped.classes.size() && mine.intrinsics.size() == shipped.intrinsics.size();
 			for (size_t k = 0; same_tables && k < mine.classes.size(); ++k)
 				same_tables = mine.classes[k].name == shipped.classes[k].name && mine.classes[k].layout_pos == shipped.classes[k].layout_pos;
