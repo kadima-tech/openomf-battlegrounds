@@ -279,9 +279,13 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 	// The limbs point the base robot's way in every pose.
 	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
 		if (supplied.count(b.bank.sequences[q].name)) continue;
+		bool throws = false;
+		for (auto &s : rig.bank.sequences[q].streams) throws |= rig.bank.channels[s.channel].name == "ThrowFollowTarget" && s.pos.size() > 1;
+		if (throws) continue;
 		for (float t : {0.0f, 0.5f}) {
 			auto pn = b.bank.pose(b.bank.sequences[q], t), pb = rig.bank.pose(rig.bank.sequences[q], t);
-			for (const char *pair : {"LeftUpperArm:LeftLowerArm", "RightLowerArm:RightHand", "LeftUpperLeg:LeftLowerLeg", "Pelvis:Chest"}) {
+			// Legs (and an arm holding a throw) are bent by the contact correction; contact_stats checks them.
+			for (const char *pair : {"LeftUpperArm:LeftLowerArm", "RightLowerArm:RightHand", "Pelvis:Chest"}) {
 				std::string s = pair;
 				int a = rig.bank.channel(s.substr(0, s.find(':'))), c = rig.bank.channel(s.substr(s.find(':') + 1));
 				if (a < 0 || c < 0) continue;
@@ -322,6 +326,68 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 			float r = stretch_of(lod, p) / base;
 			if (r > st.stretch) st.stretch = r, st.worst = b.bank.sequences[q].name;
 			for (auto &v : p) st.reach = std::max(st.reach, std::sqrt(v[0] * v[0] + v[2] * v[2]));
+		}
+	}
+	return st;
+}
+
+// Contacts: where a base foot is down, the new one is on the new floor and moves as the base's does
+// (no sliding against the game's base speeds); in a throw the gripping limb keeps its place on the
+// target.
+struct ContactStats {
+	float floor = 0, slide = 0, grip = 0;
+	std::string floor_worst, slide_worst;
+	size_t samples = 0, grips = 0, off_floor = 0, planted = 0, sliding = 0;
+};
+static ContactStats contact_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, const std::set<std::string> &supplied = {}) {
+	ContactStats st;
+	const float tol = rig.height * 0.05f;
+	const int tf = rig.bank.channel("ThrowFollowTarget");
+	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
+		if (supplied.count(b.bank.sequences[q].name)) continue;
+		const int n = 41;
+		std::vector<std::vector<de::Transform>> pb(n), pn(n);
+		for (int i = 0; i < n; ++i) pb[size_t(i)] = rig.bank.pose(rig.bank.sequences[q], float(i) / (n - 1)), pn[size_t(i)] = b.bank.pose(b.bank.sequences[q], float(i) / (n - 1));
+		for (const char *foot : {"LeftFoot", "RightFoot"}) {
+			int f = rig.bank.channel(foot);
+			size_t bi = 0;
+			for (size_t k = 0; k < rig.skin.size(); ++k) bi = rig.skin[k].name == foot ? k : bi;
+			if (f < 0) continue;
+			const float floor_b = rig.skin[bi].bind.t[1], floor_n = b.binds[bi].t[1];
+			for (int i = 0; i < n; ++i) {
+				const auto &B = pb[size_t(i)][size_t(f)].t, &N = pn[size_t(i)][size_t(f)].t;
+				if (B[1] >= floor_b + tol) continue;
+				++st.samples;
+				float e = std::fabs((N[1] - floor_n) - (B[1] - floor_b));
+				if (e > st.floor) st.floor = e, st.floor_worst = b.bank.sequences[q].name;
+				st.off_floor += e > rig.height * 0.02f;
+				if (i == 0 || pb[size_t(i - 1)][size_t(f)].t[1] >= floor_b + tol) continue;
+				const auto &B0 = pb[size_t(i - 1)][size_t(f)].t, &N0 = pn[size_t(i - 1)][size_t(f)].t;
+				// Planted (the base's foot still): the new one must not move.
+				if (std::hypot(B[0] - B0[0], B[2] - B0[2]) > 0.05f) continue;
+				float slide = std::hypot(N[0] - N0[0], N[2] - N0[2]);
+				++st.planted;
+				st.sliding += slide > rig.height * 0.01f;
+				if (slide > st.slide) st.slide = slide, st.slide_worst = b.bank.sequences[q].name;
+			}
+		}
+		bool throws = false;
+		for (auto &s : rig.bank.sequences[q].streams) throws |= int(s.channel) == tf && s.pos.size() > 1;
+		if (!throws) continue;
+		int grip = -1;
+		float best = rig.height * 0.5f;
+		for (const char *end : {"LeftFoot", "RightFoot", "LeftHand", "RightHand"}) {
+			int e = rig.bank.channel(end);
+			for (int i = 0; e >= 0 && i < n; ++i) {
+				float d = dist(pb[size_t(i)][size_t(e)].t, pb[size_t(i)][size_t(tf)].t);
+				if (d < best) best = d, grip = e;
+			}
+		}
+		for (int i = 0; grip >= 0 && i < n; ++i) {
+			float d = dist(pb[size_t(i)][size_t(grip)].t, pb[size_t(i)][size_t(tf)].t);
+			if (d > best + rig.height * 0.1f) continue;
+			++st.grips;
+			st.grip = std::max(st.grip, std::fabs(dist(pn[size_t(i)][size_t(grip)].t, pn[size_t(i)][size_t(tf)].t) - d));
 		}
 	}
 	return st;
@@ -538,6 +604,13 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	PoseStats ps = pose_stats(b, *plan.har.rig, from_file);
 	printf("  scale %.2f, LODs %zu / %zu / %zu triangles, %zu sequences (%zu from the file); worst edge stretch %.2f (%s), reach %.1f units, limbs within %.0f deg of the base, their meshes within %.0f deg of the limbs (base %.0f)\n", b.scale, b.lods[0].faces.size(),
 	       b.lods.size() > 1 ? b.lods[1].faces.size() : 0, b.lods.size() > 2 ? b.lods[2].faces.size() : 0, b.bank.sequences.size(), b.supplied, ps.stretch, ps.worst.c_str(), ps.reach, std::acos(std::clamp(ps.direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.mesh_direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.base_mesh_direction, -1.0f, 1.0f)) * 57.3f);
+	ContactStats cs = contact_stats(b, *plan.har.rig, from_file);
+	printf("  contacts: %zu sequences corrected; feet down in %zu samples, %zu off the floor (worst %.2f, %s, out of reach); planted in %zu, %zu sliding (worst %.2f, %s); throw grip %zu samples, off by %.2f\n", b.contacts,
+	       cs.samples, cs.off_floor, cs.floor, cs.floor_worst.c_str(), cs.planted, cs.sliding, cs.slide, cs.slide_worst.c_str(), cs.grips, cs.grip);
+	CHECK(b.contacts > 0);
+	CHECK(cs.off_floor * 10 < cs.samples);  // out of reach: thrown, falling, legs at full stretch
+	CHECK(cs.sliding * 50 < cs.planted);
+	CHECK(cs.grip < plan.har.rig->height * 0.05f);
 	CHECK(b.supplied == 1);
 	CHECK(ps.stretch < 2.0f);
 	CHECK(ps.direction > 0.99f);

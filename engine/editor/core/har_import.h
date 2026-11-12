@@ -106,6 +106,7 @@ struct RobotBuild {
 	};
 	std::vector<Sphere> spheres;
 	size_t retargeted = 0, supplied = 0;
+	size_t contacts = 0;  // retargeted sequences whose feet, throw grip or head anchor were corrected
 	std::vector<std::string> notes;
 };
 // `lod0_only` (the preview) leaves out the generated LODs.
