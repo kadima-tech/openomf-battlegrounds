@@ -52,6 +52,20 @@ struct RobotRig {
 	std::vector<Sphere> spheres;  // in the fighter file's order
 	std::vector<std::string> script_sequences;  // "seq<Name>" globals of its scripts that name sequences
 	std::vector<std::string> sphere_prefixes;   // IsNamePrefix("...") names its scripts gather attack spheres by
+	// Further skinned parts with their own deform info, bank and mesh (Gargoyle's wings): drawn
+	// from a bone actor tree under a body bone (`root` under `parent`), posed by the part's bank.
+	struct Extra {
+		std::string deform_name, mesh_name, bank_name;
+		std::vector<de::SkinBone> skin;  // binds (model space at rest) and the part mesh's weights
+		de::Mesh mesh;
+		de::AnimBank bank;
+		std::string root, parent;
+		std::map<std::string, de::Transform> actors;  // the bone actors' locals under (and with) root
+		std::map<std::string, std::string> actor_parent;
+		de::Transform parent_rest;                    // the body bone's model-space rest
+		std::vector<std::array<uint8_t, 2>> flags;    // the bank's channel BOOLs
+	};
+	std::vector<Extra> extras;
 	float height = 0;                         // the skin bones' vertical span (DE units)
 	std::array<float, 3> forward{0, 0, 1}, left{1, 0, 0};  // where it faces and its left (DE space)
 	int channel(const std::string &name) const { return bank.channel(name); }
@@ -108,6 +122,17 @@ struct RobotBuild {
 		float hotspot = 0, falloff = 0;
 	};
 	std::vector<Sphere> spheres;
+	// Per RobotRig::extras: from the file when its bones are mapped (the vertices those joints carry,
+	// binds, bone actors and bank fitted to them), else the base's part moved and scaled with the
+	// body bone it hangs from.
+	struct Part {
+		bool mapped = false;
+		RobotLod lod;  // mapped: geometry, UV layer 0 and weights; else the base's faces, moved vertices
+		std::vector<de::Transform> binds;
+		de::AnimBank bank;
+		std::map<std::string, de::Transform> actors;
+	};
+	std::vector<Part> parts;
 	size_t retargeted = 0, supplied = 0;
 	size_t contacts = 0;  // retargeted sequences whose feet, throw grip or head anchor were corrected
 	std::vector<std::string> notes;

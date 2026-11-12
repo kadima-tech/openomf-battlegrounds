@@ -502,6 +502,73 @@ std::shared_ptr<RobotRig> read_rig(const BaseData &base, const std::string &robo
 		if (n > 0) ahead = add(ahead, flat(sub(mul(sum, 1 / n), rig->skin[size_t(b)].bind.t)));
 	}
 	if (length(ahead) > 1e-3f) rig->forward = normalize(ahead);
+	// Further deform infos (Gargoyle's wings): the model mesh each weights, the bank holding its bones,
+	// and the actor tree they hang in below a body bone.
+	{
+		std::map<uint32_t, uint32_t> parent_of;
+		for (uint32_t i = 0; i < ff->objects().size(); ++i) {
+			for (uint32_t c : de::ObjectsFile::children(ff->object_data(ff->objects()[i]))) parent_of[c] = i;
+		}
+		auto rest = rig->bank.pose(de::AnimSequence{}, 0);
+		for (auto &d : ff->objects()) {
+			if (d.class_path != "ActorDeformInfo" || &d == deform) continue;
+			RobotRig::Extra x;
+			x.deform_name = d.name;
+			for (auto &[faces, c] : meshes) {
+				(void)faces;
+				try {
+					auto bones = de::read_skin(*ff, d, *mf, c);
+					bool weighted = false;
+					for (auto &b : bones) weighted = weighted || std::any_of(b.weights.begin(), b.weights.end(), [](uint8_t w) { return w != 0; });
+					if (!weighted) continue;
+					x.skin = std::move(bones);
+					x.mesh = de::read_mesh(*mf, mf->objects()[c]);
+					x.mesh_name = mf->objects()[c].name;
+					break;
+				} catch (const std::exception &) {
+				}
+			}
+			if (x.skin.empty()) continue;
+			for (auto &o : ff->objects()) {
+				if (o.class_path != "AnimationSequenceGroup" || &o == bank) continue;
+				de::AnimBank bk = de::read_anim_bank(*ff, o);
+				if (bk.channel(x.skin[0].name) >= 0) {
+					x.bank = std::move(bk), x.bank_name = o.name;
+					bank_extras(*ff, o, &x.flags);
+					break;
+				}
+			}
+			for (uint32_t i = 0; i < ff->objects().size() && x.root.empty(); ++i) {
+				if (ff->objects()[i].name != x.skin[0].name || ff->objects()[i].class_path != "Actor") continue;
+				uint32_t below = i;
+				for (auto it = parent_of.find(i); it != parent_of.end(); it = parent_of.find(it->second)) {
+					int ch = rig->bank.channel(ff->objects()[it->second].name);
+					if (ch >= 0) {
+						x.root = ff->objects()[below].name, x.parent = ff->objects()[it->second].name;
+						x.parent_rest = rest[size_t(ch)];
+						std::function<void(uint32_t, const std::string &)> walk = [&](uint32_t a, const std::string &up) {
+							std::string here = up;
+							if (ff->objects()[a].class_path == "Actor") {
+								try {
+									x.actors[ff->objects()[a].name] = de::read_actor(*ff, ff->objects()[a]).local;
+									x.actor_parent[ff->objects()[a].name] = up;
+									here = ff->objects()[a].name;
+								} catch (const std::exception &) {
+								}
+							}
+							for (uint32_t c : de::ObjectsFile::children(ff->object_data(ff->objects()[a]))) walk(c, here);
+						};
+						walk(below, x.parent);
+						break;
+					}
+					below = it->second;
+				}
+			}
+			if (x.root.empty() || x.bank.channels.empty() || x.flags.size() != x.bank.channels.size()) continue;
+			rig->lods.erase(std::remove_if(rig->lods.begin(), rig->lods.end(), [&](const RobotRig::Lod &l) { return l.name == x.mesh_name; }), rig->lods.end());
+			rig->extras.push_back(std::move(x));
+		}
+	}
 	// Spheres under the fighter, in hierarchy order.
 	std::function<void(uint32_t, const std::string &)> walk = [&](uint32_t i, const std::string &parent) {
 		for (uint32_t c : de::ObjectsFile::children(ff->object_data(ff->objects()[i]))) {
@@ -936,6 +1003,16 @@ void map_bones(ImportPlan &plan) {
 		r.bone = opt;
 		r.required = false;
 		rows.push_back(r);
+	}
+	// Optional: the bones of further parts (Gargoyle's wings); unmapped, the part keeps its own.
+	for (auto &x : rig.extras) {
+		for (auto &b : x.skin) {
+			BoneMapping r;
+			r.bone = b.name;
+			r.required = false;
+			r.part = x.deform_name;
+			rows.push_back(r);
+		}
 	}
 	std::set<int> used;
 	for (auto &r : rows) {
@@ -1435,6 +1512,38 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	}
 	const float sc = out.scale;
 	const auto joints = skin_joints(plan);
+	// Further parts (Gargoyle's wings): the joints their bones are mapped to.
+	const size_t nparts = rig.extras.size();
+	std::vector<std::vector<int>> part_joint(nparts);
+	std::vector<bool> part_mapped(nparts, false);
+	for (size_t e = 0; e < nparts; ++e) {
+		for (auto &bone : rig.extras[e].skin) {
+			int j = -1;
+			for (auto &r : h.bones) {
+				if (r.part == rig.extras[e].deform_name && r.bone == bone.name) j = r.joint;
+			}
+			part_joint[e].push_back(j);
+			part_mapped[e] = part_mapped[e] || j >= 0;
+		}
+	}
+	std::map<int, std::pair<int, int>> part_memo;
+	// The part bone a joint drives: its own or its nearest mapped ancestor's, unless that is a body bone.
+	auto part_of = [&](int node) -> std::pair<int, int> {
+		if (auto it = part_memo.find(node); it != part_memo.end()) return it->second;
+		std::pair<int, int> out{-1, -1};
+		for (int n = node; n >= 0 && out.first < 0; n = s.nodes[size_t(n)].parent) {
+			bool body = false;
+			for (size_t c = 0; c < nc && !body; ++c) body = joint_of[c] == n && rig.required(int(c));
+			if (body) break;
+			for (size_t e = 0; e < nparts && out.first < 0; ++e) {
+				for (size_t b = 0; b < part_joint[e].size(); ++b) {
+					if (part_joint[e][b] == n) out = {int(e), int(b)};
+				}
+			}
+		}
+		return part_memo[node] = out;
+	};
+	std::vector<LodData> part_lods(nparts);
 	// Materials: an export's fighter stages come back as they were; otherwise the materials'
 	// colours go into one atlas.
 	std::set<int> materials;
@@ -1645,17 +1754,40 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 			const bool mirrored = det3(M) < 0;
 			const gltf::Mat4 NM = gltf::inverse(M);
 			// Per glTF vertex: DE position and quantised skin.
-			std::vector<uint32_t> index(P.positions.size());
+			std::vector<uint32_t> index(P.positions.size()), part_index(P.positions.size(), 0);
+			std::vector<int> part(P.positions.size(), -1);
 			auto src = P.custom.find("_DE_VERTEX");
 			for (size_t v = 0; v < P.positions.size(); ++v) {
 				V3 p = from_gltf(gltf::transform_point(M, P.positions[v]), u);
 				std::vector<float> w(nb, 0.0f);
+				std::map<std::pair<int, int>, float> pw;
+				float body_w = 0;
 				if (pc.skinned && v < P.joints.size() && v < P.weights.size()) {
 					for (int k = 0; k < 4; ++k) {
 						uint16_t jk = P.joints[v][size_t(k)];
 						float wt = P.weights[v][size_t(k)];
 						if (wt <= 0 || jk >= joints.size()) continue;
-						w[size_t(bone_cached(joints[jk]))] += wt;
+						auto pb = nparts ? part_of(joints[jk]) : std::pair<int, int>{-1, -1};
+						if (pb.first >= 0) {
+							pw[pb] += wt;
+							continue;
+						}
+						w[size_t(bone_cached(joints[jk]))] += wt, body_w += wt;
+					}
+				}
+				if (!pw.empty() && lod == 0) {
+					std::map<int, float> per;
+					float pw_sum = 0;
+					for (auto &[k2, x] : pw) per[k2.first] += x, pw_sum += x;
+					if (pw_sum > body_w) {
+						int e = std::max_element(per.begin(), per.end(), [](auto &a, auto &b2) { return a.second < b2.second; })->first;
+						LodData &pd = part_lods[size_t(e)];
+						std::vector<uint8_t> q(rig.extras[size_t(e)].skin.size(), 0);
+						for (auto &[k2, x] : pw) {
+							if (k2.first == e) q[size_t(k2.second)] = uint8_t(std::clamp(int(std::lround(x / per[e] * 255)), 0, 255));
+						}
+						part[v] = e, part_index[v] = uint32_t(pd.verts.size());
+						pd.verts.push_back(p), pd.skin.push_back(q);
 					}
 				}
 				float sum = 0;
@@ -1712,6 +1844,18 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 						n = normalize(V3{tn[0], tn[1], -tn[2]});
 					}
 					tr.n[size_t(k)] = n;
+				}
+				if (part[gi[0]] >= 0 || part[gi[1]] >= 0 || part[gi[2]] >= 0) {
+					// A further part's triangle (all three corners on it), else dropped from the body.
+					int e = part[gi[0]];
+					if (e >= 0 && part[gi[1]] == e && part[gi[2]] == e) {
+						LodData &pd = part_lods[size_t(e)];
+						pd.faces.push_back({part_index[gi[0]], part_index[gi[1]], part_index[gi[2]]});
+						if (pd.uvs.empty()) pd.uvs.resize(1);
+						pd.uvs[0].push_back(tr.uv[0]);
+						pd.normals.push_back(tr.n);
+					}
+					continue;
 				}
 				tris.push_back(std::move(tr));
 			}
@@ -2238,6 +2382,65 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	correct_contacts();
 	out.retargeted = out.bank.sequences.size() - out.supplied;
 	out.rest = out.bank.pose(de::AnimSequence{}, 0);
+	for (size_t e = 0; e < nparts; ++e) {
+		const RobotRig::Extra &x = rig.extras[e];
+		RobotBuild::Part part;
+		part.mapped = part_mapped[e] && !part_lods[e].faces.empty();
+		const int pc = rig.channel(x.parent);
+		const de::Transform cb = x.parent_rest, cn = pc >= 0 ? out.rest[size_t(pc)] : cb;
+		// The base's part moved with the body bone and scaled; mapped bones go where their joints are.
+		auto moved = [&](const V3 &p) { return cn.apply(mul(affine_inverse(cb).apply(p), sc)); };
+		std::map<std::string, de::Transform> world;
+		std::function<void(const std::string &)> place_actor = [&](const std::string &a) {
+			const std::string &up = x.actor_parent.at(a);
+			de::Transform parent_world = up == x.parent ? cn : world.at(up);
+			de::Transform local = x.actors.at(a);
+			local.t = mul(local.t, sc);
+			de::Transform w = parent_world.then(local);
+			for (size_t b = 0; b < x.skin.size(); ++b) {
+				if (x.skin[b].name != a || !part.mapped || part_joint[e][b] < 0) continue;
+				w.r = x.skin[b].bind.r;
+				w.t = de_point(joint_bind(plan, part_joint[e][b]));
+				local = affine_inverse(parent_world).then(w);
+			}
+			world[a] = w;
+			part.actors[a] = local;
+			for (auto &[child, parent] : x.actor_parent) {
+				if (parent == a) place_actor(child);
+			}
+		};
+		if (x.actors.count(x.root)) place_actor(x.root);
+		for (size_t b = 0; b < x.skin.size(); ++b) {
+			de::Transform bind = x.skin[b].bind;
+			if (auto it = world.find(x.skin[b].name); it != world.end()) bind.t = it->second.t;
+			else bind.t = moved(bind.t);
+			part.binds.push_back(bind);
+		}
+		part.bank = x.bank;
+		for (size_t c = 0; c < part.bank.channels.size(); ++c) {
+			float k2 = sc;
+			const std::string &n = part.bank.channels[c].name;
+			if (part.mapped && x.actors.count(n) && part.actors.count(n)) {
+				float l0 = length(x.actors.at(n).t);
+				if (l0 > 1e-3f) k2 = length(part.actors.at(n).t) / l0;
+			}
+			part.bank.channels[c].rest_pos = mul(part.bank.channels[c].rest_pos, k2);
+			for (auto &q : part.bank.sequences) {
+				for (auto &st : q.streams) {
+					if (st.channel != c) continue;
+					for (auto &key : st.pos) key.p = mul(key.p, k2);
+				}
+			}
+		}
+		if (part.mapped) {
+			part.lod = finish_lod(part_lods[e]);
+			out.notes.push_back(x.mesh_name + ": " + std::to_string(part.lod.faces.size()) + " triangles from the file's " + x.deform_name + " joints");
+		} else {
+			for (auto &v : x.mesh.vertices) part.lod.vertices.push_back(moved(v));
+			part.lod.faces = x.mesh.faces;
+		}
+		out.parts.push_back(std::move(part));
+	}
 	// Spheres: authored ones where the file has them, else the base's, scaled with their bone.
 	auto bone_scale = [&](int c) {
 		for (int k : children[size_t(c)]) {
@@ -2476,7 +2679,7 @@ void write_weights(Project &p, uint32_t channel, const std::vector<uint8_t> &w) 
 	touched(o);
 }
 
-void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild &b, const RobotRig &rig) {
+void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
 	{
 		deo::Object &o = p.file().objects[mesh];
 		Chunks c = split_chunks(o.contents);
@@ -2509,8 +2712,8 @@ void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild
 		}
 	}
 	std::set<uint32_t> written;
-	for (size_t i = 0; i < rig.skin.size(); ++i) {
-		std::string name = "Deform" + rig.skin[i].name + "VertexData";
+	for (size_t i = 0; i < skin.size(); ++i) {
+		std::string name = "Deform" + skin[i].name + "VertexData";
 		auto it = channels.find(name);
 		uint32_t ch;
 		if (it != channels.end()) {
@@ -2713,14 +2916,76 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		}
 	}
 	std::vector<std::pair<size_t, uint32_t>> meshes;
+	std::map<std::string, size_t> part_mesh;
+	for (size_t e = 0; e < rig.extras.size(); ++e) part_mesh[rig.extras[e].mesh_name] = e;
+	std::set<uint32_t> kept_part;  // a base part kept as it was textured: its images stay
 	for (uint32_t c : p.children(model)) {
-		if (objs[c].info.class_text() == "Mesh\\Standard") meshes.push_back({mesh_counts(objs[c]).first, c});
+		if (objs[c].info.class_text() != "Mesh\\Standard") continue;
+		auto pm = part_mesh.find(objs[c].info.name_text());
+		if (pm == part_mesh.end() || pm->second >= b.parts.size()) {
+			meshes.push_back({mesh_counts(objs[c]).first, c});
+			continue;
+		}
+		const RobotBuild::Part &part = b.parts[pm->second];
+		if (part.mapped) {
+			RobotBuild layer0;
+			write_mesh(p, c, part.lod, layer0, rig.extras[pm->second].skin);
+		} else {
+			deo::Object &o = objs[c];
+			set_ex(o, "ObjExtCon", build::mesh_geometry(part.lod.vertices, part.lod.faces));
+			touched(o);
+			kept_part.insert(c);
+		}
+		++res.meshes;
 	}
 	std::sort(meshes.begin(), meshes.end(), [](auto &x, auto &y) { return x.first > y.first; });
 	for (size_t k = 0; k < meshes.size(); ++k) {
 		const RobotLod &lod = b.lods[std::min(k, b.lods.size() - 1)];
-		write_mesh(p, meshes[k].second, lod, b, rig);
+		write_mesh(p, meshes[k].second, lod, b, rig.skin);
 		++res.meshes;
+	}
+	// The parts' deform infos, banks and bone actors.
+	auto write_binds = [&](uint32_t deform_obj, const std::vector<de::Transform> &binds) {
+		deo::Object &d = objs[deform_obj];
+		Chunks c = split_chunks(d.contents);
+		if (c.chunks.empty()) throw deo::Error("unexpected deform info layout");
+		Bytes &body = c.chunks[0].body;
+		deo::Reader r(body);
+		r.block();
+		for (size_t i = 0; i < binds.size() && r.remaining(); ++i) {
+			if (!r.u8()) break;
+			size_t ce;
+			r.chunk(&ce);
+			size_t at = r.pos();
+			if (ce - at < 48) break;
+			for (int k = 0; k < 3; ++k) put(body, at + size_t(k) * 4, binds[i].t[size_t(k)]);
+			for (int k = 0; k < 9; ++k) put(body, at + 12 + size_t(k) * 4, binds[i].r[size_t(k)]);
+			r.seek(ce);
+		}
+		d.contents = join_chunks(c);
+		touched(d);
+	};
+	for (size_t e = 0; e < rig.extras.size() && e < b.parts.size(); ++e) {
+		const RobotRig::Extra &x = rig.extras[e];
+		const RobotBuild::Part &part = b.parts[e];
+		std::function<void(uint32_t)> visit = [&](uint32_t i) {
+			for (uint32_t c : p.children(i)) {
+				const std::string cls = objs[c].info.class_text(), n = objs[c].info.name_text();
+				if (cls == "ActorDeformInfo" && n == x.deform_name) write_binds(c, part.binds);
+				if (cls == "Actor" && part.actors.count(n)) set_actor_local(p, c, part.actors.at(n));
+				visit(c);
+			}
+		};
+		visit(uint32_t(o.fighter));
+		for (size_t i = first_new; i < end; ++i) {
+			if (objs[i].info.class_text() != "AnimationSequenceGroup" || objs[i].info.name_text() != x.bank_name) continue;
+			Chunks c = split_chunks(objs[i].contents);
+			Chunks fresh = split_chunks(bank_contents(x.bank_name, part.bank, x.flags));
+			if (c.chunks.empty() || fresh.chunks.empty()) continue;
+			c.chunks[0] = fresh.chunks[0];
+			objs[i].contents = join_chunks(c);
+			touched(objs[i]);
+		}
 	}
 	// Images: the paint mask, reflection mask and bump in place; RGBScaled blank; RGBStatic added.
 	std::vector<uint32_t> todo = p.children(model);
@@ -2728,6 +2993,7 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 	while (!todo.empty()) {
 		uint32_t i = todo.back();
 		todo.pop_back();
+		if (kept_part.count(i)) continue;
 		for (uint32_t c : p.children(i)) todo.push_back(c);
 		if (objs[i].info.class_text() != "Image\\Standard") continue;
 		std::string n = objs[i].info.name_text();

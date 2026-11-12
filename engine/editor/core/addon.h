@@ -180,6 +180,8 @@ std::vector<uint32_t> hierarchy_children(const deo::Object &o);
 // reference through `map`. Returns false when the chunk's layout is not known.
 bool map_reference_chunk(const std::string &class_path, size_t chunk_index, const RawChunk &in, RawChunk &out,
                          const std::function<Ref(const Ref &)> &map);
+// A TextureProcess\MultiStage's references chunk 2 (its stages' managers and images), mapped.
+bool map_multistage(const RawChunk &in, RawChunk &out, const std::function<Ref(const Ref &)> &map);
 // Every reference in an object's references block (known layouts only).
 std::vector<Ref> object_references(const std::string &class_path, const Bytes &references, bool *understood = nullptr);
 

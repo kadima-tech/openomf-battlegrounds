@@ -81,6 +81,7 @@ struct BoneMapping {
 	MapSource source = MapSource::None;
 	float confidence = 0;   // 0..1
 	bool required = true;   // a bone of the base robot's skin; the others are placed from it when unmapped
+	std::string part;       // a further part's deform info (Gargoyle's WingDeformInfo), else empty
 };
 
 struct SequenceMapping {
