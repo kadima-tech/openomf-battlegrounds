@@ -244,6 +244,14 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   information; and makes Jaguar Mk2, edits stats, spheres, inputs, a constant and a paint job, and
   checks `read_fighter_stats` and `fighter_models` through `OPENBG_ADDONS`. `EDITOR_ASSETS_OUT=<dir>`
   keeps the add-ons (for `openbg --addon`).
+- **HAR General and Paint tabs:** General's Choose Creature section edits the title, text and picture
+  Choose Creature shows (the first change copies the base's ControlCreator, title, picture and text
+  into the add-on); the picture imports from a PNG or renders four poses of the selected paint job.
+  Paint lists the paint jobs (the preview draws the selected one), imports or exports each image and
+  makes a new one from the selected one's model, base or add-on. Scripted: `--har-paint "Job"` (a new
+  paint job), `--har-paint "Job:RGBStatic=file.png"`, `--paint-job N` (the selected row),
+  `--har-title`, `--har-text`, `--har-picture file.png|render`. `openbg-fight --model <paint job>`
+  fights with that paint job; `openbg --highlight <name>` makes the choosers highlight it first.
 - Memory: files stay in memory once read; browsing every image in the game reads most of `Data`.
 
 **Arenas and play in editor** (`editor/app/world_*.cpp`, `pie.cpp`, `editor/core/arena.*`):
@@ -340,7 +348,7 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
     `<add-on>.assets/models/<name>/mapping.json` for re-imports.
   - The source file is copied to `<add-on>.assets/models/<name>/` so the import can be redone.
 - Scripted runs: `--import file.glb [--import-kind prop|arena|robot] [--import-name N]
-  [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
+  [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>] [--import-paint Name=image.png]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
   instead), `--place-prop <name>` (with `--arena`), `--export "[file/][Class:]Name" --export-out
   out.glb`. Example: `openbg-editor --data <Data> mods/Box.DEObjects --import arena.glb --import-kind
   arena --import-name "Box Arena" --arena "Box Arena" --play`.
@@ -353,7 +361,12 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   Jaguar (vertices, binds, rest and poses equal), a generated humanoid with unknown joint names and
   other proportions (mapped by shape) onto Jaguar, a Mixamo-named rig onto Katana (an animation named
   by hand), each checked posed in every sequence (limbs along the base's, no stretching past the
-  base's), validated, saved and read by the engine. `--samples <dir>` writes the generated rigs
+  base's; planted feet still and on the floor, the throw grip kept), with a second paint job, new
+  and left-out spheres and its Choose Creature panel, validated, saved and read by the engine; and
+  Gargoyle-named box rigs with and without wing joints (the wings the file's, or Gargoyle's moved).
+  Real content: `engine/tests/scripts/make_character.py` builds a textured, skinned, animated
+  character in Blender (`blender -b --factory-startup --python engine/tests/scripts/make_character.py --
+  --naming mixamo|rigify --textures atlas|multi --out file.glb|file.gltf`), for importing by hand. `--samples <dir>` writes the generated rigs
   (`humanoid.glb`, `mixamo.glb`); `<Data> --keep <dir>` keeps the add-ons for
   `OPENBG_ADDONS=<dir>/HarBoxBot.DEObjects openbg-fight <Data> "Box Bot"`.
 

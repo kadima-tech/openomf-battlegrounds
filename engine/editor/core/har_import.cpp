@@ -3022,6 +3022,13 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		build::add_child(p, model, img);
 		++res.images;
 	}
+	// Choose Creature's panel names the new robot rather than describing the base one.
+	try {
+		HarObjects ho = har_objects(p, desc);
+		if (read_presentation(p, ho).found) write_presentation(p, ho, name, name + ", built on " + rig.robot + "'s frame and moves.");
+	} catch (const deo::Error &e) {
+		res.notes.push_back(std::string("Choose Creature panel: ") + e.what());
+	}
 	for (const auto &extra : h.extra_paints) {
 		HarObjects ho = har_objects(p, desc);
 		if (extra.name.empty() || ho.model_descriptions.empty()) continue;
