@@ -81,6 +81,7 @@ struct BoneMapping {
 	MapSource source = MapSource::None;
 	float confidence = 0;   // 0..1
 	bool required = true;   // a bone of the base robot's skin; the others are placed from it when unmapped
+	std::string part;       // a further part's deform info (Gargoyle's WingDeformInfo), else empty
 };
 
 struct SequenceMapping {
@@ -93,7 +94,10 @@ struct SphereSource {
 	std::string sphere;     // the affector's name ("Sphere:<name>" in the file)
 	int node = -1;
 	std::string bone;       // the rig bone it ends up under
-	bool known = false;     // the base robot has an affector of that name
+	bool known = false;     // it moves a base sphere or makes a new one
+	int moves = -1;         // the base sphere (RobotRig::spheres) of its name it places
+	int copies = -1;        // else a new sphere: a copy of this base sphere (its class, groups, effects)
+	std::string note;       // why it is left out
 };
 
 struct RobotRig;
@@ -113,6 +117,13 @@ struct HarPlan {
 	bool ground = true;       // the lowest vertex on the floor
 	enum class Paint : uint8_t { Materials, Colours } paint = Paint::Colours;
 	bool decimate_lod0 = false;  // LOD0 to the base robot's budget as well
+	// Further paint jobs: a copy of the model with this image as its colours (RGBStatic) or, when
+	// the paint is the pilot's, its paint mask (RGBMain); laid out as the model's texture.
+	struct ExtraPaint {
+		std::string name;
+		std::filesystem::path image;
+	};
+	std::vector<ExtraPaint> extra_paints;
 	std::shared_ptr<const RobotRig> rig;
 	std::vector<std::string> notes;  // what the analysis found
 };

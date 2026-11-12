@@ -933,6 +933,10 @@ void models_startup(Editor &e) {
 		if (!o.import_base.empty()) st.plan.har.base_robot = o.import_base;
 		robot_analyse(e, st.plan);
 	}
+	for (auto &spec : o.import_paints) {
+		auto eq = spec.find('=');
+		if (eq != std::string::npos) st.plan.har.extra_paints.push_back({spec.substr(0, eq), std::filesystem::path(std::u8string(spec.begin() + long(eq) + 1, spec.end()))});
+	}
 	ed::revalidate(st.plan, e.base());
 	if (o.import_dialog) {
 		st.scripted = true;

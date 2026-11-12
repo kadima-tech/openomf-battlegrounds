@@ -147,6 +147,7 @@ int main(int argc, char **argv) {
 	bool host = false;  // --host: --launch as a joinable session, as BMatchServer sets one up (testing)
 	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
+	std::vector<std::string> highlight;  // --highlight: a name the choosers highlight first (testing)
 	bool headless = false;
 	int frames = 60;
 	std::string join;  // --join: the server to join at once
@@ -165,6 +166,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--lobby") && i + 1 < argc) lobby = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
+		else if (!strcmp(argv[i], "--highlight") && i + 1 < argc) highlight.push_back(argv[++i]);
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
 			for (size_t p = 0; p <= l.size();) {
@@ -397,6 +399,7 @@ int main(int argc, char **argv) {
 			sel->title = u.description;
 			sel->autoselect_key = u.autoselect;
 			sel->choose_fighter = u.choose_fighter;
+			sel->highlight = highlight;
 			sel->script = ui;
 			for (auto &g : u.pool) {
 				if (de::ObjectRef d = world.data().by_guid(g)) sel->pool.push_back(d);

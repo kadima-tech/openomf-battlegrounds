@@ -4,6 +4,8 @@
 #include <map>
 
 #include "har.h"
+#include "image_io.h"
+#include "pilot.h"
 #include "icons.h"
 #include "imgui_stdlib.h"
 #include "theme.h"
@@ -234,6 +236,64 @@ void assets_startup(Editor &e) {
 		bool exists = false;
 		for (uint32_t h : ed::addon_hars(*e.project())) exists |= tutf8(e.project()->file().objects[h].info.name_text()) == name;
 		if (!exists) make_har(e, from, name);
+	}
+	if (!o.har_paints.empty()) {
+		std::string target = o.open_har;
+		if (target.empty() && !o.new_har.empty()) {
+			std::string from;
+			split(o.new_har, &from, &target);
+		}
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			// "Job" makes a paint job (a copy of the first); "Job:Image=file.png" replaces one of its images.
+			for (auto &spec : o.har_paints) {
+				ed::HarObjects ho = ed::har_objects(*e.project(), h);
+				std::string job = spec.substr(0, spec.find(':')), rest = spec.find(':') == std::string::npos ? "" : spec.substr(spec.find(':') + 1);
+				int desc = -1;
+				for (int m : ho.model_descriptions) {
+					if (tutf8(e.project()->file().objects[size_t(m)].info.name_text()) == job) desc = m;
+				}
+				try {
+					if (desc < 0) desc = int(ed::create_paint_job(*e.project(), ho, job)), e.log(LogLine::Ok, "New paint job " + job);
+					if (rest.empty()) continue;
+					std::string image = rest.substr(0, rest.find('=')), file = rest.substr(rest.find('=') + 1);
+					bool done = false;
+					for (auto &img : ed::paint_images(*e.project(), uint32_t(desc))) {
+						if (img.name != image || done) continue;
+						int w = 0, hh = 0, type = 0;
+						ed::image_header(e.project()->file().objects[size_t(img.object)], &type, &w, &hh);
+						ed::RgbaImage im = ed::load_image(file);
+						ed::set_image_pixels(*e.project(), uint32_t(img.object), w, hh, ed::resize_rgba(im.width, im.height, im.rgba, w, hh), std::filesystem::path(file).filename().string());
+						done = true;
+					}
+					e.log(done ? LogLine::Ok : LogLine::Error, (done ? "Set " : "No image ") + image + " of " + job);
+				} catch (const std::exception &ex) {
+					e.log(LogLine::Error, std::string("Paint job ") + spec + ": " + ex.what());
+				}
+			}
+		}
+	}
+	if (!o.har_title.empty() || !o.har_text.empty() || (!o.har_picture.empty() && o.har_picture != "render")) {
+		std::string target = o.open_har;
+		if (target.empty() && !o.new_har.empty()) {
+			std::string from;
+			split(o.new_har, &from, &target);
+		}
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			ed::HarObjects ho = ed::har_objects(*e.project(), h);
+			try {
+				ed::HarPresentation pr = ed::read_presentation(*e.project(), ho);
+				ed::write_presentation(*e.project(), ho, o.har_title.empty() ? pr.title : o.har_title, o.har_text.empty() ? pr.text : o.har_text);
+				if (!o.har_picture.empty() && o.har_picture != "render") {
+					ed::RgbaImage im = ed::load_image(o.har_picture);
+					ed::set_presentation_picture(*e.project(), ho, im.width, im.height, im.rgba, std::filesystem::path(o.har_picture).filename().string());
+				}
+				e.log(LogLine::Ok, "Set " + target + "'s Choose Creature panel");
+			} catch (const std::exception &ex) {
+				e.log(LogLine::Error, std::string("Choose Creature panel: ") + ex.what());
+			}
+		}
 	}
 	if (!o.har_constants.empty()) {
 		std::string target = o.open_har;

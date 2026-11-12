@@ -194,6 +194,7 @@ public:
 	void click(AppManager &app, Control &c) override;
 	void draw(AppManager &app, std::vector<DrawItem> &out) override;
 	UIManager *child() const override { return picker_.get(); }
+	std::vector<std::string> highlight;  // testing: the entry highlighted first, by name
 	// Testing (OPENBG_HELP_CYCLE): show entry i as a click on its row would; its name, empty past the end.
 	std::string show_entry(AppManager &app, size_t i);
 

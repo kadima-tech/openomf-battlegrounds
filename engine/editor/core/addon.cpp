@@ -347,6 +347,35 @@ int Project::find(const Guid &g) const {
 	return -1;
 }
 
+// DE_CMultiStageTextureProcess references chunk 2 (de::read_multistage's layout).
+bool map_multistage(const RawChunk &in, RawChunk &out, const std::function<Ref(const Ref &)> &map) {
+	out = in;
+	if (in.version < 4 || in.version > 8) return false;
+	try {
+		deo::Reader r(in.body);
+		deo::Writer w;
+		uint32_t n = r.u32();
+		w.u32(n);
+		for (uint32_t i = 0; i < n; ++i) {
+			write_ref(w, map(read_ref(r)));
+			uint8_t is_ref = r.u8();
+			w.u8(is_ref);
+			if (is_ref) write_ref(w, map(read_ref(r)));
+			else w.bytes(r.bytes(16));
+			if (in.version == 4) w.block(r.block());
+			else w.bytes(r.bytes(4));
+			w.bytes(r.bytes(1 + 4));
+			if (in.version >= 6) w.bytes(r.bytes(1));
+			if (in.version >= 7) w.bytes(r.bytes(1));
+		}
+		if (r.remaining()) return false;
+		out.body = w.data();
+		return true;
+	} catch (const deo::Error &) {
+		return false;
+	}
+}
+
 Project::Target Project::target(const Ref &r) const {
 	Target t;
 	if (r.kind == Ref::Local && r.index < file_.objects.size()) {
@@ -606,7 +635,7 @@ std::vector<uint32_t> Project::copy_from_base(size_t file, const std::vector<uin
 		Chunks rc = split_chunks(o.references);
 		for (size_t k = 0; k < rc.chunks.size(); ++k) {
 			RawChunk out;
-			if (!map_reference_chunk(cls, k, rc.chunks[k], out, map) &&
+			if (!map_reference_chunk(cls, k, rc.chunks[k], out, map) && !(cls == "TextureProcess\\MultiStage" && k == 2 && map_multistage(rc.chunks[k], out, map)) &&
 			    !(guess_layouts && guess_map_reference_chunk(rc.chunks[k], out, src.objects.size(), src.guid_pool.size(), map))) {
 				throw deo::Error("cannot copy " + o.info.name_text() + ": the references of a " + cls + " are not decoded yet");
 			}

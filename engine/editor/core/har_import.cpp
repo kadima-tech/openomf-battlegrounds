@@ -99,6 +99,66 @@ de::Transform frame(const V3 &primary, const V3 &secondary) {
 	return t;
 }
 
+de::Transform rotation_between(const V3 &a_in, const V3 &b_in);
+
+de::Transform axis_angle(const V3 &axis, float angle) {
+	float h = std::sin(angle / 2);
+	return de::transform_from({0, 0, 0}, {axis[0] * h, axis[1] * h, axis[2] * h, std::cos(angle / 2)});
+}
+
+// A rotation about a point.
+de::Transform pivoted(de::Transform rot, const V3 &at) {
+	rot.t = sub(at, rot.rotate(at));
+	return rot;
+}
+
+// Moves the end of a two-bone chain (root -> mid -> end, model space) to `target`: the mid joint
+// bends about the limb's hinge (`hint` when it is straight), the root swings, the end keeps its
+// orientation. Out of reach, the limb straightens towards the target.
+void two_bone_ik(std::vector<de::Transform> &w, size_t root, size_t mid, size_t end, const V3 &target, const V3 &hint) {
+	const V3 a = w[root].t, b = w[mid].t, c = w[end].t;
+	const float l1 = length(sub(b, a)), l2 = length(sub(c, b));
+	if (l1 < 1e-4f || l2 < 1e-4f) return;
+	const float reach = std::clamp(length(sub(target, a)), std::fabs(l1 - l2) + 1e-3f, l1 + l2 - 1e-3f);
+	V3 n = cross(sub(b, a), sub(c, b));
+	if (length(n) < 0.02f * l1 * l2) n = hint;
+	n = normalize(n);
+	if (length(n) < 0.5f) return;
+	auto interior = [&](const V3 &end_at) { return std::acos(std::clamp(dot(normalize(sub(a, b)), normalize(sub(end_at, b))), -1.0f, 1.0f)); };
+	const float goal = std::acos(std::clamp((l1 * l1 + l2 * l2 - reach * reach) / (2 * l1 * l2), -1.0f, 1.0f));
+	const float turn = interior(c) - goal;
+	de::Transform bend = axis_angle(n, turn);
+	V3 c1 = add(b, bend.rotate(sub(c, b)));
+	const de::Transform other = axis_angle(n, -turn);
+	const V3 c2 = add(b, other.rotate(sub(c, b)));
+	if (std::fabs(interior(c2) - goal) + 1e-4f < std::fabs(interior(c1) - goal)) bend = other, c1 = c2;
+	const de::Transform at_b = pivoted(bend, b), at_a = pivoted(rotation_between(sub(c1, a), sub(target, a)), a);
+	const auto keep = w[end].r;
+	w[root] = at_a.then(w[root]);
+	w[mid] = at_a.then(at_b.then(w[mid]));
+	w[end] = at_a.then(at_b.then(w[end]));
+	w[end].r = keep;
+}
+
+// Replaces a stream's keys inside [from, to] with `keys` (all of them when it had none).
+template <typename Key>
+void splice_keys(std::vector<Key> &stream, std::vector<Key> keys, float from, float to) {
+	if (keys.empty()) return;
+	if (stream.empty()) {
+		stream = std::move(keys);
+		return;
+	}
+	std::vector<Key> out;
+	for (auto &k : stream) {
+		if (k.t < from - 1e-6f) out.push_back(k);
+	}
+	for (auto &k : keys) out.push_back(k);
+	for (auto &k : stream) {
+		if (k.t > to + 1e-6f) out.push_back(k);
+	}
+	stream = std::move(out);
+}
+
 // The shortest rotation taking direction a to b.
 de::Transform rotation_between(const V3 &a_in, const V3 &b_in) {
 	V3 a = normalize(a_in), b = normalize(b_in);
@@ -442,6 +502,73 @@ std::shared_ptr<RobotRig> read_rig(const BaseData &base, const std::string &robo
 		if (n > 0) ahead = add(ahead, flat(sub(mul(sum, 1 / n), rig->skin[size_t(b)].bind.t)));
 	}
 	if (length(ahead) > 1e-3f) rig->forward = normalize(ahead);
+	// Further deform infos (Gargoyle's wings): the model mesh each weights, the bank holding its bones,
+	// and the actor tree they hang in below a body bone.
+	{
+		std::map<uint32_t, uint32_t> parent_of;
+		for (uint32_t i = 0; i < ff->objects().size(); ++i) {
+			for (uint32_t c : de::ObjectsFile::children(ff->object_data(ff->objects()[i]))) parent_of[c] = i;
+		}
+		auto rest = rig->bank.pose(de::AnimSequence{}, 0);
+		for (auto &d : ff->objects()) {
+			if (d.class_path != "ActorDeformInfo" || &d == deform) continue;
+			RobotRig::Extra x;
+			x.deform_name = d.name;
+			for (auto &[faces, c] : meshes) {
+				(void)faces;
+				try {
+					auto bones = de::read_skin(*ff, d, *mf, c);
+					bool weighted = false;
+					for (auto &b : bones) weighted = weighted || std::any_of(b.weights.begin(), b.weights.end(), [](uint8_t w) { return w != 0; });
+					if (!weighted) continue;
+					x.skin = std::move(bones);
+					x.mesh = de::read_mesh(*mf, mf->objects()[c]);
+					x.mesh_name = mf->objects()[c].name;
+					break;
+				} catch (const std::exception &) {
+				}
+			}
+			if (x.skin.empty()) continue;
+			for (auto &o : ff->objects()) {
+				if (o.class_path != "AnimationSequenceGroup" || &o == bank) continue;
+				de::AnimBank bk = de::read_anim_bank(*ff, o);
+				if (bk.channel(x.skin[0].name) >= 0) {
+					x.bank = std::move(bk), x.bank_name = o.name;
+					bank_extras(*ff, o, &x.flags);
+					break;
+				}
+			}
+			for (uint32_t i = 0; i < ff->objects().size() && x.root.empty(); ++i) {
+				if (ff->objects()[i].name != x.skin[0].name || ff->objects()[i].class_path != "Actor") continue;
+				uint32_t below = i;
+				for (auto it = parent_of.find(i); it != parent_of.end(); it = parent_of.find(it->second)) {
+					int ch = rig->bank.channel(ff->objects()[it->second].name);
+					if (ch >= 0) {
+						x.root = ff->objects()[below].name, x.parent = ff->objects()[it->second].name;
+						x.parent_rest = rest[size_t(ch)];
+						std::function<void(uint32_t, const std::string &)> walk = [&](uint32_t a, const std::string &up) {
+							std::string here = up;
+							if (ff->objects()[a].class_path == "Actor") {
+								try {
+									x.actors[ff->objects()[a].name] = de::read_actor(*ff, ff->objects()[a]).local;
+									x.actor_parent[ff->objects()[a].name] = up;
+									here = ff->objects()[a].name;
+								} catch (const std::exception &) {
+								}
+							}
+							for (uint32_t c : de::ObjectsFile::children(ff->object_data(ff->objects()[a]))) walk(c, here);
+						};
+						walk(below, x.parent);
+						break;
+					}
+					below = it->second;
+				}
+			}
+			if (x.root.empty() || x.bank.channels.empty() || x.flags.size() != x.bank.channels.size()) continue;
+			rig->lods.erase(std::remove_if(rig->lods.begin(), rig->lods.end(), [&](const RobotRig::Lod &l) { return l.name == x.mesh_name; }), rig->lods.end());
+			rig->extras.push_back(std::move(x));
+		}
+	}
 	// Spheres under the fighter, in hierarchy order.
 	std::function<void(uint32_t, const std::string &)> walk = [&](uint32_t i, const std::string &parent) {
 		for (uint32_t c : de::ObjectsFile::children(ff->object_data(ff->objects()[i]))) {
@@ -478,6 +605,21 @@ std::shared_ptr<RobotRig> read_rig(const BaseData &base, const std::string &robo
 		}
 	}
 	rig->script_sequences.assign(names.begin(), names.end());
+	// The shared fighter class gathers attack spheres by name prefix (BFighter's entry, FINDINGS 672).
+	std::set<std::string> prefixes;
+	for (const deo::File *src : {&fd, base.file("Fighter") ? &base.model(size_t(base.file("Fighter") - base.files().data())) : nullptr}) {
+		if (!src) continue;
+		for (auto &o : src->objects) {
+			if (o.info.class_text() != "Behavior") continue;
+			std::string text = behavior_source(o);
+			const std::string key = "IsNamePrefix(\"";
+			for (size_t at = text.find(key); at != std::string::npos; at = text.find(key, at + 1)) {
+				size_t from = at + key.size(), to = text.find('"', from);
+				if (to != std::string::npos && to > from) prefixes.insert(text.substr(from, to - from));
+			}
+		}
+	}
+	rig->sphere_prefixes.assign(prefixes.begin(), prefixes.end());
 	return rig;
 }
 
@@ -862,6 +1004,16 @@ void map_bones(ImportPlan &plan) {
 		r.required = false;
 		rows.push_back(r);
 	}
+	// Optional: the bones of further parts (Gargoyle's wings); unmapped, the part keeps its own.
+	for (auto &x : rig.extras) {
+		for (auto &b : x.skin) {
+			BoneMapping r;
+			r.bone = b.name;
+			r.required = false;
+			r.part = x.deform_name;
+			rows.push_back(r);
+		}
+	}
 	std::set<int> used;
 	for (auto &r : rows) {
 		const BoneMapping *old = row(h, r.bone);
@@ -1070,8 +1222,34 @@ void analyse_robot(ImportPlan &plan, const BaseData &base) {
 				if (b.joint == p && b.required) sp.bone = b.bone;
 			}
 		}
-		for (auto &rs : h.rig->spheres) sp.known = sp.known || rs.name == sp.sphere;
 		h.spheres.push_back(sp);
+	}
+	// Each base sphere of a name is placed by the file's first, second, ... of that name (Blender's
+	// ".001" suffixes ignored); the rest are new: copies of a base sphere the scripts treat alike,
+	// a body sphere (GetHitAffector...) or an attack sphere named by a prefix the scripts gather.
+	std::map<std::string, std::vector<int>> base_named;
+	for (size_t i = 0; i < h.rig->spheres.size(); ++i) base_named[h.rig->spheres[i].name].push_back(int(i));
+	std::map<std::string, size_t> used;
+	for (auto &sp : h.spheres) {
+		std::string name = sp.sphere;
+		size_t dot = name.find_last_of('.');
+		if (dot != std::string::npos && dot + 1 < name.size() && name.find_first_not_of("0123456789", dot + 1) == std::string::npos) name = name.substr(0, dot);
+		size_t k = used[name]++;
+		if (auto it = base_named.find(name); it != base_named.end() && k < it->second.size()) {
+			sp.moves = it->second[k];
+		} else {
+			std::string like;
+			if (name.rfind("GetHitAffector", 0) == 0) like = "GetHitAffector";
+			for (auto &pre : h.rig->sphere_prefixes) {
+				if (name.rfind(pre, 0) == 0 && pre.size() > like.size()) like = pre;
+			}
+			for (size_t i = 0; i < h.rig->spheres.size() && !like.empty() && sp.copies < 0; ++i) {
+				if (h.rig->spheres[i].name.rfind(like, 0) == 0) sp.copies = int(i);
+			}
+			if (sp.copies < 0) sp.note = like.empty() ? "the scripts find spheres by name, and none of " + h.base_robot + "'s or their prefixes (GetHitAffector, " + (h.rig->sphere_prefixes.empty() ? std::string("...") : h.rig->sphere_prefixes.front()) + ", ...) starts it" : h.base_robot + " has no sphere like " + like + " to copy";
+		}
+		if (sp.bone.empty() && sp.note.empty()) sp.note = "it is not under a mapped joint";
+		sp.known = (sp.moves >= 0 || sp.copies >= 0) && !sp.bone.empty();
 	}
 	if (!h.detected.empty()) h.notes.push_back("Rig looks like " + h.detected);
 }
@@ -1137,8 +1315,7 @@ void robot_issues(const ImportPlan &plan, std::vector<Issue> &out) {
 		if (!have.count(n)) add(Issue::Error, "The scripts use sequence " + n + ", which the bank lacks");
 	}
 	for (auto &sp : h.spheres) {
-		if (!sp.known) add(Issue::Warning, "Sphere:" + sp.sphere + " names no hitbox of " + h.base_robot + " and is left out");
-		else if (sp.bone.empty()) add(Issue::Warning, "Sphere:" + sp.sphere + " is not under a mapped joint; the base robot's sphere is kept");
+		if (!sp.known) add(Issue::Warning, "Sphere:" + sp.sphere + " is left out: " + sp.note);
 	}
 	// Size against the base robot.
 	float lo = 1e30f, hi = -1e30f;
@@ -1334,173 +1511,39 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		out.scale = hi > lo && rig.height > 0 ? (hi - lo) / rig.height : 1;
 	}
 	const float sc = out.scale;
-	std::vector<std::vector<int>> children(nc);
-	for (size_t c = 0; c < nc; ++c) {
-		int p = rig.bank.channels[c].parent;
-		if (p >= 0 && size_t(p) < nc) children[size_t(p)].push_back(int(c));
-	}
-	auto sided = [&](int c, const char *side) { return rig.bank.channels[size_t(c)].name.rfind(side, 0) == 0; };
-	// Each skin bone's turn: its base direction (to its central child, across its left / right
-	// children) onto the new one. Leaves take their parent's.
-	std::vector<de::Transform> turn(nc);
-	std::vector<bool> has_turn(nc, false);
-	for (size_t c = 0; c < nc; ++c) {
-		if (!rig.required(int(c))) continue;
-		int primary = -1, l = -1, r = -1;
-		for (int k : children[c]) {
-			if (!rig.required(k)) continue;
-			if (sided(k, "Left")) l = l < 0 ? k : l;
-			else if (sided(k, "Right")) r = r < 0 ? k : r;
-			else if (primary < 0) primary = k;
-		}
-		if (primary < 0) {
-			for (int k : children[c]) {
-				if (rig.required(k) && primary < 0 && !(l >= 0 && r >= 0)) primary = k;
-			}
-		}
-		if (primary < 0) continue;
-		V3 db = sub(jb[size_t(primary)], jb[c]), dn = sub(jn[size_t(primary)], jn[c]);
-		if (l >= 0 && r >= 0) turn[c] = frame(dn, sub(jn[size_t(l)], jn[size_t(r)])).then(frame(db, sub(jb[size_t(l)], jb[size_t(r)])).inverse());
-		else turn[c] = rotation_between(db, dn);
-		has_turn[c] = true;
-	}
-	for (size_t pass = 0; pass < nc; ++pass) {
-		bool changed = false;
-		for (size_t c = 0; c < nc; ++c) {
-			int p = rig.bank.channels[c].parent;
-			if (rig.required(int(c)) && !has_turn[c] && p >= 0 && size_t(p) < nc && has_turn[size_t(p)]) turn[c] = turn[size_t(p)], has_turn[c] = changed = true;
-		}
-		if (!changed) break;
-	}
-	// The new bind frame of every channel: skin bones from the file, the rest following their parent.
-	const int body = rig.channel("Body"), head = rig.channel("Head"), anchor = rig.channel("HeadAnchor");
-	std::vector<de::Transform> bn(nc);
-	std::vector<bool> done(nc, false);
-	for (size_t pass = 0; pass < nc; ++pass) {
-		bool progress = false;
-		for (size_t c = 0; c < nc; ++c) {
-			if (done[c]) continue;
-			int p = int(c) == body ? -1 : rig.bank.channels[c].parent;
-			if (p >= 0 && size_t(p) < nc && !done[size_t(p)]) continue;
-			if (p >= 0 && size_t(p) >= nc) p = -1;
-			if (rig.required(int(c))) {
-				bn[c] = rotation_only(turn[c]).then(rotation_only(rig.bind[c]));
-				bn[c].t = jn[c];
-			} else if (p < 0) {
-				bn[c] = rig.bind[c];
-				bn[c].t = mul(rig.bind[c].t, sc);
-			} else {
-				de::Transform local = affine_inverse(rig.bind[size_t(p)]).then(rig.bind[c]);
-				local.t = mul(local.t, sc);
-				bn[c] = bn[size_t(p)].then(local);
-			}
-			if (int(c) == anchor) {
-				if (joint_of[c] >= 0 && body >= 0 && joint_of[size_t(body)] >= 0) bn[c].t = bn[size_t(body)].then(from_gltf(gltf::multiply(F, joint_bind(plan, joint_of[size_t(body)])), u).inverse()).apply(jn[c]);
-				else if (joint_of[c] >= 0) bn[c].t = jn[c];
-				else if (head >= 0) bn[c].t = add(bn[size_t(head)].t, mul(sub(rig.bind[c].t, rig.bind[size_t(head)].t), sc));
-			}
-			done[c] = progress = true;
-		}
-		if (!progress) break;
-	}
-	for (size_t b = 0; b < nb; ++b) {
-		int c = rig.channel(rig.skin[b].name);
-		out.binds.push_back(c >= 0 ? bn[size_t(c)] : rig.skin[b].bind);
-	}
-	// Channel offsets stay in their parent channel's frame, scaled by the bone's change of length,
-	// so every limb points where the base's does.
-	std::vector<float> k(nc, sc);
-	for (size_t c = 0; c < nc; ++c) {
-		int p = rig.bank.channels[c].parent;
-		if (!rig.required(int(c))) continue;
-		if (p >= 0 && size_t(p) < nc && rig.required(p)) {
-			float l0 = length(sub(jb[c], jb[size_t(p)]));
-			if (l0 > 1e-3f) k[c] = length(sub(jn[c], jn[size_t(p)])) / l0;
-		} else if (jb[c][1] > 1e-3f && jn[c][1] > 1e-3f) {
-			k[c] = jn[c][1] / jb[c][1];
-		}
-	}
-	auto map_pos = [&](size_t c, const V3 &p) { return mul(p, k[c]); };
-	out.bank = rig.bank;
-	for (size_t c = 0; c < nc; ++c) out.bank.channels[c].rest_pos = map_pos(c, rig.bank.channels[c].rest_pos);
-	auto retarget = [&](const de::AnimSequence &seq) {
-		de::AnimSequence o = seq;
-		for (auto &st : o.streams) {
-			if (st.channel >= nc) continue;
-			for (auto &k : st.pos) k.p = map_pos(st.channel, k.p);
-		}
-		return o;
-	};
-	for (size_t q = 0; q < out.bank.sequences.size(); ++q) out.bank.sequences[q] = retarget(rig.bank.sequences[q]);
-	// File animations named as sequences: each mapped bone follows its joint.
 	const auto joints = skin_joints(plan);
-	std::map<int, size_t> skin_index;
-	for (size_t k = 0; k < joints.size(); ++k) skin_index[joints[k]] = k;
-	const gltf::Mat4 Finv = gltf::inverse(F);
-	for (const SequenceMapping &m : h.sequences) {
-		if (m.animation < 0 || size_t(m.animation) >= s.animations.size()) continue;
-		de::AnimSequence *seq = nullptr;
-		for (auto &q : out.bank.sequences) {
-			if (q.name == m.sequence) seq = &q;
+	// Further parts (Gargoyle's wings): the joints their bones are mapped to.
+	const size_t nparts = rig.extras.size();
+	std::vector<std::vector<int>> part_joint(nparts);
+	std::vector<bool> part_mapped(nparts, false);
+	for (size_t e = 0; e < nparts; ++e) {
+		for (auto &bone : rig.extras[e].skin) {
+			int j = -1;
+			for (auto &r : h.bones) {
+				if (r.part == rig.extras[e].deform_name && r.bone == bone.name) j = r.joint;
+			}
+			part_joint[e].push_back(j);
+			part_mapped[e] = part_mapped[e] || j >= 0;
 		}
-		if (!seq) continue;
-		const gltf::Animation &a = s.animations[size_t(m.animation)];
-		bool normalised = a.extras.is_object() && a.extras.find("de_normalised") && a.extras.find("de_normalised")->is_bool() && a.extras.find("de_normalised")->as_bool();
-		float duration = std::max(a.duration(), 1e-3f);
-		int keys = std::clamp(int(std::lround((normalised ? 1.0f : duration) * 30)) + 1, 2, 241);
-		// Channels the file drives: mapped skin bones (and HeadAnchor when mapped).
-		std::vector<size_t> driven;
-		for (size_t c = 0; c < nc; ++c) {
-			if (joint_of[c] >= 0 && (rig.required(int(c)) || int(c) == anchor)) driven.push_back(c);
-		}
-		std::map<size_t, de::AnimSequence::Stream> streams;
-		for (size_t c : driven) streams[c].channel = uint16_t(c);
-		NodePose pose;
-		std::vector<de::Quat> last(nc, {0, 0, 0, 0});
-		for (int k = 0; k < keys; ++k) {
-			float tn = float(k) / float(keys - 1);
-			sample_animation(s, a, normalised ? tn : tn * duration, pose);
-			std::map<int, gltf::Mat4> memo;
-			std::vector<de::Transform> world(nc);
-			std::vector<bool> have(nc, false);
-			auto base_pose = out.bank.pose(*seq, tn);
-			auto follow = [&](size_t c) {
-				int j = joint_of[c];
-				gltf::Mat4 ibm = gltf::inverse(joint_bind(plan, j));
-				gltf::Mat4 G = gltf::multiply(gltf::multiply(F, gltf::multiply(posed_world(s, pose, j, memo), ibm)), Finv);
-				return from_gltf(G, u).then(bn[c]);
-			};
-			for (size_t c : driven) world[c] = follow(c), have[c] = true;
-			for (size_t c : driven) {
-				int p = int(c) == body ? -1 : rig.bank.channels[c].parent;
-				de::Transform parent;
-				// A mapped root (an export's Body) carries the move's placement, which the game leaves out.
-				if (p >= 0 && size_t(p) < nc) parent = have[size_t(p)] ? world[size_t(p)] : joint_of[size_t(p)] >= 0 ? follow(size_t(p)) : (p == body ? de::Transform{} : base_pose[size_t(p)]);
-				de::Transform local = affine_inverse(parent).then(world[c]);
-				de::Quat q = quat_of(local);
-				if (q[0] * last[c][0] + q[1] * last[c][1] + q[2] * last[c][2] + q[3] * last[c][3] < 0)
-					for (auto &x : q) x = -x;
-				last[c] = q;
-				streams[c].pos.push_back({tn, local.t});
-				streams[c].rot.push_back({tn, q});
+	}
+	std::map<int, std::pair<int, int>> part_memo;
+	// The part bone a joint drives: its own or its nearest mapped ancestor's, unless that is a body bone.
+	auto part_of = [&](int node) -> std::pair<int, int> {
+		if (auto it = part_memo.find(node); it != part_memo.end()) return it->second;
+		std::pair<int, int> out{-1, -1};
+		for (int n = node; n >= 0 && out.first < 0; n = s.nodes[size_t(n)].parent) {
+			bool body = false;
+			for (size_t c = 0; c < nc && !body; ++c) body = joint_of[c] == n && rig.required(int(c));
+			if (body) break;
+			for (size_t e = 0; e < nparts && out.first < 0; ++e) {
+				for (size_t b = 0; b < part_joint[e].size(); ++b) {
+					if (part_joint[e][b] == n) out = {int(e), int(b)};
+				}
 			}
 		}
-		// Moves that walk away from their start are played in place: the game's physics moves the
-		// fighter, so the root bone loses its horizontal drift.
-		for (auto &[c, st] : streams) {
-			int p = rig.bank.channels[c].parent;
-			if (body < 0 || p != body || joint_of[size_t(body)] >= 0 || st.pos.size() < 2) continue;
-			V3 drift = flat(sub(st.pos.back().p, st.pos.front().p));
-			if (length(drift) < rig.height * 0.05f) continue;
-			for (auto &k : st.pos) k.p = sub(k.p, mul(drift, k.t));
-		}
-		seq->streams.erase(std::remove_if(seq->streams.begin(), seq->streams.end(), [&](const de::AnimSequence::Stream &st) { return streams.count(st.channel) > 0; }), seq->streams.end());
-		for (auto &[c, st] : streams) seq->streams.push_back(std::move(st));
-		std::sort(seq->streams.begin(), seq->streams.end(), [](auto &x, auto &y) { return x.channel < y.channel; });
-		++out.supplied;
-	}
-	out.retargeted = out.bank.sequences.size() - out.supplied;
-	out.rest = out.bank.pose(de::AnimSequence{}, 0);
+		return part_memo[node] = out;
+	};
+	std::vector<LodData> part_lods(nparts);
 	// Materials: an export's fighter stages come back as they were; otherwise the materials'
 	// colours go into one atlas.
 	std::set<int> materials;
@@ -1711,17 +1754,40 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 			const bool mirrored = det3(M) < 0;
 			const gltf::Mat4 NM = gltf::inverse(M);
 			// Per glTF vertex: DE position and quantised skin.
-			std::vector<uint32_t> index(P.positions.size());
+			std::vector<uint32_t> index(P.positions.size()), part_index(P.positions.size(), 0);
+			std::vector<int> part(P.positions.size(), -1);
 			auto src = P.custom.find("_DE_VERTEX");
 			for (size_t v = 0; v < P.positions.size(); ++v) {
 				V3 p = from_gltf(gltf::transform_point(M, P.positions[v]), u);
 				std::vector<float> w(nb, 0.0f);
+				std::map<std::pair<int, int>, float> pw;
+				float body_w = 0;
 				if (pc.skinned && v < P.joints.size() && v < P.weights.size()) {
 					for (int k = 0; k < 4; ++k) {
 						uint16_t jk = P.joints[v][size_t(k)];
 						float wt = P.weights[v][size_t(k)];
 						if (wt <= 0 || jk >= joints.size()) continue;
-						w[size_t(bone_cached(joints[jk]))] += wt;
+						auto pb = nparts ? part_of(joints[jk]) : std::pair<int, int>{-1, -1};
+						if (pb.first >= 0) {
+							pw[pb] += wt;
+							continue;
+						}
+						w[size_t(bone_cached(joints[jk]))] += wt, body_w += wt;
+					}
+				}
+				if (!pw.empty() && lod == 0) {
+					std::map<int, float> per;
+					float pw_sum = 0;
+					for (auto &[k2, x] : pw) per[k2.first] += x, pw_sum += x;
+					if (pw_sum > body_w) {
+						int e = std::max_element(per.begin(), per.end(), [](auto &a, auto &b2) { return a.second < b2.second; })->first;
+						LodData &pd = part_lods[size_t(e)];
+						std::vector<uint8_t> q(rig.extras[size_t(e)].skin.size(), 0);
+						for (auto &[k2, x] : pw) {
+							if (k2.first == e) q[size_t(k2.second)] = uint8_t(std::clamp(int(std::lround(x / per[e] * 255)), 0, 255));
+						}
+						part[v] = e, part_index[v] = uint32_t(pd.verts.size());
+						pd.verts.push_back(p), pd.skin.push_back(q);
 					}
 				}
 				float sum = 0;
@@ -1778,6 +1844,18 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 						n = normalize(V3{tn[0], tn[1], -tn[2]});
 					}
 					tr.n[size_t(k)] = n;
+				}
+				if (part[gi[0]] >= 0 || part[gi[1]] >= 0 || part[gi[2]] >= 0) {
+					// A further part's triangle (all three corners on it), else dropped from the body.
+					int e = part[gi[0]];
+					if (e >= 0 && part[gi[1]] == e && part[gi[2]] == e) {
+						LodData &pd = part_lods[size_t(e)];
+						pd.faces.push_back({part_index[gi[0]], part_index[gi[1]], part_index[gi[2]]});
+						if (pd.uvs.empty()) pd.uvs.resize(1);
+						pd.uvs[0].push_back(tr.uv[0]);
+						pd.normals.push_back(tr.n);
+					}
+					continue;
 				}
 				tris.push_back(std::move(tr));
 			}
@@ -1838,6 +1916,531 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		out.notes.push_back("LOD" + std::to_string(k) + " generated: " + std::to_string(d.faces.size()) + " triangles");
 		out.lods.push_back(finish_lod(d));
 	}
+	std::vector<std::vector<int>> children(nc);
+	for (size_t c = 0; c < nc; ++c) {
+		int p = rig.bank.channels[c].parent;
+		if (p >= 0 && size_t(p) < nc) children[size_t(p)].push_back(int(c));
+	}
+	auto sided = [&](int c, const char *side) { return rig.bank.channels[size_t(c)].name.rfind(side, 0) == 0; };
+	// Each skin bone's turn takes its base frame onto the new one: the direction to its central child
+	// with the axis across its left / right children (pelvis, chest), or with the hinge its limb
+	// bends about, so the base's elbows and knees bend the new ones the same way round; hands and
+	// feet point to their vertices (feet level); the head stays as modelled.
+	const V3 up{0, 1, 0};
+	auto weighted_centre = [&](const std::vector<V3> &verts, const std::function<uint8_t(size_t)> &w, size_t n) {
+		V3 sum{0, 0, 0};
+		float k = 0;
+		for (size_t v = 0; v < n; ++v) {
+			if (w(v) > 160) sum = add(sum, verts[v]), k += 1;
+		}
+		return k > 0 ? mul(sum, 1 / k) : V3{0, 0, 0};
+	};
+	std::vector<V3> centre_b(nc), centre_n(nc);
+	for (size_t c = 0; c < nc; ++c) {
+		int b = rig.deformer[c];
+		if (b < 0) continue;
+		const auto &bw = rig.skin[size_t(b)].weights;
+		centre_b[c] = weighted_centre(rig.mesh.vertices, [&](size_t v) -> uint8_t { return v < bw.size() ? bw[v] : 0; }, rig.mesh.vertices.size());
+		centre_n[c] = weighted_centre(lod0.verts, [&](size_t v) -> uint8_t { return size_t(b) < lod0.skin[v].size() ? lod0.skin[v][size_t(b)] : 0; }, lod0.verts.size());
+	}
+	auto has_name = [&](size_t c, const char *part) { return rig.bank.channels[c].name.find(part) != std::string::npos; };
+	auto central_child = [&](size_t c) {
+		int primary = -1, sides = 0;
+		for (int k : children[c]) {
+			if (!rig.required(k)) continue;
+			if (sided(k, "Left") || sided(k, "Right")) ++sides;
+			else if (primary < 0) primary = k;
+		}
+		if (primary < 0 && sides < 2) {
+			for (int k : children[c]) {
+				if (rig.required(k) && primary < 0) primary = k;
+			}
+		}
+		return primary;
+	};
+	std::vector<V3> hinge_b(nc), hinge_n(nc);
+	auto hinge = [&](const std::vector<V3> &J, size_t a, size_t b, size_t e, size_t c, int primary) {
+		V3 d = sub(J[size_t(primary)], J[c]);
+		bool leg = has_name(c, "Leg") || has_name(c, "Foot");
+		V3 fallback = normalize(cross(d, leg ? mul(rig.forward, -1) : rig.forward));
+		V3 u = sub(J[b], J[a]), v = sub(J[e], J[b]);
+		V3 h = cross(u, v);
+		// Bent by less than about 8 degrees: the facing decides.
+		if (length(h) < 0.14f * length(u) * length(v) || length(fallback) < 0.5f) return fallback;
+		h = normalize(h);
+		return dot(h, fallback) < 0 ? mul(h, -1) : h;
+	};
+	std::vector<de::Transform> turn(nc);
+	std::vector<bool> has_turn(nc, false);
+	for (size_t c = 0; c < nc; ++c) {
+		if (!rig.required(int(c))) continue;
+		int l = -1, r = -1;
+		for (int k : children[c]) {
+			if (!rig.required(k)) continue;
+			if (sided(k, "Left")) l = l < 0 ? k : l;
+			else if (sided(k, "Right")) r = r < 0 ? k : r;
+		}
+		int primary = central_child(c);
+		if (primary >= 0 && l >= 0 && r >= 0 && primary != l && primary != r) {
+			V3 db = sub(jb[size_t(primary)], jb[c]), dn = sub(jn[size_t(primary)], jn[c]);
+			turn[c] = frame(dn, sub(jn[size_t(l)], jn[size_t(r)])).then(frame(db, sub(jb[size_t(l)], jb[size_t(r)])).inverse());
+		} else if (primary >= 0) {
+			// The limb's joints: this one, its child and grandchild, else its parent, it and its child.
+			int g = central_child(size_t(primary)), p = rig.bank.channels[c].parent;
+			size_t a = c, b = size_t(primary), e = size_t(std::max(g, 0));
+			if (g < 0) {
+				if (p < 0 || size_t(p) >= nc || !rig.required(p)) {
+					turn[c] = rotation_between(sub(jb[size_t(primary)], jb[c]), sub(jn[size_t(primary)], jn[c]));
+					has_turn[c] = true;
+					continue;
+				}
+				a = size_t(p), b = c, e = size_t(primary);
+			}
+			hinge_b[c] = hinge(jb, a, b, e, c, primary);
+			hinge_n[c] = hinge(jn, a, b, e, c, primary);
+			turn[c] = frame(sub(jn[size_t(primary)], jn[c]), hinge_n[c]).then(frame(sub(jb[size_t(primary)], jb[c]), hinge_b[c]).inverse());
+		} else if (has_name(c, "Foot") && length(flat(sub(centre_b[c], jb[c]))) > 1e-3f && length(flat(sub(centre_n[c], jn[c]))) > 1e-3f) {
+			turn[c] = frame(flat(sub(centre_n[c], jn[c])), up).then(frame(flat(sub(centre_b[c], jb[c])), up).inverse());
+		} else if (has_name(c, "Hand") && length(sub(centre_b[c], jb[c])) > 1e-3f && length(sub(centre_n[c], jn[c])) > 1e-3f) {
+			int p = rig.bank.channels[c].parent;
+			V3 hb = p >= 0 && size_t(p) < nc && length(hinge_b[size_t(p)]) > 0.5f ? hinge_b[size_t(p)] : rig.forward;
+			V3 hn = p >= 0 && size_t(p) < nc && length(hinge_n[size_t(p)]) > 0.5f ? hinge_n[size_t(p)] : rig.forward;
+			turn[c] = frame(sub(centre_n[c], jn[c]), hn).then(frame(sub(centre_b[c], jb[c]), hb).inverse());
+		} else if (has_name(c, "Head")) {
+			turn[c] = {};
+		} else {
+			continue;
+		}
+		has_turn[c] = true;
+	}
+	for (size_t pass = 0; pass < nc; ++pass) {
+		bool changed = false;
+		for (size_t c = 0; c < nc; ++c) {
+			int p = rig.bank.channels[c].parent;
+			if (rig.required(int(c)) && !has_turn[c] && p >= 0 && size_t(p) < nc && has_turn[size_t(p)]) turn[c] = turn[size_t(p)], has_turn[c] = changed = true;
+		}
+		if (!changed) break;
+	}
+	// The new bind frame of every channel: skin bones from the file, the rest following their parent.
+	const int body = rig.channel("Body"), head = rig.channel("Head"), anchor = rig.channel("HeadAnchor");
+	std::vector<de::Transform> bn(nc);
+	std::vector<bool> done(nc, false);
+	for (size_t pass = 0; pass < nc; ++pass) {
+		bool progress = false;
+		for (size_t c = 0; c < nc; ++c) {
+			if (done[c]) continue;
+			int p = int(c) == body ? -1 : rig.bank.channels[c].parent;
+			if (p >= 0 && size_t(p) < nc && !done[size_t(p)]) continue;
+			if (p >= 0 && size_t(p) >= nc) p = -1;
+			if (rig.required(int(c))) {
+				bn[c] = rotation_only(turn[c]).then(rotation_only(rig.bind[c]));
+				bn[c].t = jn[c];
+			} else if (p < 0) {
+				bn[c] = rig.bind[c];
+				bn[c].t = mul(rig.bind[c].t, sc);
+			} else {
+				de::Transform local = affine_inverse(rig.bind[size_t(p)]).then(rig.bind[c]);
+				local.t = mul(local.t, sc);
+				bn[c] = bn[size_t(p)].then(local);
+			}
+			if (int(c) == anchor) {
+				if (joint_of[c] >= 0 && body >= 0 && joint_of[size_t(body)] >= 0) bn[c].t = bn[size_t(body)].then(from_gltf(gltf::multiply(F, joint_bind(plan, joint_of[size_t(body)])), u).inverse()).apply(jn[c]);
+				else if (joint_of[c] >= 0) bn[c].t = jn[c];
+				else if (head >= 0) bn[c].t = add(bn[size_t(head)].t, mul(sub(rig.bind[c].t, rig.bind[size_t(head)].t), sc));
+			}
+			done[c] = progress = true;
+		}
+		if (!progress) break;
+	}
+	for (size_t b = 0; b < nb; ++b) {
+		int c = rig.channel(rig.skin[b].name);
+		out.binds.push_back(c >= 0 ? bn[size_t(c)] : rig.skin[b].bind);
+	}
+	// Channel offsets stay in their parent channel's frame, scaled by the bone's change of length,
+	// so every limb points where the base's does.
+	std::vector<float> k(nc, sc);
+	for (size_t c = 0; c < nc; ++c) {
+		int p = rig.bank.channels[c].parent;
+		if (!rig.required(int(c))) continue;
+		if (p >= 0 && size_t(p) < nc && rig.required(p)) {
+			float l0 = length(sub(jb[c], jb[size_t(p)]));
+			if (l0 > 1e-3f) k[c] = length(sub(jn[c], jn[size_t(p)])) / l0;
+		} else if (jb[c][1] > 1e-3f && jn[c][1] > 1e-3f) {
+			k[c] = jn[c][1] / jb[c][1];
+		}
+	}
+	auto map_pos = [&](size_t c, const V3 &p) { return mul(p, k[c]); };
+	out.bank = rig.bank;
+	for (size_t c = 0; c < nc; ++c) out.bank.channels[c].rest_pos = map_pos(c, rig.bank.channels[c].rest_pos);
+	auto retarget = [&](const de::AnimSequence &seq) {
+		de::AnimSequence o = seq;
+		for (auto &st : o.streams) {
+			if (st.channel >= nc) continue;
+			for (auto &k : st.pos) k.p = map_pos(st.channel, k.p);
+		}
+		return o;
+	};
+	for (size_t q = 0; q < out.bank.sequences.size(); ++q) out.bank.sequences[q] = retarget(rig.bank.sequences[q]);
+	// Contacts: the base's sequences keep their rotations, so with other proportions feet slide and
+	// throws miss. Where a base foot is down its new one is held on the floor, moving as the base's
+	// does (the game moves the fighter at the base's speeds); where a hand or foot holds the throw
+	// target, the new one reaches the same place on it and the target follows it; the head anchor
+	// stays on the new head. Limbs reach by two-bone IK about their hinge; FINDINGS 670.
+	std::vector<bool> supplied(out.bank.sequences.size(), false);
+	auto correct_contacts = [&]() {
+		const int tf = rig.channel("ThrowFollowTarget");
+		struct Limb {
+			size_t root, mid, end;
+			V3 hint;  // the mid bone's hinge in its bind frame
+			bool foot;
+		};
+		std::vector<Limb> limbs;
+		for (const char *name : {"LeftFoot", "RightFoot", "LeftHand", "RightHand"}) {
+			int e = rig.channel(name);
+			if (e < 0 || !rig.required(e)) continue;
+			int m = rig.bank.channels[size_t(e)].parent;
+			if (m < 0 || size_t(m) >= nc || !rig.required(m)) continue;
+			int r = rig.bank.channels[size_t(m)].parent;
+			if (r < 0 || size_t(r) >= nc || !rig.required(r)) continue;
+			V3 hn = length(hinge_n[size_t(m)]) > 0.5f ? hinge_n[size_t(m)] : rig.left;
+			limbs.push_back({size_t(r), size_t(m), size_t(e), bn[size_t(m)].inverse_rotate(hn), name[std::strlen(name) - 1] == 't'});
+		}
+		const float tol = rig.height * 0.05f;
+		for (size_t q = 0; q < out.bank.sequences.size(); ++q) {
+			if (supplied[q] || rig.bank.sequences[q].name != out.bank.sequences[q].name) continue;
+			const de::AnimSequence &sb = rig.bank.sequences[q];
+			de::AnimSequence &sn = out.bank.sequences[q];
+			size_t dense = 0;
+			for (auto &st : sb.streams) dense = std::max({dense, st.rot.size(), st.pos.size()});
+			const size_t n = std::clamp<size_t>(dense, 16, 120) + 1;
+			std::vector<std::vector<de::Transform>> pb(n), pn(n);
+			for (size_t i = 0; i < n; ++i) {
+				float t = float(i) / float(n - 1);
+				pb[i] = rig.bank.pose(sb, t);
+				pn[i] = out.bank.pose(sn, t);
+			}
+			// Per limb: the wanted end position and how much it is wanted, per sample.
+			std::vector<std::vector<V3>> want(limbs.size(), std::vector<V3>(n));
+			std::vector<std::vector<float>> weight(limbs.size(), std::vector<float>(n, 0));
+			auto ramp = [&](std::vector<float> &w) {
+				std::vector<float> o = w;
+				for (size_t i = 0; i < n; ++i) {
+					if (w[i] < 1) continue;
+					for (int d = 1; d <= 2; ++d) {
+						float r = 1 - float(d) / 3;
+						if (i >= size_t(d)) o[i - size_t(d)] = std::max(o[i - size_t(d)], r);
+						if (i + size_t(d) < n) o[i + size_t(d)] = std::max(o[i + size_t(d)], r);
+					}
+				}
+				w = o;
+			};
+			for (size_t li = 0; li < limbs.size(); ++li) {
+				const Limb &L = limbs[li];
+				if (!L.foot) continue;
+				const float floor_b = jb[L.end][1], floor_n = jn[L.end][1];
+				std::vector<float> &w = weight[li];
+				for (size_t i = 0; i < n; ++i) w[i] = pb[i][L.end].t[1] < floor_b + tol ? 1.0f : 0.0f;
+				size_t start = 0;
+				for (size_t i = 0; i < n; ++i) {
+					if (w[i] >= 1 && (i == 0 || w[i - 1] < 1)) start = i;
+					size_t from = w[i] >= 1 ? start : i;
+					V3 moved = sub(pb[i][L.end].t, pb[from][L.end].t);
+					want[li][i] = {pn[from][L.end].t[0] + moved[0], floor_n + pb[i][L.end].t[1] - floor_b, pn[from][L.end].t[2] + moved[2]};
+				}
+				ramp(w);
+				for (size_t i = 0; i < n; ++i) {
+					if (w[i] > 0 && w[i] < 1) {
+						// Easing in or out: the nearest held sample's place, moved as the base's foot moves.
+						size_t near = i;
+						for (size_t d = 1; d <= 2; ++d) {
+							if (i >= d && weight[li][i - d] >= 1 && near == i) near = i - d;
+							if (i + d < n && weight[li][i + d] >= 1 && near == i) near = i + d;
+						}
+						V3 moved = sub(pb[i][L.end].t, pb[near][L.end].t);
+						V3 held = add(want[li][near], moved);
+						want[li][i] = add(pn[i][L.end].t, mul(sub(held, pn[i][L.end].t), w[i]));
+						w[i] = 1;
+					}
+				}
+			}
+			// Throws: the base's limb nearest its ThrowFollowTarget holds the victim there.
+			int grip = -1;
+			std::vector<float> held(n, 0);
+			std::vector<de::Transform> grip_to_target(n);
+			bool throws = false;
+			for (auto &st : sb.streams) throws |= int(st.channel) == tf && (st.pos.size() > 1 || st.rot.size() > 1);
+			if (throws) {
+				float best = rig.height * 0.5f;
+				for (size_t li = 0; li < limbs.size(); ++li) {
+					for (size_t i = 0; i < n; ++i) {
+						float d = length(sub(pb[i][limbs[li].end].t, pb[i][size_t(tf)].t));
+						if (d < best) best = d, grip = int(li);
+					}
+				}
+				if (grip >= 0) {
+					const Limb &L = limbs[size_t(grip)];
+					for (size_t i = 0; i < n; ++i) {
+						float d = length(sub(pb[i][L.end].t, pb[i][size_t(tf)].t));
+						held[i] = d < best + rig.height * 0.15f ? 1.0f : 0.0f;
+					}
+					ramp(held);
+					for (size_t i = 0; i < n; ++i) {
+						grip_to_target[i] = affine_inverse(pb[i][L.end]).then(pb[i][size_t(tf)]);
+						V3 on_target = affine_inverse(pb[i][size_t(tf)]).apply(pb[i][L.end].t);
+						V3 reach = pn[i][size_t(tf)].apply(on_target);
+						want[size_t(grip)][i] = add(pn[i][L.end].t, mul(sub(reach, pn[i][L.end].t), held[i]));
+						weight[size_t(grip)][i] = std::max(weight[size_t(grip)][i], held[i]);
+					}
+				}
+			}
+			bool any = false;
+			for (auto &w : weight) any = any || std::any_of(w.begin(), w.end(), [](float x) { return x > 0; });
+			const bool head_tracks = anchor >= 0 && head >= 0 && std::any_of(sb.streams.begin(), sb.streams.end(), [&](const de::AnimSequence::Stream &st) { return int(st.channel) == anchor && !st.pos.empty(); });
+			if (!any && !head_tracks) continue;
+			// Solve every sample, then write the changed channels' keys.
+			std::map<size_t, std::vector<de::AnimSequence::RotKey>> rot_keys;
+			std::map<size_t, std::vector<de::AnimSequence::PosKey>> pos_keys;
+			std::map<size_t, std::pair<float, float>> window;
+			auto note = [&](size_t c, float t) {
+				auto it = window.find(c);
+				if (it == window.end()) window[c] = {t, t};
+				else it->second.first = std::min(it->second.first, t), it->second.second = std::max(it->second.second, t);
+			};
+			// Every sample between a channel's first and last change is keyed, so the keys spliced in
+			// replace the base's without losing the motion between two contacts.
+			std::vector<std::pair<size_t, size_t>> span(limbs.size(), {n, 0});
+			for (size_t li = 0; li < limbs.size(); ++li) {
+				for (size_t i = 0; i < n; ++i) {
+					if (weight[li][i] > 0) span[li] = {std::min(span[li].first, i), std::max(span[li].second, i)};
+				}
+			}
+			size_t grip_from = n, grip_to = 0, anchor_from = n, anchor_to = 0;
+			for (size_t i = 0; i < n; ++i) {
+				if (grip >= 0 && held[i] > 0) grip_from = std::min(grip_from, i), grip_to = std::max(grip_to, i);
+				if (head_tracks && length(sub(pb[i][size_t(anchor)].t, pb[i][size_t(head)].t)) < rig.height * 0.3f) anchor_from = std::min(anchor_from, i), anchor_to = std::max(anchor_to, i);
+			}
+			for (size_t i = 0; i < n; ++i) {
+				const float t = float(i) / float(n - 1);
+				std::vector<de::Transform> w = pn[i];
+				for (size_t li = 0; li < limbs.size(); ++li) {
+					const Limb &L = limbs[li];
+					if (i < span[li].first || i > span[li].second) continue;
+					V3 goal = want[li][i];
+					if (L.foot) {
+						// Out of reach: stay on the floor, as far along as the leg goes.
+						const V3 hip = w[L.root].t;
+						const float reach = (length(sub(w[L.mid].t, hip)) + length(sub(w[L.end].t, w[L.mid].t))) * 0.999f;
+						const float dy = goal[1] - hip[1];
+						V3 across = flat(sub(goal, hip));
+						if (length(sub(goal, hip)) > reach && std::fabs(dy) < reach && length(across) > 1e-4f) goal = add(add(hip, mul(normalize(across), std::sqrt(reach * reach - dy * dy))), {0, dy, 0});
+					}
+					if (weight[li][i] > 0) two_bone_ik(w, L.root, L.mid, L.end, goal, w[L.mid].rotate(L.hint));
+					for (size_t c : {L.root, L.mid, L.end}) {
+						int p = rig.bank.channels[c].parent;
+						de::Transform local = affine_inverse(p >= 0 && size_t(p) < nc ? w[size_t(p)] : de::Transform{}).then(w[c]);
+						rot_keys[c].push_back({t, quat_of(local)});
+						note(c, t);
+					}
+				}
+				if (i >= grip_from && i <= grip_to) {
+					const Limb &L = limbs[size_t(grip)];
+					V3 at = w[L.end].then(grip_to_target[i]).t;
+					V3 p = add(pn[i][size_t(tf)].t, mul(sub(at, pn[i][size_t(tf)].t), held[i]));
+					int par = rig.bank.channels[size_t(tf)].parent;
+					pos_keys[size_t(tf)].push_back({t, affine_inverse(par >= 0 && size_t(par) < nc && par != body ? w[size_t(par)] : de::Transform{}).apply(p)});
+					note(size_t(tf), t);
+				}
+				if (i >= anchor_from && i <= anchor_to) {
+					V3 off = mul(affine_inverse(pb[i][size_t(head)]).apply(pb[i][size_t(anchor)].t), sc);
+					V3 p = length(sub(pb[i][size_t(anchor)].t, pb[i][size_t(head)].t)) < rig.height * 0.3f ? w[size_t(head)].apply(off) : pn[i][size_t(anchor)].t;
+					int par = rig.bank.channels[size_t(anchor)].parent;
+					pos_keys[size_t(anchor)].push_back({t, affine_inverse(par >= 0 && size_t(par) < nc && par != body ? w[size_t(par)] : de::Transform{}).apply(p)});
+					note(size_t(anchor), t);
+				}
+			}
+			auto stream_of = [&](size_t c) -> de::AnimSequence::Stream & {
+				for (auto &st : sn.streams) {
+					if (st.channel == c) return st;
+				}
+				sn.streams.push_back({uint16_t(c), {}, {}});
+				return sn.streams.back();
+			};
+			auto rest_keys = [&](size_t c, bool rot) {
+				// A channel with no keys of this kind gets them at every sample: its rest outside the window.
+				de::AnimSequence::Stream &st = stream_of(c);
+				return rot ? st.rot.empty() : st.pos.empty();
+			};
+			for (auto &[c, keys] : rot_keys) {
+				// Several limbs may share a channel at one time: the last solve wins.
+				std::map<float, de::Quat> by_time;
+				for (auto &k : keys) by_time[k.t] = k.q;
+				std::vector<de::AnimSequence::RotKey> ks;
+				for (auto &[t, q] : by_time) ks.push_back({t, q});
+				if (rest_keys(c, true)) {
+					std::vector<de::AnimSequence::RotKey> all;
+					for (size_t i = 0; i < n; ++i) {
+						float t = float(i) / float(n - 1);
+						auto it = by_time.find(t);
+						all.push_back({t, it != by_time.end() ? it->second : out.bank.channels[c].rest_rot});
+					}
+					ks = std::move(all);
+				}
+				de::AnimSequence::Stream &st = stream_of(c);
+				splice_keys(st.rot, ks, window[c].first, window[c].second);
+				for (size_t i = 1; i < st.rot.size(); ++i) {
+					const auto &a = st.rot[i - 1].q;
+					auto &b = st.rot[i].q;
+					if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0)
+						for (auto &x : b) x = -x;
+				}
+			}
+			for (auto &[c, keys] : pos_keys) {
+				std::vector<de::AnimSequence::PosKey> ks = keys;
+				if (rest_keys(c, false)) {
+					std::map<float, V3> by_time;
+					for (auto &k : keys) by_time[k.t] = k.p;
+					ks.clear();
+					for (size_t i = 0; i < n; ++i) {
+						float t = float(i) / float(n - 1);
+						auto it = by_time.find(t);
+						ks.push_back({t, it != by_time.end() ? it->second : out.bank.channels[c].rest_pos});
+					}
+				}
+				splice_keys(stream_of(c).pos, ks, window[c].first, window[c].second);
+			}
+			std::sort(sn.streams.begin(), sn.streams.end(), [](auto &x, auto &y) { return x.channel < y.channel; });
+			++out.contacts;
+		}
+	};
+	// File animations named as sequences: each mapped bone follows its joint.
+	std::map<int, size_t> skin_index;
+	for (size_t k = 0; k < joints.size(); ++k) skin_index[joints[k]] = k;
+	const gltf::Mat4 Finv = gltf::inverse(F);
+	for (const SequenceMapping &m : h.sequences) {
+		if (m.animation < 0 || size_t(m.animation) >= s.animations.size()) continue;
+		de::AnimSequence *seq = nullptr;
+		for (auto &q : out.bank.sequences) {
+			if (q.name == m.sequence) seq = &q;
+		}
+		if (!seq) continue;
+		const gltf::Animation &a = s.animations[size_t(m.animation)];
+		bool normalised = a.extras.is_object() && a.extras.find("de_normalised") && a.extras.find("de_normalised")->is_bool() && a.extras.find("de_normalised")->as_bool();
+		float duration = std::max(a.duration(), 1e-3f);
+		int keys = std::clamp(int(std::lround((normalised ? 1.0f : duration) * 30)) + 1, 2, 241);
+		// Channels the file drives: mapped skin bones (and HeadAnchor when mapped).
+		std::vector<size_t> driven;
+		for (size_t c = 0; c < nc; ++c) {
+			if (joint_of[c] >= 0 && (rig.required(int(c)) || int(c) == anchor)) driven.push_back(c);
+		}
+		std::map<size_t, de::AnimSequence::Stream> streams;
+		for (size_t c : driven) streams[c].channel = uint16_t(c);
+		NodePose pose;
+		std::vector<de::Quat> last(nc, {0, 0, 0, 0});
+		for (int k = 0; k < keys; ++k) {
+			float tn = float(k) / float(keys - 1);
+			sample_animation(s, a, normalised ? tn : tn * duration, pose);
+			std::map<int, gltf::Mat4> memo;
+			std::vector<de::Transform> world(nc);
+			std::vector<bool> have(nc, false);
+			auto base_pose = out.bank.pose(*seq, tn);
+			auto follow = [&](size_t c) {
+				int j = joint_of[c];
+				gltf::Mat4 ibm = gltf::inverse(joint_bind(plan, j));
+				gltf::Mat4 G = gltf::multiply(gltf::multiply(F, gltf::multiply(posed_world(s, pose, j, memo), ibm)), Finv);
+				return from_gltf(G, u).then(bn[c]);
+			};
+			for (size_t c : driven) world[c] = follow(c), have[c] = true;
+			for (size_t c : driven) {
+				int p = int(c) == body ? -1 : rig.bank.channels[c].parent;
+				de::Transform parent;
+				// A mapped root (an export's Body) carries the move's placement, which the game leaves out.
+				if (p >= 0 && size_t(p) < nc) parent = have[size_t(p)] ? world[size_t(p)] : joint_of[size_t(p)] >= 0 ? follow(size_t(p)) : (p == body ? de::Transform{} : base_pose[size_t(p)]);
+				de::Transform local = affine_inverse(parent).then(world[c]);
+				de::Quat q = quat_of(local);
+				if (q[0] * last[c][0] + q[1] * last[c][1] + q[2] * last[c][2] + q[3] * last[c][3] < 0)
+					for (auto &x : q) x = -x;
+				last[c] = q;
+				streams[c].pos.push_back({tn, local.t});
+				streams[c].rot.push_back({tn, q});
+			}
+		}
+		// Moves that walk away from their start are played in place: the game's physics moves the
+		// fighter, so the root bone loses its horizontal drift.
+		for (auto &[c, st] : streams) {
+			int p = rig.bank.channels[c].parent;
+			if (body < 0 || p != body || joint_of[size_t(body)] >= 0 || st.pos.size() < 2) continue;
+			V3 drift = flat(sub(st.pos.back().p, st.pos.front().p));
+			if (length(drift) < rig.height * 0.05f) continue;
+			for (auto &k : st.pos) k.p = sub(k.p, mul(drift, k.t));
+		}
+		seq->streams.erase(std::remove_if(seq->streams.begin(), seq->streams.end(), [&](const de::AnimSequence::Stream &st) { return streams.count(st.channel) > 0; }), seq->streams.end());
+		for (auto &[c, st] : streams) seq->streams.push_back(std::move(st));
+		std::sort(seq->streams.begin(), seq->streams.end(), [](auto &x, auto &y) { return x.channel < y.channel; });
+		supplied[size_t(seq - out.bank.sequences.data())] = true;
+		++out.supplied;
+	}
+	correct_contacts();
+	out.retargeted = out.bank.sequences.size() - out.supplied;
+	out.rest = out.bank.pose(de::AnimSequence{}, 0);
+	for (size_t e = 0; e < nparts; ++e) {
+		const RobotRig::Extra &x = rig.extras[e];
+		RobotBuild::Part part;
+		part.mapped = part_mapped[e] && !part_lods[e].faces.empty();
+		const int pc = rig.channel(x.parent);
+		const de::Transform cb = x.parent_rest, cn = pc >= 0 ? out.rest[size_t(pc)] : cb;
+		// The base's part moved with the body bone and scaled; mapped bones go where their joints are.
+		auto moved = [&](const V3 &p) { return cn.apply(mul(affine_inverse(cb).apply(p), sc)); };
+		std::map<std::string, de::Transform> world;
+		std::function<void(const std::string &)> place_actor = [&](const std::string &a) {
+			const std::string &up = x.actor_parent.at(a);
+			de::Transform parent_world = up == x.parent ? cn : world.at(up);
+			de::Transform local = x.actors.at(a);
+			local.t = mul(local.t, sc);
+			de::Transform w = parent_world.then(local);
+			for (size_t b = 0; b < x.skin.size(); ++b) {
+				if (x.skin[b].name != a || !part.mapped || part_joint[e][b] < 0) continue;
+				w.r = x.skin[b].bind.r;
+				w.t = de_point(joint_bind(plan, part_joint[e][b]));
+				local = affine_inverse(parent_world).then(w);
+			}
+			world[a] = w;
+			part.actors[a] = local;
+			for (auto &[child, parent] : x.actor_parent) {
+				if (parent == a) place_actor(child);
+			}
+		};
+		if (x.actors.count(x.root)) place_actor(x.root);
+		for (size_t b = 0; b < x.skin.size(); ++b) {
+			de::Transform bind = x.skin[b].bind;
+			if (auto it = world.find(x.skin[b].name); it != world.end()) bind.t = it->second.t;
+			else bind.t = moved(bind.t);
+			part.binds.push_back(bind);
+		}
+		part.bank = x.bank;
+		for (size_t c = 0; c < part.bank.channels.size(); ++c) {
+			float k2 = sc;
+			const std::string &n = part.bank.channels[c].name;
+			if (part.mapped && x.actors.count(n) && part.actors.count(n)) {
+				float l0 = length(x.actors.at(n).t);
+				if (l0 > 1e-3f) k2 = length(part.actors.at(n).t) / l0;
+			}
+			part.bank.channels[c].rest_pos = mul(part.bank.channels[c].rest_pos, k2);
+			for (auto &q : part.bank.sequences) {
+				for (auto &st : q.streams) {
+					if (st.channel != c) continue;
+					for (auto &key : st.pos) key.p = mul(key.p, k2);
+				}
+			}
+		}
+		if (part.mapped) {
+			part.lod = finish_lod(part_lods[e]);
+			out.notes.push_back(x.mesh_name + ": " + std::to_string(part.lod.faces.size()) + " triangles from the file's " + x.deform_name + " joints");
+		} else {
+			for (auto &v : x.mesh.vertices) part.lod.vertices.push_back(moved(v));
+			part.lod.faces = x.mesh.faces;
+		}
+		out.parts.push_back(std::move(part));
+	}
 	// Spheres: authored ones where the file has them, else the base's, scaled with their bone.
 	auto bone_scale = [&](int c) {
 		for (int k : children[size_t(c)]) {
@@ -1846,6 +2449,20 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 			if (l0 > 1e-3f) return length(sub(jn[size_t(k)], jn[size_t(c)])) / l0;
 		}
 		return sc;
+	};
+	auto place = [&](RobotBuild::Sphere &o, const RobotRig::Sphere &rs, const SphereSource &file) {
+		int c = rig.channel(file.bone);
+		gltf::Mat4 wm = gltf::multiply(F, s.world(file.node));
+		V3 p = from_gltf(node_origin(wm), u);
+		gltf::Vec3 t, sz;
+		gltf::Vec4 r;
+		gltf::decompose(wm, &t, &r, &sz);
+		float scale = std::max({std::fabs(sz[0]), std::fabs(sz[1]), std::fabs(sz[2])}) * u;
+		o.bone = file.bone;
+		o.local.t = bn[size_t(c)].inverse().apply(p);
+		o.local.r = de::Transform{}.r;
+		o.hotspot = rs.falloff > 0 ? scale * rs.hotspot / rs.falloff : 0;
+		o.falloff = scale;
 	};
 	for (size_t i = 0; i < rig.spheres.size(); ++i) {
 		const RobotRig::Sphere &rs = rig.spheres[i];
@@ -1856,26 +2473,24 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		o.falloff = rs.falloff * sc;
 		const SphereSource *file = nullptr;
 		for (auto &sp : h.spheres) {
-			if (sp.sphere == rs.name && sp.known && !sp.bone.empty()) file = &sp;
+			if (sp.moves == int(i) && sp.known) file = &sp;
 		}
 		if (file) {
-			int c = rig.channel(file->bone);
-			gltf::Mat4 wm = gltf::multiply(F, s.world(file->node));
-			V3 p = from_gltf(node_origin(wm), u);
-			gltf::Vec3 t, sz;
-			gltf::Vec4 r;
-			gltf::decompose(wm, &t, &r, &sz);
-			float scale = std::max({std::fabs(sz[0]), std::fabs(sz[1]), std::fabs(sz[2])}) * u;
-			o.bone = file->bone;
-			o.local.t = bn[size_t(c)].inverse().apply(p);
-			o.local.r = de::Transform{}.r;
-			o.hotspot = rs.falloff > 0 ? scale * rs.hotspot / rs.falloff : 0;
-			o.falloff = scale;
+			place(o, rs, *file);
 		} else if (rs.channel >= 0 && rig.required(rs.channel)) {
 			o.local.t = mul(rs.local.t, bone_scale(rs.channel));
 		} else {
 			o.local.t = mul(rs.local.t, sc);
 		}
+		out.spheres.push_back(o);
+	}
+	for (auto &sp : h.spheres) {
+		if (!sp.known || sp.copies < 0) continue;
+		RobotBuild::Sphere o;
+		o.index = size_t(sp.copies);
+		o.added = true;
+		o.name = sp.sphere;
+		place(o, rig.spheres[size_t(sp.copies)], sp);
 		out.spheres.push_back(o);
 	}
 	return out;
@@ -2064,7 +2679,7 @@ void write_weights(Project &p, uint32_t channel, const std::vector<uint8_t> &w) 
 	touched(o);
 }
 
-void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild &b, const RobotRig &rig) {
+void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
 	{
 		deo::Object &o = p.file().objects[mesh];
 		Chunks c = split_chunks(o.contents);
@@ -2097,8 +2712,8 @@ void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild
 		}
 	}
 	std::set<uint32_t> written;
-	for (size_t i = 0; i < rig.skin.size(); ++i) {
-		std::string name = "Deform" + rig.skin[i].name + "VertexData";
+	for (size_t i = 0; i < skin.size(); ++i) {
+		std::string name = "Deform" + skin[i].name + "VertexData";
 		auto it = channels.find(name);
 		uint32_t ch;
 		if (it != channels.end()) {
@@ -2222,9 +2837,20 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 			}
 		};
 		find_bones(uint32_t(o.fighter));
+		size_t added = 0;
 		for (const auto &sp : b.spheres) {
 			uint32_t obj = spheres[sp.index];
 			if (objs[obj].info.name_text() != rig.spheres[sp.index].name) continue;
+			if (sp.added) {
+				// A copy of the template sphere (its affector groups and properties), on its bone.
+				if (sp.bone.empty() || !bones.count(sp.bone)) continue;
+				const deo::File snapshot = p.file();
+				obj = copy_tree(p, snapshot, true, {obj})[0];
+				build::rename(p, obj, sp.name);
+				build::add_child(p, bones[sp.bone], obj);
+				parents = object_parents(p.file());
+				++added;
+			}
 			if (!sp.bone.empty() && bones.count(sp.bone) && parents[obj] >= 0 && uint32_t(parents[obj]) != bones[sp.bone]) {
 				uint32_t old = uint32_t(parents[obj]);
 				auto kids = p.children(old);
@@ -2241,6 +2867,7 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 				touched(objs[obj]);
 			}
 		}
+		if (added) res.notes.push_back(std::to_string(added) + " new sphere(s) from the file");
 	} else {
 		res.notes.push_back("the copy's spheres differ from " + rig.robot + "'s; they are left as they were");
 	}
@@ -2289,14 +2916,76 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		}
 	}
 	std::vector<std::pair<size_t, uint32_t>> meshes;
+	std::map<std::string, size_t> part_mesh;
+	for (size_t e = 0; e < rig.extras.size(); ++e) part_mesh[rig.extras[e].mesh_name] = e;
+	std::set<uint32_t> kept_part;  // a base part kept as it was textured: its images stay
 	for (uint32_t c : p.children(model)) {
-		if (objs[c].info.class_text() == "Mesh\\Standard") meshes.push_back({mesh_counts(objs[c]).first, c});
+		if (objs[c].info.class_text() != "Mesh\\Standard") continue;
+		auto pm = part_mesh.find(objs[c].info.name_text());
+		if (pm == part_mesh.end() || pm->second >= b.parts.size()) {
+			meshes.push_back({mesh_counts(objs[c]).first, c});
+			continue;
+		}
+		const RobotBuild::Part &part = b.parts[pm->second];
+		if (part.mapped) {
+			RobotBuild layer0;
+			write_mesh(p, c, part.lod, layer0, rig.extras[pm->second].skin);
+		} else {
+			deo::Object &o = objs[c];
+			set_ex(o, "ObjExtCon", build::mesh_geometry(part.lod.vertices, part.lod.faces));
+			touched(o);
+			kept_part.insert(c);
+		}
+		++res.meshes;
 	}
 	std::sort(meshes.begin(), meshes.end(), [](auto &x, auto &y) { return x.first > y.first; });
 	for (size_t k = 0; k < meshes.size(); ++k) {
 		const RobotLod &lod = b.lods[std::min(k, b.lods.size() - 1)];
-		write_mesh(p, meshes[k].second, lod, b, rig);
+		write_mesh(p, meshes[k].second, lod, b, rig.skin);
 		++res.meshes;
+	}
+	// The parts' deform infos, banks and bone actors.
+	auto write_binds = [&](uint32_t deform_obj, const std::vector<de::Transform> &binds) {
+		deo::Object &d = objs[deform_obj];
+		Chunks c = split_chunks(d.contents);
+		if (c.chunks.empty()) throw deo::Error("unexpected deform info layout");
+		Bytes &body = c.chunks[0].body;
+		deo::Reader r(body);
+		r.block();
+		for (size_t i = 0; i < binds.size() && r.remaining(); ++i) {
+			if (!r.u8()) break;
+			size_t ce;
+			r.chunk(&ce);
+			size_t at = r.pos();
+			if (ce - at < 48) break;
+			for (int k = 0; k < 3; ++k) put(body, at + size_t(k) * 4, binds[i].t[size_t(k)]);
+			for (int k = 0; k < 9; ++k) put(body, at + 12 + size_t(k) * 4, binds[i].r[size_t(k)]);
+			r.seek(ce);
+		}
+		d.contents = join_chunks(c);
+		touched(d);
+	};
+	for (size_t e = 0; e < rig.extras.size() && e < b.parts.size(); ++e) {
+		const RobotRig::Extra &x = rig.extras[e];
+		const RobotBuild::Part &part = b.parts[e];
+		std::function<void(uint32_t)> visit = [&](uint32_t i) {
+			for (uint32_t c : p.children(i)) {
+				const std::string cls = objs[c].info.class_text(), n = objs[c].info.name_text();
+				if (cls == "ActorDeformInfo" && n == x.deform_name) write_binds(c, part.binds);
+				if (cls == "Actor" && part.actors.count(n)) set_actor_local(p, c, part.actors.at(n));
+				visit(c);
+			}
+		};
+		visit(uint32_t(o.fighter));
+		for (size_t i = first_new; i < end; ++i) {
+			if (objs[i].info.class_text() != "AnimationSequenceGroup" || objs[i].info.name_text() != x.bank_name) continue;
+			Chunks c = split_chunks(objs[i].contents);
+			Chunks fresh = split_chunks(bank_contents(x.bank_name, part.bank, x.flags));
+			if (c.chunks.empty() || fresh.chunks.empty()) continue;
+			c.chunks[0] = fresh.chunks[0];
+			objs[i].contents = join_chunks(c);
+			touched(objs[i]);
+		}
 	}
 	// Images: the paint mask, reflection mask and bump in place; RGBScaled blank; RGBStatic added.
 	std::vector<uint32_t> todo = p.children(model);
@@ -2304,6 +2993,7 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 	while (!todo.empty()) {
 		uint32_t i = todo.back();
 		todo.pop_back();
+		if (kept_part.count(i)) continue;
 		for (uint32_t c : p.children(i)) todo.push_back(c);
 		if (objs[i].info.class_text() != "Image\\Standard") continue;
 		std::string n = objs[i].info.name_text();
@@ -2331,6 +3021,30 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		uint32_t img = build::add_image(p, "RGBStatic", b.colours.width, b.colours.height, b.colours.rgba);
 		build::add_child(p, model, img);
 		++res.images;
+	}
+	// Choose Creature's panel names the new robot rather than describing the base one.
+	try {
+		HarObjects ho = har_objects(p, desc);
+		if (read_presentation(p, ho).found) write_presentation(p, ho, name, name + ", built on " + rig.robot + "'s frame and moves.");
+	} catch (const deo::Error &e) {
+		res.notes.push_back(std::string("Choose Creature panel: ") + e.what());
+	}
+	for (const auto &extra : h.extra_paints) {
+		HarObjects ho = har_objects(p, desc);
+		if (extra.name.empty() || ho.model_descriptions.empty()) continue;
+		RgbaImage im = load_image(extra.image);
+		uint32_t job = create_paint_job(p, ho, extra.name, ho.model_descriptions[0]);
+		const char *target = h.paint == HarPlan::Paint::Colours ? "RGBStatic" : "RGBMain";
+		for (auto &img : paint_images(p, job)) {
+			if (img.name != target) continue;
+			int w = 0, hh = 0, type = 0;
+			image_header(objs[size_t(img.object)], &type, &w, &hh);
+			RobotImage ri;
+			ri.width = w, ri.height = hh;
+			ri.rgba = resize_rgba(im.width, im.height, im.rgba, w, hh);
+			replace_image(p, uint32_t(img.object), ri, false);
+		}
+		res.notes.push_back("paint job " + extra.name + " from " + extra.image.filename().string());
 	}
 	for (size_t i = first_new; i < objs.size(); ++i) res.made.push_back(uint32_t(i));
 	(void)in_block;
