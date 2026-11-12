@@ -2,7 +2,9 @@
 // the left, the variant's data in tabs on the right.
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 
 #include "assets.h"
