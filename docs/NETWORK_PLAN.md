@@ -1,7 +1,7 @@
 # Network play: plan
 
 Goal: online and LAN play that **feels exactly like the original**, on a **modern, open-source network
-stack** (no GameSpy, no proprietary services). Status: agreed 2026-11-06; phases 0-2 done (LAN and direct IP play). Points marked **(decide)** were settled as recommended (section 6).
+stack** (no GameSpy, no proprietary services). Status: agreed 2026-11-06; phases 0-2 done (LAN and direct IP play); phase 4's lobby, NAT traversal, relay and encryption done 2026-11-12 (phase 3, full sessions, is not). Points marked **(decide)** were settled as recommended (section 6).
 
 ## 1. How the original works (summary of the research)
 
@@ -120,9 +120,9 @@ One UDP socket with a reliable ordered channel (session and UI) and an unreliabl
 | QUIC datagrams (msquic / quiche) | Standard, encrypted, congestion control | TLS certificates for player-hosted servers, larger dependency, more than this game needs |
 
 ### 3.3 Lobby server (new, open source, `server/` in this repo)
-- A single small service anyone can run (container image plus a static binary). Players can list
-  several lobbies in Options; the project runs a default one. **(decide: language. Go is
-  recommended for an easy static binary; C++ would share code with the engine.)**
+- A single small service anyone can run (container image plus a static binary). Players set the
+  lobby in Options (`Network\Lobby Server`) or with `--lobby`; no lobby is built in until it is
+  decided who runs a public one. Written in Go (`server/`, standard library only).
 - **Listing:** hosts send a heartbeat with the fields GameSpy carried: name, game type, arena, players
   and maximum, password flag, port and version. Clients query with filters.
 - **NAT traversal:** the lobby introduces both sides for UDP hole punching. If that fails, it relays
@@ -187,6 +187,21 @@ Each phase ends with something testable, merged and pushed.
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and
    bans, disconnect and reconnect, and the dedicated server.
 4. **Internet.** The lobby server, server browser, NAT hole punching, relay fallback and encryption on.
+   Done 2026-11-12 (FINDINGS 620-623): `server/` is the lobby (`openbg-lobby`, Go, one static binary and
+   a container image, CI on GitHub-hosted runners), 7.8 its protocol. A host lists its session there from
+   its game socket unless `Network\LAN Only` (the original's GameSpy switch), with a heartbeat every 5 s;
+   Join Game lists the lobby's sessions with the LAN's, every 20 s as GameSpy's list was, and pings each
+   host directly. Joining a listed session asks the lobby for an introduction; both sides punch, the
+   client connects to the host's public address (its LAN address behind the same NAT) and, after 3 s
+   without a connection, asks for a relay port and connects through it. Every connection, LAN and direct
+   IP too, is encrypted and authenticated (7.9); the protocol is now 3. The lobby is set in Options or with
+   `--lobby`; none is built in. `tools/net-internet/run.sh` plays a whole match through a local lobby with
+   emulated NAT (cone: the punch is needed; symmetric: the relay carries the match), delay and loss, then
+   checks the states (`compare.py`) and that no game datagram holds readable game data (`wirescan.py`).
+   Open: a public lobby (who runs it), several lobbies at once, IPv6, keypair identities for players
+   (names only, as decided), port mapping (UPnP / NAT-PMP), and the late joiner's winner text ("Slot15 Wins!" where the host
+   shows "Guest Wins!"). A slow join that reaches Sequenced before the server has made its fighter no
+   longer loses it to the server's 0x16 (FINDINGS 623).
 5. **Polish.** A network debug overlay (ping, lag, corrections per second, bytes per second), tuning
    against recorded sessions, cross-platform soak tests (macOS ↔ Windows ↔ Linux server), docs and a
    release.
@@ -203,8 +218,11 @@ Each phase ends with something testable, merged and pushed.
   public). Data-dependent runs stay local, like today's tests.
 
 ## 6. Decisions (agreed 2026-11-06)
-1. Transport: ENet + libsodium.
-2. Lobby server in Go, in this repo; who hosts the default instance is still open.
+1. Transport: ENet + libsodium. Changed 2026-11-12: Monocypher 4.0.2 (two C files, BSD-2-Clause / CC0)
+   instead of libsodium, for the same primitives (X25519, Ed25519, XChaCha20-Poly1305, BLAKE2b) without
+   libsodium's autotools build on MinGW and universal macOS builds.
+2. Lobby server in Go, in this repo; who hosts the default instance is still open, so none is built
+   into the game.
 3. No interop with original clients.
 4. Names only at first; keypair identity later.
 5. Bandwidth: the original's 16 KB/s by default, configurable.
@@ -316,3 +334,48 @@ delay simulator (`Delay Packet Time` and its variation, 0 by default).
   replicated by the server.
 - Nothing but session messages and states crosses the wire: `DE_CNetworkTransferAgent` is unused, so
   every machine needs identical data (our data hash check covers it).
+
+### 7.8 Lobby protocol (ours, `server/lobby/protocol.go`, `engine/src/net/lobby.cpp`)
+UDP, default port 27900 (GameSpy's heartbeat port); relay ports 27901-27964 by default. Every
+datagram starts `OBGL`, version 1, a type byte; integers little-endian, strings u16 length + bytes
+(at most 255), addresses four IPv4 bytes in network order + u16 port. A host and a joining client
+speak from their game socket, so the address the lobby sees is their game traffic's NAT mapping.
+
+| Type | Dir | Body | Notes |
+|---|---|---|---|
+| 1 Register | H→L | cookie u64, info | info: protocol, version, data hash, server and session name, players, max, flags (1 password, 2 playing), local address, identity key (32), instance |
+| 2 Challenge | L→H | cookie u64 | an HMAC of the source address and a 30 s epoch; a register without it is not listed (no spoofed sources) |
+| 3 Registered | L→H | host id u32, heartbeat ms u16, public address | sent on every heartbeat; a host silent for 20 s leaves the list |
+| 4 Unregister | H→L | host id, cookie | when the host stops |
+| 5 List | C→L | seq u32, protocol u16, first u16, padding to 128 bytes | the padding keeps a reply's amplification small |
+| 6 ListReply | L→C | seq, total u16, first u16, count u8, {host id, public address, info}… | at most ~1100 bytes; the client asks for the next page |
+| 7 Connect | C→L | host id, nonce u64, local address | from the client's game socket |
+| 8 Intro | L→C | nonce, status (0, 1 unknown host), host public and local address, the client's public address | |
+| 9 Peer | L→H | nonce, client public and local address | the host punches towards both for 5 s (at most 10 introductions a second per host) |
+| 10 Punch | P↔P | nonce | opens the NAT mappings; ignored otherwise |
+| 11 RelayRequest | C→L | host id, nonce | after 3 s without a connection (or at once with `OPENBG_FORCE_RELAY`) |
+| 12 Relay | L→C, L→H | nonce, status (0, 1, 2 none free), port u16, token u64, client public address | each side gets its own token; a repeated request gets the same relay |
+| 13 Bind / 14 Bound | P→R / R→P | token | on the relay port, from the game socket; then the relay forwards everything else between the two bound addresses, rate-limited, closed after 30 s idle |
+| 15 Error | L→any | code u8, text | e.g. "The lobby is full." |
+
+The lobby rate-limits every source address (40 datagrams a second), lists at most 1000 sessions and
+16 per address, and runs at most 64 relays; all are flags (`openbg-lobby -h`). `/healthz` and
+`/servers` (JSON, without addresses) are served when `-http` is set.
+
+### 7.9 Encryption and authentication (`engine/src/net/secure.h`)
+Every ENet connection, LAN and direct IP included, starts with a handshake on the reliable channel:
+the client sends `OBGK`, 1, 1 and an ephemeral X25519 key; the host answers `OBGK`, 2, 1, its own
+ephemeral key, its long-term Ed25519 identity key and a signature over both ephemeral keys. The
+session keys are BLAKE2b-512 of the shared secret and both keys, one half each way. Every later
+message is XChaCha20-Poly1305 with an 8-byte counter per channel in front (the nonce: counter and
+channel; the channel is the associated data); the reliable channel takes only rising counters, the
+unreliable one a 64-message window, so replays, reordering beyond the window and any altered byte
+are dropped. A peer is Connected only after the handshake; a failed one disconnects with a reason.
+
+The identity key (`Network\Host Key`, a seed made on first use) is what a player trusts: a session
+joined from the lobby must present the identity the listing carries, so neither the relay nor anyone
+on the path can read or change the game, and only the lobby itself could stand in for a host (it
+supplies the listing). A direct-IP or LAN join accepts any identity and prints its fingerprint. The
+lobby's own messages are not encrypted: the listing is public, and introductions carry only
+addresses and nonces. ENet's own headers, acknowledgements and pings stay in the clear; they carry
+no game data. The server's password and the join hello now travel encrypted.

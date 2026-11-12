@@ -21,5 +21,7 @@ publicly so a fix and disclosure can be coordinated. Response times depend on
 maintainer availability; there is no guaranteed response time or bounty program.
 
 Relevant areas include malformed game-data parsing, archive extraction, patch
-application, bundled dependencies and release packaging. Ordinary crashes and
+application, network play (the encrypted game traffic and its handshake, and the
+lobby server in `server/`; see docs/NETWORK_PLAN.md 7.8-7.9), bundled dependencies
+and release packaging. Ordinary crashes and
 gameplay bugs without a security impact can use the public bug report template.

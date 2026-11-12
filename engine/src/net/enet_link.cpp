@@ -8,6 +8,8 @@
 #ifdef _WIN32
 #include <mstcpip.h>
 #endif
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <mutex>
 
@@ -17,8 +19,35 @@ namespace {
 
 constexpr uint8_t kQuery[4] = {'O', 'B', 'G', 'Q'};
 constexpr uint8_t kReply[4] = {'O', 'B', 'G', 'R'};
+constexpr uint8_t kLobbyMagic[4] = {'O', 'B', 'G', 'L'};
 constexpr uint32_t kSilence = 6000;  // the WinSock node's interruption (FINDINGS 407)
+constexpr uint32_t kHandshakeTime = 10000;
+constexpr uint32_t kNatMapping = 30000;  // an emulated NAT forgets an address sent to this long ago
 constexpr size_t kChannels = 2;
+
+// OPENBG_NET_WIRE=<file> (tests): every datagram this process's game sockets receive, raw, each as
+// a 4-byte little-endian length and the bytes.
+void wire_log(const uint8_t *d, size_t n) {
+	static std::mutex lock;
+	static FILE *f = [] {
+		const char *path = getenv("OPENBG_NET_WIRE");
+		return path && *path ? fopen(path, "ab") : nullptr;
+	}();
+	if (!f) return;
+	std::lock_guard<std::mutex> l(lock);
+	uint8_t len[4] = {uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), uint8_t(n >> 24)};
+	fwrite(len, 1, 4, f);
+	fwrite(d, 1, n, f);
+	fflush(f);
+}
+
+// The test conditions, from the process's environment.
+void test_conditions(int &nat, float &loss) {
+	const char *n = getenv("OPENBG_NAT");
+	nat = !n ? 0 : !strcmp(n, "cone") ? 1 : !strcmp(n, "symmetric") ? 2 : 0;
+	const char *l = getenv("OPENBG_NET_LOSS");
+	loss = l ? std::clamp(float(atof(l)), 0.0f, 1.0f) : 0.0f;
+}
 
 bool init() {
 	static std::once_flag once;
@@ -100,7 +129,12 @@ bool resolve(const std::string &spec, uint16_t default_port, Address &out, std::
 // --- Peers ----------------------------------------------------------------------------------
 
 void EnetPeer::send(Channel channel, std::vector<uint8_t> data) {
-	if (host_) host_->push(*this, channel, std::move(data));
+	if (!host_) return;
+	if (!secure_ || !secure_->ready()) {
+		pending_.push_back({channel, std::move(data)});
+		return;
+	}
+	host_->push(*this, channel, secure_->seal(channel_id(channel), data));
 }
 
 bool EnetPeer::receive(Packet &out) {
@@ -122,26 +156,56 @@ uint32_t EnetPeer::silent_ms() const { return enet_time_get() - last_heard_; }
 
 // --- Hosts ----------------------------------------------------------------------------------
 
-// The host's intercept: a LAN query is answered from the game port and goes no further.
-int answer_query(ENetHost *h, ENetEvent *) {
+// The intercept, before ENet sees a datagram: the test conditions drop some, a LAN query is
+// answered from the game port, and lobby datagrams go to their handlers.
+int intercept(ENetHost *h, ENetEvent *) {
 	EnetHost *self = nullptr;
 	{
 		std::lock_guard<std::mutex> l(g_hosts_lock);
 		auto it = g_hosts.find(h);
 		if (it != g_hosts.end()) self = it->second;
 	}
-	if (h->receivedDataLength < 9 || memcmp(h->receivedData, kQuery, 4) != 0) return 0;
-	if (!self || !self->discovery_reply) return 1;
-	std::vector<uint8_t> out(kReply, kReply + 4);
-	out.insert(out.end(), h->receivedData + 5, h->receivedData + 9);
-	auto info = self->discovery_reply();
-	out.insert(out.end(), info.begin(), info.end());
-	ENetBuffer b;
-	b.data = out.data();
-	b.dataLength = out.size();
-	enet_socket_send(h->socket, &h->receivedAddress, &b, 1);
-	return 1;
+	const uint8_t *d = h->receivedData;
+	const size_t n = h->receivedDataLength;
+	wire_log(d, n);
+	if (!self) return 0;
+	const Address from{h->receivedAddress.host, h->receivedAddress.port};
+	if (self->filtered(from)) return 1;
+	if (n >= 9 && memcmp(d, kQuery, 4) == 0) {
+		if (!self->discovery_reply) return 1;
+		std::vector<uint8_t> out(kReply, kReply + 4);
+		out.insert(out.end(), d + 5, d + 9);
+		auto info = self->discovery_reply();
+		out.insert(out.end(), info.begin(), info.end());
+		ENetBuffer b;
+		b.data = out.data();
+		b.dataLength = out.size();
+		enet_socket_send(h->socket, &h->receivedAddress, &b, 1);
+		return 1;
+	}
+	if (n >= 6 && memcmp(d, kLobbyMagic, 4) == 0) {
+		auto handlers = self->raw_handlers_;
+		for (auto &[id, fn] : handlers) {
+			if (fn(from, d, n)) break;
+		}
+		return 1;
+	}
+	return 0;
 }
+
+bool EnetHost::filtered(const Address &from) {
+	if (loss_ > 0 && std::uniform_real_distribution<float>(0, 1)(rng_) < loss_) return true;
+	if (!nat_) return false;
+	if (std::find(infrastructure_.begin(), infrastructure_.end(), from) != infrastructure_.end()) return false;
+	if (nat_ == 2) return true;
+	for (auto &p : peers_) {
+		if (p->peer_ && p->peer_->state == ENET_PEER_STATE_CONNECTED && p->address() == from) return false;
+	}
+	auto it = sent_to_.find(from);
+	return it == sent_to_.end() || enet_time_get() - it->second > kNatMapping;
+}
+
+void EnetHost::sent_to(const Address &a) { sent_to_[a] = enet_time_get(); }
 
 std::unique_ptr<EnetHost> EnetHost::listen(uint16_t port, size_t max_peers, std::string *error, bool *in_use) {
 	if (in_use) *in_use = false;
@@ -163,11 +227,16 @@ std::unique_ptr<EnetHost> EnetHost::listen(uint16_t port, size_t max_peers, std:
 		std::lock_guard<std::mutex> l(g_hosts_lock);
 		g_hosts[h->host_] = h.get();
 	}
-	h->host_->intercept = answer_query;
+	h->host_->intercept = intercept;
+	h->server_ = true;
+	Key32 seed;
+	random_bytes(seed.data(), seed.size());
+	h->identity_ = Identity::from_seed(seed);
+	test_conditions(h->nat_, h->loss_);
 	return h;
 }
 
-std::unique_ptr<EnetHost> EnetHost::connect(const Address &to, std::string *error) {
+std::unique_ptr<EnetHost> EnetHost::client(std::string *error) {
 	if (!init()) {
 		if (error) *error = "The network could not be started.";
 		return nullptr;
@@ -178,16 +247,58 @@ std::unique_ptr<EnetHost> EnetHost::connect(const Address &to, std::string *erro
 		if (error) *error = "No network socket could be opened.";
 		return nullptr;
 	}
-	ENetAddress a{};
-	a.host = to.ip;
-	a.port = to.port;
-	ENetPeer *p = enet_host_connect(h->host_, &a, kChannels, 0);
-	if (!p) {
+	{
+		std::lock_guard<std::mutex> l(g_hosts_lock);
+		g_hosts[h->host_] = h.get();
+	}
+	h->host_->intercept = intercept;
+	test_conditions(h->nat_, h->loss_);
+	return h;
+}
+
+std::unique_ptr<EnetHost> EnetHost::connect(const Address &to, std::string *error) {
+	auto h = client(error);
+	if (h) h->connect_to(to);
+	if (h && !h->connecting_) {
 		if (error) *error = "The connection could not be started.";
 		return nullptr;
 	}
-	h->wrap(p);
 	return h;
+}
+
+void EnetHost::connect_to(const Address &to) {
+	if (connecting_ && connecting_->state != ENET_PEER_STATE_CONNECTED) {
+		if (auto *p = static_cast<EnetPeer *>(connecting_->data)) p->peer_ = nullptr;
+		connecting_->data = nullptr;
+		enet_peer_reset(connecting_);
+	}
+	ENetAddress a{};
+	a.host = to.ip;
+	a.port = to.port;
+	sent_to(to);
+	connecting_ = enet_host_connect(host_, &a, kChannels, 0);
+	if (connecting_) wrap(connecting_);
+}
+
+void EnetHost::send_raw(const Address &to, const std::vector<uint8_t> &data) {
+	if (!host_) return;
+	ENetAddress a{};
+	a.host = to.ip;
+	a.port = to.port;
+	ENetBuffer b;
+	b.data = const_cast<uint8_t *>(data.data());
+	b.dataLength = data.size();
+	sent_to(to);
+	enet_socket_send(host_->socket, &a, &b, 1);
+}
+
+int EnetHost::add_raw_handler(std::function<bool(const Address &, const uint8_t *, size_t)> h) {
+	raw_handlers_.emplace_back(next_handler_, std::move(h));
+	return next_handler_++;
+}
+
+void EnetHost::remove_raw_handler(int id) {
+	std::erase_if(raw_handlers_, [id](const auto &e) { return e.first == id; });
 }
 
 EnetHost::~EnetHost() {
@@ -250,6 +361,39 @@ void EnetHost::flush(EnetPeer &p, uint32_t now) {
 	}
 }
 
+void EnetHost::fail_handshake(EnetPeer &p, const std::string &why) {
+	p.refusal = why;
+	const bool tell = p.announced_ || !server_;
+	if (p.peer_) {
+		enet_peer_disconnect_now(p.peer_, 0);
+		p.peer_->data = nullptr;
+		p.peer_ = nullptr;
+	}
+	p.held_.clear();
+	p.pending_.clear();
+	if (tell) events_.push_back({Event::Disconnected, &p});
+}
+
+// The host answers the hello; the client checks the answer. Then the peer is Connected, and what
+// was sent before goes out sealed.
+void EnetHost::handshake(EnetPeer &p, std::vector<uint8_t> data) {
+	if (server_) {
+		auto answer = identity_ ? p.secure_->answer(data, *identity_) : std::vector<uint8_t>{};
+		if (answer.empty()) return fail_handshake(p, "The client's handshake was not understood.");
+		push(p, Channel::Reliable, std::move(answer));
+	} else {
+		std::string why;
+		if (!p.secure_->finish(data, expect_, &why)) return fail_handshake(p, why);
+	}
+	p.announced_ = true;
+	events_.push_back({Event::Connected, &p});
+	while (!p.pending_.empty()) {
+		Packet q = std::move(p.pending_.front());
+		p.pending_.pop_front();
+		push(p, q.channel, p.secure_->seal(channel_id(q.channel), q.data));
+	}
+}
+
 void EnetHost::service() {
 	if (!host_) return;
 	const uint32_t now = enet_time_get();
@@ -261,30 +405,37 @@ void EnetHost::service() {
 			// No packet throttle (the WinSock service had none): it drops whole bursts of unsequenced packets.
 			e.peer->packetThrottleDeceleration = 0;
 			e.peer->packetThrottle = e.peer->packetThrottleLimit;
+			if (e.peer == connecting_) connecting_ = nullptr;
 			EnetPeer *p = wrap(e.peer);
-			p->last_heard_ = enet_time_get();
-			events_.push_back({Event::Connected, p});
+			p->last_heard_ = p->connected_at_ = enet_time_get();
+			p->secure_ = std::make_unique<SecureChannel>(server_ ? SecureChannel::Role::Host : SecureChannel::Role::Client);
+			if (!server_) push(*p, Channel::Reliable, p->secure_->hello());
 			break;
 		}
 		case ENET_EVENT_TYPE_RECEIVE: {
 			if (auto *p = static_cast<EnetPeer *>(e.peer->data)) {
 				p->last_heard_ = enet_time_get();
 				p->bytes_in += e.packet->dataLength;
-				Packet in;
-				in.channel = e.channelID == 0 ? Channel::Reliable : Channel::Unreliable;
-				in.data.assign(e.packet->data, e.packet->data + e.packet->dataLength);
-				p->inbox_.push_back(std::move(in));
+				std::vector<uint8_t> data(e.packet->data, e.packet->data + e.packet->dataLength);
+				if (!p->secure_ || !p->secure_->ready()) {
+					if (p->secure_ && e.channelID == 0) handshake(*p, std::move(data));
+				} else {
+					Packet in;
+					in.channel = e.channelID == 0 ? Channel::Reliable : Channel::Unreliable;
+					if (p->secure_->open(e.channelID, data, in.data)) p->inbox_.push_back(std::move(in));
+				}
 				if (p->interrupted) p->interrupted = false, events_.push_back({Event::Restored, p});
 			}
 			enet_packet_destroy(e.packet);
 			break;
 		}
 		case ENET_EVENT_TYPE_DISCONNECT:
+			if (e.peer == connecting_) connecting_ = nullptr;
 			if (auto *p = static_cast<EnetPeer *>(e.peer->data)) {
 				p->peer_ = nullptr;
 				p->held_.clear();
 				e.peer->data = nullptr;
-				events_.push_back({Event::Disconnected, p});
+				if (p->announced_ || !server_) events_.push_back({Event::Disconnected, p});
 			}
 			break;
 		default: break;
@@ -293,6 +444,10 @@ void EnetHost::service() {
 	// ENet's own pings keep lastReceiveTime fresh while the other side is alive.
 	for (auto &p : peers_) {
 		if (!p->peer_ || p->peer_->state != ENET_PEER_STATE_CONNECTED) continue;
+		if (!p->announced_) {
+			if (enet_time_get() - p->connected_at_ > kHandshakeTime) fail_handshake(*p, "The connection's handshake did not finish.");
+			continue;
+		}
 		uint32_t heard = std::max(p->last_heard_, p->peer_->lastReceiveTime);
 		p->last_heard_ = heard;
 		if (!p->interrupted && enet_time_get() - heard > kSilence) p->interrupted = true, events_.push_back({Event::Interrupted, p.get()});

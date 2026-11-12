@@ -117,10 +117,24 @@ FetchContent_MakeAvailable(enet)
 target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 target_compile_options(enet PRIVATE -w)
 
-# The byte link between the machines of a network session (src/net/link.h) and its ENet transport.
-add_library(net STATIC src/net/link.cpp src/net/enet_link.cpp)
+# Monocypher (monocypher.org, BSD-2-Clause or CC0): the game traffic's X25519 key exchange, Ed25519
+# host identities and XChaCha20-Poly1305 (src/net/secure.h). Pinned to 4.0.2.
+FetchContent_Declare(monocypher
+	URL https://codeload.github.com/LoupVaillant/Monocypher/tar.gz/0d85f98c9d9b0227e42cf795cb527dff372b40a4
+	URL_HASH SHA256=7339f8a4729d5339ad6df61ba11937f8d5d163ba5a49edf5fdf3d8717b73d1a9
+	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(monocypher)
+add_library(monocypher STATIC ${monocypher_SOURCE_DIR}/src/monocypher.c ${monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c)
+target_include_directories(monocypher PUBLIC ${monocypher_SOURCE_DIR}/src ${monocypher_SOURCE_DIR}/src/optional)
+
+# The byte link between the machines of a network session (src/net/link.h), its ENet transport and
+# the lobby protocol (src/net/lobby.h, server/ in this repository).
+add_library(net STATIC src/net/link.cpp src/net/enet_link.cpp src/net/secure.cpp src/net/lobby.cpp)
 target_include_directories(net PUBLIC src)
-target_link_libraries(net PRIVATE enet)
+target_link_libraries(net PRIVATE enet PUBLIC monocypher)
+if(WIN32)
+	target_link_libraries(net PRIVATE bcrypt)
+endif()
 
 # Game runtime: native objects and intrinsics for compiled scripts.
 add_library(game STATIC
@@ -166,7 +180,7 @@ add_executable(de-tests tests/de_tests.cpp)
 target_link_libraries(de-tests PRIVATE vm)
 # The transport on localhost, no game data needed.
 add_executable(net-tests tests/net_tests.cpp)
-target_link_libraries(net-tests PRIVATE net)
+target_link_libraries(net-tests PRIVATE net enet)
 add_test(NAME net-tests COMMAND net-tests)
 # Pure computations behind natives (src/game/native_math.h), no game data needed.
 add_executable(game-unit-tests tests/game_unit_tests.cpp)

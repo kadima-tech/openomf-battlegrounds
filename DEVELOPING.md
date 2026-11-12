@@ -139,6 +139,33 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   found there, the headless host is stopped and leaves the list, and the guest joins the second session. Join Game prints
   `net: LAN list: <server>@<address> ...` whenever its list changes, keeps the wall clock's pace in a screenshot run,
   and `OPENBG_LAN_JOIN="<server name>:<port>"` joins that session as soon as it is listed (testing).
+- Internet play (phase 4, `docs/NETWORK_PLAN.md` 7.8-7.9): the lobby server is `server/` (Go, standard library
+  only): `cd server && go test ./... && go build ./cmd/openbg-lobby`, then `./openbg-lobby -listen :27900
+  -relay-ports 27901-27964` (`-h` lists the limits: `-max-hosts`, `-max-hosts-per-ip`, `-max-relays`, `-relay-rate`
+  bytes/s per relay, `-host-timeout`, `-relay-idle`, `-http :8080` for `/healthz` and `/servers`; each flag also reads
+  an `OPENBG_LOBBY_*` environment variable). `docker build -t openbg-lobby server/` makes a container image (a static
+  binary on `scratch`); on Linux run it with `--network host` (or publish 27900 and the relay range over UDP with
+  the same numbers): the lobby must see players' real addresses, which Docker Desktop's port proxy hides. Players
+  need UDP 27900 and the relay range open to the lobby's machine; hosts need nothing open (the punch or the relay
+  gets through), though a forwarded game port lets the direct path always work. The game finds the lobby in Options,
+  Network, Lobby Server (`Network\Lobby Server`, `host[:port]`, default port 27900; none is set by default), or
+  with `openbg --lobby host[:port]` for one run (which also lists a hosted session). Host Game lists its session there
+  unless `Network\LAN Only` is set (`net: listed on the lobby at ... as <id> (public address ...)`), Join Game lists
+  the lobby's sessions with the LAN's, and `openbg --join "lobby:<server name>" --lobby <lobby>` joins a listed one
+  from the command line. Each connection is encrypted; a host prints its identity fingerprint (`net: hosting on
+  port N, data ..., identity <16 hex>`, kept in `Network\Host Key`) and a client the one it connected to. Test
+  switches (on either side): `OPENBG_NAT=cone` takes datagrams only from addresses the game socket sent to (a NAT's
+  filtering: the punch is needed), `OPENBG_NAT=symmetric` only from the lobby and its relays (the punch fails, the
+  relay is used), `OPENBG_NET_LOSS=0.02` drops that share of what arrives, `OPENBG_FORCE_RELAY=1` skips the punch,
+  `OPENBG_NET_WIRE=<file>` appends every datagram the game sockets receive (4-byte length, bytes).
+  `tools/net-internet/run.sh <Data> [--ping ms] [--loss f] [--nat cone|symmetric] [--relay] [--frames N] [--port N]
+  [--lobby-port N] [--out dir]` builds and starts a lobby on localhost, hosts a match that lists itself, joins it
+  from a second process through the lobby, and prints the lobby's log, both sides' connection lines,
+  `tools/net-lan/compare.py`'s comparison and `tools/net-internet/wirescan.py`'s check that no game datagram held
+  a player, robot, pilot or server name (`LOBBY=<binary>` reuses a built lobby). `net-tests` covers the handshake,
+  identities, sealing, replays and tampering, and a tap between two ENet hosts that sees no plaintext. The lobby's
+  CI is `.github/workflows/server.yml` (GitHub-hosted runners: gofmt, vet, `go test -race`, five platforms' binaries,
+  the container image).
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `openbg-unlock-all <Data> <registry.txt>` writes a registry with everything the game locks unlocked, for playtesters (`tools/unlock_all.cpp`): id 0 on each description locked by default, the 22 RECON DATA stats (ids 100-121) on each pilot, and every session master's starting matches (0x10063 + n); the host's arena toggle (0xffff) is left alone. An existing file keeps its other values. A playtester puts the result in their settings folder as `registry.txt` (see the Registry entry in PLACEHOLDERS.md for the folder); with a registry present the first-run Basic Training is skipped. Build it from the patched data (the default `OPENBG_DATA_DIR`) so 2.123's content is included; add-ons in `OPENBG_ADDONS` are unlocked too.
