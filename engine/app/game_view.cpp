@@ -623,7 +623,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	render::set_transparent_sink(getenv("OPENBG_NO_DEFER") ? nullptr : &transparent);
 	std::vector<render::DeferredDraw> top_layer;
 	render::set_top_sink(&top_layer);
-	arena_r.draw(vp, eye);
+	{ PERF_ZONE("draw.arena"); arena_r.draw(vp, eye); }
 	// Actors made at run time (pickups, jets, spawned props), where they are now: shown,
 	// active, and not a fighter's own body.
 	std::vector<render::ActorMeshRenderer::Item> items = moving_items;
@@ -694,7 +694,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 				st.attachments.push_back(as);
 			}
 			if (auto paint = paint_colours(world, a)) fi->renderer.set_paint(*paint);
-			fi->renderer.draw(vp, eye, body, st);
+			{ PERF_ZONE("draw.fighters"); fi->renderer.draw(vp, eye, body, st); }
 		}
 		render::set_transparent_sink(nullptr);
 		// The robots' shadows from this frame's poses (they project in the next frame's light passes).
@@ -716,6 +716,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			}
 		}
 		// The applied Texture Detail (renderer +0x1a0).
+		PERF_ZONE("draw.shadows");
 		shadows_r.update(shadow_type, world.texture_detail, casters, render::g_lighting, view, 70.5f);
 	}
 	if (!capture_camera) world.particles->process_trailers();
