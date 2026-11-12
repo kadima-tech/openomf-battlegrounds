@@ -181,7 +181,7 @@ Each phase ends with something testable, merged and pushed.
    a guest join (direct or through the LAN list). Polish (FINDINGS 495-498, 2026-11-11): the listener moves to the next
    port when its own is in use (up to 99) and Join Game finds it there, keeps querying and drops hosts silent for 6 s
    (`host-menu.sh --guest-first`), the host's player is `Network\Player Name`, a host's Back after a match returns to
-   Choose Session Master, and no pre-fight ghost destruction (ENet's throttle no longer drops ID requests). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
+   Choose Session Master, and no pre-fight ghost destruction (ENet's throttle no longer drops ID requests; a client's copy of a remote fighter keeps its physics still until its first state, FINDINGS 620). Still open: the slot state (0x0a), the client info's pilot photo and stats, the Team column,
    an administrator's level button.
 
 3. **Full sessions.** Up to 16 players, AI bots, all four game types, chat, Change Fighter, kick votes and

@@ -94,6 +94,9 @@ bool replay_driven(World &w, const GameObject *o);
 // DE_CCreature::Tick at its start: true when the creature skips its physics and brain this tick
 // (held since a replay's clock went back, or re-taking a state of this tick).
 bool creature_state_tick(World &w, GameObject &o);
+// A client's copy of a fighter it does not control, before the server's first state of it: its
+// physics waits (PLACEHOLDERS, FINDINGS 620).
+bool net_awaiting_first_state(World &w, const GameObject &o);
 // DE_CCreature::Tick after the state-changed hooks, before the tick count goes up: a hold ends
 // once the clock is back where it was (AssureSequenced).
 void creature_state_tick_end(World &w, GameObject &o);
