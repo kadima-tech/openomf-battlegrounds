@@ -310,6 +310,7 @@ void GameView::wire_session() {
 }
 
 void GameView::load_arena(const std::string &stem, int environment) {
+	PERF_ZONE("draw.load_arena");
 	arena = stem;
 	arena_environment = environment;
 	owners_set = false;
@@ -395,7 +396,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	}
 	fighters.erase(std::remove_if(fighters.begin(), fighters.end(), [this](Fighter *f) { return !world.object(f->actor->handle); }), fighters.end());
 	if (player && std::find(fighters.begin(), fighters.end(), player) == fighters.end()) player = nullptr;
-	load_renderers();
+	{ PERF_ZONE("draw.load_renderers"); load_renderers(); }
 	glViewport(0, 0, dw, dh);
 	glEnable(GL_DEPTH_TEST);
 	glClearColor(0.62f, 0.55f, 0.45f, 1);
@@ -620,7 +621,10 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	// Blended first passes go to the transparent layer, drawn with the effects after the opaque scene
 	// (OPENBG_NO_DEFER=1 draws them in their meshes' passes instead, debugging).
 	std::vector<render::DeferredDraw> transparent;
-	render::set_transparent_sink(getenv("OPENBG_NO_DEFER") ? nullptr : &transparent);
+	static const bool no_defer = getenv("OPENBG_NO_DEFER") != nullptr;
+	static const bool no_actors = getenv("OPENBG_NO_ACTORS") != nullptr;
+	static const bool no_particles = getenv("OPENBG_NO_PARTICLES") != nullptr;
+	render::set_transparent_sink(no_defer ? nullptr : &transparent);
 	std::vector<render::DeferredDraw> top_layer;
 	render::set_top_sink(&top_layer);
 	{ PERF_ZONE("draw.arena"); arena_r.draw(vp, eye); }
@@ -635,7 +639,8 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (o->file == arena_file && in_environment(o->index)) continue;
 			bool live = game::in_scene(*o);
 			live = live && o->visible;  // its own Renderable flag (not inherited)
-			if (const char *sk = getenv("OPENBG_SKIP_ACTOR")) {
+			static const char *sk = getenv("OPENBG_SKIP_ACTOR");
+			if (sk) {
 				for (const game::GameObject *p = o; p && live; p = p->parent) live = p->name != sk;
 			}
 			if (live) items.push_back({{o->file, o->index}, o->world(), light_owner_of(o), live_of(o), images_of(o), o, game::position_static(*o)});
@@ -648,7 +653,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 			if (dbg && live && fr == 900) fprintf(stderr, "[actor mesh] %s (%s) under %s\n", o->name.c_str(), o->class_path.c_str(), o->parent ? o->parent->name.c_str() : "-");
 		}
 		actors_r.texture_version = world.texture_override_version;
-		if (!getenv("OPENBG_NO_ACTORS")) { PERF_ZONE("draw.actors"); actors_r.draw(world.data(), items, vp, eye); }
+		if (!no_actors) { PERF_ZONE("draw.actors"); actors_r.draw(world.data(), items, vp, eye); }
 	}
 	load_renderers();
 	{
@@ -722,7 +727,7 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 	if (!capture_camera) world.particles->process_trailers();
 	render::set_transparent_sink(nullptr);
 	render::set_top_sink(nullptr);
-	if (!getenv("OPENBG_NO_PARTICLES")) { PERF_ZONE("draw.particles"); particles_r.draw(world, vp, view, eye, false, &transparent); }
+	if (!no_particles) { PERF_ZONE("draw.particles"); particles_r.draw(world, vp, view, eye, false, &transparent); }
 	else for (auto &t : transparent) t.draw();
 	overlay.draw_world(world, vp);
 	// The glow layer, added over the scene (OPENBG_NO_GLOW=1 leaves it out).
@@ -735,13 +740,13 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		for (bool occluders : {true, false}) {
 			render::set_glow_occluders(occluders);
 			arena_r.draw_glow(vp, eye);
-			if (!getenv("OPENBG_NO_ACTORS")) actors_r.draw_glow(items, vp, eye);
+			if (!no_actors) actors_r.draw_glow(items, vp, eye);
 			for (auto *fi : fighters) {
 				if (fi->actor->spawned && fi->renderer_loaded && shown(fi->actor)) fi->renderer.draw_glow(vp, eye);
 			}
 		}
 		render::set_glow_occluders(false);
-		if (!getenv("OPENBG_NO_PARTICLES")) particles_r.draw(world, vp, view, eye, true);
+		if (!no_particles) particles_r.draw(world, vp, view, eye, true);
 		glow_r.end(dw, dh);
 	}
 	render::draw_top_layer(top_layer, view);

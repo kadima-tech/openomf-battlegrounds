@@ -54,10 +54,20 @@ inline Frames &frames() {
 	return f;
 }
 
-inline void frame_time(double ms) {
+// A frame over 50 ms prints the zones that took more than 5 ms of it.
+inline void frame_time(int frame, double ms) {
 	Frames &f = frames();
 	f.worst = std::max(f.worst, ms);
 	f.over += ms > 20;
+	static std::map<std::string, double> before;
+	if (ms > 50) {
+		fprintf(stderr, "[spike %d] %.1f ms:", frame, ms);
+		for (auto &[name, z] : zones()) {
+			if (z.ms - before[name] > 5) fprintf(stderr, " %s %.1f", name.c_str(), z.ms - before[name]);
+		}
+		fprintf(stderr, "\n");
+	}
+	for (auto &[name, z] : zones()) before[name] = z.ms;
 }
 
 inline void report(int frame, int frames, double wall_ms) {
@@ -67,8 +77,9 @@ inline void report(int frame, int frames, double wall_ms) {
 	perf::frames() = Frames{};
 	for (auto &[name, z] : zones()) {
 		fprintf(stderr, ", %s %.3f ms x%.0f", name.c_str(), z.ms / frames, double(z.calls) / frames);
-		z = Zone{};
 	}
+	for (auto &[name, z] : zones()) z = Zone{};
+	frame_time(frame, 0);
 	fprintf(stderr, "\n");
 	fflush(stderr);
 }
