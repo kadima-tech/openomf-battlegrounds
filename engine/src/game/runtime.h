@@ -683,6 +683,7 @@ public:
 		size_t attached = 0;
 		std::vector<de::ObjectRef> globals;
 		mutable std::optional<uint32_t> extent;  // the members' size, known after the first load
+		mutable std::vector<uint32_t> code_addrs;
 	};
 	const ClassTemplate &class_template(const de::ObjectRef &cls_obj);
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, ClassTemplate> class_templates_;

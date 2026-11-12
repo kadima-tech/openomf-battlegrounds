@@ -1002,7 +1002,7 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 		for (auto &[n, f] : data_.files()) if (f.get() == cls_obj.file) stem = n;
 		fprintf(stderr, "[attach %u] %s (%s) on %s%s\n", frame_, cls_obj.info().name.c_str(), stem.c_str(), owner->name.c_str(), t.compiled ? " (compiled)" : "");
 	}
-	vm::load_class(b->cls, mem_, t.contents, t.code);
+	vm::load_class(b->cls, mem_, t.contents, t.code, &t.code_addrs);
 	// The class's behaviors (Behavior objects, possibly in other files) and their global IDs.
 	for (size_t i = 0; i < t.attached; ++i) {
 		const de::ObjectRef &br = t.behaviors[i];
