@@ -17,6 +17,7 @@
 // window at WxH points (1600x1000) and S pixels per point (2), writes the last one and quits.
 #include <SDL.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

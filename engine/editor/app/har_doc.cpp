@@ -2,6 +2,7 @@
 // the left, the variant's data in tabs on the right.
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
