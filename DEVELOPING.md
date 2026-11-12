@@ -63,7 +63,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   dmusic, vendored in `engine/third_party/dmusic`, MIT, through a port of Microsoft's software synthesizer).
   The game's own HUD and messages are drawn (fonts from Core.ModuleDLL) and also printed in the
   terminal, and the view is the game's fight camera (`--free-camera` for a mouse-orbit camera); `OPENBG_DEBUG_SESSION=1` lists the session's modifiers,
-  `OPENBG_DEBUG_EVENTS=1` traces event handle checks. In `openbg` screenshot and headless runs, `OPENBG_AUTOPLAY=<frame>` hands the player's fighter to the AI from that frame (the scripts still see it as the user's) and `OPENBG_KO=<frame>,...` drains every computer fighter's health then, the player named as the attacker and credited as a hit would credit it (BFighter's `m_LastDamageInflictor`, FINDINGS 280: the death event names the player and the destruction-hit event reaches it; `OPENBG_DEBUG_SENDS=Dead` prints the events whose handle contains that text, with INT3 and the first two objects); `OPENBG_KO=auto[:N]` does it N frames (default 150) after each start of the action, which plays a whole tournament (`--launch "North American Open" --choose Elizabeth,Jaguar` with `MOUSE` presses every 250 frames for the rules displays, notifications and the cinematic; the drain is no hit, so a fighter it catches in a state only a hit ends, such as an AI Pyros's duck, stays up: another N gets past it). `OPENBG_HELP_CYCLE=<frame>,<every>` shows the open description selector's entries in turn from that frame (every help page, with `SHOTS`), `OPENBG_PLACE` works in `openbg` too (Training's pads), `OPENBG_DEBUG_REGISTRY=1` prints registry values as they change (unlocks), `OPENBG_DEBUG_UI=1` the page flow (each page queued, activated and completed, rules displays, closed stacks), `OPENBG_DEBUG_TREE=<name>@<frame>` prints the scene branches under objects of that name, `OPENBG_DEBUG_MEMORY=N` the script arena's size and what the world holds (objects, brains, temporals, collision testers, affectors, tick hooks, particle instances; destroyed ones counted apart) every N frames (`openbg-fight` adds the frames' tick time, the draw time in windowed and screenshot runs, and the sound mixer's voices and speaker elements), and `OPENBG_DEBUG_VM_ERRORS=1` the instruction a script error left from; screenshot runs end by listing the log and the natives still missing. `OPENBG_QUIT_SESSION=<frame>` leaves the session then as the in-game menu's Main Menu does (closing a recording), `OPENBG_DEBUG_REPLAY=1` traces a recording's or replay's state managers, fighter positions and creatures given their first tick by `SetTime`, and `OPENBG_DEBUG_REWIND=<frame>:<ms>` sets a replay's clock back then. Attacks land:
+  `OPENBG_DEBUG_EVENTS=1` traces event handle checks. In `openbg` screenshot and headless runs, `OPENBG_AUTOPLAY=<frame>` hands the player's fighter to the AI from that frame (the scripts still see it as the user's) and `OPENBG_KO=<frame>,...` drains every computer fighter's health then, the player named as the attacker and credited as a hit would credit it (BFighter's `m_LastDamageInflictor`, FINDINGS 280: the death event names the player and the destruction-hit event reaches it; `OPENBG_DEBUG_SENDS=Dead` prints the events whose handle contains that text, with INT3 and the first two objects); `OPENBG_KO=auto[:N]` does it N frames (default 150) after each start of the action, which plays a whole tournament (`--launch "North American Open" --choose Elizabeth,Jaguar` with `MOUSE` presses every 250 frames for the rules displays, notifications and the cinematic; the drain is no hit, so a fighter it catches in a state only a hit ends, such as an AI Pyros's duck, stays up: another N gets past it). `OPENBG_HELP_CYCLE=<frame>,<every>` shows the open description selector's entries in turn from that frame (every help page, with `SHOTS`), `OPENBG_PLACE` works in `openbg` too (Training's pads), `OPENBG_DEBUG_REGISTRY=1` prints registry values as they change (unlocks), `OPENBG_DEBUG_UI=1` the page flow (each page queued, activated and completed, rules displays, closed stacks), `OPENBG_DEBUG_TREE=<name>@<frame>` prints the scene branches under objects of that name, `OPENBG_DEBUG_MEMORY=N` the script arena's size and what the world holds (objects, brains, temporals, collision testers, affectors, tick hooks, particle instances; destroyed ones counted apart) every N frames (`openbg-fight` adds the frames' tick time, the draw time in windowed and screenshot runs, and the sound mixer's voices and speaker elements; `openbg` windowed and screenshot runs print `[perf]` lines every 5 s, each zone's ms and calls per frame with the worst frame and the frames over 20 ms, and a `[spike]` line naming the zones of any frame over 50 ms), and `OPENBG_DEBUG_VM_ERRORS=1` the instruction a script error left from; screenshot runs end by listing the log and the natives still missing. `OPENBG_QUIT_SESSION=<frame>` leaves the session then as the in-game menu's Main Menu does (closing a recording), `OPENBG_DEBUG_REPLAY=1` traces a recording's or replay's state managers, fighter positions and creatures given their first tick by `SetTime`, and `OPENBG_DEBUG_REWIND=<frame>:<ms>` sets a replay's clock back then. Attacks land:
   hits run each robot's own damage, reaction and knockback scripts, and standing still (or walking
   back) blocks attacks from the front. `OPENBG_DEBUG_HITS=1` logs hits and knockback,
   `OPENBG_DEBUG_DANGER=1` the danger each robot perceives. Robots stand, walk and land on the arena's
@@ -142,6 +142,33 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   found there, the headless host is stopped and leaves the list, and the guest joins the second session. Join Game prints
   `net: LAN list: <server>@<address> ...` whenever its list changes, keeps the wall clock's pace in a screenshot run,
   and `OPENBG_LAN_JOIN="<server name>:<port>"` joins that session as soon as it is listed (testing).
+- Internet play (phase 4, `docs/NETWORK_PLAN.md` 7.8-7.9): the lobby server is `server/` (Go, standard library
+  only): `cd server && go test ./... && go build ./cmd/openbg-lobby`, then `./openbg-lobby -listen :27900
+  -relay-ports 27901-27964` (`-h` lists the limits: `-max-hosts`, `-max-hosts-per-ip`, `-max-relays`, `-relay-rate`
+  bytes/s per relay, `-host-timeout`, `-relay-idle`, `-http :8080` for `/healthz` and `/servers`; each flag also reads
+  an `OPENBG_LOBBY_*` environment variable). `docker build -t openbg-lobby server/` makes a container image (a static
+  binary on `scratch`); on Linux run it with `--network host` (or publish 27900 and the relay range over UDP with
+  the same numbers): the lobby must see players' real addresses, which Docker Desktop's port proxy hides. Players
+  need UDP 27900 and the relay range open to the lobby's machine; hosts need nothing open (the punch or the relay
+  gets through), though a forwarded game port lets the direct path always work. The game finds the lobby in Options,
+  Network, Lobby Server (`Network\Lobby Server`, `host[:port]`, default port 27900; none is set by default), or
+  with `openbg --lobby host[:port]` for one run (which also lists a hosted session). Host Game lists its session there
+  unless `Network\LAN Only` is set (`net: listed on the lobby at ... as <id> (public address ...)`), Join Game lists
+  the lobby's sessions with the LAN's, and `openbg --join "lobby:<server name>" --lobby <lobby>` joins a listed one
+  from the command line. Each connection is encrypted; a host prints its identity fingerprint (`net: hosting on
+  port N, data ..., identity <16 hex>`, kept in `Network\Host Key`) and a client the one it connected to. Test
+  switches (on either side): `OPENBG_NAT=cone` takes datagrams only from addresses the game socket sent to (a NAT's
+  filtering: the punch is needed), `OPENBG_NAT=symmetric` only from the lobby and its relays (the punch fails, the
+  relay is used), `OPENBG_NET_LOSS=0.02` drops that share of what arrives, `OPENBG_FORCE_RELAY=1` skips the punch,
+  `OPENBG_NET_WIRE=<file>` appends every datagram the game sockets receive (4-byte length, bytes).
+  `tools/net-internet/run.sh <Data> [--ping ms] [--loss f] [--nat cone|symmetric] [--relay] [--frames N] [--port N]
+  [--lobby-port N] [--out dir]` builds and starts a lobby on localhost, hosts a match that lists itself, joins it
+  from a second process through the lobby, and prints the lobby's log, both sides' connection lines,
+  `tools/net-lan/compare.py`'s comparison and `tools/net-internet/wirescan.py`'s check that no game datagram held
+  a player, robot, pilot or server name (`LOBBY=<binary>` reuses a built lobby). `net-tests` covers the handshake,
+  identities, sealing, replays and tampering, and a tap between two ENet hosts that sees no plaintext. The lobby's
+  CI is `.github/workflows/server.yml` (GitHub-hosted runners: gofmt, vet, `go test -race`, five platforms' binaries,
+  the container image).
 - `tools/deobj_dump.cpp`: the `deobj-dump` inspector (`header`, `toc[+]`, `scripts`, `disasm`, `ex`, `block`, `blocks`, `refs <Data> <file> <object>` resolved reference lists, each target with its object index, `particles <Data> [file]` a survey of every particle effect).
 
 `openbg-unlock-all <Data> <registry.txt>` writes a registry with everything the game locks unlocked, for playtesters (`tools/unlock_all.cpp`): id 0 on each description locked by default, the 22 RECON DATA stats (ids 100-121) on each pilot, and every session master's starting matches (0x10063 + n); the host's arena toggle (0xffff) is left alone. An existing file keeps its other values. A playtester puts the result in their settings folder as `registry.txt` (see the Registry entry in PLACEHOLDERS.md for the folder); with a registry present the first-run Basic Training is skipped. Build it from the patched data (the default `OPENBG_DATA_DIR`) so 2.123's content is included; add-ons in `OPENBG_ADDONS` are unlocked too.
@@ -247,6 +274,14 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   information; and makes Jaguar Mk2, edits stats, spheres, inputs, a constant and a paint job, and
   checks `read_fighter_stats` and `fighter_models` through `OPENBG_ADDONS`. `EDITOR_ASSETS_OUT=<dir>`
   keeps the add-ons (for `openbg --addon`).
+- **HAR General and Paint tabs:** General's Choose Creature section edits the title, text and picture
+  Choose Creature shows (the first change copies the base's ControlCreator, title, picture and text
+  into the add-on); the picture imports from a PNG or renders four poses of the selected paint job.
+  Paint lists the paint jobs (the preview draws the selected one), imports or exports each image and
+  makes a new one from the selected one's model, base or add-on. Scripted: `--har-paint "Job"` (a new
+  paint job), `--har-paint "Job:RGBStatic=file.png"`, `--paint-job N` (the selected row),
+  `--har-title`, `--har-text`, `--har-picture file.png|render`. `openbg-fight --model <paint job>`
+  fights with that paint job; `openbg --highlight <name>` makes the choosers highlight it first.
 - Memory: files stay in memory once read; browsing every image in the game reads most of `Data`.
 
 **Arenas and play in editor** (`editor/app/world_*.cpp`, `pie.cpp`, `editor/core/arena.*`):
@@ -281,7 +316,7 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
 - Scripted runs: `--arena <name|stem>`, `--variant`, `--select-node <name>`, `--move-to x,y,z`,
   `--light-colour r,g,b,intensity`, `--camera x,y,z,yaw,pitch`, `--layout 1|2|4`, `--shading 0|1|2`,
   `--play`, `--simulate`, `--play-ticks N`, `--replay` (Stop and Play again), `--eject`,
-  `--inspector`, `--debug hits,nav,energy`.
+  `--inspector`, `--debug hits,nav,energy`, `--play-robot <name>`, `--play-opponent <name>`.
 - `editor-arena-tests` (ctest `editor-arena`): the arena list, Desert's tree (16 spawn points, nav
   links resolved, checks pass), a variant -> description, spawn moved and duplicated, light recoloured
   -> save -> reopen, and the engine reading the saved variant: same counts, and for 431 copied
@@ -343,7 +378,7 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
     `<add-on>.assets/models/<name>/mapping.json` for re-imports.
   - The source file is copied to `<add-on>.assets/models/<name>/` so the import can be redone.
 - Scripted runs: `--import file.glb [--import-kind prop|arena|robot] [--import-name N]
-  [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
+  [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>] [--import-paint Name=image.png]` (straight in; `--import-dialog` / `--import-step 0-3` show the dialog
   instead), `--place-prop <name>` (with `--arena`), `--export "[file/][Class:]Name" --export-out
   out.glb`. Example: `openbg-editor --data <Data> mods/Box.DEObjects --import arena.glb --import-kind
   arena --import-name "Box Arena" --arena "Box Arena" --play`.
@@ -356,7 +391,12 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   Jaguar (vertices, binds, rest and poses equal), a generated humanoid with unknown joint names and
   other proportions (mapped by shape) onto Jaguar, a Mixamo-named rig onto Katana (an animation named
   by hand), each checked posed in every sequence (limbs along the base's, no stretching past the
-  base's), validated, saved and read by the engine. `--samples <dir>` writes the generated rigs
+  base's; planted feet still and on the floor, the throw grip kept), with a second paint job, new
+  and left-out spheres and its Choose Creature panel, validated, saved and read by the engine; and
+  Gargoyle-named box rigs with and without wing joints (the wings the file's, or Gargoyle's moved).
+  Real content: `engine/tests/scripts/make_character.py` builds a textured, skinned, animated
+  character in Blender (`blender -b --factory-startup --python engine/tests/scripts/make_character.py --
+  --naming mixamo|rigify --textures atlas|multi --out file.glb|file.gltf`), for importing by hand. `--samples <dir>` writes the generated rigs
   (`humanoid.glb`, `mixamo.glb`); `<Data> --keep <dir>` keeps the add-ons for
   `OPENBG_ADDONS=<dir>/HarBoxBot.DEObjects openbg-fight <Data> "Box Bot"`.
 

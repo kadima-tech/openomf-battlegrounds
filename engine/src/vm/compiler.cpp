@@ -26,7 +26,7 @@ using pc::Stmt;
 std::vector<de::ObjectRef> referenced_behaviors(const de::World &data, const de::ObjectRef &behavior) {
 	std::vector<de::ObjectRef> out;
 	try {
-		auto d = behavior.file->object_data(behavior.info());
+		auto d = behavior.file->object_links(behavior.info());
 		de::Contents c(d.references);
 		de::Chunk obj = de::begin_chunk(c);
 		c.seek(obj.end);
@@ -54,7 +54,7 @@ std::vector<uint8_t> change_information(const de::World &data, const std::vector
 std::vector<de::ObjectRef> behavior_globals(const de::World &data, const de::ObjectRef &behavior) {
 	std::vector<de::ObjectRef> out;
 	try {
-		auto d = behavior.file->object_data(behavior.info());
+		auto d = behavior.file->object_links(behavior.info());
 		de::Contents c(d.references);
 		de::Chunk obj = de::begin_chunk(c);
 		c.seek(obj.end);
@@ -175,7 +175,7 @@ const NativeApi &native_api(const de::World &data) {
 		for (uint32_t i = 0; i < f->objects().size(); ++i) {
 			auto &o = f->objects()[i];
 			if (o.class_path != "Class") continue;
-			auto d = f->object_data(o);
+			auto d = f->object_links(o);
 			auto vmc2 = f->ex_payload(d, "VMC2");
 			if (!vmc2) continue;
 			VMClass c;

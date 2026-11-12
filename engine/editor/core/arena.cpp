@@ -282,34 +282,6 @@ const ClassLayout *class_layout(const std::string &cls, size_t index) {
 	return best;
 }
 
-// DE_CMultiStageTextureProcess references chunk 2 (de::read_multistage's layout).
-bool map_multistage(const RawChunk &in, RawChunk &out, const std::function<Ref(const Ref &)> &map) {
-	out = in;
-	if (in.version < 4 || in.version > 8) return false;
-	try {
-		deo::Reader r(in.body);
-		deo::Writer w;
-		uint32_t n = r.u32();
-		w.u32(n);
-		for (uint32_t i = 0; i < n; ++i) {
-			write_ref(w, map(read_ref(r)));
-			uint8_t is_ref = r.u8();
-			w.u8(is_ref);
-			if (is_ref) write_ref(w, map(read_ref(r)));
-			else w.bytes(r.bytes(16));
-			if (in.version == 4) w.block(r.block());
-			else w.bytes(r.bytes(4));
-			w.bytes(r.bytes(1 + 4));
-			if (in.version >= 6) w.bytes(r.bytes(1));
-			if (in.version >= 7) w.bytes(r.bytes(1));
-		}
-		if (r.remaining()) return false;
-		out.body = w.data();
-		return true;
-	} catch (const deo::Error &) {
-		return false;
-	}
-}
 
 bool map_any_chunk(const std::string &cls, size_t k, const RawChunk &in, RawChunk &out, size_t objects, size_t pool,
                    const std::function<Ref(const Ref &)> &map) {

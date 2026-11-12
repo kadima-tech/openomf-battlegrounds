@@ -142,3 +142,29 @@ inline bool load_gl() {
 }  // namespace glu
 
 #endif
+
+#include <functional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+
+namespace glu {
+
+struct UniformNameHash {
+	using is_transparent = void;
+	size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
+};
+
+// The driver's name lookup costs more than the draw it sets up; programs are never deleted or relinked.
+inline GLint cached_uniform_location(GLuint prog, const GLchar *name) {
+	static std::unordered_map<GLuint, std::unordered_map<std::string, GLint, UniformNameHash, std::equal_to<>>> cache;
+	auto &names = cache[prog];
+	auto it = names.find(std::string_view(name));
+	if (it == names.end()) it = names.emplace(name, glGetUniformLocation(prog, name)).first;
+	return it->second;
+}
+
+}  // namespace glu
+
+#undef glGetUniformLocation
+#define glGetUniformLocation glu::cached_uniform_location

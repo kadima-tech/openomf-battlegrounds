@@ -28,6 +28,8 @@
 #include "har_import.h"
 #include "model_export.h"
 #include "model_import.h"
+#include "content.h"
+#include "pilot.h"
 #include "validate.h"
 
 namespace fs = std::filesystem;
@@ -70,7 +72,7 @@ struct Joint {
 	V3 at;  // world, metres
 };
 
-enum class Naming { Mixamo, Unknown };
+enum class Naming { Mixamo, Unknown, Gargoyle, GargoyleWings };
 
 static bool name_is(const std::string &n, const std::string &suffix) { return n.size() >= suffix.size() && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0 && (n.size() == suffix.size() || n[n.size() - suffix.size() - 1] == ':'); }
 
@@ -107,8 +109,41 @@ static std::vector<Joint> humanoid_joints(Naming naming, float arm, float leg) {
 	return j;
 }
 
+// Gargoyle's skin bones by name (three-part legs), and with GargoyleWings its wing bones too.
+static std::vector<Joint> gargoyle_joints(bool wings) {
+	std::vector<Joint> j;
+	j.push_back({"Pelvis", -1, {0, 0.95f, 0}});
+	j.push_back({"Chest", 0, {0, 1.25f, 0}});
+	j.push_back({"Head", 1, {0, 1.6f, 0.02f}});
+	j.push_back({"HeadTop", 2, {0, 1.85f, 0.02f}});
+	for (int side = 0; side < 2; ++side) {
+		const float sx = side == 0 ? 1 : -1;
+		const std::string S = side == 0 ? "Left" : "Right";
+		int a = int(j.size());
+		j.push_back({S + "UpperArm", 1, {sx * 0.2f, 1.45f, 0}});
+		j.push_back({S + "LowerArm", a, {sx * 0.48f, 1.45f, 0}});
+		j.push_back({S + "Hand", a + 1, {sx * 0.75f, 1.45f, 0}});
+		j.push_back({S + "Finger", a + 2, {sx * 0.85f, 1.45f, 0.02f}});
+		int l = int(j.size());
+		j.push_back({S + "UpperLeg", 0, {sx * 0.1f, 0.9f, 0}});
+		j.push_back({S + "MiddleLeg", l, {sx * 0.12f, 0.6f, 0.1f}});
+		j.push_back({S + "LowerLeg", l + 1, {sx * 0.12f, 0.35f, -0.08f}});
+		j.push_back({S + "Foot", l + 2, {sx * 0.12f, 0.08f, 0}});
+		j.push_back({S + "Toe", l + 3, {sx * 0.12f, 0.02f, 0.15f}});
+		if (!wings) continue;
+		int w = int(j.size());
+		j.push_back({S + "WingBase", 1, {sx * 0.06f, 1.35f, -0.15f}});
+		j.push_back({S + "WingInner", w, {sx * 0.3f, 1.45f, -0.35f}});
+		j.push_back({S + "WingMiddle", w + 1, {sx * 0.6f, 1.55f, -0.5f}});
+		j.push_back({S + "WingOuter", w + 2, {sx * 0.9f, 1.75f, -0.6f}});
+		j.push_back({S + "WingTip", w + 3, {sx * 1.1f, 1.9f, -0.65f}});
+	}
+	return j;
+}
+
 static gltf::Scene humanoid(Naming naming, float arm, float leg, bool with_animation) {
-	auto joints = humanoid_joints(naming, arm, leg);
+	const bool gargoyle = naming == Naming::Gargoyle || naming == Naming::GargoyleWings;
+	auto joints = gargoyle ? gargoyle_joints(naming == Naming::GargoyleWings) : humanoid_joints(naming, arm, leg);
 	gltf::Scene s;
 	s.generator = "editor-har-import-tests";
 	// Mixamo through Blender: an Armature node at a hundredth scale, joints in centimetres.
@@ -198,7 +233,19 @@ static gltf::Scene humanoid(Naming naming, float arm, float leg, bool with_anima
 	body.mesh = 0;
 	body.skin = 0;
 	s.add_node(body);
-	if (with_animation) {
+	if (naming == Naming::Unknown) {
+		// Spheres: a new body sphere on the left forearm, a new attack sphere on the right hand, and
+		// one whose name no script looks for.
+		for (auto [name, joint] : {std::pair<const char *, const char *>{"Sphere:GetHitAffectorForearm", "joint9"}, {"Sphere:RightPunchMediumHitDetector3", "joint21"}, {"Sphere:Antenna", "joint5"}}) {
+			gltf::Node n;
+			n.name = name;
+			n.scale = {0.4f, 0.4f, 0.4f};
+			for (size_t i = 0; i < joints.size(); ++i) {
+				if (joints[i].name == joint) s.add_node(n, node[i]);
+			}
+		}
+	}
+	if (with_animation && !gargoyle) {
 		// "Winning1": the left arm waved, so a supplied sequence replaces the base's.
 		gltf::Animation a;
 		a.name = "Armature|Winning1";
@@ -279,9 +326,13 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 	// The limbs point the base robot's way in every pose.
 	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
 		if (supplied.count(b.bank.sequences[q].name)) continue;
+		bool throws = false;
+		for (auto &s : rig.bank.sequences[q].streams) throws |= rig.bank.channels[s.channel].name == "ThrowFollowTarget" && s.pos.size() > 1;
+		if (throws) continue;
 		for (float t : {0.0f, 0.5f}) {
 			auto pn = b.bank.pose(b.bank.sequences[q], t), pb = rig.bank.pose(rig.bank.sequences[q], t);
-			for (const char *pair : {"LeftUpperArm:LeftLowerArm", "RightLowerArm:RightHand", "LeftUpperLeg:LeftLowerLeg", "Pelvis:Chest"}) {
+			// Legs (and an arm holding a throw) are bent by the contact correction; contact_stats checks them.
+			for (const char *pair : {"LeftUpperArm:LeftLowerArm", "RightLowerArm:RightHand", "Pelvis:Chest"}) {
 				std::string s = pair;
 				int a = rig.bank.channel(s.substr(0, s.find(':'))), c = rig.bank.channel(s.substr(s.find(':') + 1));
 				if (a < 0 || c < 0) continue;
@@ -322,6 +373,68 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 			float r = stretch_of(lod, p) / base;
 			if (r > st.stretch) st.stretch = r, st.worst = b.bank.sequences[q].name;
 			for (auto &v : p) st.reach = std::max(st.reach, std::sqrt(v[0] * v[0] + v[2] * v[2]));
+		}
+	}
+	return st;
+}
+
+// Contacts: where a base foot is down, the new one is on the new floor and moves as the base's does
+// (no sliding against the game's base speeds); in a throw the gripping limb keeps its place on the
+// target.
+struct ContactStats {
+	float floor = 0, slide = 0, grip = 0;
+	std::string floor_worst, slide_worst;
+	size_t samples = 0, grips = 0, off_floor = 0, planted = 0, sliding = 0;
+};
+static ContactStats contact_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, const std::set<std::string> &supplied = {}) {
+	ContactStats st;
+	const float tol = rig.height * 0.05f;
+	const int tf = rig.bank.channel("ThrowFollowTarget");
+	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
+		if (supplied.count(b.bank.sequences[q].name)) continue;
+		const int n = 41;
+		std::vector<std::vector<de::Transform>> pb(n), pn(n);
+		for (int i = 0; i < n; ++i) pb[size_t(i)] = rig.bank.pose(rig.bank.sequences[q], float(i) / (n - 1)), pn[size_t(i)] = b.bank.pose(b.bank.sequences[q], float(i) / (n - 1));
+		for (const char *foot : {"LeftFoot", "RightFoot"}) {
+			int f = rig.bank.channel(foot);
+			size_t bi = 0;
+			for (size_t k = 0; k < rig.skin.size(); ++k) bi = rig.skin[k].name == foot ? k : bi;
+			if (f < 0) continue;
+			const float floor_b = rig.skin[bi].bind.t[1], floor_n = b.binds[bi].t[1];
+			for (int i = 0; i < n; ++i) {
+				const auto &B = pb[size_t(i)][size_t(f)].t, &N = pn[size_t(i)][size_t(f)].t;
+				if (B[1] >= floor_b + tol) continue;
+				++st.samples;
+				float e = std::fabs((N[1] - floor_n) - (B[1] - floor_b));
+				if (e > st.floor) st.floor = e, st.floor_worst = b.bank.sequences[q].name;
+				st.off_floor += e > rig.height * 0.02f;
+				if (i == 0 || pb[size_t(i - 1)][size_t(f)].t[1] >= floor_b + tol) continue;
+				const auto &B0 = pb[size_t(i - 1)][size_t(f)].t, &N0 = pn[size_t(i - 1)][size_t(f)].t;
+				// Planted (the base's foot still): the new one must not move.
+				if (std::hypot(B[0] - B0[0], B[2] - B0[2]) > 0.05f) continue;
+				float slide = std::hypot(N[0] - N0[0], N[2] - N0[2]);
+				++st.planted;
+				st.sliding += slide > rig.height * 0.01f;
+				if (slide > st.slide) st.slide = slide, st.slide_worst = b.bank.sequences[q].name;
+			}
+		}
+		bool throws = false;
+		for (auto &s : rig.bank.sequences[q].streams) throws |= int(s.channel) == tf && s.pos.size() > 1;
+		if (!throws) continue;
+		int grip = -1;
+		float best = rig.height * 0.5f;
+		for (const char *end : {"LeftFoot", "RightFoot", "LeftHand", "RightHand"}) {
+			int e = rig.bank.channel(end);
+			for (int i = 0; e >= 0 && i < n; ++i) {
+				float d = dist(pb[size_t(i)][size_t(e)].t, pb[size_t(i)][size_t(tf)].t);
+				if (d < best) best = d, grip = e;
+			}
+		}
+		for (int i = 0; grip >= 0 && i < n; ++i) {
+			float d = dist(pb[size_t(i)][size_t(grip)].t, pb[size_t(i)][size_t(tf)].t);
+			if (d > best + rig.height * 0.1f) continue;
+			++st.grips;
+			st.grip = std::max(st.grip, std::fabs(dist(pn[size_t(i)][size_t(grip)].t, pn[size_t(i)][size_t(tf)].t) - d));
 		}
 	}
 	return st;
@@ -371,7 +484,7 @@ static void print_mapping(const ed::ImportPlan &plan) {
 }
 
 // The add-on as the engine reads it: the HAR's description, model, skin and bank.
-static void check_engine_reads(const fs::path &data, const fs::path &file, const std::string &name, size_t lod0_faces) {
+static void check_engine_reads(const fs::path &data, const fs::path &file, const std::string &name, size_t lod0_faces, size_t paint_jobs = 1) {
 	set_env("OPENBG_ADDONS", file.string());
 	std::set<std::string> keep{file.stem().string(), "Jaguar", "JaguarModel1", "Katana", "KatanaModel1", "SharedObjects", "Fighter"};
 	de::World w(data, [&](const std::string &s) { return keep.count(s) > 0; });
@@ -385,7 +498,14 @@ static void check_engine_reads(const fs::path &data, const fs::path &file, const
 	}
 	CHECK(desc);
 	auto models = game::fighter_models(w, desc);
-	CHECK(models.size() == 1);
+	CHECK(models.size() == paint_jobs);
+	size_t defaults = 0;
+	for (auto &m : models) defaults += game::read_description(w, m).flag_d8;
+	CHECK(defaults <= 1);
+	if (paint_jobs > 1) {
+		de::ObjectRef large = game::read_description(w, desc).large;
+		CHECK(large && large.file == f && large.info().class_path == "ControlCreator");
+	}
 	// The model's biggest mesh with its weights, and the fighter's bank.
 	const de::ObjectInfo *model = nullptr, *bank = nullptr, *deform = nullptr;
 	for (auto &o : f->objects()) {
@@ -518,6 +638,17 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 		CHECK(ok);
 	}
 	CHECK(plan.har.mirror);  // the glTF convention's left is the game's mirror image
+	size_t new_spheres = 0;
+	if (naming == Naming::Unknown) {
+		CHECK(plan.har.spheres.size() == 3);
+		for (auto &sp : plan.har.spheres) {
+			if (sp.sphere == "Antenna") CHECK(!sp.known && !sp.note.empty());
+			else {
+				CHECK(sp.known && sp.copies >= 0 && !sp.bone.empty());
+				++new_spheres;
+			}
+		}
+	}
 	int supplied = 0;
 	for (auto &m : plan.har.sequences) supplied += m.animation >= 0;
 	// A base without the file's sequence name: the animation is named by hand (the Animations page).
@@ -538,6 +669,13 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	PoseStats ps = pose_stats(b, *plan.har.rig, from_file);
 	printf("  scale %.2f, LODs %zu / %zu / %zu triangles, %zu sequences (%zu from the file); worst edge stretch %.2f (%s), reach %.1f units, limbs within %.0f deg of the base, their meshes within %.0f deg of the limbs (base %.0f)\n", b.scale, b.lods[0].faces.size(),
 	       b.lods.size() > 1 ? b.lods[1].faces.size() : 0, b.lods.size() > 2 ? b.lods[2].faces.size() : 0, b.bank.sequences.size(), b.supplied, ps.stretch, ps.worst.c_str(), ps.reach, std::acos(std::clamp(ps.direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.mesh_direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.base_mesh_direction, -1.0f, 1.0f)) * 57.3f);
+	ContactStats cs = contact_stats(b, *plan.har.rig, from_file);
+	printf("  contacts: %zu sequences corrected; feet down in %zu samples, %zu off the floor (worst %.2f, %s, out of reach); planted in %zu, %zu sliding (worst %.2f, %s); throw grip %zu samples, off by %.2f\n", b.contacts,
+	       cs.samples, cs.off_floor, cs.floor, cs.floor_worst.c_str(), cs.planted, cs.sliding, cs.slide, cs.slide_worst.c_str(), cs.grips, cs.grip);
+	CHECK(b.contacts > 0);
+	CHECK(cs.off_floor * 10 < cs.samples);  // out of reach: thrown, falling, legs at full stretch
+	CHECK(cs.sliding * 50 < cs.planted);
+	CHECK(cs.grip < plan.har.rig->height * 0.05f);
 	CHECK(b.supplied == 1);
 	CHECK(ps.stretch < 2.0f);
 	CHECK(ps.direction > 0.99f);
@@ -546,6 +684,13 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	auto project = ed::Project::create(base, dir / "HarGenerated.DEObjects");
 	ed::ImportResult r = ed::import_robot(*project, plan);
 	CHECK(ed::addon_hars(*project).size() == 1);
+	{
+		ed::HarData hd = ed::read_har(*project, ed::har_objects(*project, r.root));
+		CHECK(hd.spheres.size() == plan.har.rig->spheres.size() + new_spheres);
+		size_t found = 0;
+		for (auto &sp : hd.spheres) found += (sp.name == "GetHitAffectorForearm" && sp.bone == "LeftLowerArm") || (sp.name == "RightPunchMediumHitDetector3" && sp.bone == "RightHand");
+		CHECK(found == new_spheres);
+	}
 	for (auto &i : ed::validate(*project)) {
 		if (i.severity == ed::Issue::Error) fprintf(stderr, "  validation: %s\n", i.text.c_str());
 		CHECK(i.severity != ed::Issue::Error);
@@ -558,14 +703,106 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	for (auto &m : again.har.sequences) {
 		if (!manual.empty() && m.sequence == manual) CHECK(m.animation == 0 && m.source == ed::MapSource::Manual);
 	}
+	// A second paint job: a copy of the imported model with its own colours.
+	{
+		ed::HarObjects o = ed::har_objects(*project, r.root);
+		uint32_t job = ed::create_paint_job(*project, o, "Night");
+		o = ed::har_objects(*project, r.root);
+		CHECK(o.model_descriptions.size() == 2);
+		int first = ed::paint_job_model(*project, uint32_t(o.model_descriptions[0])), second = ed::paint_job_model(*project, job);
+		CHECK(first >= 0 && second >= 0 && first != second);
+		auto images = ed::paint_images(*project, job);
+		bool colours = false;
+		for (auto &img : images) {
+			if (img.name != "RGBStatic") continue;
+			int w = 0, h = 0, type = 0;
+			ed::image_header(project->file().objects[size_t(img.object)], &type, &w, &h);
+			ed::set_image_pixels(*project, uint32_t(img.object), w, h, std::vector<uint8_t>(size_t(w) * size_t(h) * 4, 40), "night.png");
+			colours = true;
+		}
+		CHECK(colours || plan.har.paint != ed::HarPlan::Paint::Colours);
+		// Choose Creature's panel: the import names the robot in the add-on's own copy.
+		ed::HarPresentation before = ed::read_presentation(*project, o);
+		CHECK(before.found && before.own && before.title == name && before.width == 512 && before.height == 128);
+		ed::write_presentation(*project, o, "BOX BOT", "A robot of boxes.");
+		ed::set_presentation_picture(*project, o, 4, 1, std::vector<uint8_t>(16, 200), "test.png");
+		ed::HarPresentation after = ed::read_presentation(*project, o);
+		CHECK(after.own && after.title == "BOX BOT" && after.text == "A robot of boxes." && after.picture >= 0 && after.width == 512);
+	}
 	project->save();
-	check_engine_reads(data, dir / "HarGenerated.DEObjects", name, b.lods[0].faces.size());
+	check_engine_reads(data, dir / "HarGenerated.DEObjects", name, b.lods[0].faces.size(), 2);
 	if (!keep.empty()) {
 		std::string stem = naming == Naming::Mixamo ? "HarMixamo" : "HarBoxBot";
 		fs::copy_file(dir / "HarGenerated.DEObjects", keep / (stem + ".DEObjects"), fs::copy_options::overwrite_existing);
 		fs::copy_file(dir / "rig.glb", keep / (stem + ".glb"), fs::copy_options::overwrite_existing);
 	}
 	(void)r;
+	fs::remove_all(dir);
+	printf("  ok\n");
+}
+
+// Gargoyle's wings: a second deform info, bank and mesh hung from the chest. Without wing joints the
+// base's wings stay, moved and scaled with the new chest; with them the file's wing vertices are.
+static void test_wings(const fs::path &data, ed::BaseData &base, bool wings, const fs::path &keep) {
+	fs::path dir = scratch();
+	gltf::write(humanoid(wings ? Naming::GargoyleWings : Naming::Gargoyle, 1, 1, false), dir / "rig.glb");
+	const std::string name = wings ? "Winged Bot" : "Wingless Bot";
+	ed::ImportPlan plan = robot_plan(dir / "rig.glb", base, "Gargoyle", name);
+	printf("%s onto Gargoyle:\n", wings ? "a box rig with wing joints" : "a box rig without wings");
+	print_mapping(plan);
+	print_issues(plan);
+	CHECK(!plan.errors());
+	CHECK(plan.har.rig->extras.size() == 1);
+	size_t wing_rows = 0;
+	for (auto &b : plan.har.bones) wing_rows += !b.part.empty() && b.joint >= 0;
+	CHECK(wing_rows == (wings ? 8u : 0u));
+	ed::RobotBuild b = ed::build_robot(plan);
+	CHECK(b.parts.size() == 1);
+	if (b.parts.empty()) return;
+	const auto &part = b.parts[0];
+	CHECK(part.mapped == wings && !part.lod.faces.empty() && part.binds.size() == 8);
+	// The wings hang by the new chest: their vertices near it, not where Gargoyle's chest was.
+	int chest = plan.har.rig->channel("Chest");
+	V3 c = b.rest[size_t(chest)].t, mean{0, 0, 0};
+	for (auto &v : part.lod.vertices) mean = {mean[0] + v[0], mean[1] + v[1], mean[2] + v[2]};
+	float n = float(std::max<size_t>(1, part.lod.vertices.size()));
+	mean = {mean[0] / n, mean[1] / n, mean[2] / n};
+	printf("  wings: %s, %zu triangles, centre %.1f units from the chest (rig %.1f tall), binds at %.1f %.1f %.1f\n", wings ? "the file's" : "Gargoyle's, moved", part.lod.faces.size(), dist(mean, c),
+	       plan.har.rig->height * b.scale, part.binds[0].t[0], part.binds[0].t[1], part.binds[0].t[2]);
+	CHECK(dist(mean, c) < plan.har.rig->height * b.scale * 0.6f);
+	// The LODs are the body's only.
+	for (auto &l : b.lods) CHECK(l.faces.size() + (wings ? 0 : 0) > 0);
+	auto project = ed::Project::create(base, dir / "HarWings.DEObjects");
+	ed::import_robot(*project, plan);
+	project->save();
+	set_env("OPENBG_ADDONS", (dir / "HarWings.DEObjects").string());
+	std::set<std::string> files{"HarWings", "Gargoyle", "GargoyleModel1", "SharedObjects"};
+	de::World w(data, [&](const std::string &x) { return files.count(x) > 0; });
+	set_env("OPENBG_ADDONS", "");
+	const de::ObjectsFile *f = w.file("HarWings");
+	CHECK(f);
+	if (f) {
+		const de::ObjectInfo *deform = nullptr;
+		uint32_t mesh = UINT32_MAX;
+		for (uint32_t i = 0; i < f->objects().size(); ++i) {
+			if (f->objects()[i].class_path == "ActorDeformInfo" && f->objects()[i].name == "WingDeformInfo") deform = &f->objects()[i];
+			if (f->objects()[i].class_path == "Mesh\\Standard" && f->objects()[i].name == "DE_Wings Mesh") mesh = i;
+		}
+		CHECK(deform && mesh != UINT32_MAX);
+		if (deform && mesh != UINT32_MAX) {
+			auto skin = de::read_skin(*f, *deform, *f, mesh);
+			de::Mesh m = de::read_mesh(*f, f->objects()[mesh]);
+			size_t weighted = 0;
+			for (size_t v = 0; v < m.vertices.size(); ++v) {
+				int sum = 0;
+				for (auto &bone : skin) sum += v < bone.weights.size() ? bone.weights[v] : 0;
+				weighted += sum > 0;
+			}
+			CHECK(skin.size() == 8 && weighted == m.vertices.size() && m.faces.size() == part.lod.faces.size());
+			CHECK(dist(skin[0].bind.t, part.binds[0].t) < 1e-3f);
+		}
+	}
+	if (!keep.empty()) fs::copy_file(dir / "HarWings.DEObjects", keep / (wings ? "HarWinged.DEObjects" : "HarWingless.DEObjects"), fs::copy_options::overwrite_existing);
 	fs::remove_all(dir);
 	printf("  ok\n");
 }
@@ -594,6 +831,8 @@ int main(int argc, char **argv) {
 	test_round_trip(data, base, keep);
 	test_generated(data, base, Naming::Unknown, "generated humanoid (unknown joint names, long arms, short legs)", "Jaguar", keep);
 	test_generated(data, base, Naming::Mixamo, "Mixamo-named rig (centimetre armature)", "Katana", keep);
+	test_wings(data, base, false, keep);
+	test_wings(data, base, true, keep);
 	if (failures) {
 		fprintf(stderr, "%d check(s) failed\n", failures);
 		return 1;

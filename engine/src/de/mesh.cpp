@@ -151,7 +151,7 @@ void add_sorted(std::vector<uint32_t> &out, const std::vector<uint32_t> &ids) {
 Octree read_octree(const ObjectsFile &f, const ObjectInfo &o) {
 	Octree t;
 	try {
-		auto d = f.object_data(o);
+		auto d = f.object_links(o);
 		auto ex = f.ex_payload(d, "D3DProjectedTargetOctree");
 		if (!ex) return t;
 		Contents c(ex->data);

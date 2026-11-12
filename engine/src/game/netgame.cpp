@@ -127,7 +127,19 @@ NetOptions net_options(const std::map<std::string, std::string> &r) {
 	o.budget = std::max(1000, reg_int(r, "Network\\Winsock\\Maximum Outgoing Bytes", 16000));
 	o.delay.delay_ms = float(std::max(0, reg_int(r, "Network\\Winsock\\Delay Packet Time", 0)));
 	o.delay.variation_ms = float(std::max(0, reg_int(r, "Network\\Winsock\\Delay Packet Time Added Variation", 0)));
+	o.lobby = reg_str(r, "Network\\Lobby Server");
+	o.lan_only = reg_int(r, "Network\\LAN Only", 0) != 0;
+	o.host_key = reg_str(r, "Network\\Host Key");
+	o.force_relay = getenv("OPENBG_FORCE_RELAY") != nullptr;
 	return o;
+}
+
+bool resolve_lobby(const std::string &spec, net::Address &out, std::string *error) {
+	if (spec.empty()) {
+		if (error) *error = "No lobby server is set (Options, Network: Lobby Server).";
+		return false;
+	}
+	return net::resolve(spec, net::kLobbyPort, out, error);
 }
 
 std::vector<uint8_t> encode_server_info(const NetServerInfo &i) {
@@ -176,6 +188,10 @@ NetGame::~NetGame() { close(); }
 
 void NetGame::close() {
 	if (host_ && state_ == State::Hosting) printf("net: stopped hosting, port %u released\n", host_->port());
+	lobby_host_.reset();
+	lobby_join_.reset();
+	finder_.reset();
+	finding_.clear();
 	net_.reset();
 	if (host_) {
 		for (net::EnetPeer *p : host_->peers()) host_->disconnect(p, true);
@@ -215,6 +231,7 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 	}
 	host_->set_delay(o.delay);
 	host_->set_kick_time(o.kick_ms);
+	if (auto id = net::Identity::from_hex(o.host_key)) host_->set_identity(*id);
 	hash_ = net_data_hash(w_.data());
 	hosted_ = &s;
 	s.net_status = 1;
@@ -233,7 +250,7 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 	net_->on_ban = [this](net::Endpoint *link, uint32_t hours) {
 		for (auto &[peer, c] : accepted_) {
 			if (peer != link) continue;
-			bans_[peer->address().ip] = steady_ms() + uint64_t(hours) * 3600000;
+			bans_[origin(peer).ip] = steady_ms() + uint64_t(hours) * 3600000;
 			printf("net: %s banned for %u hours\n", c->player_name.c_str(), hours);
 			host_->disconnect(peer, false);
 		}
@@ -257,12 +274,63 @@ bool NetGame::host(SessionState &s, const NetOptions &o, std::string *error) {
 		return encode_server_info(i);
 	};
 	state_ = State::Hosting;
-	printf("net: hosting on port %u, data %s\n", host_->port(), hash_text(hash_).c_str());
+	printf("net: hosting on port %u, data %s, identity %s\n", host_->port(), hash_text(hash_).c_str(), net::fingerprint(host_->identity()).c_str());
+	// DE_CGameSpyFactory::Init: unless Network\LAN Only, the session is listed (on GameSpy's master then, our lobby now).
+	net::Address lobby;
+	std::string why;
+	if (!o.lan_only && !o.lobby.empty()) {
+		if (!resolve_lobby(o.lobby, lobby, &why)) {
+			printf("net: not listed: %s\n", why.c_str());
+		} else {
+			lobby_host_ = std::make_unique<net::LobbyHost>(*host_, lobby);
+			lobby_host_->info = [this] {
+				NetServerInfo i;
+				decode_server_info(host_->discovery_reply(), i);
+				net::LobbyInfo l;
+				l.protocol = i.protocol;
+				l.version = i.version;
+				l.data_hash = i.data_hash;
+				l.server_name = i.server_name;
+				l.session_name = i.session_name;
+				l.players = uint8_t(std::clamp(i.players, 0, 255));
+				l.max_players = uint8_t(std::clamp(i.max_players, 0, 255));
+				l.flags = uint8_t((i.password ? 1 : 0) | (i.playing ? 2 : 0));
+				l.local.port = host_->port();
+				l.identity = host_->identity();
+				l.instance = i.instance;
+				return l;
+			};
+			printf("net: listing on the lobby at %s\n", lobby.text().c_str());
+		}
+	}
 	return true;
+}
+
+net::Address NetGame::origin(net::EnetPeer *p) const {
+	if (p && lobby_host_) {
+		if (auto c = lobby_host_->relayed_client(p->address())) return *c;
+	}
+	return p ? p->address() : net::Address{};
 }
 
 bool NetGame::join(const std::string &address, const NetOptions &o, std::string *error) {
 	opt_ = o;
+	if (address.rfind("lobby:", 0) == 0) {
+		net::Address lobby;
+		if (!resolve_lobby(o.lobby, lobby, error)) return false;
+		finder_ = std::make_unique<net::LobbyList>(lobby, kNetProtocol, 1000);
+		if (!finder_->ok()) {
+			if (error) *error = "No network socket could be opened.";
+			finder_.reset();
+			return false;
+		}
+		finding_ = address.substr(6);
+		finding_since_ = net::now_ms();
+		hash_ = net_data_hash(w_.data());
+		state_ = State::Connecting;
+		printf("net: looking for \"%s\" on the lobby at %s\n", finding_.c_str(), lobby.text().c_str());
+		return true;
+	}
 	net::Address to;
 	if (!net::resolve(address, o.port, to, error)) return false;
 	host_ = net::EnetHost::connect(to, error);
@@ -272,6 +340,22 @@ bool NetGame::join(const std::string &address, const NetOptions &o, std::string 
 	hash_ = net_data_hash(w_.data());
 	state_ = State::Connecting;
 	printf("net: connecting to %s, data %s\n", to.text().c_str(), hash_text(hash_).c_str());
+	return true;
+}
+
+bool NetGame::join_listed(const net::LobbyEntry &e, const NetOptions &o, std::string *error) {
+	opt_ = o;
+	net::Address lobby;
+	if (!resolve_lobby(o.lobby, lobby, error)) return false;
+	host_ = net::EnetHost::client(error);
+	if (!host_) return false;
+	host_->set_delay(o.delay);
+	host_->set_kick_time(o.kick_ms);
+	hash_ = net_data_hash(w_.data());
+	lobby_join_ = std::make_unique<net::LobbyJoin>(*host_, lobby, e, o.force_relay);
+	state_ = State::Connecting;
+	printf("net: joining \"%s\" (lobby id %u, identity %s) through the lobby at %s, data %s\n", e.info.server_name.c_str(), e.id,
+	       net::fingerprint(e.info.identity).c_str(), lobby.text().c_str(), hash_text(hash_).c_str());
 	return true;
 }
 
@@ -300,17 +384,17 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 		net::EnetPeer *previous = nullptr;
 		if (reason.empty() && hosted_) {
 			for (auto &[old, cl] : accepted_) {
-				if (old != &p && old->address().ip == p.address().ip && cl->player_name == (name.empty() ? kUnnamed : name)) previous = old;
+				if (old != &p && origin(old).ip == origin(&p).ip && cl->player_name == (name.empty() ? kUnnamed : name)) previous = old;
 			}
 		}
-		if (auto b = bans_.find(p.address().ip); reason.empty() && b != bans_.end() && steady_ms() < b->second) reason = "Banned From Server";
+		if (auto b = bans_.find(origin(&p).ip); reason.empty() && b != bans_.end() && steady_ms() < b->second) reason = "Banned From Server";
 		if (reason.empty() && !previous && int(hosted_->clients.size()) >= hosted_->max_player_clients) reason = "The server is full.";
 		else if (reason.empty() && !opt_.password.empty() && password != opt_.password) reason = "The password is not correct.";
 		if (!reason.empty()) {
 			Out o = lobby_message(kRefuse);
 			o.str(reason);
 			p.send(net::Channel::Reliable, std::move(o.d));
-			printf("net: refused %s (%s): %s\n", p.address().text().c_str(), name.c_str(), reason.c_str());
+			printf("net: refused %s (%s): %s\n", origin(&p).text().c_str(), name.c_str(), reason.c_str());
 			return;
 		}
 		if (name.empty()) name = kUnnamed;
@@ -326,7 +410,7 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 			host_->disconnect(previous, true);
 			accepted_[&p] = &c;
 			net_->reconnect(net_->add_peer(&p), c, linked);
-			printf("net: %s reconnected from %s\n", name.c_str(), p.address().text().c_str());
+			printf("net: %s reconnected from %s\n", name.c_str(), origin(&p).text().c_str());
 		} else {
 			SessionClient &c = add_client_to(w_, *hosted_, false, name);
 			c.local = false;
@@ -352,7 +436,7 @@ void NetGame::lobby(net::EnetPeer &p, const net::Packet &packet) {
 		o.u32(starting);
 		o.u32(uint32_t(hosted_->max_player_clients));
 		p.send(net::Channel::Reliable, std::move(o.d));
-		if (!previous) printf("net: %s joined from %s\n", name.c_str(), p.address().text().c_str());
+		if (!previous) printf("net: %s joined from %s\n", name.c_str(), origin(&p).text().c_str());
 		return;
 	}
 	if (state_ == State::Connecting && m == kRefuse) {
@@ -401,7 +485,25 @@ void NetGame::start_client_session(const std::vector<uint8_t> &d, size_t pos) {
 }
 
 void NetGame::update() {
+	if (finder_) {
+		finder_->update();
+		const auto entries = finder_->entries();
+		for (const net::LobbyEntry &e : entries) {
+			if (e.info.server_name != finding_) continue;
+			finder_.reset();
+			std::string error;
+			if (!join_listed(e, opt_, &error)) return fail("Unable To Join", error);
+			break;
+		}
+		if (finder_ && net::now_ms() - finding_since_ > 60000) return fail("Unable To Join", "The lobby does not list \"" + finding_ + "\" (" + finder_->status + ").");
+		if (finder_) return;
+	}
 	if (!host_) return;
+	if (lobby_host_) lobby_host_->update();
+	if (lobby_join_) {
+		lobby_join_->update();
+		if (lobby_join_->phase() == net::LobbyJoin::Phase::Failed) return fail("Unable To Join", lobby_join_->error);
+	}
 	// The network game lives as long as its session: a match that ends closes it.
 	SessionState *s = hosted_ ? hosted_ : net_ ? net_->session : nullptr;
 	if (s && std::none_of(w_.sessions.begin(), w_.sessions.end(), [&](const auto &sp) { return sp.get() == s; })) {
@@ -417,6 +519,8 @@ void NetGame::update() {
 		switch (e.kind) {
 		case net::EnetHost::Event::Connected:
 			if (state_ == State::Connecting) {
+				if (lobby_join_) lobby_join_->connected();
+				if (const net::Key32 *k = e.peer->identity()) printf("net: connected to %s, server identity %s, encrypted\n", e.peer->address().text().c_str(), net::fingerprint(*k).c_str());
 				server_ = e.peer;
 				Out o = lobby_message(kJoin);
 				o.str(kMagic);
@@ -444,7 +548,12 @@ void NetGame::update() {
 					if (net_) net_->remove_peer(e.peer);
 					accepted_.erase(it);
 				}
-			} else if (e.peer == server_) {
+			} else if (state_ == State::Connecting && !e.peer->refusal.empty()) {
+				fail("Unable To Join", e.peer->refusal);
+				return;
+			} else if (state_ == State::Connecting && lobby_join_ && e.peer != server_) {
+				// A punched connection that did not come up; the relay still may.
+			} else if (e.peer == server_ || state_ == State::Connecting) {
 				fail(state_ == State::Joined ? "Connection Lost" : "Unable To Join",
 				     state_ == State::Joined ? "The connection to the server was lost." : "The server did not answer.");
 				return;

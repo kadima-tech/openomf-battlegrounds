@@ -2,7 +2,10 @@
 // the left, the variant's data in tabs on the right.
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 
 #include "assets.h"
@@ -33,7 +36,10 @@ public:
 	HarDocument(Editor &e, const ed::Guid &g) : guid_(g) {
 		if (e.options().asset_tab >= 0) tab_ = std::clamp(e.options().asset_tab, 0, 6);
 		if (e.options().asset_select >= 0) pick_ = e.options().asset_select;
+		if (e.options().paint_job >= 0) paint_ = e.options().paint_job;
+		render_picture_ = e.options().har_picture == "render";
 	}
+	~HarDocument() override { delete_texture(picture_); }
 	std::string title(Editor &e) const override {
 		int i = e.find_object(guid_);
 		return i < 0 ? "HAR" : "HAR: " + utf8_text(e.project()->file().objects[size_t(i)].info.name_text());
@@ -58,7 +64,16 @@ private:
 	ed::Guid guid_;
 	ed::HarData data_, committed_;
 	uint64_t read_revision_ = 0;
-	int tab_ = 0, pick_ = 0, input_ = 0;
+	int tab_ = 0, pick_ = 0, input_ = 0, paint_ = 0;
+	uint64_t paint_revision_ = 0;
+	// Choose Creature's panel (title, text, picture), re-read when the project changes.
+	ed::HarPresentation pres_;
+	std::string pres_title_, pres_text_;
+	uint64_t pres_revision_ = 0;
+	GLuint picture_ = 0;
+	bool render_picture_ = false;
+	void presentation(Editor &e, const ed::HarObjects &o);
+	void render_picture(Editor &e, const ed::HarObjects &o);
 	RobotPreview robot_;
 	std::string loaded_, error_;
 	int animation_ = 0;
@@ -107,16 +122,25 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	ImVec2 p0 = ImGui::GetWindowPos(), p1 = p0 + ImVec2(size.x, size.y - footer);
 	dl->AddRectFilledMultiColor(p0 + ImVec2(1, 1), p1 - ImVec2(1, 0), rgb(0x2b2742), rgb(0x2b2742), rgb(0x15161c), rgb(0x15161c));
 	std::string base = o.fighter >= 0 ? e.project()->file().objects[size_t(o.fighter)].info.name_text() : "";
-	// An imported robot's model is the add-on's own: drawn from the add-on with its rig.
+	// The selected paint job's model: the add-on's own (an imported robot, a new paint job) drawn with
+	// the variant's rig, or a base model.
+	paint_ = o.model_descriptions.empty() ? 0 : std::clamp(paint_, 0, int(o.model_descriptions.size()) - 1);
 	int own_model = -1;
+	std::string base_file, base_model;
 	if (!o.model_descriptions.empty()) {
-		int m = e.project()->find(ed::description_resource(e.project()->file().objects[size_t(o.model_descriptions[0])]));
-		if (m >= 0 && e.project()->file().objects[size_t(m)].info.class_text() == "FighterModel") own_model = m;
+		uint32_t md = uint32_t(o.model_descriptions[size_t(paint_)]);
+		own_model = ed::paint_job_model(*e.project(), md);
+		if (own_model < 0) {
+			if (const ed::BaseObject *bm = e.base()->by_guid(ed::description_resource(e.project()->file().objects[md]))) {
+				base_file = e.base()->files()[bm->file].stem;
+				base_model = "#" + std::to_string(bm->index);
+			}
+		}
 	}
-	std::string key = own_model >= 0 ? "addon:" + std::to_string(own_model) + ":" + std::to_string(o.fighter) : base;
+	std::string key = own_model >= 0 ? "addon:" + std::to_string(own_model) + ":" + std::to_string(o.fighter) + ":" + std::to_string(paint_revision_) : base + ":" + base_file + base_model;
 	if (!base.empty() && loaded_ != key) {
 		loaded_ = key;
-		bool ok = own_model >= 0 ? robot_.load_addon(e.project()->bytes(), uint32_t(own_model), uint32_t(o.fighter), key, &error_) : robot_.load(e.base()->dir(), base, &error_);
+		bool ok = own_model >= 0 ? robot_.load_addon(e.project()->bytes(), uint32_t(own_model), uint32_t(o.fighter), key, &error_) : robot_.load(e.base()->dir(), base, &error_, base_file, base_model);
 		if (!ok) e.log(LogLine::Error, "Preview: " + error_);
 		const auto &anims = robot_.animations();
 		for (size_t k = 0; k < anims.size(); ++k) {
@@ -139,7 +163,7 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 			ImVec2 c = p0 + ImVec2(x / scale, y / scale);
 			float r = std::max(2.0f, s.falloff * ppu / scale);
 			bool sel = tab_ == 3 && int(k) == pick_;
-			bool hit = s.name.find("Hit") != std::string::npos || s.name.find("Leap") != std::string::npos;
+			bool hit = ed::attack_sphere(s.name);
 			unsigned col = sel ? kWarningStrong : hit ? 0xff6b6b : 0x6bb8ff;
 			if (sel) dl->AddCircleFilled(c, r, rgb(col, 60), 32);
 			dl->AddCircle(c, r, rgb(col, sel ? 255 : 110), 32, sel ? 2.5f : 1.0f);
@@ -150,7 +174,8 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	ImGui::InvisibleButton("orbit", area);
 	if (ImGui::IsItemActive()) yaw_ += ImGui::GetIO().MouseDelta.x * 0.01f;
 	ImGui::PushFont(nullptr, kFontSmall);
-	dl->AddText(p0 + ImVec2(ui::px(12), ui::px(10)), rgb(kTextDim), (data_.name + (loaded_.rfind("addon:", 0) == 0 ? "  (imported model on " + base + "'s rig)" : "  (" + base + "'s model and rig)")).c_str());
+	std::string job = o.model_descriptions.empty() ? "" : "  \xc2\xb7  " + utf8_text(e.project()->file().objects[size_t(o.model_descriptions[size_t(paint_)])].info.name_text());
+	dl->AddText(p0 + ImVec2(ui::px(12), ui::px(10)), rgb(kTextDim), (data_.name + job + (own_model >= 0 ? "  (the add-on's model on " + base + "'s rig)" : "  (" + base + "'s model and rig)")).c_str());
 	dl->AddText(p0 + ImVec2(ui::px(12), ui::px(28)), rgb(0xff6b6b), "\xe2\x97\x8f attack spheres");
 	dl->AddText(p0 + ImVec2(ui::px(130), ui::px(28)), rgb(0x6bb8ff), "\xe2\x97\x8f body / hit spheres");
 	ImGui::PopFont();
@@ -211,6 +236,7 @@ void HarDocument::general(Editor &e, const ed::HarObjects &o) {
 	ui::dim_text("shown in Choose Creature", kTextMuted);
 	ui::form_label("Locked by default", lw, ImGui::GetFrameHeight());
 	ui::checkbox("##locked", &data_.locked);
+	presentation(e, o);
 	ImGui::SeparatorText("What the variant holds");
 	auto row = [&](const char *label, const std::string &v) {
 		ui::form_label(label, lw);
@@ -228,6 +254,118 @@ void HarDocument::general(Editor &e, const ed::HarObjects &o) {
 	ui::dim_text("Every object is a copy with a fresh GUID, so the original game lists the variant next to the base robot; "
 	             "its rig and moves are the base robot's, its model too unless it was imported (File > Import 3D Model, a robot: docs/EDITOR_SPEC.md \xc2\xa7" "5.5).",
 	             kTextMuted);
+}
+
+void HarDocument::presentation(Editor &e, const ed::HarObjects &o) {
+	ed::Project &p = *e.project();
+	if (pres_revision_ != p.revision()) {
+		pres_ = ed::read_presentation(p, o);
+		pres_title_ = pres_.title, pres_text_ = pres_.text;
+		pres_revision_ = p.revision();
+		int w = 0, h = 0;
+		std::vector<uint8_t> px;
+		if (pres_.picture >= 0) px = ed::image_rgba(p.file().objects[size_t(pres_.picture)], &w, &h);
+		if (!px.empty()) picture_ = upload_texture(w, h, px, picture_);
+		else delete_texture(picture_), picture_ = 0;
+	}
+	if (render_picture_ && robot_.animations().size()) {
+		render_picture_ = false;
+		render_picture(e, o);
+		if (e.options().save) e.save();
+	}
+	const float lw = ui::px(180);
+	ImGui::SeparatorText("Choose Creature");
+	if (!pres_.found) {
+		ui::dim_text("The description has no Choose Creature panel.", kTextMuted);
+		return;
+	}
+	if (!pres_.own) ui::dim_text("Shows the base robot's title, text and picture; changing one copies them into the add-on.", kTextMuted);
+	ui::form_label("Title", lw);
+	ImGui::SetNextItemWidth(-ui::px(4));
+	ImGui::InputText("##ptitle", &pres_title_);
+	bool commit = ImGui::IsItemDeactivatedAfterEdit();
+	ui::form_label("Description", lw);
+	ImGui::InputTextMultiline("##ptext", &pres_text_, ImVec2(-ui::px(4), ui::px(110)), ImGuiInputTextFlags_WordWrap);
+	commit = commit || ImGui::IsItemDeactivatedAfterEdit();
+	if (commit && (pres_title_ != pres_.title || pres_text_ != pres_.text)) {
+		try {
+			ed::write_presentation(p, o, pres_title_, pres_text_);
+		} catch (const std::exception &ex) {
+			e.log(LogLine::Error, std::string("Cannot change the panel: ") + ex.what());
+		}
+	}
+	ui::form_label("Picture", lw);
+	ImGui::BeginGroup();
+	if (picture_ && pres_.width > 0) {
+		float w = std::min(ImGui::GetContentRegionAvail().x - ui::px(4), ui::px(512));
+		ImGui::Image((ImTextureID)(intptr_t)picture_, ImVec2(w, w * float(pres_.height) / float(pres_.width)));
+	} else {
+		ui::dim_text((std::to_string(pres_.width) + " x " + std::to_string(pres_.height) + ", the base robot's").c_str(), kTextDim);
+	}
+	if (ui::toolbar_button(ICON_UPLOAD, "Import PNG/BMP", ui::Tone::Ghost, true, "Scaled to the picture's size", ImGui::GetFrameHeight())) {
+		e.file_dialog().open(FileDialog::OpenFile, "Choose Creature picture", {}, {".png", ".bmp"}, [&e, o](const std::filesystem::path &path) {
+			try {
+				ed::RgbaImage im = ed::load_image(path);
+				ed::set_presentation_picture(*e.project(), o, im.width, im.height, im.rgba, path.filename().string());
+				e.log(LogLine::Ok, "Imported " + path.filename().string());
+			} catch (const std::exception &ex) {
+				e.log(LogLine::Error, ex.what());
+			}
+		});
+	}
+	ImGui::SameLine();
+	if (ui::toolbar_button(ICON_CAMERA, "Render from the model", ui::Tone::Ghost, robot_.animations().size() > 0, "The selected paint job in four poses, as the shipped pictures show the robot", ImGui::GetFrameHeight())) render_picture(e, o);
+	ImGui::EndGroup();
+}
+
+// Tiles of the robot (the selected paint job) in four poses on a dark backdrop, as the shipped strips.
+void HarDocument::render_picture(Editor &e, const ed::HarObjects &o) {
+	const int W = pres_.width > 0 ? pres_.width : 512, H = pres_.height > 0 ? pres_.height : 128;
+	const int tiles = std::max(1, W / std::max(1, H)), side = H, big = side * 2;
+	const auto &anims = robot_.animations();
+	auto find = [&](std::initializer_list<const char *> names) {
+		for (const char *n : names) {
+			for (size_t k = 0; k < anims.size(); ++k) {
+				if (anims[k].find(n) != std::string::npos) return int(k);
+			}
+		}
+		return 0;
+	};
+	struct Shot {
+		int anim;
+		float t, yaw;
+	};
+	const Shot shots[4] = {{find({"Standing"}), 0.2f, 0.5f}, {find({"RightPunchHeavy", "PunchHeavy", "Punch"}), 0.45f, 1.2f}, {find({"KickHeavy", "Kick"}), 0.5f, -0.9f}, {find({"Winning", "Win"}), 0.6f, 0.2f}};
+	std::vector<uint8_t> strip(size_t(W) * size_t(H) * 4, 255);
+	const std::array<std::array<float, 3>, 3> paint = {{{0.8f, 0.25f, 0.2f}, {0.85f, 0.85f, 0.9f}, {0.2f, 0.2f, 0.25f}}};
+	for (int k = 0; k < tiles; ++k) {
+		const Shot &sh = shots[k % 4];
+		robot_.set_zoom(1.5f);
+		robot_.render(big, big, paint, sh.anim, sh.t, sh.yaw);
+		robot_.set_zoom(1);
+		int pw = 0, ph = 0;
+		auto px = robot_.pixels(&pw, &ph);
+		if (pw != big || ph != big) continue;
+		auto small = ed::resize_rgba(big, big, px, side, side);
+		for (int y = 0; y < side; ++y) {
+			for (int x = 0; x < side; ++x) {
+				const uint8_t *s0 = &small[(size_t(y) * size_t(side) + size_t(x)) * 4];
+				uint8_t *d = &strip[(size_t(y) * size_t(W) + size_t(k * side + x)) * 4];
+				float a = s0[3] / 255.0f;
+				// The backdrop: a dark violet gradient, lighter towards the top.
+				float g = 1 - float(y) / float(side);
+				const float bg[3] = {18 + 30 * g, 16 + 22 * g, 30 + 40 * g};
+				for (int c = 0; c < 3; ++c) d[c] = uint8_t(std::clamp(s0[c] * a + bg[c] * (1 - a), 0.0f, 255.0f));
+				d[3] = 255;
+			}
+		}
+	}
+	try {
+		ed::set_presentation_picture(*e.project(), o, W, H, strip, "rendered");
+		e.log(LogLine::Ok, "Rendered the Choose Creature picture");
+	} catch (const std::exception &ex) {
+		e.log(LogLine::Error, ex.what());
+	}
 }
 
 void HarDocument::movement() {
@@ -397,47 +535,79 @@ void HarDocument::sounds(Editor &e) {
 }
 
 void HarDocument::paint(Editor &e, const ed::HarObjects &o) {
-	ui::dim_text("Paint jobs are FighterModelDescriptions. The variant starts with the base robot's; a new one copies the base model "
-	             "(meshes, materials and images) so its RGBMain, ReflectionMask and Bump images can be replaced.",
-	             kTextMuted);
+	ui::dim_text("Paint jobs are Choose Creature's Model list. A new one copies the selected one's model; replace its images (export one to paint over it).", kTextMuted);
+	ui::dim_text("RGBStatic: the model's own colours. RGBMain: the paint mask (R, G, B take the pilot's colours). ReflectionMask, Bump: the shine.", kTextDim);
 	const auto &objs = e.project()->file().objects;
-	for (int m : o.model_descriptions) {
-		ImGui::PushID(m);
-		ImGui::SeparatorText(objs[size_t(m)].info.name_text().c_str());
-		auto images = ed::paint_images(*e.project(), uint32_t(m));
-		if (images.empty()) ui::dim_text("Uses the base robot's model (read-only).", kTextDim);
-		for (auto &img : images) {
-			ImGui::PushID(img.object);
-			int w = 0, h = 0, type = 0;
-			ed::image_header(objs[size_t(img.object)], &type, &w, &h);
-			ui::form_label(img.name.c_str(), ui::px(160));
-			ImGui::AlignTextToFramePadding();
-			ui::dim_text((std::to_string(w) + " x " + std::to_string(h)).c_str(), kTextDim);
-			ImGui::SameLine();
-			int obj = img.object;
-			if (ui::toolbar_button(ICON_UPLOAD, "Import PNG/BMP", ui::Tone::Ghost, true, nullptr, ImGui::GetFrameHeight())) {
-				e.file_dialog().open(FileDialog::OpenFile, "Import " + img.name, {}, {".png", ".bmp"}, [&e, obj, w, h](const std::filesystem::path &path) {
-					try {
-						ed::RgbaImage im = ed::load_image(path);
-						int tw = w > 0 ? w : im.width, th = h > 0 ? h : im.height;
-						ed::set_image_pixels(*e.project(), uint32_t(obj), tw, th, ed::resize_rgba(im.width, im.height, im.rgba, tw, th), path.filename().string());
-						e.log(LogLine::Ok, "Imported " + path.filename().string());
-					} catch (const std::exception &ex) {
-						e.log(LogLine::Error, ex.what());
-					}
-				});
-			}
+	if (ImGui::BeginTable("jobs", 2, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg)) {
+		ImGui::TableSetupColumn("Paint job", ImGuiTableColumnFlags_WidthStretch, 1);
+		ImGui::TableSetupColumn("Model", ImGuiTableColumnFlags_WidthStretch, 1.2f);
+		for (size_t k = 0; k < o.model_descriptions.size(); ++k) {
+			int m = o.model_descriptions[k];
+			ImGui::PushID(m);
+			ImGui::TableNextRow(0, ui::px(28));
+			ImGui::TableNextColumn();
+			if (ImGui::Selectable(utf8_text(objs[size_t(m)].info.name_text()).c_str(), int(k) == paint_, ImGuiSelectableFlags_SpanAllColumns)) paint_ = int(k);
+			ImGui::TableNextColumn();
+			int own = ed::paint_job_model(*e.project(), uint32_t(m));
+			ui::dim_text(own >= 0 ? (utf8_text(objs[size_t(own)].info.name_text()) + "  (in the add-on)").c_str() : "the base robot's (read-only)", own >= 0 ? kTextSoft : kTextDim);
 			ImGui::PopID();
+		}
+		ImGui::EndTable();
+	}
+	if (o.model_descriptions.empty()) return;
+	const int job = o.model_descriptions[size_t(paint_)];
+	ImGui::SeparatorText(utf8_text(objs[size_t(job)].info.name_text()).c_str());
+	auto images = ed::paint_images(*e.project(), uint32_t(job));
+	if (images.empty()) ui::dim_text("Uses the base robot's model: make a new paint job to change its images.", kTextDim);
+	for (auto &img : images) {
+		ImGui::PushID(img.object);
+		int w = 0, h = 0, type = 0;
+		ed::image_header(objs[size_t(img.object)], &type, &w, &h);
+		ui::form_label(img.name.c_str(), ui::px(200));
+		ImGui::AlignTextToFramePadding();
+		ui::dim_text((std::to_string(w) + " x " + std::to_string(h)).c_str(), kTextDim);
+		ImGui::SameLine(ui::px(330));
+		int obj = img.object;
+		if (ui::toolbar_button(ICON_UPLOAD, "Import PNG/BMP", ui::Tone::Ghost, true, "Replaces the image, scaled to its size", ImGui::GetFrameHeight())) {
+			e.file_dialog().open(FileDialog::OpenFile, "Import " + img.name, {}, {".png", ".bmp"}, [this, &e, obj, w, h](const std::filesystem::path &path) {
+				try {
+					ed::RgbaImage im = ed::load_image(path);
+					int tw = w > 0 ? w : im.width, th = h > 0 ? h : im.height;
+					ed::set_image_pixels(*e.project(), uint32_t(obj), tw, th, ed::resize_rgba(im.width, im.height, im.rgba, tw, th), path.filename().string());
+					++paint_revision_;
+					e.log(LogLine::Ok, "Imported " + path.filename().string());
+				} catch (const std::exception &ex) {
+					e.log(LogLine::Error, ex.what());
+				}
+			});
+		}
+		ImGui::SameLine();
+		std::string stem = img.name;
+		if (ui::toolbar_button(ICON_DOWNLOAD, "Export PNG", ui::Tone::Ghost, true, nullptr, ImGui::GetFrameHeight())) {
+			e.file_dialog().open(FileDialog::SaveFile, "Export " + img.name, stem + ".png", {".png"}, [&e, obj](const std::filesystem::path &path) {
+				int iw = 0, ih = 0;
+				auto px = ed::image_rgba(e.project()->file().objects[size_t(obj)], &iw, &ih);
+				if (px.empty()) {
+					e.log(LogLine::Error, "The image could not be decoded");
+					return;
+				}
+				ed::write_png(path, iw, ih, px);
+				e.log(LogLine::Ok, "Wrote " + path.filename().string());
+			});
 		}
 		ImGui::PopID();
 	}
 	ImGui::Dummy(ImVec2(0, ui::px(8)));
+	for (int m : o.model_descriptions) {
+		if (utf8_text(objs[size_t(m)].info.name_text()) == paint_name_) paint_name_ = "Paint" + std::to_string(o.model_descriptions.size() + 1);
+	}
 	ImGui::SetNextItemWidth(ui::px(220));
 	ImGui::InputText("##pname", &paint_name_);
 	ImGui::SameLine();
-	if (ui::toolbar_button(ICON_PALETTE, "New paint job", ui::Tone::Accent, !paint_name_.empty(), "Copies the base model (about 20 MB)", ImGui::GetFrameHeight())) {
+	if (ui::toolbar_button(ICON_PALETTE, "New paint job", ui::Tone::Accent, !paint_name_.empty(), "A copy of the selected paint job's model (several MB)", ImGui::GetFrameHeight())) {
 		try {
-			ed::create_paint_job(*e.project(), o, paint_name_);
+			ed::create_paint_job(*e.project(), o, paint_name_, job);
+			paint_ = int(o.model_descriptions.size());
 			e.log(LogLine::Ok, "New paint job " + paint_name_);
 		} catch (const std::exception &ex) {
 			e.log(LogLine::Error, std::string("Cannot make the paint job: ") + ex.what());

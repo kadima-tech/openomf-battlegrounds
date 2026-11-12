@@ -21,6 +21,7 @@ upstream texts, rather than this index, define each component's terms.
 | zlib (Windows only) | [madler/zlib](https://github.com/madler/zlib), 1.3.1 | zlib; `licenses/zlib.txt` (macOS uses the system zlib) |
 | openindeo | [kadima-tech/openindeo](https://github.com/kadima-tech/openindeo), commit `5452df0c8900f0892e701253481bf5c311a9a9d7` | MIT; `licenses/openindeo.txt` |
 | ENet | [lsalzman/enet](https://github.com/lsalzman/enet), 1.3.18 (commit `2662c0de09e36f2a2030ccc2c528a3e4c9e8138a`) | MIT; `licenses/enet.txt` |
+| Monocypher | [LoupVaillant/Monocypher](https://github.com/LoupVaillant/Monocypher), 4.0.2 (commit `0d85f98c9d9b0227e42cf795cb527dff372b40a4`), with its optional Ed25519 | BSD-2-Clause or CC0-1.0, at the user's choice; `licenses/Monocypher.txt` |
 | CPython runtime and included libraries | Python 3.12.12 from [python-build-standalone](https://github.com/astral-sh/python-build-standalone) (macOS: installed by [uv](https://github.com/astral-sh/uv); Windows: release `20251028`, including its Visual C++ runtime DLLs) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
 | bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.2.6 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.2.6.dist-info/` |
 | Tcl/Tk (Linux runtime only) | Included in the Linux CPython runtime ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)), which also links X11 client libraries into Tk; the launcher does not use Tk | Tcl/Tk BSD-style license; `licenses/Tcl-Tk.txt`; X.Org libraries under MIT/X11-style terms |
@@ -28,7 +29,7 @@ upstream texts, rather than this index, define each component's terms.
 The vendored dmusic source notices are also available in
 [`engine/third_party/dmusic/`](https://github.com/kadima-tech/openomf-battlegrounds/tree/main/engine/third_party/dmusic).
 Dependency versions
-and integrity pins live in `launcher/cmake/CMakeLists.txt`, `engine/CMakeLists.txt` (ENet), `launcher/bundle-setup.sh`,
+and integrity pins live in `launcher/cmake/CMakeLists.txt`, `engine/CMakeLists.txt` (ENet, Monocypher), `launcher/bundle-setup.sh`,
 `launcher/windows/bundle-python.sh` and `launcher/requirements.txt`. uv is a build-time
 tool and is not distributed in the finished app. macOS system frameworks and libraries
 are supplied by macOS; on Windows, the system DLLs the programs use (including the
@@ -51,6 +52,12 @@ The editor is a development tool built from source and not part of the app downl
 | Inter | [rsms/inter](https://github.com/rsms/inter), 4.1 (Regular, SemiBold); `engine/third_party/fonts/Inter-LICENSE.txt` | SIL Open Font License 1.1 |
 | JetBrains Mono | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono), 2.304 (Regular); `engine/third_party/fonts/JetBrainsMono-LICENSE.txt` | SIL Open Font License 1.1 |
 | Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 0.469.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |
+
+## The lobby server (openbg-lobby)
+
+The lobby server in `server/` is built separately (a static Go binary or a container image) and
+is not part of the app downloads. It uses only the Go standard library and runtime (BSD-3-Clause,
+the Go Authors), which a distributed binary carries.
 
 ## Original game and update data
 

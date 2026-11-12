@@ -1,0 +1,75 @@
+name: Lobby server
+
+on:
+  # Any branch: the job is cheap, and the lobby is worth checking before a pull request.
+  push:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - name: Format and vet
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      - name: Build the binaries
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            os=${target%/*} arch=${target#*/}
+            ext=$([ "$os" = windows ] && echo .exe || true)
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "dist/openbg-lobby-$os-$arch$ext" ./cmd/openbg-lobby
+          done
+          ls -l dist
+
+      - name: Build the container image
+        run: docker build -t openbg-lobby:ci .
+
+      - name: Smoke test the image
+        run: |
+          docker run -d --name lobby -p 127.0.0.1:27900:27900/udp openbg-lobby:ci
+          sleep 2
+          docker logs lobby 2>&1 | grep "listening on"
+          docker rm -f lobby
+
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: openbg-lobby
+          path: server/dist/
+          if-no-files-found: error
+          retention-days: 14

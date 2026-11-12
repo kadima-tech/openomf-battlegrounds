@@ -67,6 +67,7 @@ cp "$repo/engine/third_party/dmusic/LICENSE.md" "$resources/licenses/dmusic.txt"
 cp "$repo/engine/third_party/dmusic/LICENSE-DDKSynth.md" "$resources/licenses/DDKSynth.txt"
 cp "$(source_dir OPENINDEO openindeo)/LICENSE" "$resources/licenses/openindeo.txt"
 cp "$(source_dir ENET enet)/LICENSE" "$resources/licenses/enet.txt"
+cp "$(source_dir MONOCYPHER monocypher)/LICENCE.md" "$resources/licenses/Monocypher.txt"
 
 # A relocatable CPython and the decoder, both for Windows x64, whatever the build host is.
 bash "$here/bundle-python.sh" "$resources" "$build/tools"

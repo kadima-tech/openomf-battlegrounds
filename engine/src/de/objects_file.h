@@ -70,6 +70,8 @@ public:
 		std::vector<EX> ex;  // extended data descriptors, fetched lazily by EXGetData
 	};
 	ObjectData object_data(const ObjectInfo &info) const;
+	// The same without the contents (not read or decompressed): for references and hierarchy.
+	ObjectData object_links(const ObjectInfo &info) const;
 
 	// DE_CObject::ObjProcessHierarchy (Core 0x7003c110): the hierarchy block is a v1 chunk with a
 	// BOOL-terminated list of child references (ExtractChildReference 0x70057a80, local only).
@@ -88,6 +90,7 @@ public:
 
 private:
 	ObjectInfo read_object_info(Contents &c) const;
+	ObjectData read_blocks(const ObjectInfo &info, bool contents) const;
 
 	mutable Contents file_;
 	uint8_t format_ = 0;

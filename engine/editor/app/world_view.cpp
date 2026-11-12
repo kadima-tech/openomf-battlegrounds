@@ -464,6 +464,8 @@ void WorldEditor::run_script() {
 	if (script_step_ == 0) {
 		if (o.layout) layout_ = o.layout;
 		if (o.shading >= 0) panes_[0].shading = o.shading;
+		if (!o.play_robot.empty()) settings_.robot = o.play_robot;
+		if (!o.play_opponent.empty()) settings_.opponent = o.play_opponent;
 		for (const char *f : {"hits", "nav", "energy"}) {
 			if (o.debug.find(f) == std::string::npos) continue;
 			if (!strcmp(f, "hits")) debug_.hit_spheres = true;

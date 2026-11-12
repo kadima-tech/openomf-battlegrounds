@@ -219,7 +219,7 @@ The editor exposes its operations as an **MCP server**, so AI assistants and scr
   an add-on chosen by the user (or named explicitly in a headless call). Each change is logged.
 
 ### 5.5 3D model import and export (glTF)
-Status (2026-11-11): export (meshes, LOD switchers, props, arenas, robots with skin and
+Status (2026-11-12): export (meshes, LOD switchers, props, arenas, robots with skin and
 animations), prop, arena and robot (HAR) import are built, with the Import dialog (robots add Bones,
 Animations and Hitboxes pages). See "Built" and "Built: robots" at the end of this section and
 DEVELOPING.md. glTF 2.0 (`.gltf` + `.bin`, or `.glb`) is the exchange format:
@@ -320,10 +320,17 @@ they can be redone.
   of the ankles, else the toes) against the base's; a different handedness is mirrored (x negated:
   glTF characters are the mirror image of the game's convention, FINDINGS 561), then turned in 90
   degree steps; the lowest vertex goes to the floor. Exports of ours are taken as they are.
-- Retargeting: each skin bone's bind frame is the base's turned so the bone points the way the base's
-  does (pelvis and chest by two directions, limbs by one, hands, feet and head by their parent's);
-  every sequence keeps the base's rotations, and each channel's offset is scaled by its bone's change
-  of length (others by the overall size). A file animation named as a sequence (Blender's
+- Retargeting: each skin bone's bind frame is the base's turned onto the new one (pelvis and chest by
+  two directions; limbs by their direction and the hinge they bend about, measured from the joints
+  when bent, else from the facing, so the base's elbows and knees bend the new ones the same way
+  round; hands and feet to their vertices, feet level; the head as modelled; FINDINGS 670); every
+  sequence keeps the base's rotations, and each channel's offset is scaled by its bone's change of
+  length (others by the overall size). Contacts are then corrected by two-bone IK about the hinge on
+  samples of each retargeted sequence (FINDINGS 671): where the base's foot is down, the new one
+  stays on its floor and moves as the base's does (no sliding against the game's speeds); where a
+  base hand or foot holds `ThrowFollowTarget` in a throw, the new one reaches the same place on it
+  and the target follows the limb, so the victim hangs from the new hand; `HeadAnchor` stays on the
+  new head. A file animation named as a sequence (Blender's
   `Armature|` prefix ignored, or chosen on the Animations page) replaces it: sampled at 30 keys a
   second and normalised to 0..1 (`extras.de_normalised` exports are 0..1 already), each mapped bone
   following its joint; the root's horizontal drift is removed unless the file has a `Body` node.
@@ -337,7 +344,23 @@ they can be redone.
   mask (each material one of the pilot's three colours). Images named `PaintMask`, `ReflectionMask`
   or `Bump` (or material extras `de_paint_mask`, `de_reflection_mask`, `de_bump`) are used as such.
 - Hitboxes: an empty `Sphere:<affector>` under a joint moves that sphere to the joint's bone (its
-  scale the falloff, in metres); the base's other spheres keep their bone, offsets scaled with it.
+  scale the falloff, in metres; the second of a name the second sphere, Blender's `.001` ignored);
+  further ones named `GetHitAffector...` or after an attack prefix the fighter scripts gather
+  (`IsNamePrefix`, FINDINGS 672) are new copies of such a base sphere; other names are left out with
+  the reason on the Hitboxes page. The base's other spheres keep their bone, offsets scaled with it.
+- Further parts (Gargoyle's wings, FINDINGS 673): their bones are optional rows on the Bones page.
+  Mapped, the file's vertices those joints carry (and their unmapped children's) become the part's
+  mesh (UVs in the body's atlas, its images the body's), its binds and bone actors go where the
+  joints are and its bank's offsets scale per bone; unmapped, the base's part is moved and scaled
+  with the bone it hangs from.
+- Paint jobs: further paint jobs come from images laid out as the model's texture (Source > Paint >
+  Add from an image, `--import-paint Name=file.png`): copies of the model with that image as its
+  colours (or paint mask). In the HAR editor, Paint lists the paint jobs, previews the selected one,
+  imports or exports each image (RGBStatic, RGBMain, ReflectionMask, Bump) and makes new ones (a copy
+  of the selected one's model, base or add-on).
+- Choose Creature: the import names the robot in its panel (a copy of the base's ControlCreator with
+  title, text and picture); the HAR editor's General tab edits them and imports the picture from a
+  PNG or renders it from the model (four poses of the selected paint job).
 - Game side: a description's robot is set up from the robot object itself and its own bank, inputs,
   class and deform info (the nearest in an add-on holding several, `de::robot_part`), so an add-on's
   HAR variant fights as itself in `openbg`, `openbg-fight` and Play in editor; renderers draw
@@ -349,6 +372,15 @@ they can be redone.
   degree of the base's and no edge stretches more than the base's does; the add-on validates, saves
   and the engine reads its skin, bank and materials back. Both fight in `openbg-fight`: hits land
   both ways.
+- Verified (2026-11-12): planted base feet keep the new ones still (4 of 1,533 and 7 of 1,863 samples move) and on
+  the floor except out of reach (4-7%: thrown, falling, legs at full stretch); Jaguar's overhead throw
+  keeps the grip within 0.15 units; a second paint job, a new body and attack sphere (the trace shows
+  the scripts gathering it), the Choose Creature panel and Gargoyle with and without wing joints
+  import, save and read back. Characters made in Blender (`engine/tests/scripts/make_character.py`:
+  8,400 triangles, a texture atlas or five materials with external PNGs, Mixamo-named T-pose or
+  Rigify DEF bones in an A-pose with rolls and twist bones, Idle / Walk / Punch) import onto Jaguar,
+  Katana and Pyros, show textured in the HAR editor, in Choose Creature (picture, title, text, paint
+  jobs) and in `openbg-fight` (`--model` picks a paint job).
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the
@@ -500,11 +532,12 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
   model whose images take PNG/BMP imports) and the behavior's numeric finals. The variant shows in Choose
   Creature and fights as its own robot (the game builds it from the variant's file). A changed
   constant recompiles the fighter's classes (the compiler takes the fighter scripts' `master`,
-  inherited elements and sequence names, FINDINGS 522-527) and the game uses the new value. Not yet:
-  the robot preview shows the base paint.
+  inherited elements and sequence names, FINDINGS 522-527) and the game uses the new value. The
+  preview shows the paint job selected on the Paint tab (2026-11-12).
 - **7 (mostly done, 2026-11-11):** glTF export of meshes, props, arenas and robots; prop, arena and
   robot (HAR) import through the Import dialog (§5.5 "Built", "Built: robots"): bone mapping with
   presets, guesses and a mapping UI, retargeted sequences, file animations, decimated LODs, hitboxes;
-  the imported HAR opens in the HAR editor and fights in the game. Not yet: twist and contact
-  correction in retargeting, extra paint jobs and new hitboxes for imported robots, secondary rigs
-  (Gargoyle's wings).
+  the imported HAR opens in the HAR editor and fights in the game. Robots (2026-11-12): twist and
+  contact correction in retargeting, several paint jobs (and the HAR preview shows the selected one),
+  the Choose Creature panel, new hitboxes, Gargoyle's wings. Not yet: file animations for the wings,
+  a walk speed that follows a robot's leg length.

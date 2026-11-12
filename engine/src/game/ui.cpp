@@ -926,11 +926,11 @@ private:
 		Ctl *body = panel(g, "Network Settings");
 		static const int kRates[6] = {0, 3600, 7000, 16000, 40000, 187500};
 		struct State {
-			int lan = 1, connection = 0;
-			Edit *server = nullptr, *port = nullptr, *max = nullptr, *password = nullptr, *admin = nullptr, *bytes = nullptr;
+			int lan = 0, connection = 0;
+			Edit *server = nullptr, *port = nullptr, *max = nullptr, *password = nullptr, *admin = nullptr, *bytes = nullptr, *lobby = nullptr;
 		};
 		auto st = std::make_shared<State>();
-		st->lan = reg_int(app, "Network\\LAN Only", 1) != 0;
+		st->lan = reg_int(app, "Network\\LAN Only", 0) != 0;
 		int bytes = reg_int(app, "Network\\Winsock\\Maximum Outgoing Bytes", 0);
 		for (int k = 1; k < 6; ++k) {
 			if (bytes == kRates[k]) st->connection = k;
@@ -938,6 +938,8 @@ private:
 		auto *column = body->add<Stack>();
 		st->server = edit(g, column, "Server Name", app.registry_string("Network\\Server Name"), 20, 0.35f);
 		check(g, column, "LAN Only", &st->lan);
+		// Ours: where GameSpy's master server was fixed, the lobby is the player's choice.
+		st->lobby = edit(g, column, "Lobby Server", app.registry_string("Network\\Lobby Server"), 40, 0.35f);
 		st->port = edit(g, column, "Listener Port", std::to_string(reg_int(app, "Network\\Winsock\\Listener Port", 0)), -1, 0.5f, true);
 		st->max = edit(g, column, "Max Players", std::to_string(reg_int(app, "Network\\Max Clients", 16)), -1, 0.5f, true);
 		st->password = edit(g, column, "Server Password", app.registry_string("Network\\Server Password"), 15, 0.5f);
@@ -951,6 +953,7 @@ private:
 		// OnApplyOptions (0x3505c8f0).
 		on_apply_ = [&app, st] {
 			app.set_registry_bool("Network\\LAN Only", st->lan != 0);
+			app.set_registry_string("Network\\Lobby Server", st->lobby->str);
 			app.set_registry_string("Network\\Server Name", st->server->str);
 			app.set_registry_string("Network\\Server Password", st->password->str);
 			app.set_registry_string("Network\\Remote Admin Password", st->admin->str);
@@ -1840,6 +1843,9 @@ bool DescriptionSelector::begin(AppManager &app) {
 	}
 	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
 	selected_ = entries_.empty() ? -1 : 0;
+	for (size_t k = 0; k < entries_.size(); ++k) {
+		if (std::find(highlight.begin(), highlight.end(), entries_[k].info().name) != highlight.end()) selected_ = int(k);
+	}
 	// Begin (2.123 0x201ec460): only a pool of one passes a Back on.
 	if (pool.size() == 1) {
 		choose(app, pool[0]);
@@ -2571,12 +2577,21 @@ void AppManager::apply_settings() {
 	world.ai_difficulty = int(f("AI Difficulty", 0));
 }
 
+std::string AppManager::lobby_server() {
+	if (!lobby_override.empty()) return lobby_override;
+	std::string lan = registry_string("Network\\LAN Only");
+	if (atoi(lan.c_str()) != 0) return {};
+	return registry_string("Network\\Lobby Server");
+}
+
 // DE_CSessionBrowser (Core ObjInitContents 0x701dfd20, SetupControls 0x701e0320, its robot's
 // ProcessButtonClickEvent 0x701e2bb0): a "Session Browser" list (Server, Ping, Players,
 // Description) over the known sessions, Join and Cancel. The original filled it from GameSpy and
 // its LAN query; ours asks the LAN every 500 ms on the game port and the next ones a host may have
-// moved to, and, in the strip under the list where the GameSpy query control was, takes an address
-// typed in (host or host:port).
+// moved to, and the lobby (unless LAN Only) every 20 s as GameSpy's list was; each listed host is
+// asked directly for its ping, as GameSpy's "Querying Servers" did. The strip under the list, where
+// the GameSpy query control showed the matchmaking status, shows ours and takes an address typed in
+// (host or host:port).
 class SessionBrowser : public UIManager {
 public:
 	SessionBrowser() : UIManager("Join Game", "MatchBrowser") { wall_clock = true; }
@@ -2586,6 +2601,14 @@ public:
 		sessions_.clear();
 		discovery_ = std::make_unique<net::Discovery>();
 		last_query_ = 0;
+		lobby_.reset();
+		lobby_status_.clear();
+		if (std::string spec = app.lobby_server(); !spec.empty()) {
+			net::Address at;
+			std::string error;
+			if (!resolve_lobby(spec, at, &error)) lobby_status_ = "No DNS";
+			else lobby_ = std::make_unique<net::LobbyList>(at, kNetProtocol);
+		}
 		if (const char *j = getenv("OPENBG_LAN_JOIN")) auto_join_ = j;
 		return true;
 	}
@@ -2639,6 +2662,45 @@ public:
 			if (typed_) discovery_->query(*typed_);
 		}
 		bool changed = false;
+		if (lobby_) {
+			if (lobby_->update()) {
+				// A listed session already on the LAN list stays there; the others are the lobby's.
+				std::vector<Entry> keep;
+				for (Entry &e : sessions_) {
+					if (!e.listed) keep.push_back(e);
+				}
+				for (const net::LobbyEntry &l : lobby_->entries()) {
+					if (std::any_of(keep.begin(), keep.end(), [&](const Entry &e) { return e.info.instance == l.info.instance; })) continue;
+					Entry e;
+					e.at = l.public_addr;
+					e.listed = true;
+					e.lobby = l;
+					e.info.protocol = l.info.protocol;
+					e.info.version = l.info.version;
+					e.info.data_hash = l.info.data_hash;
+					e.info.server_name = l.info.server_name;
+					e.info.session_name = l.info.session_name;
+					e.info.players = l.info.players;
+					e.info.max_players = l.info.max_players;
+					e.info.password = l.info.flags & 1;
+					e.info.playing = l.info.flags & 2;
+					e.info.instance = l.info.instance;
+					e.heard = now;
+					for (const Entry &old : sessions_) {
+						if (old.listed && old.lobby.id == l.id) e.ping = old.ping;
+					}
+					keep.push_back(e);
+				}
+				sessions_ = keep;
+				changed = true;
+			}
+			if (now - last_ping_ >= 2000) {
+				last_ping_ = now;
+				for (const Entry &e : sessions_) {
+					if (e.listed) discovery_->query(e.at);
+				}
+			}
+		}
 		net::Discovery::Reply r;
 		while (discovery_->receive(r)) {
 			NetServerInfo info;
@@ -2646,8 +2708,14 @@ public:
 			net::Address at = r.from;
 			if (info.port) at.port = info.port;
 			auto it = std::find_if(sessions_.begin(), sessions_.end(), [&](const Entry &e) { return e.at == at || (info.instance && e.info.instance == info.instance); });
-			if (it == sessions_.end()) sessions_.push_back({at, info, r.ping_ms, now}), changed = true;
-			else {
+			if (it == sessions_.end()) {
+				Entry e;
+				e.at = at, e.info = info, e.ping = r.ping_ms, e.heard = now;
+				sessions_.push_back(e), changed = true;
+			} else if (it->listed) {
+				if (it->ping != r.ping_ms) changed = true;
+				it->ping = r.ping_ms, it->pinged = true;
+			} else {
 				if (it->ping != r.ping_ms || it->info.players != info.players || it->info.instance != info.instance) changed = true;
 				it->info = info, it->ping = r.ping_ms, it->heard = now;
 			}
@@ -2656,7 +2724,7 @@ public:
 		const bool had = selected_ >= 0 && size_t(selected_) < sessions_.size();
 		const net::Address keep = had ? sessions_[size_t(selected_)].at : net::Address{};
 		const size_t before = sessions_.size();
-		sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(), [now](const Entry &e) { return now - e.heard > kForget; }), sessions_.end());
+		sessions_.erase(std::remove_if(sessions_.begin(), sessions_.end(), [now](const Entry &e) { return !e.listed && now - e.heard > kForget; }), sessions_.end());
 		if (sessions_.size() != before) {
 			changed = true;
 			auto it = std::find_if(sessions_.begin(), sessions_.end(), [&](const Entry &e) { return had && e.at == keep; });
@@ -2665,7 +2733,7 @@ public:
 		if (!changed) return;
 		refresh();
 		std::string seen;
-		for (const Entry &e : sessions_) seen += " " + (e.info.server_name.empty() ? std::string("?") : e.info.server_name) + "@" + e.at.text();
+		for (const Entry &e : sessions_) seen += " " + (e.info.server_name.empty() ? std::string("?") : e.info.server_name) + "@" + e.at.text() + (e.listed ? "(lobby)" : "");
 		if (seen != listed_) printf("net: LAN list:%s\n", seen.empty() ? " empty" : seen.c_str());
 		listed_ = seen;
 		// OPENBG_LAN_JOIN="<server name>:<port>" (testing): that session is chosen and joined once it is listed.
@@ -2688,7 +2756,8 @@ public:
 		if (!why.empty()) return app.notify("Unable To Join", why);
 		auto go = [this, &app, e](const std::string &password) {
 			std::string error;
-			if (!app.join_server || !app.join_server(e.at.text(), password, &error)) return app.notify("Unable To Join", error.empty() ? "The game could not join." : error);
+			const bool ok = e.listed ? app.join_listed && app.join_listed(e.lobby, password, &error) : app.join_server && app.join_server(e.at.text(), password, &error);
+			if (!ok) return app.notify("Unable To Join", error.empty() ? "The game could not join." : error);
 			complete(app);
 		};
 		if (!e.info.password) return go("");
@@ -2704,6 +2773,8 @@ private:
 		NetServerInfo info;
 		uint32_t ping = 0;
 		uint32_t heard = 0;
+		bool listed = false, pinged = false;  // from the lobby; it answered a direct query
+		net::LobbyEntry lobby;
 	};
 	static constexpr int kSweep = 20;
 	static constexpr uint32_t kForget = 6000;  // the WinSock node's silence before an interruption
@@ -2735,18 +2806,24 @@ private:
 		for (auto &e : sessions_) {
 			std::string players = std::to_string(e.info.players) + "/" + std::to_string(e.info.max_players);
 			std::string desc = e.info.session_name + (e.info.password ? " (password)" : "") + (e.info.playing ? "" : " - setting up");
-			rows.push_back({{e.info.server_name.empty() ? e.at.text() : e.info.server_name, std::to_string(e.ping), players, desc}});
+			const std::string ping = e.listed && !e.pinged ? "-" : std::to_string(e.ping);
+			rows.push_back({{e.info.server_name.empty() ? e.at.text() : e.info.server_name, ping, players, desc}});
 		}
 		int keep = selected_;
 		list_->set_rows(rows);
 		if (keep >= 0 && size_t(keep) < rows.size()) list_->select(keep, false);
-		if (status_) status_->str = (sessions_.empty() ? "Searching the local network..." : std::to_string(sessions_.size()) + (sessions_.size() == 1 ? " session found." : " sessions found."));
+		if (!status_) return;
+		status_->str = sessions_.empty() ? "Searching the local network..." : std::to_string(sessions_.size()) + (sessions_.size() == 1 ? " session found." : " sessions found.");
+		if (lobby_ || !lobby_status_.empty()) status_->str += "  Lobby: " + (lobby_ ? lobby_->status : lobby_status_);
 	}
 	void select(int i) {
 		selected_ = i >= 0 && size_t(i) < sessions_.size() ? i : -1;
 		if (join_) join_->enabled = selected_ >= 0, join_->read_only = !join_->enabled;
 	}
 	std::unique_ptr<net::Discovery> discovery_;
+	std::unique_ptr<net::LobbyList> lobby_;
+	std::string lobby_status_;
+	uint32_t last_ping_ = 0;
 	std::optional<net::Address> typed_;
 	std::optional<std::array<uint8_t, 16>> hash_;
 	std::vector<Entry> sessions_;

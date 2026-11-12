@@ -357,7 +357,7 @@ ActorInfo read_actor(const ObjectsFile &f, const ObjectInfo &o) {
 namespace {
 
 std::shared_ptr<FloatValue> child_value(const World &w, const ObjectRef &parent, const std::string &name) {
-	for (uint32_t c : ObjectsFile::children(parent.file->object_data(parent.info()))) {
+	for (uint32_t c : ObjectsFile::children(parent.file->object_links(parent.info()))) {
 		const ObjectInfo &o = parent.file->objects()[c];
 		if (o.name == name && o.class_path.rfind("Value\\FLOAT", 0) == 0) return std::make_shared<FloatValue>(read_float_value(w, {parent.file, c}));
 	}
@@ -442,7 +442,7 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 			if (flat && !layer.image) layer.image = img;
 		}
 		if (layer.image) {
-			for (uint32_t c : ObjectsFile::children(layer.image.file->object_data(layer.image.info()))) {
+			for (uint32_t c : ObjectsFile::children(layer.image.file->object_links(layer.image.info()))) {
 				const ObjectInfo &o = layer.image.file->objects()[c];
 				if (o.name == "Bump" && o.class_path == "Image\\Standard") {
 					layer.bump = {layer.image.file, c};
@@ -455,7 +455,7 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 		}
 		return layer;
 	};
-	for (uint32_t c : ObjectsFile::children(mesh.file->object_data(mesh.info()))) {
+	for (uint32_t c : ObjectsFile::children(mesh.file->object_links(mesh.info()))) {
 		auto &mat = mesh.file->objects()[c];
 		if (mat.class_path != "TextureProcess\\MultiStage") {
 			continue;
@@ -480,7 +480,7 @@ std::vector<Material> read_materials(const World &w, const ObjectRef &mesh) {
 			m.layers.push_back(std::move(layer));
 		}
 		if (m.layers.empty()) {
-			for (uint32_t t : ObjectsFile::children(mesh.file->object_data(mat))) {
+			for (uint32_t t : ObjectsFile::children(mesh.file->object_links(mat))) {
 				if (mesh.file->objects()[t].class_path.rfind("TextureManager", 0) == 0) m.layers.push_back(layer_of({mesh.file, t}));
 			}
 		}
@@ -493,7 +493,7 @@ std::vector<ObjectRef> actor_meshes(const World &w, const ObjectRef &actor, bool
 	std::vector<ObjectRef> meshes;
 	const ObjectsFile &file = *actor.file;
 	const auto &objs = file.objects();
-	for (uint32_t c : ObjectsFile::children(file.object_data(objs[actor.index]))) {
+	for (uint32_t c : ObjectsFile::children(file.object_links(objs[actor.index]))) {
 		if (children && objs[c].class_path == "Mesh\\Standard") meshes.push_back({&file, c});
 	}
 	for (auto &ref : actor_components(file.object_data(objs[actor.index]))) {

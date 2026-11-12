@@ -206,6 +206,13 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   orange, filled and 2.5 px); tabs General / Movement / Inputs / Hitboxes / Sounds / Paint / Script
   on the right. Inputs: a sequence list beside step cards of a 3 x 3 direction pad (lit cells
   #3a3566), six button toggles (grey any, green pressed, dark red released) and four timing fields.
+  General has a "Choose Creature" section: Title, a word-wrapped Description box and the 512 x 128
+  picture shown at the form's width, with ghost "Import PNG/BMP" and "Render from the model" buttons
+  (four poses of the selected paint job, 128 px tiles on a dark violet gradient). Paint is a table of
+  paint jobs (name, its model with "(in the add-on)" or "the base robot's (read-only)" dimmed; the
+  selected row is the one the preview draws, its name after the robot's above the preview), then the
+  selected job's images as label / size / ghost Import and Export buttons, and a name field with an
+  accent "New paint job" button.
 - **Robot import** (the Import dialog's Bones / Animations / Hitboxes pages): the Bones page is a
   table of rig bones (a status icon, the bone, "optional" dimmed), a searchable joint dropdown per
   row (the joint's current owner in brackets), "found by" coloured by source (name / preset green
@@ -214,7 +221,12 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   chips. The preview draws the new robot (faces flat-shaded in the demo paint) beside the base robot
   in grey, the file's joints as violet dots with lines (unmapped grey, the selected bone's orange),
   the base's bones in blue (#6bb8ff) and the new rig's in green when posed; a footer has the pose
-  combo (Bind pose or any sequence), play / pause and Base robot / Skeletons toggles.
+  combo (Bind pose or any sequence), play / pause and Base robot / Skeletons toggles. Further parts'
+  bones (Gargoyle's wings) are optional rows. Source's Paint section lists further paint jobs (a
+  name field, the image's file name dimmed, an x) under a ghost "Add from an image..." button. The
+  Hitboxes page wraps its explanation, shows "placed from the file" / "new" (green) / "left out"
+  (amber) chips, and lists new spheres (a + icon, "new, like <base sphere>" in green) and left-out
+  ones (an amber warning icon, "left out: <reason>", the reason as a tooltip) before the base's.
 - **Arena viewports:** the game's renderer fills each pane (lit, unlit, or collision: flat-shaded
   surfaces and affector meshes on #121318). Dark overlay buttons at the top left (layout, view,
   shading, Show menu) and top right (move / rotate gizmo, magnet snap, maximise); the arena's name

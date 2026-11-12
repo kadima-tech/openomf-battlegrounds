@@ -51,7 +51,7 @@ Sound read_noise(const World &w, const ObjectRef &noise) {
 
 Sound read_sound(const World &w, const ObjectRef &noise) {
 	Sound s = read_noise(w, noise);
-	auto d = noise.file->object_data(noise.info());
+	auto d = noise.file->object_links(noise.info());
 	auto p = noise.file->ex_payload(d, "DeNoiseSampleExDataId");
 	if (!p) throw FormatError("noise " + noise.info().name + " has no samples");
 	const auto &b = p->data;

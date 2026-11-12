@@ -15,7 +15,7 @@ namespace {
 
 const de::ObjectInfo *find_child(const de::ObjectsFile &f, size_t parent, const std::string &cls,
                                  const std::string &name = "") {
-	for (uint32_t c : de::ObjectsFile::children(f.object_data(f.objects()[parent]))) {
+	for (uint32_t c : de::ObjectsFile::children(f.object_links(f.objects()[parent]))) {
 		auto &o = f.objects()[c];
 		if (o.class_path == cls && (name.empty() || o.name == name)) {
 			return &o;
@@ -49,7 +49,7 @@ Model load_fighter(const de::ObjectsFile &f, const char *spec, bool verbose) {
 		throw std::runtime_error("no FighterModel found");
 	}
 	Model out;
-	for (uint32_t c : de::ObjectsFile::children(f.object_data(objs[model]))) {
+	for (uint32_t c : de::ObjectsFile::children(f.object_links(objs[model]))) {
 		if (objs[c].class_path != "Mesh\\Standard") {
 			continue;
 		}

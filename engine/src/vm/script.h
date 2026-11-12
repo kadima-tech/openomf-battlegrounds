@@ -61,6 +61,8 @@ struct ScriptClass {
 // Build a class from its Class object contents (DE_CClass::ObjProcessContents, Core 0x70135a90)
 // and parsed VMC2. Method indices follow DE_CClassCompiledMethod::LoadVMCode: a method's
 // signature is looked up in the class string pool and appended if missing.
-void load_class(ScriptClass &out, Memory &mem, const std::vector<uint8_t> &contents, VMClass code);
+// code_addrs: the arena copies of the methods' VMCode, made by the first load and shared after it.
+void load_class(ScriptClass &out, Memory &mem, const std::vector<uint8_t> &contents, VMClass code,
+                std::vector<uint32_t> *code_addrs = nullptr);
 
 }  // namespace vm

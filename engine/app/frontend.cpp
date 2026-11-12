@@ -147,10 +147,12 @@ int main(int argc, char **argv) {
 	bool host = false;  // --host: --launch as a joinable session, as BMatchServer sets one up (testing)
 	std::string replay_path;  // --replay: play this recording at once (testing)
 	std::vector<std::string> choose;  // --choose: names launched UIs pick at once (testing)
+	std::vector<std::string> highlight;  // --highlight: a name the choosers highlight first (testing)
 	bool headless = false;
 	int frames = 60;
 	std::string join;  // --join: the server to join at once
 	int port = 0;      // --port
+	std::string lobby;  // --lobby: the lobby server, for this run
 	int shot_w = 1024, shot_h = 768;  // --size WxH: a screenshot run's frame
 	for (int i = 2; i < argc; ++i) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
@@ -162,7 +164,9 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--replay") && i + 1 < argc) replay_path = argv[++i];
 		else if (!strcmp(argv[i], "--join") && i + 1 < argc) join = argv[++i];
 		else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
+		else if (!strcmp(argv[i], "--lobby") && i + 1 < argc) lobby = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
+		else if (!strcmp(argv[i], "--highlight") && i + 1 < argc) highlight.push_back(argv[++i]);
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
 			std::string l = argv[++i];
 			for (size_t p = 0; p <= l.size();) {
@@ -295,9 +299,16 @@ int main(int argc, char **argv) {
 			netgame.close();
 			if (!world.sessions.empty()) game::destroy_all_sessions(world);
 		};
+		app.lobby_override = lobby;
 		auto net_options = [&] {
+			// A host's identity key is made once and kept, so players can recognise the host.
+			if (!net::Identity::from_hex(app.registry_string("Network\\Host Key"))) {
+				std::string seed = net::Identity::new_seed_hex();
+				if (!seed.empty()) app.set_registry_string("Network\\Host Key", seed);
+			}
 			game::NetOptions o = game::net_options(world.registry);
 			if (port > 0 && port < 65536) o.port = uint16_t(port);
+			if (!lobby.empty()) o.lobby = lobby, o.lan_only = false;
 			return o;
 		};
 		app.join_server = [&](const std::string &address, const std::string &password, std::string *error) {
@@ -305,6 +316,13 @@ int main(int argc, char **argv) {
 			o.password = password;
 			netgame.close();
 			return netgame.join(address, o, error);
+		};
+		app.join_listed = [&](const net::LobbyEntry &entry, const std::string &password, std::string *error) {
+			game::NetOptions o = net_options();
+			o.password = password;
+			o.lobby = app.lobby_server();
+			netgame.close();
+			return netgame.join_listed(entry, o, error);
 		};
 		// The launcher's InitGUI (not readable): the GUI scene's persistent actors, matched to the
 		// app manager's roles by their names (FINDINGS 125 inference).
@@ -381,6 +399,7 @@ int main(int argc, char **argv) {
 			sel->title = u.description;
 			sel->autoselect_key = u.autoselect;
 			sel->choose_fighter = u.choose_fighter;
+			sel->highlight = highlight;
 			sel->script = ui;
 			for (auto &g : u.pool) {
 				if (de::ObjectRef d = world.data().by_guid(g)) sel->pool.push_back(d);
@@ -1162,6 +1181,22 @@ int main(int argc, char **argv) {
 				glu::write_png(out.c_str(), dw, dh, px);
 				printf("snapshot %s\n", out.c_str());
 			}
+			if (perf::enabled()) {
+				{ PERF_ZONE("frame.gpu_finish"); glFinish(); }
+				static Uint64 perf_last = SDL_GetPerformanceCounter();
+				const Uint64 perf_now = SDL_GetPerformanceCounter();
+				perf::frame_time(fr, double(perf_now - perf_last) * 1000.0 / double(SDL_GetPerformanceFrequency()));
+				perf_last = perf_now;
+				static Uint64 perf_t0 = SDL_GetPerformanceCounter();
+				static int perf_f0 = fr;
+				double perf_ms = double(SDL_GetPerformanceCounter() - perf_t0) * 1000.0 / double(SDL_GetPerformanceFrequency());
+				if (perf_ms >= 5000) {
+					fprintf(stderr, "[counts %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
+					perf::report(fr, fr - perf_f0, perf_ms);
+					perf_t0 = SDL_GetPerformanceCounter();
+					perf_f0 = fr;
+				}
+			}
 			if (shot) {
 				auto save = [&](const std::string &out) {
 					std::vector<uint8_t> px(size_t(W) * H * 4);
@@ -1178,18 +1213,6 @@ int main(int argc, char **argv) {
 					if (l.find("," + std::to_string(fr) + ",") != std::string::npos) save(std::string(shot) + "-" + std::to_string(fr) + ".png");
 				}
 				continue;
-			}
-			if (perf::enabled()) {
-				{ PERF_ZONE("frame.gpu_finish"); glFinish(); }
-				static Uint64 perf_t0 = SDL_GetPerformanceCounter();
-				static int perf_f0 = fr;
-				double perf_ms = double(SDL_GetPerformanceCounter() - perf_t0) * 1000.0 / double(SDL_GetPerformanceFrequency());
-				if (perf_ms >= 5000) {
-					fprintf(stderr, "[counts %d] script arena %u MB, %s\n", fr, world.memory().used() >> 20, world.debug_counts().c_str());
-					perf::report(fr, fr - perf_f0, perf_ms);
-					perf_t0 = SDL_GetPerformanceCounter();
-					perf_f0 = fr;
-				}
 			}
 			SDL_GL_SwapWindow(win);
 		}

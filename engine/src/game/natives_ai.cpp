@@ -235,7 +235,7 @@ static bool has_forget_modifier(World &w, GameObject &o) {
 	for (const de::ObjectRef &p : w.properties_of(o)) {
 		if (!p || p.info().class_path != "UniqueActorProperty\\CommandManager") continue;
 		try {
-			de::Contents c(p.file->object_data(p.info()).references);
+			de::Contents c(p.file->object_links(p.info()).references);
 			while (c.remaining() > 1) {
 				de::Chunk ch = de::begin_chunk(c);
 				if (ch.end > c.size()) break;
@@ -1056,7 +1056,7 @@ void register_ai_natives(World &w) {
 		GameObject *img = nullptr;
 		if (o && o->file) {
 			try {
-				auto d = o->file->object_data(o->file->objects()[o->index]);
+				auto d = o->file->object_links(o->file->objects()[o->index]);
 				de::Contents rc(d.references);
 				size_t last = 0;
 				int version = 0;

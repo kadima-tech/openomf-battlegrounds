@@ -319,7 +319,7 @@ bool is_particle_renderer(const ObjectRef &r) {
 
 ObjectRef read_mesh_image(const World &w, const ObjectRef &r) {
 	try {
-		auto d = r.file->object_data(r.info());
+		auto d = r.file->object_links(r.info());
 		Contents rc(d.references);
 		auto list = chunks(rc);
 		if (list.size() < 2) return {};

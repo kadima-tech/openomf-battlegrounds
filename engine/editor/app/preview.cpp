@@ -1,5 +1,6 @@
 #include "preview.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -14,10 +15,10 @@ RobotPreview::~RobotPreview() {
 	if (fbo_) glDeleteFramebuffers(1, &fbo_);
 }
 
-bool RobotPreview::load(const std::filesystem::path &data, const std::string &name, std::string *error) {
+bool RobotPreview::load(const std::filesystem::path &data, const std::string &name, std::string *error, const std::string &model_file, const std::string &model) {
 	try {
-		model_file_ = std::make_unique<de::ObjectsFile>(fighter::read_file(data / (name + "Model1.DEObjects")));
-		model_ = fighter::load_fighter(*model_file_, nullptr, false);
+		model_file_ = std::make_unique<de::ObjectsFile>(fighter::read_file(data / ((model_file.empty() ? name + "Model1" : model_file) + ".DEObjects")));
+		model_ = fighter::load_fighter(*model_file_, model.empty() ? nullptr : model.c_str(), false);
 		fighter_file_ = std::make_unique<de::ObjectsFile>(fighter::read_file(data / (name + ".DEObjects")));
 		rig_ = fighter::load_rig(*fighter_file_, *model_file_, model_.mesh_index, false);
 	} catch (const std::exception &e) {
@@ -25,7 +26,7 @@ bool RobotPreview::load(const std::filesystem::path &data, const std::string &na
 		rig_.reset();
 		return false;
 	}
-	return finish(name);
+	return finish(name + (model.empty() ? "" : ":" + model));
 }
 
 bool RobotPreview::load_addon(std::vector<uint8_t> bytes, uint32_t model, uint32_t robot, const std::string &key, std::string *error) {
@@ -120,7 +121,7 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 	float proj[16], view[16], mvp[16];
 	const float fov = 32.0f, aspect = float(w) / float(h);
 	float half = std::fmin(fov * 0.5f * 3.14159265f / 180.0f, std::atan(std::tan(fov * 0.5f * 3.14159265f / 180.0f) * aspect));
-	float distance = model_.radius * 0.95f / std::sin(half);
+	float distance = model_.radius * 0.95f / std::sin(half) / zoom_;
 	(void)height;
 	glu::perspective(proj, fov, aspect, model_.radius * 0.05f, model_.radius * 20.0f);
 	const float pitch = 0.10f;
@@ -152,6 +153,21 @@ GLuint RobotPreview::render(int w, int h, const std::array<std::array<float, 3>,
 	glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prev_fbo));
 	glViewport(vp[0], vp[1], vp[2], vp[3]);
 	return colour_;
+}
+
+std::vector<uint8_t> RobotPreview::pixels(int *width, int *height) const {
+	*width = tw_, *height = th_;
+	std::vector<uint8_t> out(size_t(tw_) * size_t(th_) * 4);
+	if (!fbo_ || out.empty()) return out;
+	GLint prev = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glReadPixels(0, 0, tw_, th_, GL_RGBA, GL_UNSIGNED_BYTE, out.data());
+	glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prev));
+	const size_t row = size_t(tw_) * 4;
+	for (int y = 0; y < th_ / 2; ++y) std::swap_ranges(out.begin() + long(size_t(y) * row), out.begin() + long(size_t(y + 1) * row), out.begin() + long(size_t(th_ - 1 - y) * row));
+	return out;
 }
 
 bool RobotPreview::bone_screen(const std::string &bone, float *x, float *y, float *pixels_per_unit) const {

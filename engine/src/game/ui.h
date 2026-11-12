@@ -14,6 +14,10 @@
 #include "de/scene.h"
 #include "game/controls.h"
 
+namespace net {
+struct LobbyEntry;
+}
+
 namespace game {
 
 class World;
@@ -190,6 +194,7 @@ public:
 	void click(AppManager &app, Control &c) override;
 	void draw(AppManager &app, std::vector<DrawItem> &out) override;
 	UIManager *child() const override { return picker_.get(); }
+	std::vector<std::string> highlight;  // testing: the entry highlighted first, by name
 	// Testing (OPENBG_HELP_CYCLE): show entry i as a click on its row would; its name, empty past the end.
 	std::string show_entry(AppManager &app, size_t i);
 
@@ -255,6 +260,12 @@ public:
 	std::function<bool(const std::string &path)> launch_replay;
 	// Join Game's Join: connect to a server ("host:port"); false with `error` set.
 	std::function<bool(const std::string &address, const std::string &password, std::string *error)> join_server;
+	// Join Game's Join on a session the lobby lists.
+	std::function<bool(const net::LobbyEntry &entry, const std::string &password, std::string *error)> join_listed;
+	// The lobby Join Game lists and Host Game lists on: --lobby, else Network\Lobby Server unless
+	// Network\LAN Only; empty for none.
+	std::string lobby_server();
+	std::string lobby_override;  // --lobby
 	// The in-game menu's Esc impulse; true when it acted.
 	bool in_game_menu_impulse();
 	// The "Client Browser" impulse (Tab): DE_CClientBrowserFactory::ProcessEvent.

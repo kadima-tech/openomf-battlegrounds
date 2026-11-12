@@ -138,6 +138,7 @@ struct StateManager {
 	uint32_t held_at = 0;              // +0xdc
 	uint64_t last = 0;                 // +0x94: the state Register*State made
 	uint32_t server_id = 0;
+	bool heard = false;  // a client has taken a state of it from the server
 };
 
 // A tick-based creature's clock in a replay (DE_CCreature +0x1d4 is GameObject::creature_ticks).
@@ -2134,7 +2135,17 @@ bool net_newest_state(World &w, const GameObject *owner, NetState &out) {
 
 NetTake net_receive_state(World &w, GameObject *owner, const NetState &st, float lag_ms) {
 	StateManager *sm = manager_of(w, owner);
-	return sm && sm->net ? add_lagged_network_state(w, *sm, st, lag_ms) : NetTake::Rejected;
+	if (!sm || !sm->net) return NetTake::Rejected;
+	NetTake t = add_lagged_network_state(w, *sm, st, lag_ms);
+	if (t == NetTake::Taken || t == NetTake::Known) sm->heard = true;
+	return t;
+}
+
+bool net_awaiting_first_state(World &w, const GameObject &o) {
+	auto &R = rw(w);
+	if (R.net != NetRole::Client || !o.fighter || controlled_here(w, &o)) return false;
+	StateManager *sm = manager_of(w, &o);
+	return sm && sm->net && sm->down && !sm->heard;
 }
 
 void net_set_lag(World &w, float lag_ms, const GameObject *only) {

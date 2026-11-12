@@ -3,9 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <set>
 
+#include "arena.h"
 #include "content.h"
+#include "image_io.h"
+#include "model_build.h"
+#include "pilot.h"
 #include "script.h"
 
 namespace ed {
@@ -498,25 +504,37 @@ void import_sound(Project &p, uint32_t noise, const Bytes &wav, const std::strin
 	p.touch();
 }
 
-uint32_t create_paint_job(Project &p, const HarObjects &o, const std::string &name) {
+uint32_t create_paint_job(Project &p, const HarObjects &o, const std::string &name, int from) {
 	if (o.model_descriptions.empty()) throw deo::Error("the robot has no paint job to start from");
+	if (from < 0) from = o.model_descriptions[0];
 	auto &objs = p.file().objects;
-	const deo::Object &md = objs[size_t(o.model_descriptions[0])];
-	Guid model = description_resource(md);
-	const BaseObject *bm = p.base().by_guid(model);
-	if (!bm) throw deo::Error("the paint job's model is not a base object");
-	std::map<uint32_t, uint32_t> map;
-	uint32_t root = p.copy_from_base(bm->file, {bm->index}, &map, true).at(0);
-	// The new description: a copy of the first, its resource the new model.
-	deo::Object d = objs[size_t(o.model_descriptions[0])];
+	const Guid model = description_resource(objs.at(size_t(from)));
+	Bytes from_pair, to_pair;
+	uint32_t root;
+	if (int local = p.find(model); local >= 0) {
+		// An add-on model (an imported robot's, or a paint job made before): copied within the add-on.
+		const deo::File snapshot = p.file();
+		root = copy_tree(p, snapshot, true, {uint32_t(local)})[0];
+		from_pair = gb(p.agent()), to_pair = gb(p.agent());
+		Bytes og = gb(snapshot.objects[size_t(local)].info.guid), ng = gb(objs[root].info.guid);
+		from_pair.insert(from_pair.end(), og.begin(), og.end());
+		to_pair.insert(to_pair.end(), ng.begin(), ng.end());
+	} else {
+		const BaseObject *bm = p.base().by_guid(model);
+		if (!bm) throw deo::Error("the paint job's model is in neither the add-on nor the base game");
+		std::map<uint32_t, uint32_t> map;
+		root = p.copy_from_base(bm->file, {bm->index}, &map, true).at(0);
+		const deo::File &src = p.base().model(bm->file);
+		from_pair = gb(src.master.guid), to_pair = gb(p.agent());
+		Bytes og = gb(src.objects[bm->index].info.guid), ng = gb(objs[root].info.guid);
+		from_pair.insert(from_pair.end(), og.begin(), og.end());
+		to_pair.insert(to_pair.end(), ng.begin(), ng.end());
+	}
+	// The new description: a copy of the source's, its resource the new model, not the default.
+	deo::Object d = objs[size_t(from)];
 	d.info.guid = fresh_guid();
 	d.info.name = stored(name);
-	const deo::File &src = p.base().model(bm->file);
-	Bytes from = gb(src.master.guid), to = gb(p.agent());
-	Bytes og = gb(src.objects[bm->index].info.guid), ng = gb(objs[root].info.guid);
-	from.insert(from.end(), og.begin(), og.end());
-	to.insert(to.end(), ng.begin(), ng.end());
-	replace_bytes(d.contents, from, to);
+	replace_bytes(d.contents, from_pair, to_pair);
 	{
 		Chunks c = split_chunks(d.contents);
 		deo::Reader r(c.chunks[0].body);
@@ -525,31 +543,259 @@ uint32_t create_paint_job(Project &p, const HarObjects &o, const std::string &na
 		w.block(stored(name));
 		w.bytes(Bytes(c.chunks[0].body.begin() + long(r.pos()), c.chunks[0].body.end()));
 		c.chunks[0].body = w.data();
+		// v3 [resource][listed][f32 sort][locked][visible when locked][default model]: one default.
+		if (c.chunks[0].version >= 3) {
+			deo::Reader q(c.chunks[0].body);
+			q.block();
+			if (q.u8()) q.seek(q.sized());
+			size_t flag = q.pos() + 1 + 4 + 1 + 1;
+			if (flag < c.chunks[0].body.size()) c.chunks[0].body[flag] = 0;
+		}
 		d.contents = join_chunks(c);
 	}
+	d.packed.clear();
+	d.packed_as_is = false;
 	d.hierarchy = {1, 1, 0};
 	objs.push_back(d);
+	build::rename(p, root, name + " Model");
 	p.touch();
 	return uint32_t(objs.size() - 1);
 }
 
+int paint_job_model(const Project &p, uint32_t model_description) {
+	int m = p.find(description_resource(p.file().objects.at(model_description)));
+	return m >= 0 && p.file().objects[size_t(m)].info.class_text() == "FighterModel" ? m : -1;
+}
+
 std::vector<PaintImage> paint_images(const Project &p, uint32_t model_description) {
 	std::vector<PaintImage> out;
-	int root = p.find(description_resource(p.file().objects.at(model_description)));
+	int root = paint_job_model(p, model_description);
 	if (root < 0) return out;
+	std::vector<int> parents = object_parents(p.file());
 	std::vector<uint32_t> stack{uint32_t(root)};
 	std::set<uint32_t> seen;
 	while (!stack.empty()) {
 		uint32_t i = stack.back();
 		stack.pop_back();
 		if (!seen.insert(i).second) continue;
-		for (uint32_t c : p.children(i)) stack.push_back(c);
+		auto kids = p.children(i);
+		for (auto it = kids.rbegin(); it != kids.rend(); ++it) stack.push_back(*it);
 		const auto &o = p.file().objects[i];
 		std::string n = o.info.name_text();
-		if (o.info.class_text() == "Image\\Standard" && (n == "RGBMain" || n == "ReflectionMask" || n == "Bump")) out.push_back({int(i), n});
+		if (o.info.class_text() != "Image\\Standard") continue;
+		if (n != "RGBStatic" && n != "RGBMain" && n != "ReflectionMask" && n != "Bump") continue;
+		bool again = false;
+		for (auto &x : out) again = again || x.name == n;
+		// A mesh's own images (Gargoyle's wings) carry their mesh's name.
+		out.push_back({int(i), again && parents[i] >= 0 ? n + " (" + p.file().objects[size_t(parents[i])].info.name_text() + ")" : n});
 	}
 	return out;
 }
+
+namespace {
+
+// A Value\String's text: its second chunk's first block.
+std::string string_text(const deo::Object &o) {
+	Chunks c = split_chunks(o.contents);
+	if (c.chunks.size() < 2) return {};
+	try {
+		deo::Reader r(c.chunks[1].body);
+		return utf8(r.block());
+	} catch (const deo::Error &) {
+		return {};
+	}
+}
+
+void set_string_text(deo::Object &o, const std::string &text) {
+	Chunks c = split_chunks(o.contents);
+	if (c.chunks.size() < 2) return;
+	deo::Reader r(c.chunks[1].body);
+	r.block();
+	deo::Writer w;
+	w.block(stored(text));
+	w.bytes(Bytes(c.chunks[1].body.begin() + long(r.pos()), c.chunks[1].body.end()));
+	c.chunks[1].body = w.data();
+	o.contents = join_chunks(c);
+	o.packed.clear();
+	o.packed_as_is = false;
+}
+
+// The description's large representation and, under it, the panel's pieces, by GUID.
+struct Panel {
+	Guid creator, title_creator, title, picture, text;
+	bool found = false;
+};
+
+template <typename Lookup>
+Panel panel_of(const std::vector<Ref> &creator_refs, Lookup &&class_of_and_refs) {
+	Panel out;
+	for (auto &r : creator_refs) {
+		Guid g;
+		std::string cls;
+		std::vector<Ref> sub;
+		if (!class_of_and_refs(r, &g, &cls, &sub)) continue;
+		if (cls == "Image\\Standard" && guid_zero(out.picture)) out.picture = g;
+		else if (cls == "Value\\String") out.text = g;
+		else if (cls == "ControlCreator" && guid_zero(out.title_creator)) {
+			for (auto &t : sub) {
+				Guid tg;
+				std::string tcls;
+				std::vector<Ref> none;
+				if (class_of_and_refs(t, &tg, &tcls, &none) && tcls == "Value\\String") {
+					out.title_creator = g, out.title = tg;
+					break;
+				}
+			}
+		}
+	}
+	out.found = !guid_zero(out.picture) || !guid_zero(out.text);
+	return out;
+}
+
+// The add-on description's large representation's GUID (DescriptionInfo order: casts, icon, large).
+bool large_of(const Project &p, const deo::Object &d, Guid *out) {
+	for (auto &r : object_references(d.info.class_text(), d.references)) {
+		Project::Target t = p.target(r);
+		if (!t.resolved) continue;
+		std::string cls;
+		if (t.local >= 0) cls = p.file().objects[size_t(t.local)].info.class_text();
+		else if (const BaseObject *b = p.base().by_guid(t.guid)) cls = b->class_path;
+		if (cls == "ControlCreator") {
+			*out = t.guid;
+			return true;
+		}
+	}
+	return false;
+}
+
+Panel find_panel(const Project &p, const HarObjects &o, bool *own) {
+	Panel none;
+	*own = false;
+	if (o.description < 0) return none;
+	Guid large;
+	if (!large_of(p, p.file().objects[size_t(o.description)], &large)) return none;
+	if (int local = p.find(large); local >= 0) {
+		*own = true;
+		auto lookup = [&](const Ref &r, Guid *g, std::string *cls, std::vector<Ref> *sub) {
+			Project::Target t = p.target(r);
+			if (t.local < 0) {
+				const BaseObject *b = t.resolved ? p.base().by_guid(t.guid) : nullptr;
+				if (!b) return false;
+				*g = t.guid, *cls = b->class_path;
+				return true;
+			}
+			const deo::Object &x = p.file().objects[size_t(t.local)];
+			*g = x.info.guid, *cls = x.info.class_text(), *sub = object_references(*cls, x.references);
+			return true;
+		};
+		const deo::Object &c = p.file().objects[size_t(local)];
+		Panel out = panel_of(object_references("ControlCreator", c.references), lookup);
+		out.creator = large;
+		return out;
+	}
+	const BaseObject *b = p.base().by_guid(large);
+	if (!b) return none;
+	const deo::File &f = p.base().model(b->file);
+	auto lookup = [&](const Ref &r, Guid *g, std::string *cls, std::vector<Ref> *sub) {
+		const deo::Object *x = nullptr;
+		if (r.kind == Ref::Local && r.index < f.objects.size()) x = &f.objects[r.index];
+		else if (r.kind == Ref::Pool && r.index < f.guid_pool.size()) {
+			if (const BaseObject *bo = p.base().by_guid(f.guid_pool[r.index]); bo && bo->file == b->file) x = &f.objects[bo->index];
+		}
+		if (!x) return false;
+		*g = x->info.guid, *cls = x->info.class_text(), *sub = object_references(*cls, x->references);
+		return true;
+	};
+	Panel out = panel_of(object_references("ControlCreator", f.objects[b->index].references), lookup);
+	out.creator = large;
+	return out;
+}
+
+const deo::Object *panel_object(const Project &p, const Guid &g) {
+	if (guid_zero(g)) return nullptr;
+	if (int l = p.find(g); l >= 0) return &p.file().objects[size_t(l)];
+	const BaseObject *b = p.base().by_guid(g);
+	return b ? &p.base().model(b->file).objects[b->index] : nullptr;
+}
+
+}  // namespace
+
+HarPresentation read_presentation(const Project &p, const HarObjects &o) {
+	HarPresentation h;
+	Panel panel = find_panel(p, o, &h.own);
+	h.found = panel.found;
+	if (!panel.found) return h;
+	if (const deo::Object *t = panel_object(p, panel.title)) h.title = string_text(*t);
+	if (const deo::Object *t = panel_object(p, panel.text)) h.text = string_text(*t);
+	if (const deo::Object *img = panel_object(p, panel.picture)) {
+		int type = 0;
+		image_header(*img, &type, &h.width, &h.height);
+		if (h.own) h.picture = p.find(panel.picture);
+	}
+	return h;
+}
+
+void own_presentation(Project &p, const HarObjects &o) {
+	bool own = false;
+	Panel panel = find_panel(p, o, &own);
+	if (!panel.found) throw deo::Error("the robot's description has no Choose Creature panel to copy");
+	if (own) return;
+	const BaseObject *creator = p.base().by_guid(panel.creator);
+	if (!creator) throw deo::Error("the panel is not a base object");
+	std::vector<uint32_t> roots{creator->index};
+	for (const Guid *g : {&panel.title_creator, &panel.title, &panel.picture, &panel.text}) {
+		const BaseObject *b = guid_zero(*g) ? nullptr : p.base().by_guid(*g);
+		if (b && b->file == creator->file) roots.push_back(b->index);
+	}
+	std::map<uint32_t, uint32_t> map;
+	auto made = p.copy_from_base(creator->file, roots, &map, true);
+	auto &objs = p.file().objects;
+	const uint32_t copy = made[0];
+	std::string name = objs[size_t(o.description)].info.name_text();
+	build::rename(p, copy, name + "Creator");
+	// The description's large representation: the copy.
+	deo::Object &d = objs[size_t(o.description)];
+	Chunks rc = split_chunks(d.references);
+	const std::string cls = d.info.class_text();
+	for (size_t k = 0; k < rc.chunks.size(); ++k) {
+		RawChunk out;
+		bool changed = false;
+		bool ok = map_reference_chunk(cls, k, rc.chunks[k], out, [&](const Ref &r) {
+			Project::Target t = p.target(r);
+			if (t.resolved && !memcmp(t.guid.b, panel.creator.b, 16)) {
+				Ref l;
+				l.kind = Ref::Local, l.index = copy;
+				changed = true;
+				return l;
+			}
+			return r;
+		});
+		if (ok && changed) rc.chunks[k] = std::move(out);
+	}
+	d.references = join_chunks(rc);
+	d.packed.clear();
+	d.packed_as_is = false;
+	p.touch();
+}
+
+void write_presentation(Project &p, const HarObjects &o, const std::string &title, const std::string &text) {
+	own_presentation(p, o);
+	bool own = false;
+	Panel panel = find_panel(p, o, &own);
+	if (int t = p.find(panel.title); t >= 0) set_string_text(p.file().objects[size_t(t)], title);
+	if (int t = p.find(panel.text); t >= 0) set_string_text(p.file().objects[size_t(t)], text);
+	p.touch();
+}
+
+void set_presentation_picture(Project &p, const HarObjects &o, int width, int height, const std::vector<uint8_t> &rgba, const std::string &source) {
+	own_presentation(p, o);
+	HarPresentation h = read_presentation(p, o);
+	if (h.picture < 0) throw deo::Error("the panel has no picture");
+	int w = h.width > 0 ? h.width : width, hh = h.height > 0 ? h.height : height;
+	set_image_pixels(p, uint32_t(h.picture), w, hh, resize_rgba(width, height, rgba, w, hh), source);
+}
+
+bool attack_sphere(const std::string &name) { return name.find("HitDetector") != std::string::npos || name.find("AttackDetector") != std::string::npos; }
 
 std::string sphere_bone(const Project &p, int sphere) {
 	std::vector<int> parents = object_parents(p.file());

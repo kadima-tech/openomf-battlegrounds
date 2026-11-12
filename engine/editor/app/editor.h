@@ -45,15 +45,19 @@ struct Options {
 	std::string arena, select_node, camera, debug, move_to, light_colour;
 	bool variant = false, play = false, simulate = false, eject = false, inspector = false, replay = false;
 	int play_ticks = 0, layout = 0, shading = -1;
+	std::string play_robot, play_opponent;  // Play Mode's robots
 	// The asset side (assets.h): tournaments and HAR variants.
 	std::string new_tournament, open_tournament, new_har, open_har;
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
-	int asset_tab = -1, asset_select = -100;
+	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
+	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
+	int asset_tab = -1, asset_select = -100, paint_job = -1;
 	bool compile = false;
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an
 	// object, place an imported prop in the open arena.
 	std::filesystem::path import_file, export_out;
 	std::string import_kind, import_name, import_template, import_base, import_pose, export_spec, place_prop;
+	std::vector<std::string> import_paints;  // Name=image.png: a robot import's further paint jobs
 	bool import_dialog = false;
 	int import_step = 0;
 };

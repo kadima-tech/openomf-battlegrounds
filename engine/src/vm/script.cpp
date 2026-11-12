@@ -78,7 +78,7 @@ ScriptMethod *ScriptClass::find_by_name(const std::string &name) const {
 	return found;
 }
 
-void load_class(ScriptClass &out, Memory &mem, const std::vector<uint8_t> &contents, VMClass code) {
+void load_class(ScriptClass &out, Memory &mem, const std::vector<uint8_t> &contents, VMClass code, std::vector<uint32_t> *code_addrs) {
 	de::Contents c(contents);
 	de::Chunk ch = de::begin_chunk(c);
 	if (ch.version >= 2) {
@@ -96,6 +96,7 @@ void load_class(ScriptClass &out, Memory &mem, const std::vector<uint8_t> &conte
 	out.code = std::move(code);
 
 	std::vector<std::pair<ScriptMethod *, uint32_t>> parent_links;
+	size_t copied = 0;
 	for (auto &b : out.code.behaviors) {
 		auto &table = out.behavior_methods.emplace_back(b.methods.size(), nullptr);
 		for (size_t mi = 0; mi < b.methods.size(); ++mi) {
@@ -117,7 +118,13 @@ void load_class(ScriptClass &out, Memory &mem, const std::vector<uint8_t> &conte
 			}
 			sm.cm = &*m;
 			sm.cls = &out;
-			sm.code_addr = mem.alloc_copy(m->code.data(), uint32_t(m->code.size()));
+			if (code_addrs && copied < code_addrs->size()) {
+				sm.code_addr = (*code_addrs)[copied];
+			} else {
+				sm.code_addr = mem.alloc_copy(m->code.data(), uint32_t(m->code.size()));
+				if (code_addrs) code_addrs->push_back(sm.code_addr);
+			}
+			++copied;
 			sm.code_size = uint32_t(m->code.size());
 			sm.handle = g_next_method_handle++;
 			auto it = std::find(out.pool.begin(), out.pool.end(), m->signature);
