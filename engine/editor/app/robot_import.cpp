@@ -287,6 +287,30 @@ void robot_source_section(Editor &e, ed::ImportPlan &plan) {
 	if (ImGui::RadioButton("The model's own (RGBStatic)", paint == 1)) h.paint = ed::HarPlan::Paint::Colours;
 	ImGui::SameLine(0, ui::px(16));
 	if (ImGui::RadioButton("The pilot's, one per material", paint == 0)) h.paint = ed::HarPlan::Paint::Materials;
+	ui::form_label("More paint jobs", lw);
+	ImGui::BeginGroup();
+	for (size_t k = 0; k < h.extra_paints.size(); ++k) {
+		ImGui::PushID(int(k));
+		ImGui::SetNextItemWidth(ui::px(140));
+		ImGui::InputText("##n", &h.extra_paints[k].name);
+		ImGui::SameLine();
+		ImGui::AlignTextToFramePadding();
+		ui::dim_text(path_text(h.extra_paints[k].image.filename()).c_str(), kTextSoft);
+		ImGui::SameLine();
+		bool drop = ui::icon_button("x", ICON_X, "Leave this paint job out");
+		ImGui::PopID();
+		if (drop) {
+			h.extra_paints.erase(h.extra_paints.begin() + long(k));
+			break;
+		}
+	}
+	if (ui::toolbar_button(ICON_PLUS, "Add from an image...", ui::Tone::Ghost, true, "A PNG laid out as the model's texture (the atlas the import makes: export it from the Paint tab to paint over)", ImGui::GetFrameHeight())) {
+		ed::ImportPlan *pp = &plan;
+		e.file_dialog().open(FileDialog::OpenFile, "Paint job image", {}, {".png", ".bmp"}, [pp](const fs::path &path) {
+			pp->har.extra_paints.push_back({"Paint" + std::to_string(pp->har.extra_paints.size() + 2), path});
+		});
+	}
+	ImGui::EndGroup();
 	ui::form_label("Level of detail", lw);
 	ui::checkbox("##dec", &h.decimate_lod0);
 	ImGui::SameLine();

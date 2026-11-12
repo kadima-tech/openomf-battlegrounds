@@ -14,10 +14,10 @@ RobotPreview::~RobotPreview() {
 	if (fbo_) glDeleteFramebuffers(1, &fbo_);
 }
 
-bool RobotPreview::load(const std::filesystem::path &data, const std::string &name, std::string *error) {
+bool RobotPreview::load(const std::filesystem::path &data, const std::string &name, std::string *error, const std::string &model_file, const std::string &model) {
 	try {
-		model_file_ = std::make_unique<de::ObjectsFile>(fighter::read_file(data / (name + "Model1.DEObjects")));
-		model_ = fighter::load_fighter(*model_file_, nullptr, false);
+		model_file_ = std::make_unique<de::ObjectsFile>(fighter::read_file(data / ((model_file.empty() ? name + "Model1" : model_file) + ".DEObjects")));
+		model_ = fighter::load_fighter(*model_file_, model.empty() ? nullptr : model.c_str(), false);
 		fighter_file_ = std::make_unique<de::ObjectsFile>(fighter::read_file(data / (name + ".DEObjects")));
 		rig_ = fighter::load_rig(*fighter_file_, *model_file_, model_.mesh_index, false);
 	} catch (const std::exception &e) {
@@ -25,7 +25,7 @@ bool RobotPreview::load(const std::filesystem::path &data, const std::string &na
 		rig_.reset();
 		return false;
 	}
-	return finish(name);
+	return finish(name + (model.empty() ? "" : ":" + model));
 }
 
 bool RobotPreview::load_addon(std::vector<uint8_t> bytes, uint32_t model, uint32_t robot, const std::string &key, std::string *error) {

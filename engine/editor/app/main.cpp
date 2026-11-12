@@ -64,6 +64,8 @@ int main(int argc, char **argv) {
 		else if (arg("--new-har")) opt.new_har = argv[++i];
 		else if (arg("--open-har")) opt.open_har = argv[++i];
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
+		else if (arg("--har-paint")) opt.har_paints.push_back(argv[++i]);
+		else if (arg("--paint-job")) opt.paint_job = atoi(argv[++i]);
 		else if (arg("--asset-tab")) opt.asset_tab = atoi(argv[++i]);
 		else if (arg("--asset-select")) opt.asset_select = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--compile")) opt.compile = true;
@@ -88,6 +90,7 @@ int main(int argc, char **argv) {
 		else if (arg("--import-template")) opt.import_template = argv[++i];
 		else if (arg("--import-base")) opt.import_base = argv[++i];
 		else if (arg("--import-pose")) opt.import_pose = argv[++i];
+		else if (arg("--import-paint")) opt.import_paints.push_back(argv[++i]);
 		else if (!strcmp(argv[i], "--import-dialog")) opt.import_dialog = true;
 		else if (arg("--import-step")) opt.import_step = atoi(argv[++i]), opt.import_dialog = true;
 		else if (arg("--export")) opt.export_spec = argv[++i];

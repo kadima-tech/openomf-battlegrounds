@@ -2692,6 +2692,23 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		build::add_child(p, model, img);
 		++res.images;
 	}
+	for (const auto &extra : h.extra_paints) {
+		HarObjects ho = har_objects(p, desc);
+		if (extra.name.empty() || ho.model_descriptions.empty()) continue;
+		RgbaImage im = load_image(extra.image);
+		uint32_t job = create_paint_job(p, ho, extra.name, ho.model_descriptions[0]);
+		const char *target = h.paint == HarPlan::Paint::Colours ? "RGBStatic" : "RGBMain";
+		for (auto &img : paint_images(p, job)) {
+			if (img.name != target) continue;
+			int w = 0, hh = 0, type = 0;
+			image_header(objs[size_t(img.object)], &type, &w, &hh);
+			RobotImage ri;
+			ri.width = w, ri.height = hh;
+			ri.rgba = resize_rgba(im.width, im.height, im.rgba, w, hh);
+			replace_image(p, uint32_t(img.object), ri, false);
+		}
+		res.notes.push_back("paint job " + extra.name + " from " + extra.image.filename().string());
+	}
 	for (size_t i = first_new; i < objs.size(); ++i) res.made.push_back(uint32_t(i));
 	(void)in_block;
 	res.root = desc;

@@ -113,6 +113,13 @@ struct HarPlan {
 	bool ground = true;       // the lowest vertex on the floor
 	enum class Paint : uint8_t { Materials, Colours } paint = Paint::Colours;
 	bool decimate_lod0 = false;  // LOD0 to the base robot's budget as well
+	// Further paint jobs: a copy of the model with this image as its colours (RGBStatic) or, when
+	// the paint is the pilot's, its paint mask (RGBMain); laid out as the model's texture.
+	struct ExtraPaint {
+		std::string name;
+		std::filesystem::path image;
+	};
+	std::vector<ExtraPaint> extra_paints;
 	std::shared_ptr<const RobotRig> rig;
 	std::vector<std::string> notes;  // what the analysis found
 };

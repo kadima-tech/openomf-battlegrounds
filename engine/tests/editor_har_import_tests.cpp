@@ -28,6 +28,8 @@
 #include "har_import.h"
 #include "model_export.h"
 #include "model_import.h"
+#include "content.h"
+#include "pilot.h"
 #include "validate.h"
 
 namespace fs = std::filesystem;
@@ -437,7 +439,7 @@ static void print_mapping(const ed::ImportPlan &plan) {
 }
 
 // The add-on as the engine reads it: the HAR's description, model, skin and bank.
-static void check_engine_reads(const fs::path &data, const fs::path &file, const std::string &name, size_t lod0_faces) {
+static void check_engine_reads(const fs::path &data, const fs::path &file, const std::string &name, size_t lod0_faces, size_t paint_jobs = 1) {
 	set_env("OPENBG_ADDONS", file.string());
 	std::set<std::string> keep{file.stem().string(), "Jaguar", "JaguarModel1", "Katana", "KatanaModel1", "SharedObjects", "Fighter"};
 	de::World w(data, [&](const std::string &s) { return keep.count(s) > 0; });
@@ -451,7 +453,10 @@ static void check_engine_reads(const fs::path &data, const fs::path &file, const
 	}
 	CHECK(desc);
 	auto models = game::fighter_models(w, desc);
-	CHECK(models.size() == 1);
+	CHECK(models.size() == paint_jobs);
+	size_t defaults = 0;
+	for (auto &m : models) defaults += game::read_description(w, m).flag_d8;
+	CHECK(defaults <= 1);
 	// The model's biggest mesh with its weights, and the fighter's bank.
 	const de::ObjectInfo *model = nullptr, *bank = nullptr, *deform = nullptr;
 	for (auto &o : f->objects()) {
@@ -631,8 +636,27 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	for (auto &m : again.har.sequences) {
 		if (!manual.empty() && m.sequence == manual) CHECK(m.animation == 0 && m.source == ed::MapSource::Manual);
 	}
+	// A second paint job: a copy of the imported model with its own colours.
+	{
+		ed::HarObjects o = ed::har_objects(*project, r.root);
+		uint32_t job = ed::create_paint_job(*project, o, "Night");
+		o = ed::har_objects(*project, r.root);
+		CHECK(o.model_descriptions.size() == 2);
+		int first = ed::paint_job_model(*project, uint32_t(o.model_descriptions[0])), second = ed::paint_job_model(*project, job);
+		CHECK(first >= 0 && second >= 0 && first != second);
+		auto images = ed::paint_images(*project, job);
+		bool colours = false;
+		for (auto &img : images) {
+			if (img.name != "RGBStatic") continue;
+			int w = 0, h = 0, type = 0;
+			ed::image_header(project->file().objects[size_t(img.object)], &type, &w, &h);
+			ed::set_image_pixels(*project, uint32_t(img.object), w, h, std::vector<uint8_t>(size_t(w) * size_t(h) * 4, 40), "night.png");
+			colours = true;
+		}
+		CHECK(colours || plan.har.paint != ed::HarPlan::Paint::Colours);
+	}
 	project->save();
-	check_engine_reads(data, dir / "HarGenerated.DEObjects", name, b.lods[0].faces.size());
+	check_engine_reads(data, dir / "HarGenerated.DEObjects", name, b.lods[0].faces.size(), 2);
 	if (!keep.empty()) {
 		std::string stem = naming == Naming::Mixamo ? "HarMixamo" : "HarBoxBot";
 		fs::copy_file(dir / "HarGenerated.DEObjects", keep / (stem + ".DEObjects"), fs::copy_options::overwrite_existing);

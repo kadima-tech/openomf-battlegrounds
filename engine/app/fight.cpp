@@ -32,6 +32,7 @@
 #include <set>
 #include <tuple>
 
+#include "game/descriptions.h"
 #include "game/forces.h"
 #include "game/observer.h"
 #include "de/platform.h"
@@ -153,10 +154,11 @@ static std::optional<de::Guid> environment_description(game::World &world, const
 int main(int argc, char **argv) {
 	de::init_platform();
 	if (argc < 3) {
-		fprintf(stderr, "usage: %s <Data dir> <Fighter> [--arena Desert] [--pilot Lucas] [--watch] [--headless [frames]] [--screenshot out.png --frames N]\n",
+		fprintf(stderr, "usage: %s <Data dir> <Fighter> [--arena Desert] [--pilot Lucas] [--model <paint job>] [--watch] [--headless [frames]] [--screenshot out.png --frames N]\n",
 		        argv[0]);
 		return 2;
 	}
+	std::string model_name;
 	std::string data = argv[1], name = argv[2], arena = "Desert", pilot = "Lucas", opponent = "Katana",
 	            opponent_pilot = "Elizabeth";
 	int difficulty = 0, wins = 2;  // DE_COMF2Manager::Activate: registry AIDifficulty, default 0 (Rookie)
@@ -166,6 +168,8 @@ int main(int argc, char **argv) {
 	for (int i = 3; i < argc; ++i) {
 		if (!strcmp(argv[i], "--arena") && i + 1 < argc) {
 			arena = argv[++i];
+		} else if (!strcmp(argv[i], "--model") && i + 1 < argc) {
+			model_name = argv[++i];
 		} else if (!strcmp(argv[i], "--opponent") && i + 1 < argc) {
 			opponent = argv[++i];
 		} else if (!strcmp(argv[i], "--pilot") && i + 1 < argc) {
@@ -280,6 +284,28 @@ int main(int argc, char **argv) {
 				// A robot's description may live in another file (Force's is in ForceModel1).
 				de::ObjectRef fd = find(picks[i].first, "Description\\Creature\\Fighter", picks[i].first);
 				if (!fd) fd = world.data().find("Description\\Creature\\Fighter", picks[i].first);
+				// --model: the paint job Choose Creature's Model list would set (SetCreatureModelDescriptionGUID).
+				// --model: the paint job Choose Creature's Model list would set (SetCreatureModelDescriptionGUID,
+				// on the slot's picker behaviour).
+				if (i == 0 && !model_name.empty() && fd) {
+					bool found = false;
+					for (auto &m : game::fighter_models(world.data(), fd)) {
+						if (m.info().name != model_name || found) continue;
+						std::function<bool(game::GameObject *)> set = [&](game::GameObject *o) {
+							uint32_t g = world.make_instance("CObject::CGUID", 1);
+							memcpy(world.memory().ptr(g, 16), m.info().guid.bytes, 16);
+							std::vector<uint8_t> args(4);
+							memcpy(args.data(), &g, 4);
+							if (o->brain && o->brain->call(world, "SetCreatureModelDescriptionGUID(class CGUID)", args)) return true;
+							for (game::GameObject *c : o->children) {
+								if (set(c)) return true;
+							}
+							return false;
+						};
+						found = ss.slots[0]->obj && set(ss.slots[0]->obj);
+					}
+					if (!found) fprintf(stderr, "%s has no paint job %s; using its default\n", picks[i].first.c_str(), model_name.c_str());
+				}
 				pick(i, "SessionSlotSelectCreature", fd);
 				pick(i, "SessionSlotSelectPilot", find("Pilots", "Description\\Pilot", picks[i].second));
 				game::add_client(world, i == 0, picks[i].second);
@@ -330,7 +356,16 @@ int main(int argc, char **argv) {
 					}
 				}
 				if (!fd) fd = world.data().find("Description\\Creature\\Fighter", who);
-				if (game::GameObject *desc = fd ? world.global_object(fd) : nullptr) game::new_resource(world, desc, nullptr);
+				// --model: a paint job (FighterModelDescription) by name, as Choose Creature's Model list picks it.
+				const de::Guid *model = nullptr;
+				de::Guid chosen{};
+				if (user && !model_name.empty() && fd) {
+					for (auto &m : game::fighter_models(world.data(), fd)) {
+						if (m.info().name == model_name) chosen = m.info().guid, model = &chosen;
+					}
+					if (!model) fprintf(stderr, "%s has no paint job %s; using its default\n", who.c_str(), model_name.c_str());
+				}
+				if (game::GameObject *desc = fd ? world.global_object(fd) : nullptr) game::new_resource(world, desc, model);
 				world.make_fighter = nullptr;
 				if (!made) {
 					fprintf(stderr, "no fighter description for %s; the robot has no model\n", who.c_str());

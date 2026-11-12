@@ -5,7 +5,9 @@
 #include <cstring>
 #include <set>
 
+#include "arena.h"
 #include "content.h"
+#include "model_build.h"
 #include "script.h"
 
 namespace ed {
@@ -498,25 +500,37 @@ void import_sound(Project &p, uint32_t noise, const Bytes &wav, const std::strin
 	p.touch();
 }
 
-uint32_t create_paint_job(Project &p, const HarObjects &o, const std::string &name) {
+uint32_t create_paint_job(Project &p, const HarObjects &o, const std::string &name, int from) {
 	if (o.model_descriptions.empty()) throw deo::Error("the robot has no paint job to start from");
+	if (from < 0) from = o.model_descriptions[0];
 	auto &objs = p.file().objects;
-	const deo::Object &md = objs[size_t(o.model_descriptions[0])];
-	Guid model = description_resource(md);
-	const BaseObject *bm = p.base().by_guid(model);
-	if (!bm) throw deo::Error("the paint job's model is not a base object");
-	std::map<uint32_t, uint32_t> map;
-	uint32_t root = p.copy_from_base(bm->file, {bm->index}, &map, true).at(0);
-	// The new description: a copy of the first, its resource the new model.
-	deo::Object d = objs[size_t(o.model_descriptions[0])];
+	const Guid model = description_resource(objs.at(size_t(from)));
+	Bytes from_pair, to_pair;
+	uint32_t root;
+	if (int local = p.find(model); local >= 0) {
+		// An add-on model (an imported robot's, or a paint job made before): copied within the add-on.
+		const deo::File snapshot = p.file();
+		root = copy_tree(p, snapshot, true, {uint32_t(local)})[0];
+		from_pair = gb(p.agent()), to_pair = gb(p.agent());
+		Bytes og = gb(snapshot.objects[size_t(local)].info.guid), ng = gb(objs[root].info.guid);
+		from_pair.insert(from_pair.end(), og.begin(), og.end());
+		to_pair.insert(to_pair.end(), ng.begin(), ng.end());
+	} else {
+		const BaseObject *bm = p.base().by_guid(model);
+		if (!bm) throw deo::Error("the paint job's model is in neither the add-on nor the base game");
+		std::map<uint32_t, uint32_t> map;
+		root = p.copy_from_base(bm->file, {bm->index}, &map, true).at(0);
+		const deo::File &src = p.base().model(bm->file);
+		from_pair = gb(src.master.guid), to_pair = gb(p.agent());
+		Bytes og = gb(src.objects[bm->index].info.guid), ng = gb(objs[root].info.guid);
+		from_pair.insert(from_pair.end(), og.begin(), og.end());
+		to_pair.insert(to_pair.end(), ng.begin(), ng.end());
+	}
+	// The new description: a copy of the source's, its resource the new model, not the default.
+	deo::Object d = objs[size_t(from)];
 	d.info.guid = fresh_guid();
 	d.info.name = stored(name);
-	const deo::File &src = p.base().model(bm->file);
-	Bytes from = gb(src.master.guid), to = gb(p.agent());
-	Bytes og = gb(src.objects[bm->index].info.guid), ng = gb(objs[root].info.guid);
-	from.insert(from.end(), og.begin(), og.end());
-	to.insert(to.end(), ng.begin(), ng.end());
-	replace_bytes(d.contents, from, to);
+	replace_bytes(d.contents, from_pair, to_pair);
 	{
 		Chunks c = split_chunks(d.contents);
 		deo::Reader r(c.chunks[0].body);
@@ -525,28 +539,51 @@ uint32_t create_paint_job(Project &p, const HarObjects &o, const std::string &na
 		w.block(stored(name));
 		w.bytes(Bytes(c.chunks[0].body.begin() + long(r.pos()), c.chunks[0].body.end()));
 		c.chunks[0].body = w.data();
+		// v3 [resource][listed][f32 sort][locked][visible when locked][default model]: one default.
+		if (c.chunks[0].version >= 3) {
+			deo::Reader q(c.chunks[0].body);
+			q.block();
+			if (q.u8()) q.seek(q.sized());
+			size_t flag = q.pos() + 1 + 4 + 1 + 1;
+			if (flag < c.chunks[0].body.size()) c.chunks[0].body[flag] = 0;
+		}
 		d.contents = join_chunks(c);
 	}
+	d.packed.clear();
+	d.packed_as_is = false;
 	d.hierarchy = {1, 1, 0};
 	objs.push_back(d);
+	build::rename(p, root, name + " Model");
 	p.touch();
 	return uint32_t(objs.size() - 1);
 }
 
+int paint_job_model(const Project &p, uint32_t model_description) {
+	int m = p.find(description_resource(p.file().objects.at(model_description)));
+	return m >= 0 && p.file().objects[size_t(m)].info.class_text() == "FighterModel" ? m : -1;
+}
+
 std::vector<PaintImage> paint_images(const Project &p, uint32_t model_description) {
 	std::vector<PaintImage> out;
-	int root = p.find(description_resource(p.file().objects.at(model_description)));
+	int root = paint_job_model(p, model_description);
 	if (root < 0) return out;
+	std::vector<int> parents = object_parents(p.file());
 	std::vector<uint32_t> stack{uint32_t(root)};
 	std::set<uint32_t> seen;
 	while (!stack.empty()) {
 		uint32_t i = stack.back();
 		stack.pop_back();
 		if (!seen.insert(i).second) continue;
-		for (uint32_t c : p.children(i)) stack.push_back(c);
+		auto kids = p.children(i);
+		for (auto it = kids.rbegin(); it != kids.rend(); ++it) stack.push_back(*it);
 		const auto &o = p.file().objects[i];
 		std::string n = o.info.name_text();
-		if (o.info.class_text() == "Image\\Standard" && (n == "RGBMain" || n == "ReflectionMask" || n == "Bump")) out.push_back({int(i), n});
+		if (o.info.class_text() != "Image\\Standard") continue;
+		if (n != "RGBStatic" && n != "RGBMain" && n != "ReflectionMask" && n != "Bump") continue;
+		bool again = false;
+		for (auto &x : out) again = again || x.name == n;
+		// A mesh's own images (Gargoyle's wings) carry their mesh's name.
+		out.push_back({int(i), again && parents[i] >= 0 ? n + " (" + p.file().objects[size_t(parents[i])].info.name_text() + ")" : n});
 	}
 	return out;
 }

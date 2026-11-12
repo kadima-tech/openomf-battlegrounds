@@ -14,8 +14,9 @@
 class RobotPreview {
 public:
 	~RobotPreview();
-	// Loads <fighter>Model1.DEObjects and <fighter>.DEObjects from the Data folder.
-	bool load(const std::filesystem::path &data, const std::string &fighter, std::string *error);
+	// Loads <fighter>Model1.DEObjects (or <model_file>.DEObjects, its FighterModel `model`: a name or
+	// "#index"; the first by default) and <fighter>.DEObjects from the Data folder.
+	bool load(const std::filesystem::path &data, const std::string &fighter, std::string *error, const std::string &model_file = {}, const std::string &model = {});
 	// An add-on's robot: its FighterModel at `model` and the rig after the OMF2Fighter at `robot`.
 	bool load_addon(std::vector<uint8_t> bytes, uint32_t model, uint32_t robot, const std::string &key, std::string *error);
 	const std::string &fighter() const { return fighter_; }
