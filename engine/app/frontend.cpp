@@ -133,6 +133,16 @@ void print_state(game::World &world, int fr) {
 
 }  // namespace
 
+#ifdef _WIN32
+// On laptops with an integrated and a discrete GPU (NVIDIA Optimus, AMD switchable graphics), the
+// drivers run an executable exporting these on the discrete GPU; otherwise Windows usually picks
+// the integrated one.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 int main(int argc, char **argv) {
 	de::init_platform();
 	setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -795,6 +805,9 @@ int main(int argc, char **argv) {
 		                                            (fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) | (shot ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN),
 		                                        &ctx);
 		if (!glu::load_gl()) throw std::runtime_error("OpenGL 4.1 is required; update your graphics driver");
+		// Which GPU drew the game: on a laptop with two, the integrated one is far slower.
+		fprintf(stderr, "OpenGL renderer: %s (%s), %s\n", (const char *)glGetString(GL_RENDERER), (const char *)glGetString(GL_VENDOR),
+		        (const char *)glGetString(GL_VERSION));
 		app.key_name = [](int sc) { return std::string(SDL_GetScancodeName(SDL_Scancode(sc))); };
 		SDL_StartTextInput();
 		SDL_GL_SetSwapInterval(1);
