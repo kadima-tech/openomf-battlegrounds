@@ -167,9 +167,7 @@ std::vector<Brain *> World::brain_list(GameObject *o) {
 	std::vector<Brain *> out;
 	if (!o) return out;
 	auto own = [&](GameObject *x) {
-		for (auto &bp : brains_) {
-			if (bp->owner == x) out.push_back(bp.get());
-		}
+		if (auto it = brains_by_owner_.find(x); it != brains_by_owner_.end()) out.insert(out.end(), it->second.begin(), it->second.end());
 	};
 	SessionState *ss = session_of(*this, o);
 	if (ss && o == ss->obj) {
@@ -185,11 +183,9 @@ std::vector<Brain *> World::brain_list(GameObject *o) {
 		}
 	} else if (o->is("Actor\\Creature")) {
 		own(o);
-		for (auto &c : objects_) {
-			if (c.component_owner == o) {
-				auto v = brain_list(&c);
-				out.insert(out.end(), v.begin(), v.end());
-			}
+		for (GameObject *c : components_of(o)) {
+			auto v = brain_list(c);
+			out.insert(out.end(), v.begin(), v.end());
 		}
 	} else {
 		own(o);
@@ -1220,7 +1216,7 @@ void register_session_natives(World &w) {
 			if (!tpl) continue;
 			GameObject *comp = c.world.copy_tree(*tpl);
 			comp->parent = creature;
-			comp->component_owner = creature;
+			if (comp->component_owner != creature) comp->component_owner = creature, c.world.components_changed();
 			creature->children.push_back(comp);
 			c.world.activate_executors(comp, c.world.actor_properties(t));
 		}

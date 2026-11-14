@@ -188,7 +188,7 @@ void register_creature_natives(World &w) {
 	reg("CCreature::AddComponent(class CCreature)", [](const NativeContext &c) {
 		GameObject *o = c.self(), *k = c.arg_object(0);
 		if (!o || !k || k == o) return;
-		k->component_owner = o;
+		if (k->component_owner != o) k->component_owner = o, c.world.components_changed();
 		if (!k->active) {
 			bool was = in_scene(*k);
 			k->active = true;
