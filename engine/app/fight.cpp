@@ -651,6 +651,77 @@ int main(int argc, char **argv) {
 					tick_ms = 0;
 				}
 				print_texts(fr);
+				// OPENBG_DEBUG_BONES=<bone>,<bone>...: each fighter's bones' facing (yaw of their Z axis,
+				// degrees) and pitch every frame, the pose the renderer draws (current_pose).
+				if (const char *bones = getenv("OPENBG_DEBUG_BONES")) {
+					static bool listed = false;
+					for (auto *fi : fighters) {
+						if (listed || fr != 300) continue;
+						std::function<void(game::GameObject *, std::string)> show = [&](game::GameObject *o, std::string path) {
+							for (game::GameObject *ch : o->children) {
+								if (!ch->is_actor) continue;
+								if (ch->channel >= 0) fprintf(stderr, "[channel] %s: %s -> channel %d (%s)%s\n", fi->actor->name.c_str(), (path + "/" + ch->name).c_str(), ch->channel,
+								                              fi->actor->bank ? fi->actor->bank->channels[size_t(ch->channel)].name.c_str() : "?", ch->managed ? " managed" : "");
+								show(ch, path + "/" + ch->name);
+							}
+						};
+						show(fi->actor, "");
+					}
+					if (fr == 300) listed = true;
+					for (auto *fi : fighters) {
+						std::string line;
+						std::function<void(game::GameObject *)> walk = [&](game::GameObject *o) {
+							for (game::GameObject *ch : o->children) {
+								if (!ch->is_actor) continue;
+								if (strstr(bones, ch->name.c_str())) {
+									auto z = ch->world().rotate({0, 0, 1});
+									char buf[96];
+									snprintf(buf, sizeof buf, " %s %.0f/%.0f", ch->name.c_str(), std::atan2(z[0], z[2]) * 57.2958f, std::asin(std::clamp(z[1], -1.0f, 1.0f)) * 57.2958f);
+									line += buf;
+								}
+								walk(ch);
+							}
+						};
+						walk(fi->actor);
+						// The head's turn from the chest as drawn and as the animation's last pose has it.
+						auto rel = [&](const std::vector<de::Transform> &pose) -> float {
+							int c = fi->actor->bank ? fi->actor->bank->channel("Chest") : -1, h = fi->actor->bank ? fi->actor->bank->channel("Head") : -1;
+							if (c < 0 || h < 0 || size_t(std::max(c, h)) >= pose.size()) return 999;
+							auto zc = pose[size_t(c)].rotate({0, 0, 1}), zh = pose[size_t(h)].rotate({0, 0, 1});
+							float d = (std::atan2(zh[0], zh[2]) - std::atan2(zc[0], zc[2])) * 57.2958f;
+							while (d > 180) d -= 360;
+							while (d < -180) d += 360;
+							return d;
+						};
+						const auto drawn = world.current_pose(*fi->actor);
+						// How far (degrees) each bone's rotation relative to its parent channel, as drawn, is from
+						// the animation's last pose: 0 when nothing but the animation turned it.
+						std::string off;
+						if (const de::AnimBank *bank = fi->actor->bank; bank && drawn.size() == fi->actor->pose_now.size()) {
+							for (size_t i = 0; i < bank->channels.size(); ++i) {
+								const int p = bank->channels[i].parent;
+								if (p < 0 || size_t(p) >= drawn.size()) continue;
+								auto rel_of = [&](const std::vector<de::Transform> &pose) { return pose[size_t(p)].inverse().then(pose[i]); };
+								const de::Transform a = rel_of(drawn), b = rel_of(fi->actor->pose_now);
+								float tr = 0;
+								for (int k = 0; k < 3; ++k) {
+									std::array<float, 3> e{0, 0, 0};
+									e[size_t(k)] = 1;
+									auto x = a.rotate(e), y = b.rotate(e);
+									tr += x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+								}
+								const float ang = std::acos(std::clamp((tr - 1) / 2, -1.0f, 1.0f)) * 57.2958f;
+								if (ang > 5) {
+									char buf[64];
+									snprintf(buf, sizeof buf, " %s %.0f", bank->channels[i].name.c_str(), ang);
+									off += buf;
+								}
+							}
+						}
+						fprintf(stderr, "[bones %d] %s:%s | head-chest drawn %.0f anim %.0f seq %d t %.2f | off:%s\n", fr, fi->actor->name.c_str(), line.c_str(), rel(drawn), rel(fi->actor->pose_now),
+						        fi->actor->sequence, fi->actor->anim_time, off.c_str());
+					}
+				}
 				if (getenv("OPENBG_DEBUG_SOUND")) {
 					for (auto &r : world.sound_requests) {
 						printf("frame %5d  [sound] %s vol %.2f%s\n", fr, r.noise->name.c_str(), r.volume, r.positional ? "" : " (ambient)");
