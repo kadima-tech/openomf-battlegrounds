@@ -145,7 +145,15 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 int main(int argc, char **argv) {
 	de::init_platform();
-	setvbuf(stdout, nullptr, _IOLBF, 0);
+#ifndef _WIN32
+	setvbuf(stdout, nullptr, _IOLBF, 0);  // Windows: unbuffered (init_platform)
+#endif
+	// OPENBG_TEST_CRASH=segv|throw|abort: crash on purpose, to check the crash report (init_platform).
+	if (const char *c = getenv("OPENBG_TEST_CRASH")) {
+		if (!strcmp(c, "segv")) *static_cast<volatile int *>(nullptr) = 1;
+		if (!strcmp(c, "throw")) std::thread([] { throw std::runtime_error("OPENBG_TEST_CRASH"); }).join();
+		if (!strcmp(c, "abort")) abort();
+	}
 	if (argc < 2) {
 		fprintf(stderr, "usage: %s <Data dir> [--addon file.DEObjects] [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
@@ -846,7 +854,12 @@ int main(int argc, char **argv) {
 		for (int fr = 0; running;) {
 			SDL_Event e;
 			while (SDL_PollEvent(&e)) {
-				if (e.type == SDL_QUIT) running = false;
+				if (e.type == SDL_QUIT) {
+					// The window was closed (its close button, Alt+F4, or Windows asked): say so, so a quit
+					// is not taken for a crash.
+					fprintf(stderr, "[exit] the window was closed (frame %d)\n", fr);
+					running = false;
+				}
 				if (e.type == SDL_MOUSEMOTION) {
 					int ww, wh, dw, dh;
 					SDL_GetWindowSize(win, &ww, &wh);
@@ -887,7 +900,10 @@ int main(int argc, char **argv) {
 				save_registry(world.registry);
 				saved_registry = world.registry;
 			}
-			if (app.quit_requested) break;
+			if (app.quit_requested) {
+				fprintf(stderr, "[exit] Quit chosen in the menu (frame %d)\n", fr);
+				break;
+			}
 			Uint64 now = SDL_GetPerformanceCounter();
 			accum += double(now - last) * 1000.0 / double(SDL_GetPerformanceFrequency());
 			last = now;
