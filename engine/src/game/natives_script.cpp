@@ -286,7 +286,15 @@ void register_script_natives(World &w) {
 				GameObject *o = c.world.object(c.mem().get<uint32_t>(e + off));
 				return o ? o->name : std::string("-");
 			};
-			if (h.find(dbg) != std::string::npos) {
+			// Several handle fragments separated by '|' ("Dead|MatchWon").
+			bool match = false;
+			for (const char *p = dbg; !match && *p;) {
+				const char *q = strchr(p, '|');
+				const std::string part(p, q ? size_t(q - p) : strlen(p));
+				match = !part.empty() && h.find(part) != std::string::npos;
+				p = q ? q + 1 : p + part.size();
+			}
+			if (match) {
 				fprintf(stderr, "[send %u] %s -> %s/%s INT1 %d -> %d INT3 %d objects %s %s\n", c.world.frame(), h.c_str(), t->parent ? t->parent->name.c_str() : "-", t->name.c_str(), before,
 				        c.mem().get<int32_t>(e + kInt1), c.mem().get<int32_t>(e + kInt3), name(kObject1).c_str(), name(kObject1 + 4).c_str());
 			}
