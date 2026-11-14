@@ -54,20 +54,24 @@ inline Frames &frames() {
 	return f;
 }
 
-// A frame over 50 ms prints the zones that took more than 5 ms of it.
+// A frame over OPENBG_SPIKE_MS (default 50 ms) prints the zones that took more than a tenth of
+// that (at least 1 ms) of it, and how many times each ran.
 inline void frame_time(int frame, double ms) {
 	Frames &f = frames();
 	f.worst = std::max(f.worst, ms);
 	f.over += ms > 20;
+	static const double spike = getenv("OPENBG_SPIKE_MS") ? std::max(1.0, atof(getenv("OPENBG_SPIKE_MS"))) : 50.0;
+	static const double zone_min = std::max(1.0, spike / 10);
 	static std::map<std::string, double> before;
-	if (ms > 50) {
+	static std::map<std::string, unsigned long long> calls_before;
+	if (ms > spike) {
 		fprintf(stderr, "[spike %d] %.1f ms:", frame, ms);
 		for (auto &[name, z] : zones()) {
-			if (z.ms - before[name] > 5) fprintf(stderr, " %s %.1f", name.c_str(), z.ms - before[name]);
+			if (z.ms - before[name] > zone_min) fprintf(stderr, " %s %.1f x%llu", name.c_str(), z.ms - before[name], z.calls - calls_before[name]);
 		}
 		fprintf(stderr, "\n");
 	}
-	for (auto &[name, z] : zones()) before[name] = z.ms;
+	for (auto &[name, z] : zones()) before[name] = z.ms, calls_before[name] = z.calls;
 }
 
 inline void report(int frame, int frames, double wall_ms) {

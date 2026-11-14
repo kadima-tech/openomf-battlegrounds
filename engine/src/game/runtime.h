@@ -533,9 +533,11 @@ public:
 	// Instantiate every object of a data file (and resolve its actor components).
 	GameObject *instantiate_file(const std::string &stem);
 	GameObject *object(uint32_t handle) const;
-	// A runtime-only object (scene, session, pilot stand-ins, ...), created once per name.
 	// A shape was set on an object that already existed: affectors() rebuilds its list.
 	void shapes_changed() { shaped_stale_ = true; }
+	// A component owner was set on an object that already existed: brain_list rebuilds its index.
+	void components_changed() { components_stale_ = true; }
+	// A runtime-only object (scene, session, pilot stand-ins, ...), created once per name.
 	GameObject *create(const std::string &name, const std::string &class_path);
 	// A new object (never shared by name) parented under `parent`.
 	GameObject *create_child(GameObject *parent, const std::string &name, const std::string &class_path);
@@ -1081,6 +1083,13 @@ private:
 	std::vector<Brain *> pending_starts_;      // attached by a deferred enter_scene, not yet started
 	std::deque<std::unique_ptr<Brain>> brains_;
 	std::vector<Brain *> unregistered_brains_;  // brains_ not yet in a temporal set (register_temporals)
+	std::unordered_map<const vm::Executor *, Brain *> brain_by_exec_;               // brain_of
+	std::unordered_map<const GameObject *, std::vector<Brain *>> brains_by_owner_;  // brain_list, in brains_ order
+	// brain_list's components: objects by component owner, in creation order.
+	std::unordered_map<const GameObject *, std::vector<GameObject *>> components_;
+	size_t components_upto_ = 0;
+	bool components_stale_ = false;
+	std::vector<GameObject *> components_of(const GameObject *owner);
 	std::vector<Brain *> dead_brains_;  // of destroyed objects, until their stacks are released
 	std::map<const vm::ScriptClass *, std::map<uint32_t, int>> ref_kinds_;
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, uint32_t> behavior_ids_;

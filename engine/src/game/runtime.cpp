@@ -1075,6 +1075,9 @@ Brain *World::attach_brain(GameObject *owner, const de::ObjectRef &cls_obj, cons
 	if (!owner->brain) owner->brain = made;
 	brains_.push_back(std::move(b));
 	unregistered_brains_.push_back(made);
+	// Lookups by executor and by owner (both fixed from here on), as brains_ is searched.
+	brain_by_exec_.emplace(made->exec.get(), made);
+	brains_by_owner_[owner].push_back(made);
 	return made;
 }
 
@@ -2283,12 +2286,27 @@ void World::physics_step(GameObject &o) {
 
 Brain *World::brain_of(vm::Executor &ex) const {
 	PERF_ZONE("w.brain_of");
-	for (auto &b : brains_) {
-		if (b->exec.get() == &ex) {
-			return b.get();
-		}
+	// Each brain's executor is made with it and kept, and brains are never freed, so an executor
+	// belongs to one brain for good.
+	auto it = brain_by_exec_.find(&ex);
+	return it == brain_by_exec_.end() ? nullptr : it->second;
+}
+
+std::vector<GameObject *> World::components_of(const GameObject *owner) {
+	// Every object whose component owner it is, in creation order (destroyed ones too, as a walk
+	// of objects_ finds them). Objects made since are appended; an owner set on an older object
+	// (components_changed) rebuilds the index.
+	if (components_stale_) {
+		components_.clear();
+		components_upto_ = 0;
+		components_stale_ = false;
 	}
-	return nullptr;
+	for (; components_upto_ < objects_.size(); ++components_upto_) {
+		GameObject &o = objects_[components_upto_];
+		if (o.component_owner) components_[o.component_owner].push_back(&o);
+	}
+	auto it = components_.find(owner);
+	return it == components_.end() ? std::vector<GameObject *>{} : it->second;
 }
 
 const World::Bound &World::bind(const vm::ScriptClass &cls, uint32_t index) {
