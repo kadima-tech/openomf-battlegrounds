@@ -951,6 +951,15 @@ void models_startup(Editor &e) {
 		robot_analyse(e, st.plan);
 	}
 	if (!o.import_lod0.empty()) st.plan.har.lod0_triangles = o.import_lod0 == "keep" ? 0 : o.import_lod0 == "base" ? -1 : std::max(0, atoi(o.import_lod0.c_str()));
+	for (auto &spec : o.import_ghosts) {
+		auto eq = spec.find('='), at = spec.rfind('@');
+		if (eq == std::string::npos) continue;
+		ed::HarPlan::Ghost g;
+		g.name = spec.substr(0, eq);
+		g.sequence = spec.substr(eq + 1, at == std::string::npos || at < eq ? std::string::npos : at - eq - 1);
+		if (at != std::string::npos && at > eq) g.t = float(atof(spec.c_str() + at + 1));
+		st.plan.har.ghosts.push_back(g);
+	}
 	for (auto &spec : o.import_paints) {
 		auto eq = spec.find('=');
 		if (eq != std::string::npos) st.plan.har.extra_paints.push_back({spec.substr(0, eq), std::filesystem::path(std::u8string(spec.begin() + long(eq) + 1, spec.end()))});

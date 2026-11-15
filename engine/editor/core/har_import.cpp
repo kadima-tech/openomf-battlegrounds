@@ -1236,6 +1236,25 @@ void analyse_robot(ImportPlan &plan, const BaseData &base) {
 		if (auto it = anims.find(anim_key(seq.name)); it != anims.end()) m.animation = it->second, m.source = MapSource::Name;
 		h.sequences.push_back(m);
 	}
+	// The file's other animations become new sequences, which the scripts name seq<Name>.
+	if (!plan.from_editor) {
+		std::set<int> named;
+		std::set<std::string> taken;
+		for (auto &m : h.sequences) {
+			if (m.animation >= 0) named.insert(m.animation);
+			taken.insert(anim_key(m.sequence));
+		}
+		for (size_t a = 0; a < s.animations.size(); ++a) {
+			if (named.count(int(a))) continue;
+			std::string n = s.animations[a].name;
+			if (auto p = n.find_last_of('|'); p != std::string::npos) n = n.substr(p + 1);
+			n.erase(std::remove_if(n.begin(), n.end(), [](char c) { return !isalnum(uint8_t(c)) && c != '_'; }), n.end());
+			if (n.empty() || isdigit(uint8_t(n[0])) || !taken.insert(anim_key(n)).second) continue;
+			SequenceMapping m;
+			m.sequence = n, m.animation = int(a), m.source = MapSource::Name, m.added = true;
+			h.sequences.push_back(m);
+		}
+	}
 	h.spheres.clear();
 	for (size_t i = 0; i < s.nodes.size(); ++i) {
 		const std::string &n = s.nodes[i].name;
@@ -2496,8 +2515,22 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	std::map<int, size_t> skin_index;
 	for (size_t k = 0; k < joints.size(); ++k) skin_index[joints[k]] = k;
 	const gltf::Mat4 Finv = gltf::inverse(F);
+	// New sequences start as the standing pose (channels the file does not drive keep it).
+	std::set<int> on_base;
+	for (const SequenceMapping &m : h.sequences) {
+		if (!m.added && m.animation >= 0) on_base.insert(m.animation);
+	}
+	const de::AnimSequence standing = out.bank.find("Standing") ? *out.bank.find("Standing") : de::AnimSequence{};
+	for (const SequenceMapping &m : h.sequences) {
+		if (!m.added || m.animation < 0 || on_base.count(m.animation) || out.bank.find(m.sequence)) continue;
+		de::AnimSequence q = standing;
+		q.name = m.sequence;
+		out.bank.sequences.push_back(std::move(q));
+		supplied.push_back(false);
+	}
 	for (const SequenceMapping &m : h.sequences) {
 		if (m.animation < 0 || size_t(m.animation) >= s.animations.size()) continue;
+		if (m.added && on_base.count(m.animation)) continue;
 		de::AnimSequence *seq = nullptr;
 		for (auto &q : out.bank.sequences) {
 			if (q.name == m.sequence) seq = &q;
@@ -2672,6 +2705,60 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		o.name = sp.sphere;
 		place(o, rig.spheres[size_t(sp.copies)], sp);
 		out.spheres.push_back(o);
+	}
+	if (!lod0_only && !h.ghosts.empty() && !out.lods.empty()) {
+		const RobotLod &src = out.lods[std::min<size_t>(1, out.lods.size() - 1)];
+		std::vector<int> channel;
+		std::vector<de::Transform> inv_bind;
+		for (size_t b = 0; b < rig.skin.size(); ++b) {
+			channel.push_back(out.bank.channel(rig.skin[b].name));
+			inv_bind.push_back(affine_inverse(out.binds[b]));
+		}
+		for (const auto &g : h.ghosts) {
+			const de::AnimSequence *seq = out.bank.find(g.sequence);
+			if (!seq) {
+				out.notes.push_back("Ghost " + g.name + ": no sequence " + g.sequence);
+				continue;
+			}
+			auto pose = out.bank.pose(*seq, std::clamp(g.t, 0.0f, 1.0f));
+			RobotBuild::Ghost gh;
+			gh.name = g.name;
+			gh.lod.faces = src.faces;
+			gh.lod.uvs = src.uvs;
+			for (size_t v = 0; v < src.vertices.size(); ++v) {
+				V3 acc{0, 0, 0};
+				float sum = 0;
+				for (size_t b = 0; b < src.weights.size() && b < channel.size(); ++b) {
+					float w = float(src.weights[b][v]) / 255.0f;
+					if (w <= 0 || channel[b] < 0) continue;
+					acc = add(acc, mul(pose[size_t(channel[b])].then(inv_bind[b]).apply(src.vertices[v]), w));
+					sum += w;
+				}
+				gh.lod.vertices.push_back(sum > 0 ? mul(acc, 1.0f / sum) : src.vertices[v]);
+			}
+			out.ghosts.push_back(std::move(gh));
+		}
+		// Dark and see-through, the glow kept: the 2097 projection's dark tint (OpenOMF's "bt").
+		const RobotImage &shade = out.mask;
+		if (!out.ghosts.empty() && shade.width > 0) {
+			RobotImage &gi = out.ghost_image;
+			gi.width = shade.width, gi.height = shade.height;
+			gi.rgba.assign(shade.rgba.size(), 0);
+			const bool glow = out.glow.width == shade.width && out.glow.height == shade.height;
+			const bool own = out.colours.width == shade.width && out.colours.height == shade.height;
+			for (size_t i = 0; i + 3 < shade.rgba.size(); i += 4) {
+				float lum = float(std::max({shade.rgba[i], shade.rgba[i + 1], shade.rgba[i + 2]}));
+				if (own) lum = std::max(lum, 0.3f * out.colours.rgba[i] + 0.59f * out.colours.rgba[i + 1] + 0.11f * out.colours.rgba[i + 2]);
+				const float tint[3] = {0.10f, 0.12f, 0.30f}, base[3] = {8, 10, 26};
+				float a = 150;
+				for (int k = 0; k < 3; ++k) {
+					float g = glow ? float(out.glow.rgba[i + size_t(k)]) : 0;
+					gi.rgba[i + size_t(k)] = uint8_t(std::clamp(base[k] + lum * tint[k] + g, 0.0f, 255.0f));
+					a = std::max(a, std::min(255.0f, 150 + g));
+				}
+				gi.rgba[i + 3] = uint8_t(a);
+			}
+		}
 	}
 	return out;
 }
@@ -2917,15 +3004,15 @@ void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild
 	}
 }
 
-// The emissive faces as a Mesh\Standard beside the LODs, as Gargoyle's wing mesh sits beside them
-// (FINDINGS 673): LOD0's deform channels, one Add stage of the emission image (named so the fighter
-// filter leaves it unpainted) and a GlowFactor child, which draws it into the glow layer.
-void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
+// A Mesh\Standard drawing `lod` with one stage of `image` in blend `mode` (1 Add, 4 SemiTranslucent)
+// and a GlowFactor child, its contents (flags) a copy of the LOD mesh `like`'s; `channels` copies
+// that mesh's deform channels too, which write_mesh fills from the LOD's weights.
+uint32_t write_extra_mesh(Project &p, uint32_t like, const std::string &name, const RobotLod &lod, uint32_t image, int32_t mode, float glow,
+                          bool channels, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
 	auto &objs = p.file().objects;
-	const uint32_t image = build::add_image(p, "Glow", b.glow.width, b.glow.height, b.glow.rgba);
 	deo::Writer tc;
 	size_t at = tc.begin_chunk(3);
-	tc.block(build::stored("Glow"));
+	tc.block(build::stored(name));
 	tc.u32(0);
 	tc.end_chunk(at);
 	deo::Writer tr;
@@ -2934,10 +3021,10 @@ void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild
 	tr.u32(1);
 	write_ref(tr, build::local_ref(image));
 	tr.end_chunk(at);
-	const uint32_t tm = build::add_object(p, "TextureManager", "Glow", tc.data(), tr.data());
+	const uint32_t tm = build::add_object(p, "TextureManager", name, tc.data(), tr.data());
 	deo::Writer mc;
 	at = mc.begin_chunk(1);
-	mc.block(build::stored("Glow"));
+	mc.block(build::stored(name));
 	mc.end_chunk(at);
 	mc.u8(1), mc.u8(0);
 	deo::Writer mr;
@@ -2947,27 +3034,28 @@ void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild
 	write_ref(mr, build::local_ref(tm));
 	mr.u8(0);
 	for (int k = 0; k < 4; ++k) build::put_f32(mr, 1.0f);
-	mr.u32(1);  // Add
+	mr.u32(uint32_t(mode));
 	mr.u8(0);
 	mr.u32(0);
 	mr.u8(0), mr.u8(0);
 	mr.end_chunk(at);
-	const uint32_t material = build::add_object(p, "TextureProcess\\MultiStage", "Glow", mc.data(), mr.data());
-	build::set_children(p, material, {tm, image});
+	const uint32_t material = build::add_object(p, "TextureProcess\\MultiStage", name, mc.data(), mr.data());
+	build::set_children(p, material, {tm});
 	deo::Writer gc;
 	at = gc.begin_chunk(1);
 	gc.block(build::stored("GlowFactor"));
 	gc.end_chunk(at);
 	at = gc.begin_chunk(1);
-	build::put_f32(gc, 4.0f);
+	build::put_f32(gc, glow);
 	gc.end_chunk(at);
 	const uint32_t factor = build::add_object(p, "Value\\FLOAT", "GlowFactor", gc.data(), Bytes{2, 0, 1, 0, 1, 0});
-	deo::Object mesh_copy = objs[lod0];
+	deo::Object mesh_copy = objs[like];
 	mesh_copy.info.guid = fresh_guid();
 	mesh_copy.hierarchy = {1, 1, 0};
+	mesh_copy.ex.clear();
 	objs.push_back(mesh_copy);
 	const uint32_t mesh = uint32_t(objs.size() - 1);
-	build::rename(p, mesh, "Glow");
+	build::rename(p, mesh, name);
 	{
 		deo::Writer r;
 		r.u8(2), r.u8(0);
@@ -2980,7 +3068,7 @@ void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild
 		objs[mesh].references = r.data();
 	}
 	std::vector<uint32_t> kids{material, factor};
-	for (uint32_t c : p.children(lod0)) {
+	for (uint32_t c : channels ? p.children(like) : std::vector<uint32_t>{}) {
 		if (objs[c].info.class_text() != "DataChannel\\UnitFloats") continue;
 		deo::Object ch = objs[c];
 		ch.info.guid = fresh_guid();
@@ -2989,9 +3077,19 @@ void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild
 		kids.push_back(uint32_t(objs.size() - 1));
 	}
 	build::set_children(p, mesh, kids);
-	build::add_child(p, model, mesh);
-	write_mesh(p, mesh, b.glow_lod, b, skin);
+	write_mesh(p, mesh, lod, b, channels ? skin : std::vector<de::SkinBone>{});
 	touched(objs[mesh]);
+	return mesh;
+}
+
+// The emissive faces beside the LODs, as Gargoyle's wing mesh sits beside them (FINDINGS 673): the
+// body's deform channels, an Add stage of the emission image (named so the fighter filter leaves it
+// unpainted) and a GlowFactor, which draws it into the glow layer.
+void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
+	const uint32_t image = build::add_image(p, "Glow", b.glow.width, b.glow.height, b.glow.rgba);
+	const uint32_t mesh = write_extra_mesh(p, lod0, "Glow", b.glow_lod, image, 1, 4.0f, true, b, skin);
+	build::add_child(p, mesh, image);
+	build::add_child(p, model, mesh);
 }
 
 size_t model_fighter_at(const deo::Object &m) {
@@ -3204,6 +3302,25 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 	if (!b.glow_lod.faces.empty() && !meshes.empty()) {
 		write_glow_mesh(p, model, meshes[0].second, b, rig.skin);
 		++res.meshes;
+	}
+	if (!b.ghosts.empty() && b.ghost_image.width > 0 && !meshes.empty()) {
+		int projectile = -1;
+		for (size_t i = first_new; i < end && projectile < 0; ++i) {
+			if (objs[i].info.class_text() == "Actor\\Creature\\OMF2Projectile") projectile = int(i);
+		}
+		if (projectile < 0) {
+			res.notes.push_back(rig.robot + " has no projectile actor: the ghosts are left out");
+		} else {
+			const uint32_t image = build::add_image(p, "GhostColours", b.ghost_image.width, b.ghost_image.height, b.ghost_image.rgba);
+			build::add_child(p, uint32_t(projectile), image);
+			for (const auto &g : b.ghosts) {
+				const uint32_t mesh = write_extra_mesh(p, meshes[0].second, g.name + " Mesh", g.lod, image, 4, 2.0f, false, b, rig.skin);
+				const uint32_t actor = build::add_actor(p, g.name, de::Transform{}, {mesh});
+				build::add_child(p, uint32_t(projectile), actor);
+				++res.meshes;
+			}
+			res.notes.push_back(std::to_string(b.ghosts.size()) + " ghost(s) under " + objs[size_t(projectile)].info.name_text());
+		}
 	}
 	// The parts' deform infos, banks and bone actors.
 	auto write_binds = [&](uint32_t deform_obj, const std::vector<de::Transform> &binds) {

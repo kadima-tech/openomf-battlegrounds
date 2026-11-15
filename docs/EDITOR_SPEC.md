@@ -334,7 +334,15 @@ they can be redone.
   `Armature|` prefix ignored, or chosen on the Animations page) replaces it: sampled at 30 keys a
   second and normalised to 0..1 (`extras.de_normalised` exports are 0..1 already), each mapped bone
   following its joint; the root's horizontal drift is removed unless the file has a `Body` node.
-  Every sequence the scripts name (`seq<Name>` globals) is kept, so none can go missing.
+  Every sequence the scripts name (`seq<Name>` globals) is kept, so none can go missing. The file's
+  other animations become new sequences of their names (letters, digits and `_`), starting from the
+  stance where the file does not drive a channel; the compiler resolves `seq<Name>` against the
+  add-on's bank, so a script can play them (an animation named by hand onto a base sequence is not
+  added as well).
+- Afterimages (`--import-ghost Name=Sequence@t`, repeatable): LOD1 posed at that time of a sequence
+  (base, retargeted or new) as a static mesh on an Actor `Name` under the HAR's projectile actor, with
+  one SemiTranslucent stage of a dark see-through copy of the colours (the glow kept) and a
+  `GlowFactor`; a script shows, hides and moves them (Shadow's projections).
 - LODs: nodes named `LOD0`-`LOD2` (or ending so), else every mesh is LOD0; missing LODs are quadric
   decimations to the base's triangle counts; LOD0 keeps the file's mesh unless it passes 65,535
   vertices, or a budget is asked for (`--import-lod0 keep|base|N`, the Level of detail box). Meshes parented to a joint without a skin follow that joint.

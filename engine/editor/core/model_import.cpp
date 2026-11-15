@@ -836,6 +836,7 @@ void rename(Project &p, uint32_t object, const std::string &name) { ed::rename(p
 void put_f32(deo::Writer &w, float f) { ed::put_f32(w, f); }
 uint32_t add_image(Project &p, const std::string &name, int width, int height, const std::vector<uint8_t> &rgba) { return ed::add_image(p, name, width, height, rgba); }
 int pow2_at_most(int v, int cap) { return ed::pow2_at_most(v, cap); }
+uint32_t add_actor(Project &p, const std::string &name, const de::Transform &t, const std::vector<uint32_t> &meshes) { return ed::add_actor(p, name, t, meshes); }
 
 void mesh_adjacency(std::vector<de::Mesh::Face> &faces) {
 	Built b;

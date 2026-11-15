@@ -121,6 +121,13 @@ struct RobotBuild {
 	// as a "Glow" mesh with a GlowFactor (the glow layer, FINDINGS 92).
 	RobotImage glow;
 	RobotLod glow_lod;
+	// HarPlan::ghosts: LOD1 posed (vertices only, its faces and UVs), and their dark see-through image.
+	struct Ghost {
+		std::string name;
+		RobotLod lod;
+	};
+	std::vector<Ghost> ghosts;
+	RobotImage ghost_image;
 	struct Sphere {
 		size_t index = 0;  // into RobotRig::spheres
 		bool added = false;  // a new sphere copying that one, named `name`

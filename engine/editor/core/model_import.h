@@ -89,6 +89,7 @@ struct SequenceMapping {
 	std::string sequence;   // the base bank's name, as the scripts use it
 	int animation = -1;     // the file's animation replacing it; -1: the base robot's, retargeted
 	MapSource source = MapSource::None;
+	bool added = false;     // a new sequence: a file animation no base sequence is named after
 };
 
 struct SphereSource {
@@ -128,6 +129,13 @@ struct HarPlan {
 		std::filesystem::path image;
 	};
 	std::vector<ExtraPaint> extra_paints;
+	// Afterimages: the robot posed at a sequence's time, as a static translucent mesh on an Actor
+	// named `name` under the HAR's projectile actor (a script shows and moves it).
+	struct Ghost {
+		std::string name, sequence;
+		float t = 0.5f;
+	};
+	std::vector<Ghost> ghosts;
 	std::shared_ptr<const RobotRig> rig;
 	std::vector<std::string> notes;  // what the analysis found
 };
