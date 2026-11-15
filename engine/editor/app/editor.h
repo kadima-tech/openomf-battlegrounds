@@ -55,6 +55,9 @@ struct Options {
 	std::vector<std::string> har_scripts;    // script patch files (ed::parse_script_patch) for the HAR's behaviors
 	std::vector<std::string> har_help;       // Help topic files (ed::parse_help_file); "image: picture" is the HAR's
 	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
+	// The tournament made or opened's Choose Match image and list icon (PNG or BMP, scaled to the
+	// image's size), as the Settings form's import buttons.
+	std::filesystem::path tournament_image, tournament_icon;
 	std::vector<std::string> tournament_sets;  // KEY=VALUE: set in the tournament made or opened (ed::set_tournament_field)
 	std::string har_anim;  // the HAR preview's sequence, "Name" or "Name@t" (paused at t)
 	float har_yaw = -1000;  // the HAR preview's turn, degrees

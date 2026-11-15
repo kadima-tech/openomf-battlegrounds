@@ -3,6 +3,8 @@
 //   openbg-editor [--data <Data dir>] [<add-on.DEObjects>]
 //                 [--new-pilot Base:Name] [--open-pilot Name] [--tab 0-4] [--preview photo|robot]
 //                 [--photo image.png] [--pilot-set KEY=VALUE] [--content <type>] [--base-content] [--browse-file <file stem>]
+//                 [--new-tournament Base:Name] [--open-tournament Name] [--tournament-set KEY=VALUE]
+//                 [--tournament-image image.png] [--tournament-icon icon.png]
 //                 [--open-base Class:Name] [--select-base Class:Name] [--copy-base <pilot>]
 //                 [--select <object name>] [--level] [--save] [--launch-game]
 //                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
@@ -66,6 +68,8 @@ int main(int argc, char **argv) {
 		else if (arg("--new-tournament")) opt.new_tournament = argv[++i];
 		else if (arg("--open-tournament")) opt.open_tournament = argv[++i];
 		else if (arg("--tournament-set")) opt.tournament_sets.push_back(argv[++i]);
+		else if (arg("--tournament-image")) opt.tournament_image = utf8_path(argv[++i]);
+		else if (arg("--tournament-icon")) opt.tournament_icon = utf8_path(argv[++i]);
 		else if (arg("--new-har")) opt.new_har = argv[++i];
 		else if (arg("--open-har")) opt.open_har = argv[++i];
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
