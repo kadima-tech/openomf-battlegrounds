@@ -825,6 +825,7 @@ static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 		mat.metallic_roughness_texture.image = 1;
 		mat.extras = json::Value::object();
 		mat.extras["de_paint"] = m == 0 ? 0 : -1;
+		if (m == 1) mat.emissive = {0.2f, 0.8f, 1.0f};
 	}
 	for (auto &P : s.meshes[0].primitives) {
 		const float lo = P.material == 0 ? 0.05f : 0.55f;
@@ -857,6 +858,14 @@ static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 		CHECK(texel(b.colours, 0.75f, v, 0) == 40 && texel(b.colours, 0.75f, v, 2) == 255);
 		CHECK(texel(b.mask, 0.75f, v, 0) == 0 && texel(b.mask, 0.75f, v, 1) == 0 && texel(b.mask, 0.75f, v, 2) == 0);
 		CHECK(texel(b.reflection, 0.75f, v, 0) == 0);
+		// Joints glow: glTF's emissive factor in the glow image, nothing for Body.
+		CHECK(b.glow.width == T && texel(b.glow, 0.75f, v, 1) == 204 && texel(b.glow, 0.75f, v, 2) == 255 && texel(b.glow, 0.25f, v, 2) == 0);
+	}
+	{
+		size_t joints = 0;
+		for (auto &f : b.lods[0].uvs[0]) joints += (f[0][0] + f[1][0] + f[2][0]) / 3 > 0.5f;
+		printf("  glow: %zu of %zu triangles emissive (%zu on the glowing material)\n", b.glow_lod.faces.size(), b.lods[0].faces.size(), joints);
+		CHECK(joints > 0 && b.glow_lod.faces.size() == joints && b.glow_lod.weights.size() == plan.har.rig->skin.size());
 	}
 	// A choice on the Materials page wins over the file's, and a re-import keeps it.
 	plan.har.material_paint[1] = 2;
@@ -890,8 +899,39 @@ static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 		}
 		CHECK(main && own);
 	}
+	for (auto &i : ed::validate(*project)) {
+		if (i.severity == ed::Issue::Error) fprintf(stderr, "  validation: %s\n", i.text.c_str());
+		CHECK(i.severity != ed::Issue::Error);
+	}
 	project->save();
 	check_engine_reads(data, dir / "HarPainted.DEObjects", "Paint Bot", b.lods[0].faces.size(), 2);
+	{
+		// Each paint job's model holds the Glow mesh: drawn into the glow layer, weighted by the body's deform info.
+		set_env("OPENBG_ADDONS", (dir / "HarPainted.DEObjects").string());
+		std::set<std::string> keep{"HarPainted", "Katana", "KatanaModel1", "SharedObjects", "Fighter"};
+		de::World w(data, [&](const std::string &s) { return keep.count(s) > 0; });
+		set_env("OPENBG_ADDONS", "");
+		const de::ObjectsFile *f = w.file("HarPainted");
+		const de::ObjectInfo *deform = nullptr;
+		size_t glows = 0;
+		for (auto &oi : f ? f->objects() : std::vector<de::ObjectInfo>{}) {
+			if (!deform && oi.class_path == "ActorDeformInfo") deform = &oi;
+		}
+		for (uint32_t i = 0; f && deform && i < f->objects().size(); ++i) {
+			if (f->objects()[i].class_path != "FighterModel") continue;
+			for (uint32_t c : de::ObjectsFile::children(f->object_links(f->objects()[i]))) {
+				if (f->objects()[c].name != "Glow" || f->objects()[c].class_path != "Mesh\\Standard") continue;
+				auto mats = de::read_materials(w, {f, c});
+				auto skin = de::read_skin(*f, *deform, *f, c);
+				size_t weighted = 0;
+				for (auto &sb : skin) weighted += std::count_if(sb.weights.begin(), sb.weights.end(), [](uint8_t x) { return x != 0; });
+				CHECK(mats.size() == 1 && !mats[0].layers.empty() && mats[0].glow == 4.0f && mats[0].layers[0].mode == 1);
+				CHECK(de::read_mesh(*f, f->objects()[c]).faces.size() == b.glow_lod.faces.size() && weighted > 0);
+				++glows;
+			}
+		}
+		CHECK(glows == 2);
+	}
 	fs::remove_all(dir);
 	printf("  ok\n");
 }

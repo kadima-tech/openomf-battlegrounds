@@ -350,6 +350,11 @@ they can be redone.
   `PaintMask`, `ReflectionMask` or `Bump` (or material extras `de_paint_mask`, `de_reflection_mask`,
   `de_bump`) are used as such; an image a material uses as metallic-roughness or occlusion is not
   (exporters pack and rename those).
+- Glow: glTF emission (`emissiveFactor` x `KHR_materials_emissive_strength` x `emissiveTexture`)
+  goes into a `Glow` image in the model texture's layout; LOD0's faces showing it become a `Glow`
+  Mesh\Standard beside the LODs (as Gargoyle's wing mesh sits beside them) with the body's deform
+  channels, one Add stage of that image and a `GlowFactor` child, which draws its passes into the
+  glow layer (FINDINGS 92, 740). Shipped robots glow only through effects and specular passes.
 - Hitboxes: an empty `Sphere:<affector>` under a joint moves that sphere to the joint's bone (its
   scale the falloff, in metres; the second of a name the second sphere, Blender's `.001` ignored);
   further ones named `GetHitAffector...` or after an attack prefix the fighter scripts gather

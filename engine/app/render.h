@@ -360,6 +360,17 @@ private:
 		uint32_t seen_activations = 0;
 	};
 	std::vector<Attachment> attachments_;
+	// Meshes beside the body's carrying a GlowFactor and weighted by the body's deform info (an
+	// imported robot's emissive faces; no shipped model has one): posed with the body.
+	struct GlowMesh {
+		de::Mesh mesh;
+		std::vector<de::Material> materials;
+		std::vector<MeshBatch> batches;
+		std::vector<de::SkinBone> bones;
+		std::vector<int> bone_channel;
+		std::vector<de::Transform> inv_bind;
+	};
+	std::vector<GlowMesh> glow_meshes_;
 	const void *light_owner_ = nullptr;
 	void draw_attachments(const float *vp, const float *eye, const de::Transform &world, const std::vector<de::Transform> &body, const AnimState &a);
 	void load_attachments(const de::World &world, const de::ObjectsFile &f, size_t model, uint32_t body_mesh, const de::ObjectsFile &fighter,

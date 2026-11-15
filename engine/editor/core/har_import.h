@@ -117,6 +117,10 @@ struct RobotBuild {
 	float scale = 1;                   // new size / the base robot's
 	RobotImage mask, reflection, colours, bump, scaled;  // RGBMain, ReflectionMask, RGBStatic, Bump, RGBScaled
 	std::vector<int8_t> paint_channel;  // per texel of the mask: material_paint of the material there
+	// glTF emission: its colours in the mask's layout, and LOD0's faces that show them, drawn again
+	// as a "Glow" mesh with a GlowFactor (the glow layer, FINDINGS 92).
+	RobotImage glow;
+	RobotLod glow_lod;
 	struct Sphere {
 		size_t index = 0;  // into RobotRig::spheres
 		bool added = false;  // a new sphere copying that one, named `name`

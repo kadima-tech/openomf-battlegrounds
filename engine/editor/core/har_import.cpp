@@ -1737,8 +1737,20 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		for (int m : mats) {
 			if (m >= 0 && s.materials[size_t(m)].metallic_roughness_texture) metal_px[m] = image_rgba(s, s.materials[size_t(m)].metallic_roughness_texture.image, atlas.tile, atlas.tile);
 		}
+		std::map<int, std::vector<uint8_t>> emissive_px;
+		std::map<int, gltf::Vec3> emission;
+		for (int m : mats) {
+			if (m < 0) continue;
+			const gltf::Material &gm = s.materials[size_t(m)];
+			gltf::Vec3 e{gm.emissive[0] * gm.emissive_strength, gm.emissive[1] * gm.emissive_strength, gm.emissive[2] * gm.emissive_strength};
+			if (std::max({e[0], e[1], e[2]}) <= 0) continue;
+			emission[m] = e;
+			if (gm.emissive_texture) emissive_px[m] = image_rgba(s, gm.emissive_texture.image, atlas.tile, atlas.tile);
+		}
 		std::vector<uint8_t> colours(size_t(A) * size_t(A) * 4, 0), mask(size_t(A) * size_t(A) * 4, 0), refl(size_t(A) * size_t(A) * 4, 0);
+		std::vector<uint8_t> glow(emission.empty() ? 0 : size_t(A) * size_t(A) * 4, 0);
 		for (size_t i = 3; i < mask.size(); i += 4) mask[i] = colours[i] = refl[i] = 255;
+		for (size_t i = 3; i < glow.size(); i += 4) glow[i] = 255;
 		out.paint_channel.assign(size_t(A) * size_t(A), int8_t(mats.empty() ? -1 : chan[mats[0]]));
 		bool any_own = false;
 		for (size_t ti = 0; ti < atlas.tiles.size(); ++ti) {
@@ -1766,6 +1778,13 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 					float metal = m >= 0 ? s.materials[size_t(m)].metallic : 0;
 					if (auto mp = metal_px.find(m); mp != metal_px.end()) metal *= float(mp->second[src + 2]) / 255.0f;
 					refl[dst + size_t(std::max(c, 0))] = uint8_t(std::clamp(metal * (0.5f + 0.5f * lum / 255.0f) * 255.0f, 0.0f, 255.0f));
+					if (auto em = emission.find(m); em != emission.end()) {
+						auto ep = emissive_px.find(m);
+						for (int k = 0; k < 3; ++k) {
+							float v = em->second[size_t(k)] * (ep != emissive_px.end() ? float(ep->second[src + size_t(k)]) : 255.0f);
+							glow[dst + size_t(k)] = uint8_t(std::clamp(v, 0.0f, 255.0f));
+						}
+					}
 				}
 			}
 		}
@@ -1784,6 +1803,10 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		if (any_own) {
 			out.colours.width = out.colours.height = A;
 			out.colours.rgba = colours;
+		}
+		if (!glow.empty()) {
+			out.glow.width = out.glow.height = A;
+			out.glow.rgba = std::move(glow);
 		}
 		int named_refl = find_image(s, {"reflectionmask", "reflection"}, "de_reflection_mask", materials);
 		if (named_refl >= 0 && atlas.identity) set_image(out.reflection, named_refl, A, A);
@@ -2026,6 +2049,41 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		out.notes.push_back("LOD0 decimated to " + std::to_string(lod0.faces.size()) + " triangles");
 	}
 	out.lods.push_back(finish_lod(lod0));
+	if (out.glow.width > 0 && !out.lods[0].uvs.empty()) {
+		const RobotLod &l0 = out.lods[0];
+		const auto &uv0 = l0.uvs[0];
+		auto glow_at = [&](float u, float v) {
+			int x = std::clamp(int(u * float(out.glow.width)), 0, out.glow.width - 1);
+			int y = std::clamp(int(v * float(out.glow.height)), 0, out.glow.height - 1);
+			const uint8_t *px = &out.glow.rgba[(size_t(y) * size_t(out.glow.width) + size_t(x)) * 4];
+			return std::max({px[0], px[1], px[2]});
+		};
+		RobotLod &g = out.glow_lod;
+		std::vector<int> remap(l0.vertices.size(), -1);
+		g.uvs.resize(1);
+		g.weights.assign(l0.weights.size(), {});
+		for (size_t f = 0; f < l0.faces.size() && f < uv0.size(); ++f) {
+			const auto &t = uv0[f];
+			int lit = glow_at((t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][1] + t[1][1] + t[2][1]) / 3);
+			for (int k = 0; k < 3; ++k) lit = std::max(lit, int(glow_at(t[size_t(k)][0], t[size_t(k)][1])));
+			if (lit < 24) continue;
+			de::Mesh::Face face{};
+			for (int k = 0; k < 3; ++k) {
+				uint16_t v = l0.faces[f].v[size_t(k)];
+				if (remap[v] < 0) {
+					remap[v] = int(g.vertices.size());
+					g.vertices.push_back(l0.vertices[v]);
+					for (size_t b = 0; b < l0.weights.size(); ++b) g.weights[b].push_back(l0.weights[b][v]);
+				}
+				face.v[size_t(k)] = uint16_t(remap[v]);
+			}
+			face.flags = l0.faces[f].flags;
+			g.faces.push_back(face);
+			g.uvs[0].push_back(t);
+		}
+		build::mesh_adjacency(g.faces);
+		if (!g.faces.empty()) out.notes.push_back("Glow: " + std::to_string(g.faces.size()) + " emissive triangles");
+	}
 	for (size_t k = 1; k < lod_count; ++k) {
 		if (!h.lods[k].empty()) {
 			LodData d = build_lod(int(k));
@@ -2859,6 +2917,83 @@ void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild
 	}
 }
 
+// The emissive faces as a Mesh\Standard beside the LODs, as Gargoyle's wing mesh sits beside them
+// (FINDINGS 673): LOD0's deform channels, one Add stage of the emission image (named so the fighter
+// filter leaves it unpainted) and a GlowFactor child, which draws it into the glow layer.
+void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
+	auto &objs = p.file().objects;
+	const uint32_t image = build::add_image(p, "Glow", b.glow.width, b.glow.height, b.glow.rgba);
+	deo::Writer tc;
+	size_t at = tc.begin_chunk(3);
+	tc.block(build::stored("Glow"));
+	tc.u32(0);
+	tc.end_chunk(at);
+	deo::Writer tr;
+	tr.u8(2), tr.u8(0);
+	at = tr.begin_chunk(2);
+	tr.u32(1);
+	write_ref(tr, build::local_ref(image));
+	tr.end_chunk(at);
+	const uint32_t tm = build::add_object(p, "TextureManager", "Glow", tc.data(), tr.data());
+	deo::Writer mc;
+	at = mc.begin_chunk(1);
+	mc.block(build::stored("Glow"));
+	mc.end_chunk(at);
+	mc.u8(1), mc.u8(0);
+	deo::Writer mr;
+	mr.u8(2), mr.u8(0), mr.u8(1), mr.u8(0);
+	at = mr.begin_chunk(8);
+	mr.u32(1);
+	write_ref(mr, build::local_ref(tm));
+	mr.u8(0);
+	for (int k = 0; k < 4; ++k) build::put_f32(mr, 1.0f);
+	mr.u32(1);  // Add
+	mr.u8(0);
+	mr.u32(0);
+	mr.u8(0), mr.u8(0);
+	mr.end_chunk(at);
+	const uint32_t material = build::add_object(p, "TextureProcess\\MultiStage", "Glow", mc.data(), mr.data());
+	build::set_children(p, material, {tm, image});
+	deo::Writer gc;
+	at = gc.begin_chunk(1);
+	gc.block(build::stored("GlowFactor"));
+	gc.end_chunk(at);
+	at = gc.begin_chunk(1);
+	build::put_f32(gc, 4.0f);
+	gc.end_chunk(at);
+	const uint32_t factor = build::add_object(p, "Value\\FLOAT", "GlowFactor", gc.data(), Bytes{2, 0, 1, 0, 1, 0});
+	deo::Object mesh_copy = objs[lod0];
+	mesh_copy.info.guid = fresh_guid();
+	mesh_copy.hierarchy = {1, 1, 0};
+	objs.push_back(mesh_copy);
+	const uint32_t mesh = uint32_t(objs.size() - 1);
+	build::rename(p, mesh, "Glow");
+	{
+		deo::Writer r;
+		r.u8(2), r.u8(0);
+		at = r.begin_chunk(1);
+		r.u8(1);
+		write_ref(r, build::local_ref(material));
+		r.u8(0);
+		r.end_chunk(at);
+		r.u8(1), r.u8(0);
+		objs[mesh].references = r.data();
+	}
+	std::vector<uint32_t> kids{material, factor};
+	for (uint32_t c : p.children(lod0)) {
+		if (objs[c].info.class_text() != "DataChannel\\UnitFloats") continue;
+		deo::Object ch = objs[c];
+		ch.info.guid = fresh_guid();
+		ch.hierarchy = {1, 1, 0};
+		objs.push_back(ch);
+		kids.push_back(uint32_t(objs.size() - 1));
+	}
+	build::set_children(p, mesh, kids);
+	build::add_child(p, model, mesh);
+	write_mesh(p, mesh, b.glow_lod, b, skin);
+	touched(objs[mesh]);
+}
+
 size_t model_fighter_at(const deo::Object &m) {
 	Chunks c = split_chunks(m.contents);
 	if (c.chunks.size() < 2) return SIZE_MAX;
@@ -3064,6 +3199,10 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 	for (size_t k = 0; k < meshes.size(); ++k) {
 		const RobotLod &lod = b.lods[std::min(k, b.lods.size() - 1)];
 		write_mesh(p, meshes[k].second, lod, b, rig.skin);
+		++res.meshes;
+	}
+	if (!b.glow_lod.faces.empty() && !meshes.empty()) {
+		write_glow_mesh(p, model, meshes[0].second, b, rig.skin);
 		++res.meshes;
 	}
 	// The parts' deform infos, banks and bone actors.

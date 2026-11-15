@@ -33,8 +33,8 @@ MATERIALS = {
     "Limbs": (LIMB, 1, 0.75, 0.35, 0.0),
     "Hands": (HAND, 2, 0.80, 0.35, 0.0),
     "Dark": (DARK, -1, 0.50, 0.45, 0.0),
-    "Glow": (GLOW, -1, 0.00, 0.50, 1.6),
-    "Blade": (BLADE, -1, 0.30, 0.30, 0.7),
+    "Glow": (GLOW, -1, 0.00, 0.50, 1.0),
+    "Blade": (BLADE, -1, 0.30, 0.30, 1.0),
 }
 
 
@@ -352,7 +352,7 @@ def dilate(img, filled, steps):
 
 
 def paint(co, nr, tri, uv, cat, bone, rel, J, H):
-    """The robot's colours in its UV layout, and the category map (per texel)."""
+    """The robot's colours in its UV layout, what of them glows, and the category map (per texel)."""
     face, bary = rasterise(tri, uv, TEX)
     on = face >= 0
     f = face[on]
@@ -365,6 +365,7 @@ def paint(co, nr, tri, uv, cat, bone, rel, J, H):
     b = bone[f]
     z = pos[:, 2] / H
     out = np.zeros((len(f), 3), np.float32)
+    emit = np.zeros((len(f), 3), np.float32)
     shade = np.clip(1.0 + rv * 60.0, 0.55, 1.15)  # sunken joints darker, edges brighter
 
     m = c == ARMOUR
@@ -396,9 +397,11 @@ def paint(co, nr, tri, uv, cat, bone, rel, J, H):
     m = c == GLOW
     core = np.clip(0.5 + 0.5 * -nrm[m, 1] * 0.6 + rv[m] * 40, 0, 1)
     out[m] = np.stack([0.10 + 0.55 * core ** 2, 0.62 + 0.33 * core, np.ones(m.sum())], -1)
+    emit[m] = out[m]
     m = c == BLADE
     edge = np.clip(0.35 + rv[m] * 90 + 0.4 * (1 - np.abs(nrm[m, 2])), 0, 1)
     out[m] = np.stack([0.03 + 0.25 * edge ** 2, 0.22 + 0.62 * edge, 0.55 + 0.45 * edge], -1)
+    emit[m] = out[m] * np.clip((edge - 0.55) / 0.4, 0, 1)[:, None]
 
     img = np.zeros((TEX, TEX, 3), np.float32)
     img[on] = np.clip(out, 0, 1)
@@ -406,7 +409,10 @@ def paint(co, nr, tri, uv, cat, bone, rel, J, H):
     cmap[on] = c
     img = dilate(img, on, 8)
     img[~(dilate(on[..., None].astype(np.float32), on, 8)[..., 0] > 0)] = (0.08, 0.09, 0.11)
-    return img, cmap
+    glow = np.zeros((TEX, TEX, 3), np.float32)
+    glow[on] = np.clip(emit, 0, 1)
+    glow = dilate(glow, on, 8)
+    return img, glow, cmap
 
 
 def stealth(look, cmap):
@@ -469,9 +475,11 @@ def load_texture(path):
     return px
 
 
-def materials(mo, look, cat):
-    """One material per paint choice, all sampling the one texture."""
+def materials(mo, look, glow, cat):
+    """One material per paint choice, all sampling the one texture; the glowing ones emit the glow
+    image (glTF emissiveTexture), which the import turns into the game's glow layer."""
     img = to_image("ShadowColours", look)
+    gimg = to_image("ShadowGlow", glow)
     me = mo.data
     for name, (_, paint_, metal, rough, glows) in MATERIALS.items():
         m = bpy.data.materials.new(name)
@@ -485,7 +493,9 @@ def materials(mo, look, cat):
         bsdf.inputs["Metallic"].default_value = metal
         bsdf.inputs["Roughness"].default_value = rough
         if glows:
-            nt.links.new(tex.outputs["Color"], bsdf.inputs["Emission Color"])
+            gt = nt.nodes.new("ShaderNodeTexImage")
+            gt.image = gimg
+            nt.links.new(gt.outputs["Color"], bsdf.inputs["Emission Color"])
             bsdf.inputs["Emission Strength"].default_value = glows
         me.materials.append(m)
     order = [v[0] for v in MATERIALS.values()]
@@ -761,14 +771,14 @@ def main():
     before, after = decimate(mo, args.tris)
     co, nr, tri, uv = arrays(mo.data)
     cat, bone, rel = classify(co, nr, tri, J, bones, H)
-    look, cmap = paint(co, nr, tri, uv, cat, bone, rel, J, H)
+    look, glow, cmap = paint(co, nr, tri, uv, cat, bone, rel, J, H)
     if args.texture:
         look = load_texture(args.texture)
         if look.shape[:2] != (TEX, TEX):
             ys = (np.arange(TEX) * look.shape[0] / TEX).astype(int)
             xs = (np.arange(TEX) * look.shape[1] / TEX).astype(int)
             look = look[ys][:, xs]
-    counts = materials(mo, look, cat)
+    counts = materials(mo, look, glow, cat)
     ao = armature(bones)
     fixed, sided, loose = weights(mo, ao, bones, H)
     vs = np.array([v.co[:] for v in mo.data.vertices])
@@ -783,6 +793,7 @@ def main():
         os.makedirs(args.paint_out, exist_ok=True)
         save_png(os.path.join(args.paint_out, "ShadowColours.png"), look)
         save_png(os.path.join(args.paint_out, "ShadowDark.png"), stealth(look, cmap))
+        save_png(os.path.join(args.paint_out, "ShadowGlow.png"), glow)
     if args.blend:
         bpy.context.preferences.filepaths.save_version = 0
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.blend))

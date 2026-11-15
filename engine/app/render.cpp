@@ -1961,6 +1961,22 @@ void FighterRenderer::load(const de::World &world, const de::ObjectsFile &f, con
 			}
 			rigged = true;
 			load_attachments(world, f, model, mesh_index, *fighter, deform, bank_obj);
+			for (uint32_t c : de::ObjectsFile::children(f.object_links(objs[model]))) {
+				if (c == mesh_index || objs[c].class_path != "Mesh\\Standard" || de::child_float(world, {&f, c}, "GlowFactor").value_or(0) <= 0) continue;
+				GlowMesh g;
+				try {
+					g.bones = de::read_skin(*fighter, *deform, f, c);
+					g.mesh = de::read_mesh(f, objs[c]);
+				} catch (const std::exception &) {
+					continue;
+				}
+				g.materials = de::read_materials(world, {&f, c});
+				for (auto &b : g.bones) {
+					g.bone_channel.push_back(bank.channel(b.name));
+					g.inv_bind.push_back(b.bind.inverse());
+				}
+				glow_meshes_.push_back(std::move(g));
+			}
 		}
 	}
 	// DE_CCreatureModel::Setup (OMF 0x35037470): the model's descendant images named RGBScaled* join
@@ -1993,6 +2009,7 @@ void FighterRenderer::draw_glow(const float *vp, const float *eye) {
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
 	draw_glow_batches(prog_, batches_, &last_at_, light_owner_);
 	for (auto &at : attachments_) draw_glow_batches(prog_, at.batches, &last_at_, light_owner_);
+	for (auto &g : glow_meshes_) draw_glow_batches(prog_, g.batches, &last_at_, light_owner_);
 }
 
 // Painted once: an image is filtered only on its first decode (AssureUpdatedImage while +0x9c is 1).
@@ -2038,6 +2055,13 @@ void FighterRenderer::build() {
 			glDeleteVertexArrays(1, &b.vao);
 		}
 		at.batches = build_batches(at.mesh, at.materials, de::Transform{}, tex, nullptr, nullptr, true);
+	}
+	for (auto &g : glow_meshes_) {
+		for (auto &b : g.batches) {
+			glDeleteBuffers(1, &b.vbo);
+			glDeleteVertexArrays(1, &b.vao);
+		}
+		g.batches = build_batches(g.mesh, g.materials, de::Transform{}, tex, nullptr, nullptr, true);
 	}
 }
 
@@ -2181,6 +2205,12 @@ void FighterRenderer::draw_pose(const float *vp, const float *eye, const de::Tra
 	glUniformMatrix4fv(glGetUniformLocation(prog_, "model"), 1, GL_FALSE, kIdentity);
 	last_at_ = world.t;
 	draw_batches(prog_, batches_, -1, &world.t, light_owner_);
+	for (auto &g : glow_meshes_) {
+		std::vector<std::array<float, 3>> gp = posep ? skin_vertices(g.mesh, g.bones, g.bone_channel, g.inv_bind, *posep, de::Transform{}) : g.mesh.vertices;
+		for (auto &p : gp) p = world.apply(p);
+		upload_vertices(g.batches, g.mesh, gp);
+		draw_batches(prog_, g.batches, -1, &world.t, light_owner_);
+	}
 }
 
 // Every further ActorDeformInfo of the fighter: the model mesh (after the body's, in the model's

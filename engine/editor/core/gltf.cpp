@@ -376,6 +376,7 @@ Scene convert(cgltf_data *data, const std::filesystem::path &base) {
 		m.emissive_texture = texture_ref(data, cm.emissive_texture);
 		m.occlusion_texture = texture_ref(data, cm.occlusion_texture);
 		for (int k = 0; k < 3; ++k) m.emissive[size_t(k)] = cm.emissive_factor[k];
+		if (cm.has_emissive_strength) m.emissive_strength = cm.emissive_strength.emissive_strength;
 		m.alpha = cm.alpha_mode == cgltf_alpha_mode_mask ? Material::Alpha::Mask : cm.alpha_mode == cgltf_alpha_mode_blend ? Material::Alpha::Blend : Material::Alpha::Opaque;
 		m.alpha_cutoff = cm.alpha_cutoff;
 		m.double_sided = cm.double_sided;
