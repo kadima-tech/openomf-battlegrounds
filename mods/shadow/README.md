@@ -21,13 +21,13 @@ The projections are only as real as Shadow's concentration: they vanish the mome
 - `blender/prepare_shadow.py`: turns the FBX into the importable model, in Blender (headless):
   - scale: 3.1 m tall (Katana stands about 3 m), feet on the floor, facing kept;
   - mesh: all 5,406 triangles of the FBX (Katana's LOD0 has 2,528; the import generates LOD1 and LOD2 at Katana's 1,262 and 748). `--tris N` decimates with symmetry instead;
-  - armature: Mixamo bone names in the T-pose, at joints measured from the mesh (the crotch, knee pads, ankles, the waists at elbow and wrist, the neck);
-  - weights: Blender's automatic weights. They fail on this mesh (holes and overlapping shells), so the script weights a watertight voxel remesh instead and transfers the weights back. The loose studs then follow the bone nearest them rigidly, and no limb takes weight from the other side;
+  - armature: Mixamo bone names in the T-pose, at joints measured from the mesh (the crotch where the legs actually join, knee pads, ankles, the waists at elbow and wrist, the neck). The crotch is taken from a 1.5 cm band about the midline: the inner thighs come within 4 cm of it 15 cm lower, which put the hip joints there before (FINDINGS 760);
+  - weights: Blender's automatic weights. They fail on this mesh (holes and overlapping shells), so the script weights a watertight voxel remesh instead and transfers the weights back. The loose studs then follow the bone nearest them rigidly, and no limb takes weight from the other side (below the crotch not even at the midline);
   - texture: painted per texel in the model's own UVs: silver armour, black-and-white ribbed limbs and waist (as on the 2097 sprite), a dark face with a glowing visor, cyan studs, ear pods, claws and blade feet. `--texture file.png` uses a texture laid out in the same UVs instead;
   - materials: six, all sharing the one texture, each with a `de_paint` custom property and metallic for the reflection. Armour takes the pilot's first colour, limbs the second, hands the third; face, studs and blades keep their own colours;
   - glow: the studs, visor, ear pods and the blades' bright edges are emissive (`ShadowGlow.png`, the glTF emissive texture of the Glow and Blade materials); the import draws them into the game's glow layer;
   - the "Stealth" paint job (`ShadowDark.png`), the 512 × 128 Choose Creature picture (four staged poses) and turntable and pose renders.
-- `blender/animate_shadow.py`: his own animations, keyframed on that rig after the 2097 sprites (FINDINGS 744): `Standing` (the deep side-on stance, replacing Katana's), `ShadowCast`, `ShadowGrabCast`, `ShadowSummon`, and one-pose `Ghost*` sequences the projections are posed from. Limbs are given as directions, the torso as turns; each key plants the lower foot.
+- `blender/animate_shadow.py`: his own animations, keyframed on that rig after the 2097 sprites (FINDINGS 744): `Standing` (the deep, wide side-on stance, replacing Katana's: chest to the side, the left side leading, the front knee bent forward, the rear leg reaching back, the front claw forward low and the rear claw out behind), `ShadowCast`, `ShadowGrabCast`, `ShadowSummon`, and one-pose `Ghost*` sequences the projections are posed from. Arms are given as directions, the torso as turns, the legs by where each ankle goes from its hip (two-bone IK) and the feet flat; each key plants the lower foot.
 - `script/shadow.bgs`: the moves, a script patch for his copy of Katana's behaviors (`BKatana`: the casting states, inputs and AI choices; `BProjectile`: the projection), applied with `--har-script`. It holds only Shadow's own code.
 - `help.txt`: his Help topics (`--har-help`, docs/EDITOR_SPEC.md §5.6): his panel with the Choose Creature picture, the quick reference and one page per special and super, in the shipped pages' notation; the Special and Super Attacks topics show the shipped generic pages. Inputs checked against `script/shadow.bgs` and Katana's behavior (only the blade projectile, Sonic Blade, was replaced).
 - `blender/af_sprites.py`: extracts the sprite frames from 2097's `FIGHTR*.AF` files, which were used as references.
@@ -49,12 +49,13 @@ The projections are only as real as Shadow's concentration: they vanish the mome
 ./build.sh --model                        # prepares source/ and renders/ from the FBX in Blender first (set BLENDER if it isn't in /Applications)
 TEXTURE=tripo.png ./build.sh --model      # the same, with the model's own texture instead of the generated one
 ```
-`editor-har-import-tests <Data> --check source/shadow.glb Katana` prints the retargeting measures (for this model: limbs on Katana's, worst edge stretch 1.21 of Katana's own, 4 of 1,865 planted foot samples sliding).
+`editor-har-import-tests <Data> --check source/shadow.glb Katana` prints the retargeting measures (for this model: limbs on Katana's, joints at most 0.57 units from where their parent bones carry them, 2.62 before FINDINGS 760; 198 of 6,309 foot-down samples out of reach, 6 of 1,846 planted samples sliding).
 
 ## Not done yet
 - The Tripo texture is missing from the FBX (its material has a normal map node but no image), so the texture is generated. If it turns up, pass it with `TEXTURE=`.
 - The ribs are painted on: the FBX's limbs are smooth tubes.
-- His basics are still Katana's (walk, punches, kicks, throws); only the stance and the specials are his.
+- His basics are still Katana's (walk, punches, kicks, throws); only the stance and the specials are his. Katana walks with her feet on one line, so his thick thighs pass close in her walk.
+- His shoulder joints sit at the edge of the shoulder armour (0.48 m out, where the arm tube starts), so the upper arm is short and the arms swing from the plates; the claws reach the chest in the stance, not the belt as on the 2097 sprite.
 - The projections are posed meshes that slide and switch poses, as 2097's held sprites do; they do not animate between poses, and they do not fade out.
 - His move pages in Help have text only; the shipped ones show a picture of the move.
 - 2097's aerial specials (the air Shadow Dive, `P632` in the air, and the enhanced air grab) and the Fire Pit destruction are not made.

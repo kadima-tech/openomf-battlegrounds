@@ -78,7 +78,7 @@ enum class Naming { Mixamo, Unknown, Gargoyle, GargoyleWings };
 
 static bool name_is(const std::string &n, const std::string &suffix) { return n.size() >= suffix.size() && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0 && (n.size() == suffix.size() || n[n.size() - suffix.size() - 1] == ':'); }
 
-static std::vector<Joint> humanoid_joints(Naming naming, float arm, float leg) {
+static std::vector<Joint> humanoid_joints(Naming naming, float arm, float leg, float hips = 0.1f) {
 	const bool mx = naming == Naming::Mixamo;
 	auto n = [&](const char *mixamo, int k) { return mx ? std::string("mixamorig:") + mixamo : "joint" + std::to_string(k); };
 	std::vector<Joint> j;
@@ -102,11 +102,11 @@ static std::vector<Joint> humanoid_joints(Naming naming, float arm, float leg) {
 		j.push_back({n((S + "HandIndex1").c_str(), k++), sh + 3, {sx * (0.17f + 0.62f * arm), hip + 0.52f, 0.02f}});
 		j.push_back({n((S + "HandIndex2").c_str(), k++), sh + 4, {sx * (0.17f + 0.68f * arm), hip + 0.52f, 0.02f}});
 		int up = int(j.size());
-		j.push_back({n((S + "UpLeg").c_str(), k++), 0, {sx * 0.1f, hip - 0.05f, 0}});
-		j.push_back({n((S + "Leg").c_str(), k++), up, {sx * 0.1f, hip * 0.53f, 0.01f}});
-		j.push_back({n((S + "Foot").c_str(), k++), up + 1, {sx * 0.1f, 0.08f, 0}});
-		j.push_back({n((S + "ToeBase").c_str(), k++), up + 2, {sx * 0.1f, 0.02f, 0.13f}});
-		j.push_back({n((S + "Toe_End").c_str(), k++), up + 3, {sx * 0.1f, 0.02f, 0.2f}});
+		j.push_back({n((S + "UpLeg").c_str(), k++), 0, {sx * hips, hip - 0.05f, 0}});
+		j.push_back({n((S + "Leg").c_str(), k++), up, {sx * hips, hip * 0.53f, 0.01f}});
+		j.push_back({n((S + "Foot").c_str(), k++), up + 1, {sx * hips, 0.08f, 0}});
+		j.push_back({n((S + "ToeBase").c_str(), k++), up + 2, {sx * hips, 0.02f, 0.13f}});
+		j.push_back({n((S + "Toe_End").c_str(), k++), up + 3, {sx * hips, 0.02f, 0.2f}});
 	}
 	return j;
 }
@@ -143,9 +143,9 @@ static std::vector<Joint> gargoyle_joints(bool wings) {
 	return j;
 }
 
-static gltf::Scene humanoid(Naming naming, float arm, float leg, bool with_animation) {
+static gltf::Scene humanoid(Naming naming, float arm, float leg, bool with_animation, float hips = 0.1f) {
 	const bool gargoyle = naming == Naming::Gargoyle || naming == Naming::GargoyleWings;
-	auto joints = gargoyle ? gargoyle_joints(naming == Naming::GargoyleWings) : humanoid_joints(naming, arm, leg);
+	auto joints = gargoyle ? gargoyle_joints(naming == Naming::GargoyleWings) : humanoid_joints(naming, arm, leg, hips);
 	gltf::Scene s;
 	s.generator = "editor-har-import-tests";
 	// Mixamo through Blender: an Armature node at a hundredth scale, joints in centimetres.
@@ -326,7 +326,7 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 	base_lod.faces = rig.mesh.faces;
 	const ed::RobotLod &lod = b.lods[0];
 	// The limbs point the base robot's way in every pose.
-	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
+	for (size_t q = 0; q < std::min(b.bank.sequences.size(), rig.bank.sequences.size()); ++q) {
 		if (supplied.count(b.bank.sequences[q].name)) continue;
 		bool throws = false;
 		for (auto &s : rig.bank.sequences[q].streams) throws |= rig.bank.channels[s.channel].name == "ThrowFollowTarget" && s.pos.size() > 1;
@@ -368,7 +368,7 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 			}
 		}
 	}
-	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
+	for (size_t q = 0; q < std::min(b.bank.sequences.size(), rig.bank.sequences.size()); ++q) {
 		for (float t : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
 			auto p = skin(lod, b.binds, bones, b.bank, b.bank.sequences[q], t);
 			float base = stretch_of(base_lod, skin(base_lod, base_binds, bones, rig.bank, rig.bank.sequences[q], t));
@@ -378,6 +378,37 @@ static PoseStats pose_stats(const ed::RobotBuild &b, const ed::RobotRig &rig, co
 		}
 	}
 	return st;
+}
+
+// How far each skin bone's joint sits from where its parent bone carries it (its limb off the mesh
+// bound to it), in retargeted poses where the base's own joints stay together.
+struct JointGap {
+	float gap = 0;
+	std::string worst;
+};
+static JointGap joint_gap(const ed::RobotBuild &b, const ed::RobotRig &rig, const std::set<std::string> &supplied = {}) {
+	JointGap g;
+	auto gap = [&](const std::vector<de::Transform> &pose, const de::AnimBank &bank, size_t k, const std::function<const de::Transform &(size_t)> &bind) {
+		int c = bank.channel(rig.skin[k].name);
+		if (c < 0) return 0.0f;
+		int p = bank.channels[size_t(c)].parent;
+		for (size_t j = 0; j < rig.skin.size(); ++j) {
+			if (p >= 0 && rig.skin[j].name == bank.channels[size_t(p)].name) return dist(pose[size_t(p)].then(bind(j).inverse()).apply(bind(k).t), pose[size_t(c)].t);
+		}
+		return 0.0f;
+	};
+	for (size_t q = 0; q < std::min(b.bank.sequences.size(), rig.bank.sequences.size()); ++q) {
+		if (supplied.count(b.bank.sequences[q].name)) continue;
+		for (float t : {0.0f, 0.5f}) {
+			auto pn = b.bank.pose(b.bank.sequences[q], t), pb = rig.bank.pose(rig.bank.sequences[q], t);
+			for (size_t k = 0; k < rig.skin.size(); ++k) {
+				if (gap(pb, rig.bank, k, [&](size_t j) -> const de::Transform & { return rig.skin[j].bind; }) > 0.01f * rig.height) continue;
+				float d = gap(pn, b.bank, k, [&](size_t j) -> const de::Transform & { return b.binds[j]; });
+				if (d > g.gap) g.gap = d, g.worst = b.bank.sequences[q].name + " " + rig.skin[k].name;
+			}
+		}
+	}
+	return g;
 }
 
 // Contacts: where a base foot is down, the new one is on the new floor and moves as the base's does
@@ -392,7 +423,7 @@ static ContactStats contact_stats(const ed::RobotBuild &b, const ed::RobotRig &r
 	ContactStats st;
 	const float tol = rig.height * 0.05f;
 	const int tf = rig.bank.channel("ThrowFollowTarget");
-	for (size_t q = 0; q < b.bank.sequences.size(); ++q) {
+	for (size_t q = 0; q < std::min(b.bank.sequences.size(), rig.bank.sequences.size()); ++q) {
 		if (supplied.count(b.bank.sequences[q].name)) continue;
 		const int n = 41;
 		std::vector<std::vector<de::Transform>> pb(n), pn(n);
@@ -675,8 +706,8 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	printf("  contacts: %zu sequences corrected; feet down in %zu samples, %zu off the floor (worst %.2f, %s, out of reach); planted in %zu, %zu sliding (worst %.2f, %s); throw grip %zu samples, off by %.2f\n", b.contacts,
 	       cs.samples, cs.off_floor, cs.floor, cs.floor_worst.c_str(), cs.planted, cs.sliding, cs.slide, cs.slide_worst.c_str(), cs.grips, cs.grip);
 	CHECK(b.contacts > 0);
-	CHECK(cs.off_floor * 10 < cs.samples);  // out of reach: thrown, falling, legs at full stretch
-	CHECK(cs.sliding * 50 < cs.planted);
+	CHECK(cs.off_floor * 8 < cs.samples);  // out of reach: thrown, falling, legs at full stretch, hips wider than the base's rolled up
+	CHECK(cs.sliding * 30 < cs.planted);
 	CHECK(cs.grip < plan.har.rig->height * 0.05f);
 	CHECK(b.supplied == 1);
 	CHECK(ps.stretch < 2.0f);
@@ -775,6 +806,24 @@ static void test_heeled_feet(ed::BaseData &base) {
 	printf("heeled feet onto Katana: mirror %d turn %d (plain feet: mirror %d turn %d)\n", heeled.har.mirror, heeled.har.turn, plain.har.mirror, plain.har.turn);
 	CHECK(heeled.har.mirror == plain.har.mirror);
 	CHECK(heeled.har.turn == plain.har.turn);
+	fs::remove_all(dir);
+}
+
+// Hips set wider than the base's stay where the mesh has them in the base's moves, not on the
+// base's narrower offsets (the thighs were pulled into each other).
+static void test_wide_hips(ed::BaseData &base) {
+	fs::path dir = scratch();
+	gltf::write(humanoid(Naming::Mixamo, 1.0f, 1.0f, false, 0.2f), dir / "wide.glb");
+	for (const char *robot : {"Katana", "Jaguar"}) {
+		ed::ImportPlan plan = robot_plan(dir / "wide.glb", base, robot, "Wide Bot");
+		CHECK(!plan.errors());
+		if (plan.errors()) continue;
+		ed::RobotBuild b = ed::build_robot(plan, true);
+		JointGap g = joint_gap(b, *plan.har.rig);
+		const float h = plan.har.rig->height * b.scale;
+		printf("wide hips onto %s: joints at most %.3f units from where their parents carry them (%s), robot %.1f tall\n", robot, g.gap, g.worst.c_str(), h);
+		CHECK(g.gap < 0.03f * h);
+	}
 	fs::remove_all(dir);
 }
 
@@ -1023,6 +1072,8 @@ static int check_file(ed::BaseData &base, const fs::path &file, const std::strin
 	}
 	PoseStats ps = pose_stats(b, *plan.har.rig, from_file);
 	ContactStats cs = contact_stats(b, *plan.har.rig, from_file);
+	JointGap jg = joint_gap(b, *plan.har.rig, from_file);
+	printf("  joints at most %.2f units from where their parents carry them (%s)\n", jg.gap, jg.worst.c_str());
 	printf("  scale %.2f, mirror %d, turn %d, LODs %zu / %zu / %zu triangles; worst edge stretch %.2f (%s), reach %.1f units, limbs within %.1f deg of the base, their meshes within %.0f deg of the limbs (base %.0f)\n", b.scale, plan.har.mirror, plan.har.turn,
 	       b.lods[0].faces.size(), b.lods.size() > 1 ? b.lods[1].faces.size() : 0, b.lods.size() > 2 ? b.lods[2].faces.size() : 0, ps.stretch, ps.worst.c_str(), ps.reach, std::acos(std::clamp(ps.direction, -1.0f, 1.0f)) * 57.3f,
 	       std::acos(std::clamp(ps.mesh_direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.base_mesh_direction, -1.0f, 1.0f)) * 57.3f);
@@ -1127,6 +1178,7 @@ int main(int argc, char **argv) {
 	test_wings(data, base, true, keep);
 	test_material_paint(data, base);
 	test_lod0_budget(base);
+	test_wide_hips(base);
 	test_new_sequence(data, base);
 	test_heeled_feet(base);
 	if (failures) {

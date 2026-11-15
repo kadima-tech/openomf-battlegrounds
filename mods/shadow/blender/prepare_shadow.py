@@ -178,7 +178,8 @@ def joints(co, tri, H):
     # Legs: their centre line, the crotch, the knee pads' front, the ankle's waist.
     leg = (x > h(0.02)) & (z > h(0.12)) & (z < h(0.45))
     lx = float(np.median(x[leg]))
-    centre = np.abs(x) < h(0.012)
+    # Narrow: the inner thighs come within 4 cm of the midline 15 cm below the crotch.
+    centre = np.abs(x) < h(0.005)
     crotch = min(t for t, c in scan(p, 2, h(0.30), h(0.70), h(0.01), centre, len) if c != np.inf)
     side = (x > 0) & (np.abs(x - lx) < h(0.06))
     knee = min(scan(p, 2, h(0.22), h(0.40), h(0.005), side, lambda q: q[:, 1].min()), key=lambda r: r[1])[0]
@@ -596,7 +597,10 @@ def weights(mo, ao, bones, H):
     rigid[np.arange(len(co)), [gi[use[k][0]] for k in near]] = 1
     side_of = np.array([1 if "Left" in n else -1 if "Right" in n else 0 for n in names])
     x = co[:, 0]
-    wrong = (side_of[None, :] != 0) & (np.sign(x)[:, None] != side_of[None, :]) & (np.abs(x)[:, None] > 0.02 * co[:, 2].max())
+    crotch = next(h for n, h, _, _, _ in bones if n == P + "LeftUpLeg")[2]
+    # Below the crotch the legs are apart, so even the inner thighs take nothing from the other leg.
+    apart = (np.abs(x) > 0.02 * co[:, 2].max()) | (co[:, 2] < crotch)
+    wrong = (side_of[None, :] != 0) & (np.sign(x)[:, None] != side_of[None, :]) & apart[:, None]
     sided = int((wrong & (W > 1e-4)).any(1).sum())
     W[wrong] = 0
     empty = W.sum(1) < 1e-4
@@ -643,13 +647,8 @@ def save_png(path, rgb):
     img.save()
 
 
-# Armature-space turns per bone (children inherit them): (axis, degrees).
+# Armature-space turns per bone (children inherit them): (axis, degrees); the stance is animate_shadow's.
 POSES = {
-    "stance": {"Hips": ((0, 0, 1), 30), "Spine2": ((0, 0, 1), 15), "Spine": ((1, 0, 0), -8),
-               "LeftArm": [((0, 1, 0), 55), ((0, 0, 1), -60)], "LeftForeArm": ((0, 1, 0), -60),
-               "RightArm": [((0, 1, 0), -55), ((0, 0, 1), 40)], "RightForeArm": ((0, 1, 0), 70),
-               "LeftUpLeg": ((1, 0, 0), -55), "LeftLeg": ((1, 0, 0), 60), "LeftFoot": ((1, 0, 0), -5),
-               "RightUpLeg": ((1, 0, 0), 40), "RightLeg": ((1, 0, 0), 5), "RightFoot": ((1, 0, 0), -45)},
     "guard": {"Hips": ((0, 0, 1), 20), "Spine2": ((0, 0, 1), -10), "LeftArm": [((0, 1, 0), 65), ((0, 0, 1), -35)],
               "LeftForeArm": ((1, 0, 0), -125), "RightArm": [((0, 1, 0), -65), ((0, 0, 1), 35)], "RightForeArm": ((1, 0, 0), -110),
               "LeftUpLeg": [((0, 1, 0), 8), ((1, 0, 0), -20)], "LeftLeg": ((1, 0, 0), 25),
@@ -663,6 +662,13 @@ POSES = {
 
 
 def pose(ao, name, drop=0.0):
+    if name == "stance":
+        ao.location.z = 0
+        animate_shadow.apply(ao, {})
+        low = animate_shadow.foot_low(ao)
+        animate_shadow.apply(ao, animate_shadow.STANCE)
+        ao.location.z = low - animate_shadow.foot_low(ao)
+        return
     turns = POSES.get(name, {})
     ao.location.z = drop
     world = {}
@@ -723,7 +729,7 @@ def preview(prefix, ao, cam, H):
     k = H / 3.1
     for tag, deg in (("front", 0), ("front34", 35), ("side", 90), ("back34", 145), ("back", 180)):
         shoot(cam, "%s_%s.png" % (prefix, tag), deg, 9.4 * k, 1.9 * k, 1.6 * k)
-    for tag, name, deg, drop in (("stance", "stance", 55, -0.30), ("stance_side", "stance", 90, -0.30), ("guard", "guard", 20, -0.12),
+    for tag, name, deg, drop in (("stance", "stance", -55, 0), ("stance_side", "stance", -90, 0), ("guard", "guard", 20, -0.12),
                                  ("kick", "kick", 70, 0.0)):
         pose(ao, name, drop * k)
         shoot(cam, "%s_%s.png" % (prefix, tag), deg, 9.4 * k, 1.8 * k, 1.45 * k)
@@ -740,8 +746,8 @@ def picture(path, ao, cam, floor, H):
     bg.default_value = (0.002, 0.003, 0.012, 1)
     k = H / 3.1
     tiles = []
-    for n, (name, drop, deg, dist, height, target) in enumerate((("guard", -0.12, 25, 6.2, 1.8, 1.42), ("stance", -0.30, 60, 5.9, 1.7, 1.35),
-                                                                 ("kick", 0.0, 80, 6.4, 1.7, 1.45), ("stance", -0.30, 330, 5.9, 1.8, 1.35))):
+    for n, (name, drop, deg, dist, height, target) in enumerate((("guard", -0.12, 25, 6.2, 1.8, 1.42), ("stance", 0, 300, 5.9, 1.7, 1.35),
+                                                                 ("kick", 0.0, 80, 6.4, 1.7, 1.45), ("stance", 0, 330, 5.9, 1.8, 1.35))):
         pose(ao, name, drop * k)
         tile = "%s.tile%d.png" % (path, n)
         shoot(cam, tile, deg, dist * k, height * k, target * k)
