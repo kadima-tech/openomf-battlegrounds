@@ -36,6 +36,9 @@ private:
 		// following (1 or -1, 0 when none).
 		GameObject *held = nullptr;
 		int side = 0;
+		// The last search, found or not (see steer): when, from where, to where.
+		float searched = -1e9f;
+		std::array<float, 3> searched_from{1e30f, 0, 0}, searched_dest{1e30f, 0, 0};
 	};
 	GameObject *area_near(const std::array<float, 3> &p);
 	bool wall_between(GameObject &creature, const std::array<float, 3> &to);
