@@ -1263,3 +1263,6 @@ Evidence key: **[REA ev_…]** = REA evidence ID · **[ghidra]** = headless Ghid
 
 
 712. **An add-on HAR's robot keeps its base robot's name** (the editor's `create_har_variant`; `app::setup_fighter`): the copied `OMF2Fighter` is still called `Katana` (its class is looked up as `P<name>`), so whatever labelled fighters by the actor's name showed an imported Shadow as Katana (Play in editor's labels and Live Inspector, `openbg-fight`'s state lines). `World::make_fighter` now gets the description's name with the actor, and the labels use it.
+
+
+730. **A robot's facing came out backwards for boots with long heels** (the editor's robot import, `detect_orientation` in `engine/editor/core/har_import.cpp`; Shadow from `mods/shadow/blender/shadow-model.fbx`): forward was the mean of the vertices the foot bone alone carries, less the ankle. Shadow's boots have heel spikes behind the ankle and the toe on `ToeBase`, so the foot's own vertices sat 1 cm behind the ankle and the import took his back for his front (mirror 0 / turn 0, where the same facing gives mirror 1 / turn 180 for the generated rigs and the earlier procedural Shadow). Forward is now taken from the vertices carried by the foot and every joint below it (3.4 cm ahead for Shadow), else those joints' positions; ctest `editor-har-import` checks a box rig with heels.

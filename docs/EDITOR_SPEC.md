@@ -389,15 +389,17 @@ they can be redone.
   Katana and Pyros, show textured in the HAR editor, in Choose Creature (picture, title, text, paint
   jobs) and in `openbg-fight` (`--model` picks a paint job).
 
-- Verified (2026-11-15): Shadow, the One Must Fall 2097 robot, modelled in Blender
-  (`engine/tests/scripts/make_shadow.py`: 2,572 triangles, Mixamo bones in an A-pose, rigid
-  weights per armour part, six materials sharing one 1024 atlas with `de_paint` and metallic set,
-  glowing studs in their own colours) imports onto Katana through the dialog (bones by name and
-  the Mixamo preset; mirror and turn from the skeleton), with a second paint job from an image and
-  its Choose Creature panel (a Blender-rendered picture); it lists in Choose Creature, fights in
-  `openbg`, `openbg-fight` and Play in editor in each pilot's colours, as player and as AI
-  (`editor-har-import-tests <Data> --check shadow.glb Katana`: limbs on the base's, no edge
-  stretched past the base's, 7 of 1,865 planted samples sliding).
+- Verified (2026-11-15): Shadow, the One Must Fall 2097 robot, from the user's AI-generated model
+  (`mods/shadow/blender/shadow-model.fbx`: 5,406 triangles, no rig, texture or animation) prepared
+  in Blender (`mods/shadow/blender/prepare_shadow.py`: 2,544 triangles, Mixamo bones at joints
+  measured from the mesh in its T-pose, automatic weights through a voxel proxy, six materials
+  sharing one generated 1024 texture with `de_paint` and metallic set, glowing studs in their own
+  colours) imports onto Katana in batch (`mods/shadow/build.sh`: bones by name and the Mixamo preset;
+  mirror and turn from the skeleton, the facing from the feet with their toes, FINDINGS 730), with a
+  second paint job from an image and its Choose Creature panel (a Blender-rendered picture); it lists
+  in Choose Creature, and fights in `openbg-fight` in each pilot's colours, as player and as AI, hits
+  landing both ways (`editor-har-import-tests <Data> --check shadow.glb Katana`: limbs on the base's,
+  worst edge stretch 1.21 of the base's, 4 of 1,865 planted samples sliding).
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the

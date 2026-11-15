@@ -1,0 +1,14 @@
+{
+  "base_robot": "Katana",
+  "preset": "Auto",
+  "units_per_metre": 10.0,
+  "z_up": false,
+  "auto_orient": true,
+  "mirror": true,
+  "turn": 180,
+  "ground": true,
+  "paint": "colours",
+  "material_paint": {},
+  "bones": {},
+  "sequences": {}
+}

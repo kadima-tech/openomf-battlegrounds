@@ -747,6 +747,37 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 // its left half, Joints on its right), Body painted in the pilot's first colour and metallic,
 // Joints keeping its own colours (extras.de_paint); the exporter's packed occlusion / metallic
 // image is named after the images it was packed from and must not be taken for the paint mask.
+// Boots with long heels (Shadow's): the vertices on the foot bone alone sit behind the ankle, the
+// toes' ahead of it, so the facing comes from the foot with its toes.
+static void test_heeled_feet(ed::BaseData &base) {
+	fs::path dir = scratch();
+	gltf::write(humanoid(Naming::Mixamo, 1.0f, 1.0f, false), dir / "plain.glb");
+	gltf::Scene s = humanoid(Naming::Mixamo, 1.0f, 1.0f, false);
+	auto joints = humanoid_joints(Naming::Mixamo, 1.0f, 1.0f);
+	gltf::Primitive &P = s.meshes[0].primitives[0];
+	for (size_t i = 0; i < joints.size(); ++i) {
+		if (!name_is(joints[i].name, "LeftFoot") && !name_is(joints[i].name, "RightFoot")) continue;
+		const V3 a = joints[i].at;
+		const uint32_t first = uint32_t(P.positions.size());
+		for (int c = 0; c < 8; ++c) {
+			P.positions.push_back({a[0] + ((c & 1) ? 0.05f : -0.05f), (c & 2) ? a[1] : 0.0f, (c & 4) ? -0.02f : -0.35f});
+			P.joints.push_back({uint16_t(i), 0, 0, 0});
+			P.weights.push_back({1, 0, 0, 0});
+		}
+		const int q[6][4] = {{0, 2, 6, 4}, {1, 5, 7, 3}, {0, 4, 5, 1}, {2, 3, 7, 6}, {0, 1, 3, 2}, {4, 6, 7, 5}};
+		for (auto &f : q) {
+			for (int t : {0, 1, 2, 0, 2, 3}) P.indices.push_back(first + uint32_t(f[t]));
+		}
+	}
+	gltf::write(s, dir / "heeled.glb");
+	ed::ImportPlan plain = robot_plan(dir / "plain.glb", base, "Katana", "Plain Bot");
+	ed::ImportPlan heeled = robot_plan(dir / "heeled.glb", base, "Katana", "Heeled Bot");
+	printf("heeled feet onto Katana: mirror %d turn %d (plain feet: mirror %d turn %d)\n", heeled.har.mirror, heeled.har.turn, plain.har.mirror, plain.har.turn);
+	CHECK(heeled.har.mirror == plain.har.mirror);
+	CHECK(heeled.har.turn == plain.har.turn);
+	fs::remove_all(dir);
+}
+
 static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 	fs::path dir = scratch();
 	gltf::Scene s = humanoid(Naming::Mixamo, 1.0f, 1.0f, false);
@@ -962,6 +993,7 @@ int main(int argc, char **argv) {
 	test_wings(data, base, false, keep);
 	test_wings(data, base, true, keep);
 	test_material_paint(data, base);
+	test_heeled_feet(base);
 	if (failures) {
 		fprintf(stderr, "%d check(s) failed\n", failures);
 		return 1;

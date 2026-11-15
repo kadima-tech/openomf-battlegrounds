@@ -418,12 +418,17 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   Paint by material: a Blender material's custom property `de_paint` (-1 its own colours, 0-2 one of
   the pilot's three) reaches the import as glTF `extras` (export with Custom Properties on), and its
   Metallic becomes the reflection; the Materials page shows and changes each material's choice.
-  `engine/tests/scripts/make_shadow.py` builds Shadow, the 2097 robot (`blender -b --factory-startup
-  --python engine/tests/scripts/make_shadow.py -- --out shadow.glb [--blend shadow.blend] [--preview
-  prefix] [--paint-out dir] [--picture choose_creature.png]`): six materials sharing one atlas, a
-  dark second paint job and a Choose Creature strip; import it with `--import shadow.glb
-  --import-kind robot --import-base Katana --import-name Shadow --import-paint
-  Stealth=dir/ShadowDark.png --har-picture choose_creature.png`.
+- Mods: `mods/` holds add-ons made with the editor, each with its sources and a `build.sh` (see `mods/README.md`). `openbg-editor ... --batch [--frames N]` runs the scripted options without a window and quits, for build scripts.
+  Shadow, the 2097 robot (`mods/shadow`), comes from the user's model `blender/shadow-model.fbx` (an
+  untextured, unrigged AI-generated mesh): `blender -b --factory-startup --python
+  mods/shadow/blender/prepare_shadow.py -- --fbx shadow-model.fbx --out shadow.glb [--blend shadow.blend]
+  [--texture file.png] [--paint-out dir] [--picture choose_creature.png] [--preview prefix]` scales it
+  to 3.1 m, decimates it to 2,540 triangles, measures Mixamo joints from its surface, weights it
+  (Blender's automatic weights, on a voxel remesh when they fail on the mesh itself), paints a texture
+  in its UVs (or takes `--texture`), splits it into six materials with `de_paint` and metallic, and
+  writes the Stealth paint job and a Choose Creature strip; `mods/shadow/build.sh [--model]` runs it
+  and imports the result onto Katana (`--import shadow.glb --import-kind robot --import-base Katana
+  --import-name Shadow --import-paint Stealth=ShadowDark.png --har-picture choose_creature.png`).
   Real content: `engine/tests/scripts/make_character.py` builds a textured, skinned, animated
   character in Blender (`blender -b --factory-startup --python engine/tests/scripts/make_character.py --
   --naming mixamo|rigify --textures atlas|multi --out file.glb|file.gltf`), for importing by hand. `--samples <dir>` writes the generated rigs

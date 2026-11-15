@@ -1137,32 +1137,38 @@ void detect_orientation(ImportPlan &plan) {
 		const BoneMapping *fr = row(h, foot);
 		V3 fp;
 		if (!fr || fr->joint < 0 || !at(foot, &fp)) continue;
-		// As the rig's: the vertices the foot carries, else the joints past it (toes).
+		// The vertices the foot and its toes carry (a heel can outweigh the foot's own), else the joints past it.
+		std::set<int> foot_nodes{fr->joint};
+		std::function<void(int)> below = [&](int node) {
+			for (int c : s.nodes[size_t(node)].children) foot_nodes.insert(c), below(c);
+		};
+		below(fr->joint);
+		std::set<int> ks;
+		for (size_t i = 0; i < joints.size(); ++i) {
+			if (foot_nodes.count(joints[i])) ks.insert(int(i));
+		}
 		V3 sum{0, 0, 0};
 		float n = 0;
-		int k = -1;
-		for (size_t i = 0; i < joints.size(); ++i) {
-			if (joints[i] == fr->joint) k = int(i);
-		}
 		for (auto &pc : lod_pieces(plan, 0)) {
-			if (!pc.skinned || k < 0) continue;
+			if (!pc.skinned || ks.empty()) continue;
 			for (size_t v = 0; v < pc.prim->positions.size() && v < pc.prim->joints.size(); ++v) {
+				float w = 0;
 				for (int q = 0; q < 4; ++q) {
-					if (pc.prim->joints[v][size_t(q)] == k && pc.prim->weights[v][size_t(q)] > 0.8f) {
-						auto p = gltf::transform_point(fix, pc.prim->positions[v]);
-						sum = add(sum, {p[0], p[1], p[2]}), n += 1;
-					}
+					if (ks.count(pc.prim->joints[v][size_t(q)])) w += pc.prim->weights[v][size_t(q)];
+				}
+				if (w > 0.8f) {
+					auto p = gltf::transform_point(fix, pc.prim->positions[v]);
+					sum = add(sum, {p[0], p[1], p[2]}), n += 1;
 				}
 			}
 		}
-		std::function<void(int)> walk = [&](int node) {
-			for (int c : s.nodes[size_t(node)].children) {
+		if (n == 0) {
+			for (int c : foot_nodes) {
+				if (c == fr->joint) continue;
 				auto p = node_origin(gltf::multiply(fix, joint_bind(plan, c)));
 				sum = add(sum, {p[0], p[1], p[2]}), n += 1;
-				walk(c);
 			}
-		};
-		if (n == 0) walk(fr->joint);
+		}
 		if (n > 0) ahead = add(ahead, flat(sub(mul(sum, 1 / n), fp)));
 	}
 	V3 forward = length(ahead) > 1e-4f ? normalize(ahead) : normalize(cross(left, up));
