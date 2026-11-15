@@ -302,11 +302,13 @@ void GameView::wire_session() {
 		return nf.actor;
 	};
 	world.on_creature_owned = [this](game::GameObject *c, int slot) {
+		std::string label = c->name;
 		for (auto *fi : fighters) {
 			if (fi->actor == c && slot == 0) player = fi;
+			if (fi->actor == c) label = fi->label();
 		}
 		if (player) world.focus = player->actor;
-		printf("slot %d: %s%s%s\n", slot, c->name.c_str(), c->user_controlled ? " (player)" : " (computer)", c->team >= 0 ? (", team " + std::to_string(c->team)).c_str() : "");
+		printf("slot %d: %s%s%s\n", slot, label.c_str(), c->user_controlled ? " (player)" : " (computer)", c->team >= 0 ? (", team " + std::to_string(c->team)).c_str() : "");
 	};
 }
 

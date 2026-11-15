@@ -718,7 +718,7 @@ int main(int argc, char **argv) {
 					if (changes ? now != fi->last_state : fr % every == 0) {
 						fi->last_state = now;
 						printf("frame %4d  %-8s %-40s anim %-22s t=%.2f  pos (%.1f %.1f %.1f)%s  health %.0f%%\n", fr,
-						       fi->name.c_str(), m ? m->cm->signature.c_str() : "-", seq.c_str(), fi->actor->anim_time,
+						       fi->label().c_str(), m ? m->cm->signature.c_str() : "-", seq.c_str(), fi->actor->anim_time,
 						       fi->actor->local.t[0], fi->actor->local.t[1], fi->actor->local.t[2],
 						       fi->actor->on_floor ? " floor" : "", health_of(*fi) * 100);
 					}
