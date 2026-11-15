@@ -205,8 +205,14 @@ ScriptPatchResult apply_script_patch(de::PCode &p, const std::vector<ScriptPatch
 			if (p.elements[i].type == de::PCodeElement::kMethod && p.qualified_name(i) == s.name) found = int(i);
 		}
 		if (found >= 0) {
+			// A state given as a method (or the reverse) would change how it runs: an event that
+			// enters BRaven's RunQuote state waits and restarts it per hit; as an instant method
+			// every hit speaks at once.
+			const bool was_state = p.elements[size_t(found)].method_id == 0;
+			if (was_state != (s.kind == "state"))
+				throw deo::Error(p.name + ": " + s.name + " is a " + (was_state ? "state" : "method") + "; give it as \"// ---- " +
+				                 (was_state ? "state " : "method ") + s.name + "\"");
 			p.elements[size_t(found)].source = s.source;
-			p.elements[size_t(found)].method_id = s.kind == "state" ? 0 : 1;
 			++r.replaced;
 			continue;
 		}
