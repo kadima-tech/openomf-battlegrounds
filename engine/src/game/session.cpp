@@ -519,12 +519,23 @@ std::vector<de::ObjectRef> property_refs(const SessionNode &n) {
 
 // DE_CStandardSessionModifier::Initialize: start the executor properties on the modifier, then
 // copy in the modifiers it attaches (they are initialised in turn by the session's loop).
+// A modifier's executor instances, made once and not run yet (their behaviours answer Interface).
+std::vector<Brain *> make_executors(World &w, SessionNode &n) {
+	if (n.made) return std::move(n.prepared);
+	n.made = true;
+	return w.activate_executors(n.obj, property_refs(n), false);
+}
+
 void initialize_node(World &w, SessionState &s, SessionNode &n) {
 	if (n.initialized) return;
 	n.initialized = true;
-	w.activate_executors(n.obj, property_refs(n));
+	std::vector<Brain *> mine = make_executors(w, n);
 	// The attached modifiers follow the one that attaches them (so they are running before any
-	// later modifier -- e.g. the score limit -- looks up their interfaces).
+	// later modifier -- e.g. the score limit -- looks up their interfaces). Their executors are
+	// made before this modifier's entry runs, as a modifier's executor instance exists from its
+	// set-up: Team Demolition's master looks up the attached B2TeamScoringSystem in its Entry
+	// (else it kept none, and every round's team scores read 0 to 0, a draw), and that system's
+	// own Entry looks up the master's BStandardOMFSession, so each runs at its turn.
 	auto at = std::find(s.modifiers.begin(), s.modifiers.end(), n.obj);
 	size_t pos = at == s.modifiers.end() ? s.modifiers.size() : size_t(at - s.modifiers.begin()) + 1;
 	for (auto &t : n.attached) {
@@ -536,8 +547,11 @@ void initialize_node(World &w, SessionState &s, SessionNode &n) {
 			s.modifiers.insert(s.modifiers.begin() + long(std::min(pos, s.modifiers.size())), m);
 			++pos;
 			make_node(w, s, m);
+			SessionNode &an = *s.node(m);
+			an.prepared = make_executors(w, an);
 		}
 	}
+	for (Brain *b : mine) w.start_brain(b);
 }
 
 void call_hook(World &w, const ScriptHook &h, uint32_t arg = 0, bool with_arg = false) {
