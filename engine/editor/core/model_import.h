@@ -16,6 +16,7 @@
 
 #include <array>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -116,6 +117,9 @@ struct HarPlan {
 	int turn = 0;             // degrees about the up axis: 0, 90, 180, 270
 	bool ground = true;       // the lowest vertex on the floor
 	enum class Paint : uint8_t { Materials, Colours } paint = Paint::Colours;
+	// Per glTF material: -1 its own colours (RGBStatic), 0-2 one of the pilot's colours (the paint
+	// mask's channel). Chosen on the Materials page; else the material's extras.de_paint; else `paint`.
+	std::map<int, int> material_paint;
 	bool decimate_lod0 = false;  // LOD0 to the base robot's budget as well
 	// Further paint jobs: a copy of the model with this image as its colours (RGBStatic) or, when
 	// the paint is the pilot's, its paint mask (RGBMain); laid out as the model's texture.

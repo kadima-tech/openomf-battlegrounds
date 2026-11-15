@@ -7,6 +7,7 @@
 //                                                 the saved add-on read back by the engine
 //   editor-har-import-tests --samples <dir>       writes the generated rigs (humanoid.glb, mixamo.glb)
 //   editor-har-import-tests <Data dir> --keep <dir>   also keeps the add-ons (for openbg --addon)
+//   editor-har-import-tests <Data dir> --check <file.glb> <robot>   measures your model's import
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -26,6 +27,7 @@
 #include "gltf.h"
 #include "har.h"
 #include "har_import.h"
+#include "image_io.h"
 #include "model_export.h"
 #include "model_import.h"
 #include "content.h"
@@ -741,6 +743,131 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	printf("  ok\n");
 }
 
+// Paint by material, as a Blender file carries it: two materials share one texture atlas (Body on
+// its left half, Joints on its right), Body painted in the pilot's first colour and metallic,
+// Joints keeping its own colours (extras.de_paint); the exporter's packed occlusion / metallic
+// image is named after the images it was packed from and must not be taken for the paint mask.
+static void test_material_paint(const fs::path &data, ed::BaseData &base) {
+	fs::path dir = scratch();
+	gltf::Scene s = humanoid(Naming::Mixamo, 1.0f, 1.0f, false);
+	const int T = 64;
+	gltf::Image atlas;
+	atlas.name = "ShadowColours";
+	atlas.width = atlas.height = T;
+	for (int y = 0; y < T; ++y) {
+		for (int x = 0; x < T; ++x) {
+			if (x < T / 2) atlas.rgba.insert(atlas.rgba.end(), {200, 200, 200, 255});
+			else atlas.rgba.insert(atlas.rgba.end(), {40, 200, 255, 255});
+		}
+	}
+	gltf::Image packed;
+	packed.name = "PaintMask-ReflectionMask";
+	packed.width = packed.height = T;
+	packed.rgba.assign(size_t(T) * size_t(T) * 4, 255);
+	for (size_t i = 2; i < packed.rgba.size(); i += 4) packed.rgba[i] = 128;
+	s.images = {atlas, packed};
+	for (int m = 0; m < 2; ++m) {
+		auto &mat = s.materials[size_t(m)];
+		mat.base_colour = {1, 1, 1, 1};
+		mat.base_texture.image = 0;
+		mat.metallic = m == 0 ? 0.8f : 0.0f;
+		mat.metallic_roughness_texture.image = 1;
+		mat.extras = json::Value::object();
+		mat.extras["de_paint"] = m == 0 ? 0 : -1;
+	}
+	for (auto &P : s.meshes[0].primitives) {
+		const float lo = P.material == 0 ? 0.05f : 0.55f;
+		P.uvs.assign(1, {});
+		for (size_t v = 0; v < P.positions.size(); ++v) {
+			int c = int(v % 8);
+			P.uvs[0].push_back({lo + ((c & 1) ? 0.4f : 0), 0.05f + ((c & 2) ? 0.45f : 0) + ((c & 4) ? 0.45f : 0)});
+		}
+	}
+	gltf::write(s, dir / "painted.glb");
+	ed::ImportPlan plan = robot_plan(dir / "painted.glb", base, "Katana", "Paint Bot");
+	printf("paint by material (a shared atlas, de_paint, a packed metallic image):\n");
+	CHECK(!plan.errors());
+	CHECK(ed::material_paint(plan, 0) == 0 && ed::material_paint(plan, 1) == -1);
+	auto texel = [&](const ed::RobotImage &img, float u, float v, int ch) {
+		int x = std::clamp(int(u * float(img.width)), 0, img.width - 1), y = std::clamp(int(v * float(img.height)), 0, img.height - 1);
+		return int(img.rgba[(size_t(y) * size_t(img.width) + size_t(x)) * 4 + size_t(ch)]);
+	};
+	ed::RobotBuild b = ed::build_robot(plan, true);
+	CHECK(b.mask.width == T && b.colours.width == T && b.reflection.width == T);
+	if (b.mask.width != T || b.colours.width != T || b.reflection.width != T) return;
+	for (float v : {0.25f, 0.75f}) {
+		// Body: its luminance in the paint mask's first channel, nothing of its own, and the arena's
+		// reflection at its metallic times the packed image's blue.
+		CHECK(std::abs(texel(b.mask, 0.25f, v, 0) - 200) <= 2 && texel(b.mask, 0.25f, v, 1) == 0 && texel(b.mask, 0.25f, v, 2) == 0);
+		CHECK(texel(b.colours, 0.25f, v, 0) == 0 && texel(b.colours, 0.25f, v, 2) == 0);
+		const int refl = int(0.8f * 128.0f / 255.0f * (0.5f + 0.5f * 200.0f / 255.0f) * 255.0f);
+		CHECK(std::abs(texel(b.reflection, 0.25f, v, 0) - refl) <= 2);
+		// Joints: its own colours, unpainted, not metallic.
+		CHECK(texel(b.colours, 0.75f, v, 0) == 40 && texel(b.colours, 0.75f, v, 2) == 255);
+		CHECK(texel(b.mask, 0.75f, v, 0) == 0 && texel(b.mask, 0.75f, v, 1) == 0 && texel(b.mask, 0.75f, v, 2) == 0);
+		CHECK(texel(b.reflection, 0.75f, v, 0) == 0);
+	}
+	// A choice on the Materials page wins over the file's, and a re-import keeps it.
+	plan.har.material_paint[1] = 2;
+	b = ed::build_robot(plan, true);
+	const int lum = int(0.3f * 40 + 0.59f * 200 + 0.11f * 255);
+	CHECK(std::abs(texel(b.mask, 0.75f, 0.25f, 2) - lum) <= 2);
+	CHECK(b.colours.rgba.empty());
+	json::Value saved = ed::robot_mapping_json(plan);
+	ed::ImportPlan again = robot_plan(dir / "painted.glb", base, "Katana", "Paint Bot");
+	ed::apply_robot_mapping(again, saved);
+	CHECK(ed::material_paint(again, 1) == 2);
+	plan.har.material_paint.clear();
+	// A second paint job from an image laid out as the atlas: split the same way.
+	std::vector<uint8_t> night(size_t(T) * size_t(T) * 4, 255);
+	for (size_t i = 0; i < night.size(); i += 4) night[i] = night[i + 1] = night[i + 2] = 60;
+	ed::write_png(dir / "night.png", T, T, night);
+	plan.har.extra_paints.push_back({"Night", dir / "night.png"});
+	auto project = ed::Project::create(base, dir / "HarPainted.DEObjects");
+	ed::ImportResult r = ed::import_robot(*project, plan);
+	ed::HarObjects o = ed::har_objects(*project, r.root);
+	CHECK(o.model_descriptions.size() == 2);
+	if (o.model_descriptions.size() == 2) {
+		bool main = false, own = false;
+		for (auto &img : ed::paint_images(*project, uint32_t(o.model_descriptions[1]))) {
+			int w = 0, h = 0;
+			auto px = ed::image_rgba(project->file().objects[size_t(img.object)], &w, &h);
+			if (px.empty() || w != T) continue;
+			auto at = [&](float u, int ch) { return int(px[(size_t(T / 2) * size_t(T) + size_t(u * T)) * 4 + size_t(ch)]); };
+			if (img.name == "RGBMain") main = std::abs(at(0.25f, 0) - 60) <= 2 && at(0.75f, 0) == 0;
+			if (img.name == "RGBStatic") own = at(0.25f, 0) == 0 && std::abs(at(0.75f, 0) - 60) <= 2;
+		}
+		CHECK(main && own);
+	}
+	project->save();
+	check_engine_reads(data, dir / "HarPainted.DEObjects", "Paint Bot", b.lods[0].faces.size(), 2);
+	fs::remove_all(dir);
+	printf("  ok\n");
+}
+
+// A model of your own: the mapping and the retargeting measures the tests hold the generated rigs to.
+static int check_file(ed::BaseData &base, const fs::path &file, const std::string &robot) {
+	ed::ImportPlan plan = robot_plan(file, base, robot, file.stem().string());
+	printf("%s onto %s:\n", file.filename().string().c_str(), robot.c_str());
+	print_mapping(plan);
+	print_issues(plan);
+	if (plan.errors()) return 1;
+	ed::RobotBuild b = ed::build_robot(plan);
+	std::set<std::string> from_file;
+	for (auto &m : plan.har.sequences) {
+		if (m.animation >= 0) from_file.insert(m.sequence);
+	}
+	PoseStats ps = pose_stats(b, *plan.har.rig, from_file);
+	ContactStats cs = contact_stats(b, *plan.har.rig, from_file);
+	printf("  scale %.2f, mirror %d, turn %d, LODs %zu / %zu / %zu triangles; worst edge stretch %.2f (%s), reach %.1f units, limbs within %.1f deg of the base, their meshes within %.0f deg of the limbs (base %.0f)\n", b.scale, plan.har.mirror, plan.har.turn,
+	       b.lods[0].faces.size(), b.lods.size() > 1 ? b.lods[1].faces.size() : 0, b.lods.size() > 2 ? b.lods[2].faces.size() : 0, ps.stretch, ps.worst.c_str(), ps.reach, std::acos(std::clamp(ps.direction, -1.0f, 1.0f)) * 57.3f,
+	       std::acos(std::clamp(ps.mesh_direction, -1.0f, 1.0f)) * 57.3f, std::acos(std::clamp(ps.base_mesh_direction, -1.0f, 1.0f)) * 57.3f);
+	printf("  contacts: %zu sequences corrected; feet down in %zu samples, %zu off the floor (worst %.2f, %s); planted in %zu, %zu sliding (worst %.2f, %s); throw grip %zu samples, off by %.2f\n", b.contacts, cs.samples, cs.off_floor, cs.floor,
+	       cs.floor_worst.c_str(), cs.planted, cs.sliding, cs.slide, cs.slide_worst.c_str(), cs.grips, cs.grip);
+	for (auto &n : b.notes) printf("  note: %s\n", n.c_str());
+	return 0;
+}
+
 // Gargoyle's wings: a second deform info, bank and mesh hung from the chest. Without wing joints the
 // base's wings stay, moved and scaled with the new chest; with them the file's wing vertices are.
 static void test_wings(const fs::path &data, ed::BaseData &base, bool wings, const fs::path &keep) {
@@ -817,7 +944,7 @@ int main(int argc, char **argv) {
 		return 0;
 	}
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <Data dir> [--keep <dir>] | --samples <dir>\n", argv[0]);
+		fprintf(stderr, "usage: %s <Data dir> [--keep <dir> | --check <file.glb> <robot>] | --samples <dir>\n", argv[0]);
 		return 2;
 	}
 	fs::path data = argv[1];
@@ -828,11 +955,13 @@ int main(int argc, char **argv) {
 	fs::path keep;
 	if (argc > 3 && !strcmp(argv[2], "--keep")) keep = argv[3], fs::create_directories(keep);
 	ed::BaseData base(data);
+	if (argc > 4 && !strcmp(argv[2], "--check")) return check_file(base, argv[3], argv[4]);
 	test_round_trip(data, base, keep);
 	test_generated(data, base, Naming::Unknown, "generated humanoid (unknown joint names, long arms, short legs)", "Jaguar", keep);
 	test_generated(data, base, Naming::Mixamo, "Mixamo-named rig (centimetre armature)", "Katana", keep);
 	test_wings(data, base, false, keep);
 	test_wings(data, base, true, keep);
+	test_material_paint(data, base);
 	if (failures) {
 		fprintf(stderr, "%d check(s) failed\n", failures);
 		return 1;

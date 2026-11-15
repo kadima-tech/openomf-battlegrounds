@@ -610,19 +610,33 @@ void page_contents(Editor &e, ed::ImportPlan &plan) {
 
 void page_materials(Editor &, ed::ImportPlan &plan) {
 	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp;
+	const bool robot = plan.settings.kind == ed::ImportKind::Robot;
 	section("Materials");
+	if (robot) {
+		ImGui::PushTextWrapPos(0);
+		ui::dim_text("A robot's materials share the fighter material: each is painted in one of the pilot's three colours (the paint mask) or keeps its own colours.", kTextMuted);
+		ImGui::PopTextWrapPos();
+	}
 	if (plan.materials.empty()) ui::dim_text("No materials: meshes get a white one", kTextMuted);
 	else if (ImGui::BeginTable("mats", 3, flags)) {
 		ImGui::TableSetupColumn("Material", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-		ImGui::TableSetupColumn("Becomes", ImGuiTableColumnFlags_WidthStretch, 2);
+		ImGui::TableSetupColumn(robot ? "Painted with" : "Becomes", ImGuiTableColumnFlags_WidthStretch, 2);
 		ImGui::TableSetupColumn("Base colour", ImGuiTableColumnFlags_WidthStretch, 1.2f);
 		ImGui::TableHeadersRow();
 		for (auto &m : plan.materials) {
 			ImGui::TableNextRow(0, ui::px(26));
 			ImGui::TableNextColumn();
+			if (robot) ImGui::AlignTextToFramePadding();
 			ImGui::TextUnformatted(m.name.c_str());
 			ImGui::TableNextColumn();
-			if (m.rebuilt) {
+			if (robot && !m.rebuilt) {
+				const char *paints[] = {"Its own colours", "Pilot colour 1", "Pilot colour 2", "Pilot colour 3"};
+				int c = ed::material_paint(plan, m.material) + 1;
+				ImGui::PushID(m.material);
+				ImGui::SetNextItemWidth(ui::px(180));
+				if (ui::combo("##paint", &c, paints, 4)) plan.har.material_paint[m.material] = c - 1;
+				ImGui::PopID();
+			} else if (m.rebuilt) {
 				ImGui::PushStyleColor(ImGuiCol_Text, vec(kOk));
 				ImGui::Text(ICON_CIRCLE_CHECK " %zu stages, as exported", m.stages);
 				ImGui::PopStyleColor();
@@ -630,6 +644,7 @@ void page_materials(Editor &, ed::ImportPlan &plan) {
 				ImGui::TextUnformatted("1 stage (TextureManager)");
 			}
 			ImGui::TableNextColumn();
+			if (robot) ImGui::AlignTextToFramePadding();
 			if (m.image >= 0 && size_t(m.image) < plan.images.size()) ImGui::TextUnformatted(plan.images[size_t(m.image)].name.c_str());
 			else {
 				const auto &c = plan.scene.materials[size_t(m.material)].base_colour;
@@ -687,10 +702,11 @@ void page_review(Editor &e, ed::ImportPlan &plan) {
 	section("What it makes");
 	ImGui::PushTextWrapPos(0);
 	if (plan.settings.kind == ed::ImportKind::Robot) {
-		size_t from_file = 0;
+		size_t from_file = 0, skin_bones = 0;
 		for (auto &m : plan.har.sequences) from_file += m.animation >= 0;
+		for (auto &b : plan.har.bones) skin_bones += b.required;
 		ImGui::TextUnformatted(("A new HAR \"" + plan.settings.name + "\", a variant of " + plan.har.base_robot + " (its scripts, moves, inputs, sounds and hitboxes; listed, unlocked) whose model is this file's: " +
-		                        "three levels of detail skinned to " + std::to_string(plan.har.bones.size()) + " rig bones, the fighter material with a paint mask, and " +
+		                        "three levels of detail skinned to " + std::to_string(skin_bones) + " rig bones, the fighter material with a paint mask, and " +
 		                        std::to_string(plan.har.sequences.size()) + " sequences (" + std::to_string(from_file) + " from the file, the rest retargeted). It opens in the HAR editor, " +
 		                        "shows in Choose Creature and plays in the game.")
 		                           .c_str());

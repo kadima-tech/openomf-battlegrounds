@@ -293,7 +293,10 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   Paint lists the paint jobs (the preview draws the selected one), imports or exports each image and
   makes a new one from the selected one's model, base or add-on. Scripted: `--har-paint "Job"` (a new
   paint job), `--har-paint "Job:RGBStatic=file.png"`, `--paint-job N` (the selected row),
-  `--har-title`, `--har-text`, `--har-picture file.png|render`. `openbg-fight --model <paint job>`
+  `--har-title`, `--har-text`, `--har-picture file.png|render` (these act on the HAR opened, made or
+  imported at start-up), `--har-anim Sequence[@t]` and `--har-yaw deg` (the preview's pose, paused
+  at t), `--har-pilot <name>` (the preview's and rendered picture's colours: the preview's colour
+  list has the demo colours and every base pilot's). `openbg-fight --model <paint job>`
   fights with that paint job; `openbg --highlight <name>` makes the choosers highlight it first.
 - Memory: files stay in memory once read; browsing every image in the game reads most of `Data`.
 
@@ -407,7 +410,20 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   by hand), each checked posed in every sequence (limbs along the base's, no stretching past the
   base's; planted feet still and on the floor, the throw grip kept), with a second paint job, new
   and left-out spheres and its Choose Creature panel, validated, saved and read by the engine; and
-  Gargoyle-named box rigs with and without wing joints (the wings the file's, or Gargoyle's moved).
+  Gargoyle-named box rigs with and without wing joints (the wings the file's, or Gargoyle's moved);
+  and paint by material (two materials sharing one atlas, `de_paint`, metallic, an exporter's packed
+  image not taken for the mask, a second paint job split the same way).
+  `editor-har-import-tests <Data> --check file.glb <robot>` prints the same measures for a model of
+  your own (mapping, stretch, limb directions, planted feet, throw grip).
+  Paint by material: a Blender material's custom property `de_paint` (-1 its own colours, 0-2 one of
+  the pilot's three) reaches the import as glTF `extras` (export with Custom Properties on), and its
+  Metallic becomes the reflection; the Materials page shows and changes each material's choice.
+  `engine/tests/scripts/make_shadow.py` builds Shadow, the 2097 robot (`blender -b --factory-startup
+  --python engine/tests/scripts/make_shadow.py -- --out shadow.glb [--blend shadow.blend] [--preview
+  prefix] [--paint-out dir] [--picture choose_creature.png]`): six materials sharing one atlas, a
+  dark second paint job and a Choose Creature strip; import it with `--import shadow.glb
+  --import-kind robot --import-base Katana --import-name Shadow --import-paint
+  Stealth=dir/ShadowDark.png --har-picture choose_creature.png`.
   Real content: `engine/tests/scripts/make_character.py` builds a textured, skinned, animated
   character in Blender (`blender -b --factory-startup --python engine/tests/scripts/make_character.py --
   --naming mixamo|rigify --textures atlas|multi --out file.glb|file.gltf`), for importing by hand. `--samples <dir>` writes the generated rigs

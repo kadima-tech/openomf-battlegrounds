@@ -230,6 +230,13 @@ void assets_startup(Editor &e) {
 			}
 		}
 	}
+	// The HAR the --har-* options act on: the one opened, made or imported at start-up.
+	std::string har_target = o.open_har;
+	if (har_target.empty() && !o.new_har.empty()) {
+		std::string from;
+		split(o.new_har, &from, &har_target);
+	}
+	if (har_target.empty() && o.import_kind == "robot") har_target = o.import_name.empty() ? o.import_file.stem().string() : o.import_name;
 	if (!o.new_har.empty()) {
 		std::string from, name;
 		split(o.new_har, &from, &name);
@@ -238,11 +245,7 @@ void assets_startup(Editor &e) {
 		if (!exists) make_har(e, from, name);
 	}
 	if (!o.har_paints.empty()) {
-		std::string target = o.open_har;
-		if (target.empty() && !o.new_har.empty()) {
-			std::string from;
-			split(o.new_har, &from, &target);
-		}
+		const std::string target = har_target;
 		for (uint32_t h : ed::addon_hars(*e.project())) {
 			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
 			// "Job" makes a paint job (a copy of the first); "Job:Image=file.png" replaces one of its images.
@@ -274,11 +277,7 @@ void assets_startup(Editor &e) {
 		}
 	}
 	if (!o.har_title.empty() || !o.har_text.empty() || (!o.har_picture.empty() && o.har_picture != "render")) {
-		std::string target = o.open_har;
-		if (target.empty() && !o.new_har.empty()) {
-			std::string from;
-			split(o.new_har, &from, &target);
-		}
+		const std::string target = har_target;
 		for (uint32_t h : ed::addon_hars(*e.project())) {
 			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
 			ed::HarObjects ho = ed::har_objects(*e.project(), h);
@@ -296,11 +295,7 @@ void assets_startup(Editor &e) {
 		}
 	}
 	if (!o.har_constants.empty()) {
-		std::string target = o.open_har;
-		if (target.empty() && !o.new_har.empty()) {
-			std::string from;
-			split(o.new_har, &from, &target);
-		}
+		const std::string target = har_target;
 		for (uint32_t h : ed::addon_hars(*e.project())) {
 			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
 			ed::HarObjects ho = ed::har_objects(*e.project(), h);

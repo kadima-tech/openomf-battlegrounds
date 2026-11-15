@@ -54,6 +54,9 @@ struct Options {
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
 	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
 	std::vector<std::string> tournament_sets;  // KEY=VALUE: set in the tournament made or opened (ed::set_tournament_field)
+	std::string har_anim;  // the HAR preview's sequence, "Name" or "Name@t" (paused at t)
+	float har_yaw = -1000;  // the HAR preview's turn, degrees
+	std::string har_pilot;  // the HAR preview's (and rendered picture's) colours: a base pilot's
 	int asset_tab = -1, asset_select = -100, paint_job = -1;
 	bool compile = false;
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an

@@ -201,14 +201,15 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   Validation link jumps to outlined in the accent; "Edit user blocks" turns it into a monospace text
   box whose Apply refuses edits outside the blocks.
 - **HAR editor:** the pilot editor's shape: the robot (the game's fighter shader, drag to turn, an
-  animation dropdown in the footer) on the left with its spheres drawn on their bones (attack
+  animation dropdown and a 150 px colours dropdown in the footer: "Demo colours" or "<Pilot>'s colours",
+  each row led by the three colours as 12 px swatches) on the left with its spheres drawn on their bones (attack
   spheres #ff6b6b, body spheres #6bb8ff, as 1 px outlines with a centre dot; the selected one
   orange, filled and 2.5 px); tabs General / Movement / Inputs / Hitboxes / Sounds / Paint / Script
   on the right. Inputs: a sequence list beside step cards of a 3 x 3 direction pad (lit cells
   #3a3566), six button toggles (grey any, green pressed, dark red released) and four timing fields.
   General has a "Choose Creature" section: Title, a word-wrapped Description box and the 512 x 128
   picture shown at the form's width, with ghost "Import PNG/BMP" and "Render from the model" buttons
-  (four poses of the selected paint job, 128 px tiles on a dark violet gradient). Paint is a table of
+  (four poses of the selected paint job in the preview's colours, 128 px tiles on a dark violet gradient). Paint is a table of
   paint jobs (name, its model with "(in the add-on)" or "the base robot's (read-only)" dimmed; the
   selected row is the one the preview draws, its name after the robot's above the preview), then the
   selected job's images as label / size / ghost Import and Export buttons, and a name field with an
@@ -227,6 +228,9 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   Hitboxes page wraps its explanation, shows "placed from the file" / "new" (green) / "left out"
   (amber) chips, and lists new spheres (a + icon, "new, like <base sphere>" in green) and left-out
   ones (an amber warning icon, "left out: <reason>", the reason as a tooltip) before the base's.
+  For a robot the Materials page starts with a wrapped, dimmed explanation and its table's middle
+  column is "Painted with": a 180 px combo per material (Its own colours, Pilot colour 1-3), the
+  rows' text aligned to the combos.
 - **Arena viewports:** the game's renderer fills each pane (lit, unlit, or collision: flat-shaded
   surfaces and affector meshes on #121318). Dark overlay buttons at the top left (layout, view,
   shading, Show menu) and top right (move / rotate gizmo, magnet snap, maximise); the arena's name

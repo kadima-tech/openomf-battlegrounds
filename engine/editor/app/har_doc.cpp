@@ -2,6 +2,7 @@
 // the left, the variant's data in tabs on the right.
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include "icons.h"
 #include "image_io.h"
 #include "imgui_internal.h"
+#include "game/runtime.h"
 #include "imgui_stdlib.h"
 #include "pilot.h"
 #include "preview.h"
@@ -29,6 +31,23 @@ const char *const kPadLabel[9] = {"\xe2\x86\x96", "\xe2\x86\x91", "\xe2\x86\x97"
                                   "\xe2\x86\x99", "\xe2\x86\x93", "\xe2\x86\x98"};
 const char *const kButtons[6] = {"LP", "RP", "LK", "RK", "Jump", "Evade"};
 
+using Paint = std::array<std::array<float, 3>, 3>;
+const Paint kDemoPaint = {{{0.8f, 0.25f, 0.2f}, {0.85f, 0.85f, 0.9f}, {0.2f, 0.2f, 0.25f}}};
+
+// The preview's colour choices: the editor's demo colours, then every base pilot's three.
+std::vector<std::pair<std::string, Paint>> preview_paints(const std::filesystem::path &data) {
+	std::vector<std::pair<std::string, Paint>> out = {{"Demo colours", kDemoPaint}};
+	try {
+		de::ObjectsFile f(fighter::read_file(data / "Pilots.DEObjects"));
+		for (auto &o : f.objects()) {
+			if (o.class_path != "Actor\\Creature\\Pilot") continue;
+			if (auto p = game::read_pilot(f, o, 2)) out.push_back({o.name + "'s colours", p->colours});
+		}
+	} catch (const std::exception &) {
+	}
+	return out;
+}
+
 }  // namespace
 
 class HarDocument : public Document {
@@ -38,6 +57,7 @@ public:
 		if (e.options().asset_select >= 0) pick_ = e.options().asset_select;
 		if (e.options().paint_job >= 0) paint_ = e.options().paint_job;
 		render_picture_ = e.options().har_picture == "render";
+		pilot_wanted_ = e.options().har_pilot;
 	}
 	~HarDocument() override { delete_texture(picture_); }
 	std::string title(Editor &e) const override {
@@ -80,6 +100,10 @@ private:
 	float anim_t_ = 0.2f, yaw_ = 0.6f;
 	bool playing_ = true;
 	std::string input_filter_, paint_name_ = "Paint2";
+	std::vector<std::pair<std::string, Paint>> paints_;
+	int colours_ = 0;
+	std::string pilot_wanted_;
+	const Paint &preview_paint() const { return colours_ < int(paints_.size()) ? paints_[size_t(colours_)].second : kDemoPaint; }
 };
 
 std::unique_ptr<Document> make_har_document(Editor &e, const ed::Guid &description) { return std::make_unique<HarDocument>(e, description); }
@@ -143,9 +167,13 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 		bool ok = own_model >= 0 ? robot_.load_addon(e.project()->bytes(), uint32_t(own_model), uint32_t(o.fighter), key, &error_) : robot_.load(e.base()->dir(), base, &error_, base_file, base_model);
 		if (!ok) e.log(LogLine::Error, "Preview: " + error_);
 		const auto &anims = robot_.animations();
+		const std::string &want = e.options().har_anim;
+		const std::string seq = want.substr(0, want.find('@'));
 		for (size_t k = 0; k < anims.size(); ++k) {
-			if (anims[k] == "Standing") animation_ = int(k);
+			if (anims[k] == (seq.empty() ? "Standing" : seq)) animation_ = int(k);
 		}
+		if (want.find('@') != std::string::npos) anim_t_ = float(atof(want.c_str() + want.find('@') + 1)), playing_ = false;
+		if (e.options().har_yaw > -999) yaw_ = e.options().har_yaw * 3.14159265f / 180;
 	}
 	if (playing_) {
 		anim_t_ += ImGui::GetIO().DeltaTime * 0.6f;
@@ -153,7 +181,13 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	}
 	ImVec2 area = p1 - p0;
 	float scale = ImGui::GetIO().DisplayFramebufferScale.x;
-	GLuint tex = robot_.render(int(area.x * scale), int(area.y * scale), {{{0.8f, 0.25f, 0.2f}, {0.85f, 0.85f, 0.9f}, {0.2f, 0.2f, 0.25f}}}, animation_, anim_t_, yaw_);
+	if (paints_.empty()) {
+		paints_ = preview_paints(e.base()->dir());
+		for (size_t k = 0; k < paints_.size() && !pilot_wanted_.empty(); ++k) {
+			if (paints_[k].first == pilot_wanted_ + "'s colours") colours_ = int(k);
+		}
+	}
+	GLuint tex = robot_.render(int(area.x * scale), int(area.y * scale), preview_paint(), animation_, anim_t_, yaw_);
 	if (tex) dl->AddImage((ImTextureID)(intptr_t)tex, p0, p1, ImVec2(0, 1), ImVec2(1, 0));
 	if (tab_ == 3 || tab_ == 0) {
 		for (size_t k = 0; k < data_.spheres.size(); ++k) {
@@ -185,11 +219,24 @@ void HarDocument::preview(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	ImGui::SetCursorScreenPos(f0 + ImVec2(ui::px(14), (footer - ImGui::GetFrameHeight()) * 0.5f));
 	if (ui::icon_button("play", playing_ ? ICON_PAUSE : ICON_PLAY, playing_ ? "Pause" : "Play")) playing_ = !playing_;
 	ImGui::SameLine();
-	ImGui::SetNextItemWidth(size.x - ui::px(80));
+	ImGui::SetNextItemWidth(std::max(ui::px(120), size.x - ui::px(250)));
 	const auto &anims = robot_.animations();
 	if (ui::begin_combo("##anim", animation_ < int(anims.size()) ? anims[size_t(animation_)].c_str() : "-", ImGuiComboFlags_HeightLarge)) {
 		for (size_t k = 0; k < anims.size(); ++k) {
 			if (ImGui::Selectable(anims[k].c_str(), int(k) == animation_)) animation_ = int(k), anim_t_ = 0;
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ui::px(150));
+	if (ui::begin_combo("##colours", colours_ < int(paints_.size()) ? paints_[size_t(colours_)].first.c_str() : "-", ImGuiComboFlags_HeightLarge)) {
+		for (size_t k = 0; k < paints_.size(); ++k) {
+			const Paint &c = paints_[k].second;
+			for (int m = 0; m < 3; ++m) {
+				ImGui::ColorButton(("##c" + std::to_string(k * 3 + size_t(m))).c_str(), ImVec4(c[size_t(m)][0], c[size_t(m)][1], c[size_t(m)][2], 1), ImGuiColorEditFlags_NoTooltip, ImVec2(ui::px(12), ui::px(12)));
+				ImGui::SameLine(0, ui::px(2));
+			}
+			if (ImGui::Selectable(paints_[k].first.c_str(), int(k) == colours_)) colours_ = int(k);
 		}
 		ImGui::EndCombo();
 	}
@@ -337,7 +384,7 @@ void HarDocument::render_picture(Editor &e, const ed::HarObjects &o) {
 	};
 	const Shot shots[4] = {{find({"Standing"}), 0.2f, 0.5f}, {find({"RightPunchHeavy", "PunchHeavy", "Punch"}), 0.45f, 1.2f}, {find({"KickHeavy", "Kick"}), 0.5f, -0.9f}, {find({"Winning", "Win"}), 0.6f, 0.2f}};
 	std::vector<uint8_t> strip(size_t(W) * size_t(H) * 4, 255);
-	const std::array<std::array<float, 3>, 3> paint = {{{0.8f, 0.25f, 0.2f}, {0.85f, 0.85f, 0.9f}, {0.2f, 0.2f, 0.25f}}};
+	const Paint paint = preview_paint();
 	for (int k = 0; k < tiles; ++k) {
 		const Shot &sh = shots[k % 4];
 		robot_.set_zoom(1.5f);

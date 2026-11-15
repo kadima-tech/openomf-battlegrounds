@@ -87,6 +87,9 @@ void analyse_robot(ImportPlan &plan, const BaseData &base);
 void map_bones(ImportPlan &plan);
 void detect_orientation(ImportPlan &plan);
 void robot_issues(const ImportPlan &plan, std::vector<Issue> &out);
+// The materials the model's meshes use, and what each is painted with (HarPlan::material_paint).
+std::vector<int> robot_materials(const ImportPlan &plan);
+int material_paint(const ImportPlan &plan, int material);
 
 // The file's space to the game's, in glTF terms: up axis, mirror, turn and ground (scale is the
 // plan's units). A joint's bind transform in the file: its inverse bind's inverse, else its node.
@@ -113,6 +116,7 @@ struct RobotBuild {
 	std::map<std::string, int> stage_layer;  // fighter-material stage (texture manager name) -> UV layer, -1 none; others 0
 	float scale = 1;                   // new size / the base robot's
 	RobotImage mask, reflection, colours, bump, scaled;  // RGBMain, ReflectionMask, RGBStatic, Bump, RGBScaled
+	std::vector<int8_t> paint_channel;  // per texel of the mask: material_paint of the material there
 	struct Sphere {
 		size_t index = 0;  // into RobotRig::spheres
 		bool added = false;  // a new sphere copying that one, named `name`

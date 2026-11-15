@@ -71,6 +71,9 @@ int main(int argc, char **argv) {
 		else if (arg("--har-title")) opt.har_title = argv[++i];
 		else if (arg("--har-text")) opt.har_text = argv[++i];
 		else if (arg("--har-picture")) opt.har_picture = argv[++i];
+		else if (arg("--har-anim")) opt.har_anim = argv[++i];
+		else if (arg("--har-yaw")) opt.har_yaw = float(atof(argv[++i]));
+		else if (arg("--har-pilot")) opt.har_pilot = argv[++i];
 		else if (arg("--paint-job")) opt.paint_job = atoi(argv[++i]);
 		else if (arg("--asset-tab")) opt.asset_tab = atoi(argv[++i]);
 		else if (arg("--asset-select")) opt.asset_select = atoi(argv[++i]);

@@ -75,6 +75,7 @@ std::string build_key(const ed::ImportPlan &plan) {
 	const auto &h = plan.har;
 	std::string k = path_text(plan.source) + "|" + h.base_robot + "|" + std::to_string(plan.settings.units_per_metre) + (plan.settings.z_up ? "z" : "y") + (h.mirror ? "m" : "") +
 	                std::to_string(h.turn) + (h.ground ? "g" : "") + std::to_string(int(h.paint));
+	for (auto &[m, c] : h.material_paint) k += "p" + std::to_string(m) + "=" + std::to_string(c);
 	for (auto &b : h.bones) k += "|" + std::to_string(b.joint);
 	for (auto &m : h.sequences) {
 		if (m.animation >= 0) k += ";" + m.sequence + "=" + std::to_string(m.animation);
@@ -284,9 +285,11 @@ void robot_source_section(Editor &e, ed::ImportPlan &plan) {
 	section("Paint");
 	ui::form_label("Colours", lw);
 	int paint = int(h.paint);
-	if (ImGui::RadioButton("The model's own (RGBStatic)", paint == 1)) h.paint = ed::HarPlan::Paint::Colours;
+	if (ImGui::RadioButton("The model's own (RGBStatic)", paint == 1)) h.paint = ed::HarPlan::Paint::Colours, h.material_paint.clear();
 	ImGui::SameLine(0, ui::px(16));
-	if (ImGui::RadioButton("The pilot's, one per material", paint == 0)) h.paint = ed::HarPlan::Paint::Materials;
+	if (ImGui::RadioButton("The pilot's, one per material", paint == 0)) h.paint = ed::HarPlan::Paint::Materials, h.material_paint.clear();
+	ImGui::SameLine(0, ui::px(16));
+	ui::dim_text("(per material on the Materials page)", kTextMuted);
 	ui::form_label("More paint jobs", lw);
 	ImGui::BeginGroup();
 	for (size_t k = 0; k < h.extra_paints.size(); ++k) {

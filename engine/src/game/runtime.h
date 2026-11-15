@@ -778,8 +778,8 @@ public:
 	// The same for a live object: its data's list plus what a passive reference gave it.
 	std::vector<de::ObjectRef> properties_of(const GameObject &o) const;
 	// Builds a fighter for a description's resource (the app's fighter setup); called with the
-	// referenced OMF2Fighter actor.
-	std::function<GameObject *(const de::ObjectRef &actor)> make_fighter;
+	// referenced OMF2Fighter actor and the description's name.
+	std::function<GameObject *(const de::ObjectRef &actor, const std::string &title)> make_fighter;
 	// A slot took a creature (slot index): the app learns who fights.
 	std::function<void(GameObject *creature, int slot)> on_creature_owned;
 	// A script launched a UI manager (CClient::LaunchRemoteUIManager) that has no preset choice:
