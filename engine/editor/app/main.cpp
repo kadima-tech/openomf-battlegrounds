@@ -11,10 +11,11 @@
 //                 [--import model.glb [--import-kind prop|arena|robot] [--import-name N] [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>]
 //                  [--import-dialog | --import-step 0-3]] [--place-prop <prop>]
 //                 [--export <Class:Name or name> [--export-out file.glb|.gltf]]
-//                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]]
+//                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]] [--batch [--frames N]]
 //
 // The add-on is created when it does not exist. --screenshot draws N frames (default 8) in a hidden
 // window at WxH points (1600x1000) and S pixels per point (2), writes the last one and quits.
+// --batch runs the scripted steps the same way, writes nothing and quits (for build scripts).
 #include <SDL.h>
 
 #include <algorithm>
@@ -40,6 +41,7 @@ int main(int argc, char **argv) {
 	de::init_platform();
 	Options opt;
 	std::string shot;
+	bool batch = false;
 	int frames = 8, shot_w = 1600, shot_h = 1000;
 	float shot_scale = 2;
 	for (int i = 1; i < argc; ++i) {
@@ -110,6 +112,7 @@ int main(int argc, char **argv) {
 		else if (arg("--export-out")) opt.export_out = utf8_path(argv[++i]);
 		else if (arg("--place-prop")) opt.place_prop = argv[++i];
 		else if (arg("--screenshot")) shot = argv[++i];
+		else if (!strcmp(argv[i], "--batch")) batch = true;
 		else if (arg("--frames")) frames = atoi(argv[++i]);
 		else if (arg("--size")) sscanf(argv[++i], "%dx%d", &shot_w, &shot_h);
 		else if (arg("--scale")) shot_scale = float(atof(argv[++i]));
@@ -119,7 +122,7 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 	}
-	opt.screenshot = !shot.empty();
+	opt.screenshot = !shot.empty() || batch;
 
 #ifdef SDL_HINT_IME_SHOW_UI
 	SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
@@ -236,12 +239,14 @@ int main(int argc, char **argv) {
 						memcpy(flipped.data() + size_t(y) * size_t(fw) * 4, px.data() + size_t(fh - 1 - y) * size_t(fw) * 4, size_t(fw) * 4);
 					}
 					for (size_t k = 3; k < flipped.size(); k += 4) flipped[k] = 255;
-					try {
-						ed::write_png(shot, fw, fh, flipped);
-						printf("wrote %s\n", shot.c_str());
-					} catch (const std::exception &ex) {
-						fprintf(stderr, "%s\n", ex.what());
-						status = 1;
+					if (!shot.empty()) {
+						try {
+							ed::write_png(shot, fw, fh, flipped);
+							printf("wrote %s\n", shot.c_str());
+						} catch (const std::exception &ex) {
+							fprintf(stderr, "%s\n", ex.what());
+							status = 1;
+						}
 					}
 					break;
 				}

@@ -16,3 +16,7 @@ __pycache__/
 .DS_Store
 .claude/worktrees/
 /tools/*/build*/
+
+# Mods: built add-ons hold copies of game objects; references are third-party art and text.
+/mods/*/build/
+/mods/*/references/

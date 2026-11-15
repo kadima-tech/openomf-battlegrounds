@@ -1,0 +1,22 @@
+--new-tournament
+blank=North American Open:WAR Finale
+--tournament-set
+choose-text=WAR's president has one last fight for you. Face Major Kreissack and the machine the Nova project made of him.
+--tournament-set
+match.1.name=The Nova Project
+--tournament-set
+match.1.description=<Slot0Name> faces Major Kreissack in <EnvironmentName>.
+--tournament-set
+match.1.opponent.1=Major Kreissack,Warlord
+--tournament-set
+match.1.arena=The Blade Pit
+--tournament-set
+match.1.pre-quote+=0:Your days of power will soon come to an end!
+--tournament-set
+match.1.pre-quote+=1:Here is what the experiments produced!\nI am reborn a machine!
+--tournament-set
+match.1.win-quote+=1:Who did this to me!?!
+--tournament-set
+match.1.lose-quote+=1:I am not impressed with your pathetic fighting skills.\nCome back when you've learned to fight.
+--tournament-set
+unlock+=Major Kreissack:Major Kreissack will now be available.
