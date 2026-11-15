@@ -124,6 +124,12 @@ public:
 	// Camera rumble and debug: forces delivered this frame.
 	uint32_t delivered = 0;
 
+	// Stand-in (PLACEHOLDERS): actors a particle-spawning material created that run no script of
+	// their own (City's and SpaceStation's ForceFieldHitEffect, whose DE_CCityForceField mesh is not
+	// ported), by handle, with the frame they are removed at. Kept, they piled up in long matches.
+	std::vector<std::pair<uint32_t, uint32_t>> created_effects;
+	static constexpr uint32_t kCreatedEffectFrames = 100;  // two seconds at 50 frames a second
+
 	// DE_CFighterPhysics (OMF Tick 0x35039970, UpdateCollisionData 0x3503ad60): the fighter's
 	// floor sphere (the physics' test affector) against the surfaces in its groups.
 	struct FighterSurfaces {

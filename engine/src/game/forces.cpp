@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 
 #include "de/contents.h"
 #include "de/mesh.h"
@@ -826,7 +827,18 @@ void ForceSystem::process(GameObject &mo, GameObject &f, const Contact &c) {
 				set(o, "EndX", hi - tx);
 			}
 		}
-		if (n) w_.enter_scene(n);
+		if (n) {
+			w_.enter_scene(n);
+			// One that runs no script of its own is taken away again (created_effects).
+			std::function<bool(const GameObject &)> scripted = [&](const GameObject &o) {
+				if (o.brain) return true;
+				for (const GameObject *ch : o.children) {
+					if (scripted(*ch)) return true;
+				}
+				return false;
+			};
+			if (!scripted(*n)) created_effects.push_back({n->handle, w_.frame() + kCreatedEffectFrames});
+		}
 	}
 	// DE_CMaterial::ProcessForce(force, position, normal): the script hooks.
 	auto hit = hooks_.find(&mo);
@@ -845,6 +857,12 @@ void ForceSystem::process(GameObject &mo, GameObject &f, const Contact &c) {
 }
 
 void ForceSystem::tick() {
+	// Created effects whose time is up (created_effects) leave, as DeleteThisLater would take them.
+	std::erase_if(created_effects, [&](const std::pair<uint32_t, uint32_t> &e) {
+		if (w_.frame() < e.second) return false;
+		if (GameObject *o = w_.object(e.first)) w_.clean_later(o);
+		return true;
+	});
 	// OPENBG_DEBUG_MAP=x0,x1,z0,z1,step: a top-down map of the fighting surfaces, printed once:
 	// M the mine field, s slippery, W too steep to stand on, digits the floor height / 20 (mod
 	// 10, '-' below 0), space nothing.
