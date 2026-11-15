@@ -2,8 +2,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
+#include <string>
 #include <vector>
 
+#include "game/bone_channels.h"
 #include "game/native_math.h"
 
 namespace {
@@ -14,6 +17,15 @@ void check(bool ok, const char *what) {
 	if (!ok) ++failures;
 }
 bool near(float a, float b) { return std::fabs(a - b) < 1e-5f; }
+
+// A node of a synthetic actor tree for game::bone_channel.
+struct Node {
+	Node *parent = nullptr;
+	std::vector<Node *> children;
+	bool is_actor = true;
+	std::string name;
+	int channel = -2;
+};
 
 // The vertices order `order` visits over `count` spawns from a fresh instance, -1 where a pass ends.
 std::vector<int> walk(int order, int n, int count) {
@@ -56,6 +68,48 @@ int main() {
 	check(game::mesh_vertex_step(0, 3, next).vertex == -1 && next == 0, "order 0 leaves the vertex to the caller");
 	check(game::mesh_vertex_step(7, 3, next).vertex == 0 && next == 0, "an unknown order stays on the current vertex");
 
+
+	// Bone channel ownership (World::pose_skeleton, game/bone_channels.h). Channels: Body, Pelvis
+	// (under Body), LeftThigh (under Pelvis), Head (a root), Chest (under Body), LeftWing1 (under Chest).
+	{
+		const std::vector<std::pair<std::string, int>> channels = {{"Body", -1}, {"Pelvis", 0}, {"LeftThigh", 1}, {"Head", -1}, {"Chest", 0}, {"LeftWing1", 4}};
+		auto channel_of = [&](const std::string &n) {
+			for (size_t i = 0; i < channels.size(); ++i) {
+				if (channels[i].first == n) return int(i);
+			}
+			return -1;
+		};
+		auto channel_parent = [&](int c) { return channels[size_t(c)].second; };
+		std::vector<std::unique_ptr<Node>> nodes;
+		auto add = [&](Node *parent, const char *name) {
+			nodes.push_back(std::make_unique<Node>());
+			Node *n = nodes.back().get();
+			n->name = name;
+			n->parent = parent;
+			if (parent) parent->children.push_back(n);
+			return n;
+		};
+		Node *fighter = add(nullptr, "Pyros");
+		Node *head = add(fighter, "Head");
+		Node *pelvis = add(fighter, "Pelvis");
+		Node *thigh = add(pelvis, "LeftThigh");
+		Node *chest = add(fighter, "Chest");
+		Node *wing_base = add(chest, "WingBase");
+		Node *wing = add(wing_base, "LeftWing1");
+		Node *debris = add(add(fighter, "DestructionExplosion"), "DebrisParent");
+		Node *debris_head = add(debris, "Head");
+		Node *debris_pelvis = add(debris, "Pelvis");
+		Node *debris_thigh = add(debris, "LeftThigh");
+		add(fighter, "Effects")->is_actor = false;
+		auto ch = [&](Node *n) { return game::bone_channel(*fighter, *n, 0, channel_of, channel_parent); };
+		check(ch(head) == 3 && ch(debris_head) == -1, "bones: a root bone keeps its channel, debris named like it gets none");
+		check(ch(thigh) == 2 && ch(debris_thigh) == -1, "bones: a child bone under its parent channel's bone keeps it, a debris copy gets none");
+		check(ch(wing) == 5, "bones: a name only one actor has keeps its channel under a non-bone parent (WingBase)");
+		check(ch(pelvis) == 1 && ch(debris_pelvis) == -1, "bones: a bone under Body belongs to the actor under the fighter");
+		check(ch(chest) == 4 && ch(wing_base) == -1, "bones: a name with no channel gets none");
+		thigh->parent = nullptr;
+		check(ch(debris_thigh) == 2, "bones: with no owner left, a copy keeps the channel");
+	}
 	printf(failures ? "%d failure(s)\n" : "all passed\n", failures);
 	return failures ? 1 : 0;
 }

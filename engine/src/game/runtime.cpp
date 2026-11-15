@@ -1,5 +1,6 @@
 #include "game/runtime.h"
 #include "game/perf.h"
+#include "game/bone_channels.h"
 #include "game/netplay.h"
 #include "game/impulses.h"
 
@@ -678,35 +679,10 @@ void World::pose_skeleton(GameObject &f) {
 		}
 		return false;
 	};
-	// A channel belongs to the actor of its name whose parent is the channel's parent bone (the
-	// fighter itself for a root bone). Other actors of a bone's name keep their own place: the
-	// destruction debris (DestructionExplosion\DebrisParent's Head, Pelvis, limbs) would otherwise
-	// be posed as the bone and stand in for it when the pose is read back (current_pose), so the
-	// body's extra rotation (AnimRotate, Pyros's fire spin) and scripted turns (a fireball's aimed
-	// head) would miss those bones. A name only one actor has keeps its channel wherever it hangs
-	// (Gargoyle's wing bones under WingBase).
+	// Which actor of a bone's name a channel drives: game/bone_channels.h.
 	const int body = bank.channel("Body");
-	auto parent_channel = [&](const GameObject &o) {
-		if (&o == &f) return -1;
-		return o.channel == -2 ? bank.channel(o.name) : o.channel;
-	};
-	auto owns = [&](const GameObject &o, int c) {
-		const int bp = bank.channels[size_t(c)].parent;
-		if (!o.parent) return false;
-		if (bp < 0 || bp == body) return o.parent == &f;
-		return parent_channel(*o.parent) == bp;
-	};
-	auto rival_owns = [&](const GameObject &self, int c) {
-		std::function<bool(const GameObject &)> find = [&](const GameObject &o) {
-			for (const GameObject *x : o.children) {
-				if (!x->is_actor) continue;
-				if (x != &self && x->name == self.name && owns(*x, c)) return true;
-				if (find(*x)) return true;
-			}
-			return false;
-		};
-		return find(f);
-	};
+	auto channel_of = [&](const std::string &n) { return bank.channel(n); };
+	auto channel_parent = [&](int c) { return bank.channels[size_t(c)].parent; };
 	// Walk the fighter's actor tree in its model space; bone actors take their channel's pose,
 	// everything else (hit detectors, effect anchors) keeps its offset from its parent.
 	std::function<void(GameObject &, const de::Transform &)> walk = [&](GameObject &o, const de::Transform &parent) {
@@ -715,8 +691,7 @@ void World::pose_skeleton(GameObject &f) {
 				continue;
 			}
 			if (ch->channel == -2) {
-				ch->channel = bank.channel(ch->name);
-				if (ch->channel >= 0 && !owns(*ch, ch->channel) && rival_owns(*ch, ch->channel)) ch->channel = -1;
+				ch->channel = bone_channel(f, *ch, body, channel_of, channel_parent);
 			}
 			de::Transform model;
 			if (ch->channel >= 0 && size_t(ch->channel) < pose.size() && (!ch->managed || streamed(ch->channel))) {

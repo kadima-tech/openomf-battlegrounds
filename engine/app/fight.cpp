@@ -655,13 +655,24 @@ int main(int argc, char **argv) {
 				// degrees) and pitch every frame, the pose the renderer draws (current_pose).
 				if (const char *bones = getenv("OPENBG_DEBUG_BONES")) {
 					static bool listed = false;
+					// Whole names from the comma-separated list.
+					auto traced = [&](const std::string &name) {
+						for (const char *s = bones; *s;) {
+							const char *e = strchr(s, ',');
+							const size_t n = e ? size_t(e - s) : strlen(s);
+							if (n && name.size() == n && name.compare(0, n, s, n) == 0) return true;
+							if (!e) break;
+							s = e + 1;
+						}
+						return false;
+					};
 					for (auto *fi : fighters) {
 						if (listed || fr != 300) continue;
 						std::function<void(game::GameObject *, std::string)> show = [&](game::GameObject *o, std::string path) {
 							for (game::GameObject *ch : o->children) {
 								if (!ch->is_actor) continue;
 								if (ch->channel >= 0) fprintf(stderr, "[channel] %s: %s -> channel %d (%s)%s\n", fi->actor->name.c_str(), (path + "/" + ch->name).c_str(), ch->channel,
-								                              fi->actor->bank ? fi->actor->bank->channels[size_t(ch->channel)].name.c_str() : "?", ch->managed ? " managed" : "");
+								                              fi->actor->bank && size_t(ch->channel) < fi->actor->bank->channels.size() ? fi->actor->bank->channels[size_t(ch->channel)].name.c_str() : "?", ch->managed ? " managed" : "");
 								show(ch, path + "/" + ch->name);
 							}
 						};
@@ -673,7 +684,7 @@ int main(int argc, char **argv) {
 						std::function<void(game::GameObject *)> walk = [&](game::GameObject *o) {
 							for (game::GameObject *ch : o->children) {
 								if (!ch->is_actor) continue;
-								if (strstr(bones, ch->name.c_str())) {
+								if (traced(ch->name)) {
 									auto z = ch->world().rotate({0, 0, 1});
 									char buf[96];
 									snprintf(buf, sizeof buf, " %s %.0f/%.0f", ch->name.c_str(), std::atan2(z[0], z[2]) * 57.2958f, std::asin(std::clamp(z[1], -1.0f, 1.0f)) * 57.2958f);
@@ -698,7 +709,7 @@ int main(int argc, char **argv) {
 						// the animation's last pose: 0 when nothing but the animation turned it.
 						std::string off;
 						if (const de::AnimBank *bank = fi->actor->bank; bank && drawn.size() == fi->actor->pose_now.size()) {
-							for (size_t i = 0; i < bank->channels.size(); ++i) {
+							for (size_t i = 0; i < std::min(bank->channels.size(), drawn.size()); ++i) {
 								const int p = bank->channels[i].parent;
 								if (p < 0 || size_t(p) >= drawn.size()) continue;
 								auto rel_of = [&](const std::vector<de::Transform> &pose) { return pose[size_t(p)].inverse().then(pose[i]); };
