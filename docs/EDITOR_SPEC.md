@@ -339,10 +339,17 @@ they can be redone.
   decimations to the base's triangle counts; LOD0 is decimated to fit 65,535 vertices (or to the
   base's budget when asked). Meshes parented to a joint without a skin follow that joint.
 - Materials: an export's `extras.de_stages` give the RGBMain and ReflectionMask images and each
-  stage's UV set back; otherwise the materials' textures and colours go into one atlas, used as the
-  model's own colours (RGBStatic, paint mask blank) or, for untextured files by default, as a paint
-  mask (each material one of the pilot's three colours). Images named `PaintMask`, `ReflectionMask`
-  or `Bump` (or material extras `de_paint_mask`, `de_reflection_mask`, `de_bump`) are used as such.
+  stage's UV set back; otherwise the materials' textures and colours go into one atlas (or, when
+  they all share one texture, that texture with each texel given to the material whose faces cover
+  it). Each material is painted in one of the pilot's three colours (its luminance in that paint
+  mask channel) or keeps its own colours (RGBStatic): chosen per material on the Materials page,
+  else by the material's `extras.de_paint` (-1 own, 0-2 a pilot colour: a Blender custom
+  property), else all own colours for textured files and one pilot colour per material for
+  untextured ones (FINDINGS 710). The reflection mask is glTF's metallic (factor times the
+  metallic-roughness texture's blue) in the texel's paint channel (FINDINGS 711). Images named
+  `PaintMask`, `ReflectionMask` or `Bump` (or material extras `de_paint_mask`, `de_reflection_mask`,
+  `de_bump`) are used as such; an image a material uses as metallic-roughness or occlusion is not
+  (exporters pack and rename those).
 - Hitboxes: an empty `Sphere:<affector>` under a joint moves that sphere to the joint's bone (its
   scale the falloff, in metres; the second of a name the second sphere, Blender's `.001` ignored);
   further ones named `GetHitAffector...` or after an attack prefix the fighter scripts gather
@@ -381,6 +388,16 @@ they can be redone.
   Rigify DEF bones in an A-pose with rolls and twist bones, Idle / Walk / Punch) import onto Jaguar,
   Katana and Pyros, show textured in the HAR editor, in Choose Creature (picture, title, text, paint
   jobs) and in `openbg-fight` (`--model` picks a paint job).
+
+- Verified (2026-11-15): Shadow, the One Must Fall 2097 robot, modelled in Blender
+  (`engine/tests/scripts/make_shadow.py`: 2,572 triangles, Mixamo bones in an A-pose, rigid
+  weights per armour part, six materials sharing one 1024 atlas with `de_paint` and metallic set,
+  glowing studs in their own colours) imports onto Katana through the dialog (bones by name and
+  the Mixamo preset; mirror and turn from the skeleton), with a second paint job from an image and
+  its Choose Creature panel (a Blender-rendered picture); it lists in Choose Creature, fights in
+  `openbg`, `openbg-fight` and Play in editor in each pilot's colours, as player and as AI
+  (`editor-har-import-tests <Data> --check shadow.glb Katana`: limbs on the base's, no edge
+  stretched past the base's, 7 of 1,865 planted samples sliding).
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the

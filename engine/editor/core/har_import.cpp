@@ -964,6 +964,26 @@ std::vector<RobotPiece> lod_pieces(const ImportPlan &plan, int lod) {
 
 }  // namespace
 
+std::vector<int> robot_materials(const ImportPlan &plan) {
+	std::set<int> m;
+	for (int k = 0; k < 3; ++k) {
+		for (auto &pc : lod_pieces(plan, k)) m.insert(pc.prim->material);
+	}
+	return {m.begin(), m.end()};
+}
+
+int material_paint(const ImportPlan &plan, int material) {
+	const HarPlan &h = plan.har;
+	if (auto it = h.material_paint.find(material); it != h.material_paint.end()) return std::clamp(it->second, -1, 2);
+	if (material >= 0 && size_t(material) < plan.scene.materials.size()) {
+		const auto &ex = plan.scene.materials[size_t(material)].extras;
+		if (const json::Value *v = ex.is_object() ? ex.find("de_paint") : nullptr; v && v->is_number()) return std::clamp(int(v->as_int()), -1, 2);
+	}
+	if (h.paint == HarPlan::Paint::Colours) return -1;
+	auto mats = robot_materials(plan);
+	return int((std::find(mats.begin(), mats.end(), material) - mats.begin()) % 3);
+}
+
 gltf::Mat4 robot_fix(const ImportPlan &plan) {
 	const HarPlan &h = plan.har;
 	gltf::Mat4 m = up_fix(plan.settings.z_up);
@@ -1361,13 +1381,80 @@ std::vector<uint8_t> image_rgba(const gltf::Scene &s, int image, int w, int h) {
 	return resize_rgba(im.width, im.height, im.rgba, w, h);
 }
 
+// The material whose LOD0 faces cover each texel of an a x a texture shared through the same UVs
+// (-2 where none does), grown a few texels so filtering at UV seams finds the same material.
+std::vector<int> texel_owners(const ImportPlan &plan, int a) {
+	const auto &s = plan.scene;
+	std::vector<int> own(size_t(a) * size_t(a), -2);
+	for (auto &pc : lod_pieces(plan, 0)) {
+		const auto &P = *pc.prim;
+		int set = P.material >= 0 ? s.materials[size_t(P.material)].base_texture.uv_set : 0;
+		if (size_t(set) >= P.uvs.size()) continue;
+		const auto &uv = P.uvs[size_t(set)];
+		for (size_t t = 0; t + 2 < P.indices.size(); t += 3) {
+			float x[3] = {0, 0, 0}, y[3] = {0, 0, 0};
+			bool ok = true;
+			for (int k = 0; k < 3; ++k) {
+				uint32_t i = P.indices[t + size_t(k)];
+				if (i >= uv.size()) {
+					ok = false;
+					break;
+				}
+				x[k] = (uv[i][0] - std::floor(uv[i][0])) * float(a) - 0.5f;
+				y[k] = (uv[i][1] - std::floor(uv[i][1])) * float(a) - 0.5f;
+			}
+			if (float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]); ok && std::fabs(area) > 1e-9f) {
+				int x0 = std::max(0, int(std::floor(std::min({x[0], x[1], x[2]})))), x1 = std::min(a - 1, int(std::ceil(std::max({x[0], x[1], x[2]}))));
+				int y0 = std::max(0, int(std::floor(std::min({y[0], y[1], y[2]})))), y1 = std::min(a - 1, int(std::ceil(std::max({y[0], y[1], y[2]}))));
+				for (int py = y0; py <= y1; ++py) {
+					for (int px = x0; px <= x1; ++px) {
+						float w[3];
+						for (int k = 0; k < 3; ++k) {
+							int k1 = (k + 1) % 3, k2 = (k + 2) % 3;
+							w[k] = ((x[k2] - x[k1]) * (float(py) - y[k1]) - (float(px) - x[k1]) * (y[k2] - y[k1])) * (area < 0 ? -1.0f : 1.0f);
+						}
+						if (w[0] >= 0 && w[1] >= 0 && w[2] >= 0) own[size_t(py) * size_t(a) + size_t(px)] = P.material;
+					}
+				}
+			}
+		}
+	}
+	for (int pass = 0; pass < 4; ++pass) {
+		std::vector<int> grown = own;
+		for (int py = 0; py < a; ++py) {
+			for (int px = 0; px < a; ++px) {
+				if (own[size_t(py) * size_t(a) + size_t(px)] != -2) continue;
+				for (auto [dx, dy] : {std::pair{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+					int qx = px + dx, qy = py + dy;
+					if (qx < 0 || qy < 0 || qx >= a || qy >= a) continue;
+					if (int m = own[size_t(qy) * size_t(a) + size_t(qx)]; m != -2) {
+						grown[size_t(py) * size_t(a) + size_t(px)] = m;
+						break;
+					}
+				}
+			}
+		}
+		own.swap(grown);
+	}
+	return own;
+}
+
 int find_image(const gltf::Scene &s, const std::vector<std::string> &keys, const std::string &extra, const std::set<int> &materials) {
 	for (int m : materials) {
 		if (m < 0) continue;
 		const auto &ex = s.materials[size_t(m)].extras;
 		if (const json::Value *v = ex.is_object() ? ex.find(extra) : nullptr; v && v->is_number() && v->as_int() >= 0 && size_t(v->as_int()) < s.images.size()) return int(v->as_int());
 	}
+	// Exporters pack occlusion, roughness and metallic into one image named after its sources
+	// (Blender: "PaintMask-ReflectionMask"), so such an image is none of them.
+	std::set<int> packed;
+	for (const auto &m : s.materials) {
+		for (const auto *t : {&m.metallic_roughness_texture, &m.occlusion_texture}) {
+			if (*t) packed.insert(t->image);
+		}
+	}
 	for (size_t i = 0; i < s.images.size(); ++i) {
+		if (packed.count(int(i))) continue;
 		std::string n = lower(s.images[i].name + " " + s.images[i].uri);
 		std::string squeezed;
 		for (char c : n) {
@@ -1631,42 +1718,70 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 			}
 		}
 		const int A = atlas.size;
-		std::vector<uint8_t> colours(size_t(A) * size_t(A) * 4, 0), mask(size_t(A) * size_t(A) * 4, 0);
-		for (size_t i = 3; i < mask.size(); i += 4) mask[i] = colours[i] = 255;
+		std::map<int, int> chan;
+		bool uniform = true;
+		for (int m : mats) {
+			chan[m] = material_paint(plan, m);
+			uniform = uniform && chan[m] == chan[mats[0]];
+		}
+		// One texture shared by materials painted differently: the material that owns each texel.
+		std::vector<int> owner;
+		if (atlas.identity && !uniform) owner = texel_owners(plan, A);
+		std::map<int, std::vector<uint8_t>> metal_px;
+		for (int m : mats) {
+			if (m >= 0 && s.materials[size_t(m)].metallic_roughness_texture) metal_px[m] = image_rgba(s, s.materials[size_t(m)].metallic_roughness_texture.image, atlas.tile, atlas.tile);
+		}
+		std::vector<uint8_t> colours(size_t(A) * size_t(A) * 4, 0), mask(size_t(A) * size_t(A) * 4, 0), refl(size_t(A) * size_t(A) * 4, 0);
+		for (size_t i = 3; i < mask.size(); i += 4) mask[i] = colours[i] = refl[i] = 255;
+		out.paint_channel.assign(size_t(A) * size_t(A), int8_t(mats.empty() ? -1 : chan[mats[0]]));
+		bool any_own = false;
 		for (size_t ti = 0; ti < atlas.tiles.size(); ++ti) {
 			const Tile &t = atlas.tiles[ti];
 			std::vector<uint8_t> px = t.image >= 0 ? image_rgba(s, t.image, atlas.tile, atlas.tile) : std::vector<uint8_t>(size_t(atlas.tile) * size_t(atlas.tile) * 4, 255);
-			const int channel = int(ti % 3);
 			for (int y = 0; y < atlas.tile; ++y) {
 				for (int x = 0; x < atlas.tile; ++x) {
 					size_t src = (size_t(y) * size_t(atlas.tile) + size_t(x)) * 4;
-					size_t dst = ((size_t(t.row) * size_t(atlas.tile) + size_t(y)) * size_t(A) + size_t(t.col) * size_t(atlas.tile) + size_t(x)) * 4;
+					size_t texel = (size_t(t.row) * size_t(atlas.tile) + size_t(y)) * size_t(A) + size_t(t.col) * size_t(atlas.tile) + size_t(x);
+					size_t dst = texel * 4;
+					int m = owner.empty() || owner[texel] < -1 ? t.material : owner[texel];
+					const gltf::Vec4 colour = m >= 0 ? s.materials[size_t(m)].base_colour : t.colour;
+					const int c = chan.count(m) ? chan[m] : -1;
+					out.paint_channel[texel] = int8_t(c);
 					float lum = 0;
 					for (int k = 0; k < 3; ++k) {
-						float v = float(px[src + size_t(k)]) * t.colour[size_t(k)];
-						colours[dst + size_t(k)] = uint8_t(std::clamp(v, 0.0f, 255.0f));
+						float v = float(px[src + size_t(k)]) * colour[size_t(k)];
+						if (c < 0) colours[dst + size_t(k)] = uint8_t(std::clamp(v, 0.0f, 255.0f));
 						lum += v * (k == 0 ? 0.3f : k == 1 ? 0.59f : 0.11f);
 					}
-					mask[dst + size_t(channel)] = uint8_t(std::clamp(lum, 0.0f, 255.0f));
+					lum = std::clamp(lum, 0.0f, 255.0f);
+					if (c >= 0) mask[dst + size_t(c)] = uint8_t(lum);
+					any_own = any_own || c < 0;
+					// Metallic surfaces reflect the arena: glTF's metallic factor times its texture's blue.
+					float metal = m >= 0 ? s.materials[size_t(m)].metallic : 0;
+					if (auto mp = metal_px.find(m); mp != metal_px.end()) metal *= float(mp->second[src + 2]) / 255.0f;
+					refl[dst + size_t(std::max(c, 0))] = uint8_t(std::clamp(metal * (0.5f + 0.5f * lum / 255.0f) * 255.0f, 0.0f, 255.0f));
 				}
 			}
 		}
 		int given_mask = find_image(s, {"paintmask", "rgbmain"}, "de_paint_mask", materials);
 		if (given_mask >= 0 && atlas.identity) {
 			set_image(out.mask, given_mask, A, A);
+			// Painted texels take the pilot's colours instead of the texture's, not on top of them.
+			for (size_t i = 0; any_own && i < colours.size(); i += 4) {
+				int m = std::max({out.mask.rgba[i], out.mask.rgba[i + 1], out.mask.rgba[i + 2]});
+				for (size_t k = 0; k < 3; ++k) colours[i + k] = uint8_t(colours[i + k] * (255 - m) / 255);
+			}
 		} else {
 			out.mask.width = out.mask.height = A;
 			out.mask.rgba = mask;
-			if (h.paint == HarPlan::Paint::Colours) std::fill(out.mask.rgba.begin(), out.mask.rgba.end(), 0);
-			for (size_t i = 3; i < out.mask.rgba.size(); i += 4) out.mask.rgba[i] = 255;
 		}
-		if (h.paint == HarPlan::Paint::Colours) {
+		if (any_own) {
 			out.colours.width = out.colours.height = A;
 			out.colours.rgba = colours;
 		}
-		int refl = find_image(s, {"reflectionmask", "reflection"}, "de_reflection_mask", materials);
-		if (refl >= 0 && atlas.identity) set_image(out.reflection, refl, A, A);
-		else blank(out.reflection, A, A, 0);
+		int named_refl = find_image(s, {"reflectionmask", "reflection"}, "de_reflection_mask", materials);
+		if (named_refl >= 0 && atlas.identity) set_image(out.reflection, named_refl, A, A);
+		else out.reflection.width = out.reflection.height = A, out.reflection.rgba = refl;
 	}
 	int bump = find_image(s, {"bump"}, "de_bump", materials);
 	if (bump >= 0) {
@@ -3034,14 +3149,38 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		if (extra.name.empty() || ho.model_descriptions.empty()) continue;
 		RgbaImage im = load_image(extra.image);
 		uint32_t job = create_paint_job(p, ho, extra.name, ho.model_descriptions[0]);
-		const char *target = h.paint == HarPlan::Paint::Colours ? "RGBStatic" : "RGBMain";
+		// With some materials painted and others not, the image is the model's texture, split the same way.
+		RobotImage split_mask, split_colours;
+		const int A = b.mask.width;
+		const auto own = std::count(b.paint_channel.begin(), b.paint_channel.end(), int8_t(-1));
+		const bool mixed = own > 0 && size_t(own) < b.paint_channel.size();
+		if (mixed && A > 0 && b.paint_channel.size() == size_t(A) * size_t(b.mask.height)) {
+			split_mask.width = split_colours.width = A, split_mask.height = split_colours.height = b.mask.height;
+			split_colours.rgba = resize_rgba(im.width, im.height, im.rgba, A, b.mask.height);
+			split_mask.rgba.assign(split_colours.rgba.size(), 0);
+			for (size_t t = 0; t < b.paint_channel.size(); ++t) {
+				uint8_t *c = &split_colours.rgba[t * 4], *m = &split_mask.rgba[t * 4];
+				m[3] = c[3] = 255;
+				if (b.paint_channel[t] < 0) continue;
+				m[b.paint_channel[t]] = uint8_t(std::clamp(0.3f * c[0] + 0.59f * c[1] + 0.11f * c[2], 0.0f, 255.0f));
+				c[0] = c[1] = c[2] = 0;
+			}
+		}
 		for (auto &img : paint_images(p, job)) {
-			if (img.name != target) continue;
+			bool is_static = img.name == "RGBStatic", is_main = img.name == "RGBMain";
+			if (!is_static && !is_main) continue;
 			int w = 0, hh = 0, type = 0;
 			image_header(objs[size_t(img.object)], &type, &w, &hh);
 			RobotImage ri;
 			ri.width = w, ri.height = hh;
-			ri.rgba = resize_rgba(im.width, im.height, im.rgba, w, hh);
+			if (!split_mask.rgba.empty()) {
+				const RobotImage &from = is_main ? split_mask : split_colours;
+				ri.rgba = resize_rgba(from.width, from.height, from.rgba, w, hh);
+			} else if (is_static == (!b.paint_channel.empty() ? b.paint_channel[0] < 0 : h.paint == HarPlan::Paint::Colours)) {
+				ri.rgba = resize_rgba(im.width, im.height, im.rgba, w, hh);
+			} else {
+				continue;
+			}
 			replace_image(p, uint32_t(img.object), ri, false);
 		}
 		res.notes.push_back("paint job " + extra.name + " from " + extra.image.filename().string());
@@ -3071,6 +3210,11 @@ json::Value robot_mapping_json(const ImportPlan &plan) {
 	v["turn"] = h.turn;
 	v["ground"] = h.ground;
 	v["paint"] = h.paint == HarPlan::Paint::Colours ? "colours" : "materials";
+	json::Value mp = json::Value::object();
+	for (auto &[m, c] : h.material_paint) {
+		if (m >= 0 && size_t(m) < s.materials.size()) mp[s.materials[size_t(m)].name] = c;
+	}
+	v["material_paint"] = std::move(mp);
 	json::Value bones = json::Value::object();
 	for (auto &b : h.bones) {
 		if (b.joint < 0 || b.source != MapSource::Manual) continue;
@@ -3104,6 +3248,13 @@ void apply_robot_mapping(ImportPlan &plan, const json::Value &v) {
 	if (const json::Value *x = v.find("turn"); x && x->is_number()) h.turn = int(x->as_int());
 	if (const json::Value *x = v.find("units_per_metre"); x && x->is_number() && x->as_real() > 0 && !plan.from_editor) plan.settings.units_per_metre = float(x->as_real());
 	if (const json::Value *x = v.find("paint"); x && x->is_string()) h.paint = x->as_string() == "materials" ? HarPlan::Paint::Materials : HarPlan::Paint::Colours;
+	if (const json::Value *mp = v.find("material_paint"); mp && mp->is_object()) {
+		for (auto &[name, c] : mp->members()) {
+			for (size_t m = 0; m < s.materials.size(); ++m) {
+				if (c.is_number() && s.materials[m].name == name) h.material_paint[int(m)] = std::clamp(int(c.as_int()), -1, 2);
+			}
+		}
+	}
 	if (const json::Value *bones = v.find("bones"); bones && bones->is_object()) {
 		for (auto &[bone, joint] : bones->members()) {
 			if (!joint.is_string()) continue;

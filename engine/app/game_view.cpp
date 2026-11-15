@@ -295,8 +295,9 @@ void GameView::init_gl() {
 }
 
 void GameView::wire_session() {
-	world.make_fighter = [this](const de::ObjectRef &actor) -> game::GameObject * {
+	world.make_fighter = [this](const de::ObjectRef &actor, const std::string &title) -> game::GameObject * {
 		Fighter &nf = setup_fighter(world, actor, false, false);
+		nf.title = title;
 		fighters.push_back(&nf);
 		return nf.actor;
 	};

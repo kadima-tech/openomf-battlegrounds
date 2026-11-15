@@ -345,8 +345,9 @@ int main(int argc, char **argv) {
 			// robot with its HUD and its default model, hooked up by the model's Setup.
 			auto make_fighter = [&](const std::string &who, bool user) -> Fighter & {
 				Fighter *made = nullptr;
-				world.make_fighter = [&](const de::ObjectRef &actor) -> game::GameObject * {
+				world.make_fighter = [&](const de::ObjectRef &actor, const std::string &title) -> game::GameObject * {
 					made = &setup_fighter(world, actor, user);
+					made->title = title;
 					return made->actor;
 				};
 				de::ObjectRef fd;
@@ -836,7 +837,7 @@ int main(int argc, char **argv) {
 				for (auto *fi : fighters) {
 					std::string now = state_of(*fi);
 					if (now != fi->last_state) {
-						printf("frame %5d  %-8s %s\n", fr, fi->name.c_str(), now.c_str());
+						printf("frame %5d  %-8s %s\n", fr, fi->label().c_str(), now.c_str());
 						fflush(stdout);
 						fi->last_state = now;
 					}
@@ -873,7 +874,7 @@ int main(int argc, char **argv) {
 					glu::write_png(out.c_str(), W, H, px);
 					printf("frame %d: wrote %s\n", fr, out.c_str());
 					for (auto *fi : fighters) {
-						printf("    %-8s %s t=%.2f%s\n", fi->name.c_str(), state_of(*fi).c_str(), fi->actor->anim_time,
+						printf("    %-8s %s t=%.2f%s\n", fi->label().c_str(), state_of(*fi).c_str(), fi->actor->anim_time,
 						       fi->actor->prelude ? " (prelude)" : "");
 					}
 				}

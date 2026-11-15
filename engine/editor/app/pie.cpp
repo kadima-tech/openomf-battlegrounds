@@ -156,8 +156,9 @@ void PlaySession::setup_world() {
 	// opponent without a pilot (OPENBG_IDLE_AI's still target), and spawned by the editor.
 	auto make_fighter = [&](const std::string &who, bool user) -> app::Fighter & {
 		app::Fighter *made = nullptr;
-		world.make_fighter = [&](const de::ObjectRef &actor) -> game::GameObject * {
+		world.make_fighter = [&](const de::ObjectRef &actor, const std::string &title) -> game::GameObject * {
 			made = &app::setup_fighter(world, actor, user);
+			made->title = title;
 			return made->actor;
 		};
 		de::ObjectRef fd = find_in(world.data(), who, "Description\\Creature\\Fighter", who);
@@ -409,7 +410,7 @@ std::string PlaySession::summary() const {
 	if (!view_) return out;
 	for (auto *fi : view_->fighters) {
 		auto *m = fi->brain && fi->brain->exec ? fi->brain->exec->current_method() : nullptr;
-		out += "; " + fi->name + " " + (m ? m->cm->signature : "-");
+		out += "; " + fi->label() + " " + (m ? m->cm->signature : "-");
 	}
 	return out;
 }
@@ -476,7 +477,7 @@ void PlaySession::draw_overlays(Pane &p) {
 			t[1] += 150;
 			if (!to_screen(p, p.vp, t, &s)) continue;
 			bool sel = fi == inspected();
-			std::string label = fi->name + (fi->actor->user_controlled ? " (player)" : " (AI)");
+			std::string label = fi->label() + (fi->actor->user_controlled ? " (player)" : " (AI)");
 			ImVec2 ts = ImGui::CalcTextSize(label.c_str());
 			dl->AddRectFilled(s - ImVec2(ts.x / 2 + 6, 3), s + ImVec2(ts.x / 2 + 6, ts.y + 3), rgb(sel ? 0x3a3566 : 0x1d1e26, 220), 4);
 			dl->AddText(s - ImVec2(ts.x / 2, 0), rgb(sel ? 0xffffff : 0xd3d5e0), label.c_str());
@@ -509,9 +510,9 @@ void PlaySession::draw_inspector() {
 	// Creature picker.
 	ui::form_label("Creature", ui::px(110));
 	ImGui::SetNextItemWidth(-1);
-	if (ui::begin_combo("##creature", (fi->name + (a.user_controlled ? " (player)" : " (AI)")).c_str())) {
+	if (ui::begin_combo("##creature", (fi->label() + (a.user_controlled ? " (player)" : " (AI)")).c_str())) {
 		for (auto *f : view_->fighters) {
-			if (ImGui::Selectable((f->name + (f->actor->user_controlled ? " (player)" : " (AI)")).c_str(), f == fi)) inspect_ = f->actor;
+			if (ImGui::Selectable((f->label() + (f->actor->user_controlled ? " (player)" : " (AI)")).c_str(), f == fi)) inspect_ = f->actor;
 		}
 		ImGui::EndCombo();
 	}

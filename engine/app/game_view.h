@@ -23,7 +23,9 @@
 namespace app {
 
 struct Fighter {
-	std::string name;
+	std::string name;   // the robot actor's (an add-on HAR variant's keeps its base's)
+	std::string title;  // its description's, when a description made it
+	const std::string &label() const { return title.empty() ? name : title; }
 	game::GameObject *actor = nullptr;
 	game::Brain *brain = nullptr;
 	de::AnimBank bank;

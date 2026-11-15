@@ -599,7 +599,7 @@ GameObject *new_resource(World &w, GameObject *desc, const de::Guid *model) {
 	if (refs.empty()) return nullptr;
 	GameObject *res = nullptr;
 	if (refs[0].info().class_path == "Actor\\Creature\\OMF2Fighter" && w.make_fighter) {
-		res = w.make_fighter(refs[0]);
+		res = w.make_fighter(refs[0], src.info().name);
 	} else if (GameObject *tpl = w.global_object(refs[0])) {
 		res = w.copy_tree(*tpl, true);
 		if (res->is("Actor\\Creature\\Pilot")) {
