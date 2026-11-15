@@ -1414,6 +1414,10 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 	if (key == "listed") return void(t.listed = on(trim(v)));
 	if (key == "locked") return void(t.locked = on(trim(v)));
 	if (key == "ai-difficulty") return void(t.ai_difficulty = float(integer(trim(v), -3, 5)));
+	// The Settings form's Game type (a session master: Demolition, Last Man Standing...) and Score
+	// limit (a session modifier: "3,000 Score Limit", "5 Wins"...), by name.
+	if (key == "game-type") return void(t.game_type = guid_of("Description\\SessionMaster", v));
+	if (key == "score-limit") return void(t.score_limit = guid_of("Description\\SessionModifier", v));
 	if (key == "unlock+") {
 		size_t colon = v.find(':');
 		std::string what = trim(v.substr(0, colon));
