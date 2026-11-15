@@ -112,11 +112,14 @@ public:
 	ScriptMethod *current_method() const { return method_; }
 	// The running state (innermost non-instant frame): virtual calls resolve against its scope,
 	// as SetupVirtualMethodTable builds the table per state, whichever instant method calls.
+	// With no state frame (a state that ran off its end with no default state, then only
+	// instant calls), the state last entered (+0xf0) keeps its table: a lightning bolt whose
+	// BeingHeld.BoltHit has finished still fires through BeingHeld.CarryableLeftToss.
 	ScriptMethod *current_state() const {
 		for (auto it = frames_.rbegin(); it != frames_.rend(); ++it) {
 			if (it->method && !it->method->is_instant()) return it->method;
 		}
-		return method_;
+		return state_ ? state_ : method_;
 	}
 	// DE_CClassExecutorInstance +0xf0: the state method last entered, returned to or restored.
 	ScriptMethod *state() const { return state_; }
