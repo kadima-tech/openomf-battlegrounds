@@ -6,7 +6,7 @@ Shadow, the One Must Fall: 2097 robot, made from the user's model `blender/shado
 - `blender/shadow-model.fbx`: the source model. It is a single AI-generated mesh (Tripo): 5,406 triangles, one UV layer, no texture, no rig, no animation; 1 m tall, in a T-pose, facing -Y.
 - `blender/prepare_shadow.py`: turns the FBX into the importable model, in Blender (headless):
   - scale: 3.1 m tall (Katana stands about 3 m), feet on the floor, facing kept;
-  - mesh: decimated with symmetry to 2,544 triangles, against Katana's 2,528 (chest plate, studs, crest and blades keep their shape);
+  - mesh: all 5,406 triangles of the FBX (Katana's LOD0 has 2,528; the import generates LOD1 and LOD2 at Katana's 1,262 and 748). `--tris N` decimates with symmetry instead;
   - armature: Mixamo bone names in the T-pose, at joints measured from the mesh (the crotch, knee pads, ankles, the waists at elbow and wrist, the neck);
   - weights: Blender's automatic weights. They fail on this mesh (holes and overlapping shells), so the script weights a watertight voxel remesh instead and transfers the weights back. The loose studs then follow the bone nearest them rigidly, and no limb takes weight from the other side;
   - texture: painted per texel in the model's own UVs: silver armour, black-and-white ribbed limbs and waist (as on the 2097 sprite), a dark face with a glowing visor, cyan studs, ear pods, claws and blade feet. `--texture file.png` uses a texture laid out in the same UVs instead;
@@ -31,5 +31,5 @@ TEXTURE=tripo.png ./build.sh --model      # the same, with the model's own textu
 ## Not done yet
 - The Tripo texture is missing from the FBX (its material has a normal map node but no image), so the texture is generated. If it turns up, pass it with `TEXTURE=`.
 - The cyan studs don't glow, because imported robots have no glow material yet.
-- The ribs are painted on: the FBX's limbs are smooth tubes, and decimation leaves them a little faceted.
+- The ribs are painted on: the FBX's limbs are smooth tubes.
 - No special moves: he fights with Katana's moves.

@@ -778,6 +778,26 @@ static void test_heeled_feet(ed::BaseData &base) {
 	fs::remove_all(dir);
 }
 
+static void test_lod0_budget(ed::BaseData &base) {
+	fs::path dir = scratch();
+	gltf::write(humanoid(Naming::Mixamo, 1.0f, 1.0f, false), dir / "budget.glb");
+	ed::ImportPlan plan = robot_plan(dir / "budget.glb", base, "Katana", "Budget Bot");
+	size_t file = 0;
+	for (auto &m : plan.scene.meshes)
+		for (auto &P : m.primitives) file += P.triangles();
+	const size_t keep = ed::build_robot(plan, true).lods[0].faces.size();
+	plan.har.lod0_triangles = int(file / 2);
+	const size_t half = ed::build_robot(plan, true).lods[0].faces.size();
+	plan.har.lod0_triangles = -1;
+	const size_t base_budget = ed::build_robot(plan, true).lods[0].faces.size();
+	printf("LOD0 budget: the file's %zu triangles kept as %zu, %zu asked for %zu, the base's budget %zu (Katana %zu)\n", file, keep, file / 2, half, base_budget,
+	       plan.har.rig->lods[0].faces);
+	CHECK(keep == file);
+	CHECK(half <= file / 2 + 8 && half * 10 > file * 4);
+	CHECK(base_budget <= std::max(file, plan.har.rig->lods[0].faces));
+	CHECK(base_budget <= plan.har.rig->lods[0].faces + 8 || base_budget == file);
+}
+
 static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 	fs::path dir = scratch();
 	gltf::Scene s = humanoid(Naming::Mixamo, 1.0f, 1.0f, false);
@@ -993,6 +1013,7 @@ int main(int argc, char **argv) {
 	test_wings(data, base, false, keep);
 	test_wings(data, base, true, keep);
 	test_material_paint(data, base);
+	test_lod0_budget(base);
 	test_heeled_feet(base);
 	if (failures) {
 		fprintf(stderr, "%d check(s) failed\n", failures);

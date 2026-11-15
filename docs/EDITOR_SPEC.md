@@ -336,8 +336,8 @@ they can be redone.
   following its joint; the root's horizontal drift is removed unless the file has a `Body` node.
   Every sequence the scripts name (`seq<Name>` globals) is kept, so none can go missing.
 - LODs: nodes named `LOD0`-`LOD2` (or ending so), else every mesh is LOD0; missing LODs are quadric
-  decimations to the base's triangle counts; LOD0 is decimated to fit 65,535 vertices (or to the
-  base's budget when asked). Meshes parented to a joint without a skin follow that joint.
+  decimations to the base's triangle counts; LOD0 keeps the file's mesh unless it passes 65,535
+  vertices, or a budget is asked for (`--import-lod0 keep|base|N`, the Level of detail box). Meshes parented to a joint without a skin follow that joint.
 - Materials: an export's `extras.de_stages` give the RGBMain and ReflectionMask images and each
   stage's UV set back; otherwise the materials' textures and colours go into one atlas (or, when
   they all share one texture, that texture with each texel given to the material whose faces cover
@@ -391,7 +391,7 @@ they can be redone.
 
 - Verified (2026-11-15): Shadow, the One Must Fall 2097 robot, from the user's AI-generated model
   (`mods/shadow/blender/shadow-model.fbx`: 5,406 triangles, no rig, texture or animation) prepared
-  in Blender (`mods/shadow/blender/prepare_shadow.py`: 2,544 triangles, Mixamo bones at joints
+  in Blender (`mods/shadow/blender/prepare_shadow.py`: all 5,406 triangles, Mixamo bones at joints
   measured from the mesh in its T-pose, automatic weights through a voxel proxy, six materials
   sharing one generated 1024 texture with `de_paint` and metallic set, glowing studs in their own
   colours) imports onto Katana in batch (`mods/shadow/build.sh`: bones by name and the Mixamo preset;

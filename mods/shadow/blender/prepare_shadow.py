@@ -1,10 +1,10 @@
 """Prepare Shadow, the One Must Fall 2097 robot, from the user's model (shadow-model.fbx) for the
-editor's robot import: scaled, decimated to the robot budget, rigged with Mixamo bones, weighted,
-textured and exported as a skinned glTF.
+editor's robot import: scaled, rigged with Mixamo bones, weighted, textured and exported as a
+skinned glTF. The mesh keeps all its triangles unless --tris asks for fewer.
 
 blender -b --factory-startup --python prepare_shadow.py -- --fbx shadow-model.fbx --out shadow.glb
     [--blend shadow.blend] [--texture tripo.png] [--paint-out dir] [--picture choose_creature.png]
-    [--preview prefix] [--height 3.1] [--tris 2540]
+    [--preview prefix] [--height 3.1] [--tris N]
 
 The FBX is a single untextured, unrigged mesh in a T-pose, 1 m tall, facing -Y. Joints are measured
 from its surface; the texture is painted per texel in its own UV layout (silver armour, striped
@@ -53,7 +53,7 @@ def parse_args():
     p.add_argument("--picture", default=None, help="Choose Creature's picture, a 512 x 128 PNG")
     p.add_argument("--preview", default=None, help="PNG path prefix for turntable and pose renders")
     p.add_argument("--height", type=float, default=3.1, help="metres")
-    p.add_argument("--tris", type=int, default=2540, help="LOD0 triangle budget")
+    p.add_argument("--tris", type=int, default=0, help="decimate LOD0 to this many triangles (0: keep the model's)")
     return p.parse_args(argv)
 
 
@@ -431,7 +431,7 @@ def tri_count(mo):
 
 def decimate(mo, target):
     before = sum(len(p.vertices) - 2 for p in mo.data.polygons)
-    if before <= target:
+    if target <= 0 or before <= target:
         return before, before
     mod = mo.modifiers.new("Decimate", "DECIMATE")
     mod.decimate_type = "COLLAPSE"

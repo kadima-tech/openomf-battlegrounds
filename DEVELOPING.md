@@ -423,7 +423,7 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   untextured, unrigged AI-generated mesh): `blender -b --factory-startup --python
   mods/shadow/blender/prepare_shadow.py -- --fbx shadow-model.fbx --out shadow.glb [--blend shadow.blend]
   [--texture file.png] [--paint-out dir] [--picture choose_creature.png] [--preview prefix]` scales it
-  to 3.1 m, decimates it to 2,540 triangles, measures Mixamo joints from its surface, weights it
+  to 3.1 m (keeping all 5,406 triangles; `--tris N` decimates), measures Mixamo joints from its surface, weights it
   (Blender's automatic weights, on a voxel remesh when they fail on the mesh itself), paints a texture
   in its UVs (or takes `--texture`), splits it into six materials with `de_paint` and metallic, and
   writes the Stealth paint job and a Choose Creature strip; `mods/shadow/build.sh [--model]` runs it

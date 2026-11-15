@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -949,6 +950,7 @@ void models_startup(Editor &e) {
 		if (!o.import_base.empty()) st.plan.har.base_robot = o.import_base;
 		robot_analyse(e, st.plan);
 	}
+	if (!o.import_lod0.empty()) st.plan.har.lod0_triangles = o.import_lod0 == "keep" ? 0 : o.import_lod0 == "base" ? -1 : std::max(0, atoi(o.import_lod0.c_str()));
 	for (auto &spec : o.import_paints) {
 		auto eq = spec.find('=');
 		if (eq != std::string::npos) st.plan.har.extra_paints.push_back({spec.substr(0, eq), std::filesystem::path(std::u8string(spec.begin() + long(eq) + 1, spec.end()))});

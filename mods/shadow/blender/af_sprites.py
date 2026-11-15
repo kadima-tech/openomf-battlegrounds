@@ -62,7 +62,7 @@ def main(path, out):
         s, sps = anim(r)
         r.buf(42)
         n = r.u16()
-        if n: r.buf(n); r.u8()
+        r.buf(n)
         print(mid, len(sps), s[:60])
         for k, sp in enumerate(sps):
             if sp['data'] is None or sp['w'] == 0: continue

@@ -120,7 +120,7 @@ struct HarPlan {
 	// Per glTF material: -1 its own colours (RGBStatic), 0-2 one of the pilot's colours (the paint
 	// mask's channel). Chosen on the Materials page; else the material's extras.de_paint; else `paint`.
 	std::map<int, int> material_paint;
-	bool decimate_lod0 = false;  // LOD0 to the base robot's budget as well
+	int lod0_triangles = 0;  // LOD0's budget: 0 keeps the file's mesh, -1 the base robot's, else that many
 	// Further paint jobs: a copy of the model with this image as its colours (RGBStatic) or, when
 	// the paint is the pilot's, its paint mask (RGBMain); laid out as the model's texture.
 	struct ExtraPaint {

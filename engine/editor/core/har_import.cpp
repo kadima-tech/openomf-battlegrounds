@@ -1320,7 +1320,7 @@ void robot_issues(const ImportPlan &plan, std::vector<Issue> &out) {
 	for (auto &pc : lod_pieces(plan, 0)) verts += pc.prim->positions.size(), faces += pc.prim->triangles();
 	if (h.lods[0].empty()) add(Issue::Error, "No mesh for LOD0");
 	if (faces > kMaxMeshFaces || verts > kMaxMeshVertices) add(Issue::Warning, "LOD0 has " + std::to_string(faces) + " triangles: past a mesh's 65,535, it is decimated to fit");
-	else if (faces > 12000 && !h.decimate_lod0) add(Issue::Warning, "LOD0 has " + std::to_string(faces) + " triangles (the base robot's has " + std::to_string(rig.lods[0].faces) + "); the game skins it on the CPU");
+	else if (faces > 12000 && h.lod0_triangles == 0) add(Issue::Warning, "LOD0 has " + std::to_string(faces) + " triangles (the base robot's has " + std::to_string(rig.lods[0].faces) + "); the game skins it on the CPU");
 	std::vector<std::string> unused;
 	std::set<int> used_anims;
 	for (auto &m : h.sequences) {
@@ -2012,7 +2012,8 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	LodData lod0 = build_lod(0);
 	if (lod0.faces.empty()) throw std::runtime_error("LOD0 has no triangles");
 	size_t target0 = lod0.faces.size();
-	if (h.decimate_lod0) target0 = std::min(target0, rig.lods[0].faces);
+	if (h.lod0_triangles < 0) target0 = std::min(target0, rig.lods[0].faces);
+	else if (h.lod0_triangles > 0) target0 = std::min(target0, size_t(h.lod0_triangles));
 	if (lod0.verts.size() > kMaxMeshVertices || target0 > 65000) target0 = std::min<size_t>(target0, 60000);
 	auto fits = [](const LodData &d) {
 		std::set<uint32_t> used;
