@@ -215,18 +215,22 @@ int main(int argc, char **argv) {
 		};
 		world.all_ai = watch;
 		world.ai_difficulty = difficulty;
-		// Pilots (Pilots.DEObjects): stats for the player and the computer opponent.
+		// Pilots (Pilots.DEObjects, then any file: add-on pilots): stats for the player and the computer opponent.
+		auto find_pilot = [&](const char *cls, const std::string &who) -> de::ObjectRef {
+			if (auto *pf = world.data().file("Pilots")) {
+				for (uint32_t i = 0; i < pf->objects().size(); ++i) {
+					if (pf->objects()[i].class_path == cls && pf->objects()[i].name == who) return {pf, i};
+				}
+			}
+			return world.data().find(cls, who);
+		};
 		static std::deque<game::Pilot> pilots;
 		auto load_pilot = [&](const std::string &who) -> game::Pilot * {
-			if (auto *pf = world.data().file("Pilots")) {
-				for (auto &o : pf->objects()) {
-					if (o.class_path == "Actor\\Creature\\Pilot" && o.name == who) {
-						if (auto p = game::read_pilot(*pf, o, difficulty)) {
-							printf("pilot %s: power %.0f agility %.0f endurance %.0f focus %.0f\n", who.c_str(),
-							       p->stats.power, p->stats.agility, p->stats.endurance, p->stats.focus);
-							return &pilots.emplace_back(*p);
-						}
-					}
+			if (de::ObjectRef r = find_pilot("Actor\\Creature\\Pilot", who)) {
+				if (auto p = game::read_pilot(*r.file, r.info(), difficulty)) {
+					printf("pilot %s: power %.0f agility %.0f endurance %.0f focus %.0f\n", who.c_str(),
+					       p->stats.power, p->stats.agility, p->stats.endurance, p->stats.focus);
+					return &pilots.emplace_back(*p);
 				}
 			}
 			fprintf(stderr, "pilot %s not found; using neutral stats\n", who.c_str());
@@ -307,7 +311,7 @@ int main(int argc, char **argv) {
 					if (!found) fprintf(stderr, "%s has no paint job %s; using its default\n", picks[i].first.c_str(), model_name.c_str());
 				}
 				pick(i, "SessionSlotSelectCreature", fd);
-				pick(i, "SessionSlotSelectPilot", find("Pilots", "Description\\Pilot", picks[i].second));
+				pick(i, "SessionSlotSelectPilot", find_pilot("Description\\Pilot", picks[i].second));
 				game::add_client(world, i == 0, picks[i].second);
 			}
 			printf("session: %zu modifiers, %zu slots\n", ss.modifiers.size(), ss.slots.size());
@@ -321,12 +325,7 @@ int main(int argc, char **argv) {
 					fi.actor->pilot = load_pilot(who);
 					return;
 				}
-				de::ObjectRef dref;
-				if (auto *pf = world.data().file("Pilots")) {
-					for (uint32_t i = 0; i < pf->objects().size(); ++i) {
-						if (pf->objects()[i].class_path == "Description\\Pilot" && pf->objects()[i].name == who) dref = {pf, i};
-					}
-				}
+				de::ObjectRef dref = find_pilot("Description\\Pilot", who);
 				game::GameObject *tpl = dref ? world.global_object(dref) : nullptr;
 				game::GameObject *desc = tpl ? world.copy_tree(*tpl) : nullptr;
 				game::GameObject *p = desc ? game::new_resource(world, desc, nullptr) : nullptr;

@@ -118,6 +118,53 @@ static void tournament(const fs::path &data, const fs::path &tmp) {
 		CHECK(again.find("\"Madness II\"") != std::string::npos);
 	}
 
+	// Scripted fields (--tournament-set) give the same model and scripts as the form.
+	{
+		ed::Tournament s = t;
+		const std::pair<const char *, const char *> sets[] = {
+		    {"match+", "Finale"},
+		    {"match.3.opponent.1", "Lucas,Jaguar"},
+		    {"match.3.opponent.2", "Lucas"},
+		    {"match.3.arena", "The Desert"},
+		    {"match.3.pre-quote+", "1:You again?\\nThis won't take long."},
+		    {"match.3.win-quote+", "0:Told you."},
+		    {"match.3.lose-quote+", "1:Again."},
+		    {"match.3.lose-quotes", ""},
+		    {"match.3.ai-offset", "2"},
+		    {"unlock+", "Lucas"},
+		    {"choose-text", "Three rounds."},
+		    {"locked", "on"},
+		};
+		for (auto &[k, v] : sets) {
+			try {
+				ed::set_tournament_field(*proj, s, k, v);
+			} catch (const std::exception &ex) {
+				fprintf(stderr, "set %s=%s: %s\n", k, v, ex.what());
+				CHECK(false);
+			}
+		}
+		CHECK(s.matches.size() == 3 && s.matches[2].name == "Finale" && s.matches[2].key != s.matches[0].key && s.matches[2].key != s.matches[1].key);
+		const ed::TMatch &m = s.matches[2];
+		CHECK(m.opponents.size() == 2 && m.opponents[0].pilot == lucas->guid && m.opponents[0].robot == jaguar->guid && ed::guid_zero(m.opponents[1].robot));
+		CHECK(m.arena == desert->guid && m.ai_offset == 2 && m.lose_quotes.empty() && m.win_quotes.size() == 1 && m.win_quotes[0].slot == 0);
+		CHECK(m.pre_quotes.size() == 1 && m.pre_quotes[0].text == "You again?\nThis won't take long.");
+		CHECK(s.unlocks.size() == t.unlocks.size() + 1 && s.unlocks.back().description == lucas->guid && s.locked && s.choose_text == "Three rounds.");
+		std::string sub = ed::script_text(ed::generate_scripts(*proj, o, s).sub).text;
+		CHECK(sub.find("SubSessionActivateSlot(2,CreatureListGetRandom(),g_PilotLucas);") != std::string::npos);
+		for (auto &[k, v] : std::vector<std::pair<const char *, const char *>>{{"match.9.name", "x"}, {"match.1.opponent.7", "Lucas"}, {"match.1.opponent.1", "Nobody"},
+		                                                                       {"match.1.pre-quote+", "no slot"}, {"match.1.pre-quote+", "6:x"}, {"match.1.arena", "Atlantis"},
+		                                                                       {"unlock+", "Nothing"}, {"colour", "red"}, {"match.1.pre-quotes", "x"}}) {
+			bool refused = false;
+			try {
+				ed::set_tournament_field(*proj, s, k, v);
+			} catch (const std::exception &) {
+				refused = true;
+			}
+			if (!refused) fprintf(stderr, "set %s=%s was taken\n", k, v);
+			CHECK(refused);
+		}
+	}
+
 	// Compile both classes into VMC2.
 	ed::ScriptCompiler compiler(data);
 	for (auto &[cls, res] : compiler.compile_all(*proj)) {

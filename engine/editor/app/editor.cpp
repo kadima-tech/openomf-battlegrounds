@@ -274,8 +274,10 @@ void Editor::apply_startup() {
 		for (uint32_t pi : ed::addon_pilots(*project_)) {
 			if (utf8(project_->file().objects[pi].info.name_text()) == opt_.open_pilot) {
 				ed::Guid g = project_->file().objects[pi].info.guid;
+				for (auto &kv : opt_.pilot_sets) set_pilot_field(g, kv);
 				if (!opt_.photo.empty()) import_photo(g, opt_.photo);
 				open_pilot(g);
+				break;
 			}
 		}
 	}
@@ -412,6 +414,25 @@ void Editor::new_pilot_dialog(const std::string &from) {
 	int n = int(ed::addon_pilots(*project_).size()) + 1;
 	new_pilot_name_ = "New Pilot " + std::to_string(n);
 	new_pilot_open_ = true;
+}
+
+bool Editor::set_pilot_field(const ed::Guid &pilot, const std::string &key_value) {
+	int idx = find_object(pilot);
+	auto eq = key_value.find('=');
+	if (idx < 0 || eq == std::string::npos) {
+		log(LogLine::Error, "Pilot field: give KEY=VALUE (" + key_value + ")");
+		return false;
+	}
+	try {
+		ed::PilotObjects o = ed::pilot_objects(*project_, uint32_t(idx));
+		ed::PilotData d = ed::read_pilot(*project_, o);
+		ed::set_pilot_field(*project_, d, key_value.substr(0, eq), key_value.substr(eq + 1));
+		ed::write_pilot(*project_, o, d);
+		return true;
+	} catch (const std::exception &ex) {
+		log(LogLine::Error, std::string("Pilot field: ") + ex.what());
+		return false;
+	}
 }
 
 void Editor::import_photo_dialog(const ed::Guid &pilot) {
@@ -1336,7 +1357,7 @@ void Editor::run_command(const std::string &line) {
 		return;
 	}
 	if (cmd == "help") {
-		out("help | pilots | casts | validate | save | launch | new-pilot <base> <name> | open <pilot>");
+		out("help | pilots | casts | validate | save | launch | new-pilot <base> <name> | open <pilot> | set <key>=<value>");
 	} else if (cmd == "pilots") {
 		for (uint32_t pi : ed::addon_pilots(*project_)) out("  " + utf8(project_->file().objects[pi].info.name_text()));
 	} else if (cmd == "casts") {
@@ -1368,6 +1389,18 @@ void Editor::run_command(const std::string &line) {
 		for (uint32_t pi : ed::addon_pilots(*project_)) {
 			if (utf8(project_->file().objects[pi].info.name_text()) == name) open_pilot(project_->file().objects[pi].info.guid);
 		}
+	} else if (cmd == "set") {
+		std::string kv;
+		std::getline(in, kv);
+		while (!kv.empty() && kv[0] == ' ') kv.erase(0, 1);
+		auto *doc = active_document();
+		const ed::Guid *g = nullptr;
+		for (uint32_t pi : ed::addon_pilots(*project_)) {
+			const ed::Guid &pg = project_->file().objects[pi].info.guid;
+			if (pilot_document_is(doc, pg)) g = &pg;
+		}
+		if (!g) out("  open an add-on pilot first");
+		else out(set_pilot_field(*g, kv) ? "  set" : "  error: " + status_);
 	} else if (!cmd.empty()) {
 		out("  unknown command; try help");
 	}

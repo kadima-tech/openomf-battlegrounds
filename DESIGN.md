@@ -185,8 +185,8 @@ and `theme::apply_style()`, the Dear ImGui style function; the custom-drawn cont
   #4ec9b0, members #9cdcfe.
 - **Read-only pilot:** the pilot editor with a "BASE GAME - READ-ONLY" badge by the heading, a banner
   with "Copy to Add-on..." (accent), and dimmed, disabled fields.
-- **Asset editors:** the pilot editor puts a tall in-engine preview (photo, or the robot in the
-  pilot's paint) with a "Preview (in-engine)" footer on the left, and on the right the heading, tabs
+- **Asset editors:** the pilot editor puts a tall in-engine preview (the whole photo, fitted and standing
+  on the footer as Choose Pilot frames it, or the robot in the pilot's paint) with a "Preview (in-engine)" footer on the left, and on the right the heading, tabs
   (General / Attributes / AI Traits / Paint / Casts & Flags) over a violet underline, and a footer of
   validation chips.
 - **Tournament editor:** three columns. Left, a "SESSION MASTER" tree (the tournament with an amber

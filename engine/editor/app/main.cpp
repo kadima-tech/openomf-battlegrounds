@@ -2,7 +2,7 @@
 //
 //   openbg-editor [--data <Data dir>] [<add-on.DEObjects>]
 //                 [--new-pilot Base:Name] [--open-pilot Name] [--tab 0-4] [--preview photo|robot]
-//                 [--photo image.png] [--content <type>] [--base-content] [--browse-file <file stem>]
+//                 [--photo image.png] [--pilot-set KEY=VALUE] [--content <type>] [--base-content] [--browse-file <file stem>]
 //                 [--open-base Class:Name] [--select-base Class:Name] [--copy-base <pilot>]
 //                 [--select <object name>] [--level] [--save] [--launch-game]
 //                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
 		else if (arg("--tab")) opt.pilot_tab = atoi(argv[++i]);
 		else if (arg("--preview")) opt.preview = argv[++i];
 		else if (arg("--photo")) opt.photo = utf8_path(argv[++i]);
+		else if (arg("--pilot-set")) opt.pilot_sets.push_back(argv[++i]);
 		else if (arg("--content")) opt.content = argv[++i];
 		else if (!strcmp(argv[i], "--base-content")) opt.base_content = true;
 		else if (arg("--browse-file")) opt.browse_file = argv[++i];
@@ -62,6 +63,7 @@ int main(int argc, char **argv) {
 		else if (arg("--select")) opt.select = argv[++i];
 		else if (arg("--new-tournament")) opt.new_tournament = argv[++i];
 		else if (arg("--open-tournament")) opt.open_tournament = argv[++i];
+		else if (arg("--tournament-set")) opt.tournament_sets.push_back(argv[++i]);
 		else if (arg("--new-har")) opt.new_har = argv[++i];
 		else if (arg("--open-har")) opt.open_har = argv[++i];
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
@@ -89,6 +91,8 @@ int main(int argc, char **argv) {
 		else if (arg("--play-ticks")) opt.play_ticks = atoi(argv[++i]);
 		else if (arg("--play-robot")) opt.play_robot = argv[++i];
 		else if (arg("--play-opponent")) opt.play_opponent = argv[++i];
+		else if (arg("--play-pilot")) opt.play_pilot = argv[++i];
+		else if (arg("--play-opponent-pilot")) opt.play_opponent_pilot = argv[++i];
 		else if (arg("--debug")) opt.debug = argv[++i];
 		else if (arg("--import")) opt.import_file = utf8_path(argv[++i]);
 		else if (arg("--import-kind")) opt.import_kind = argv[++i];

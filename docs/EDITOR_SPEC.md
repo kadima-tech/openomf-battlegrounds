@@ -541,3 +541,12 @@ Progress (2026-11-06, first editor iteration, `openbg-editor`; DEVELOPING.md "Th
   contact correction in retargeting, several paint jobs (and the HAR preview shows the selected one),
   the Choose Creature panel, new hitboxes, Gargoyle's wings. Not yet: file animations for the wings,
   a walk speed that follows a robot's leg length.
+- **Validation pass, editor to game (2026-11-15):** a new pilot (Major Kreissack, OMF 2097's villain)
+  made from start to finish with the editor's scripted options, a photo cut-out imported, a one-match
+  tournament against him with quotes and an unlock, then checked in the game (Choose Pilot locked,
+  locked-visible and unlocked, RECON DATA, playing as him, him as an AI opponent with his quotes and
+  HUD photo, the unlock notification) and in Play-in-editor. It added scripted fields for pilots
+  (`--pilot-set`, the console's `set`) and tournaments (`--tournament-set`), Play-in-editor pilots
+  (`--play-pilot`, `--play-opponent-pilot`); the photo import now weighs colours by alpha (the
+  colour under transparent pixels bled into the edges), the pilot preview shows the whole photo (it
+  cropped it to fill the panel), and `openbg-fight` finds add-on pilots.

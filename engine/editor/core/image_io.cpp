@@ -202,33 +202,36 @@ std::vector<uint8_t> crop_square_resize(int width, int height, const std::vector
 	int crop = std::min(width, height), x0 = (width - crop) / 2, y0 = (height - crop) / 2;
 	std::vector<uint8_t> out(size_t(side) * size_t(side) * 4);
 	float scale = float(crop) / float(side);
+	// Colours are weighted by alpha, so what lies under transparent pixels never bleeds into the edges.
 	for (int y = 0; y < side; ++y) {
 		for (int x = 0; x < side; ++x) {
-			float acc[4] = {};
+			float acc[4] = {}, weight = 0;
+			auto add = [&](int px, int py, float w) {
+				const uint8_t *p = rgba.data() + (size_t(y0 + py) * size_t(width) + size_t(x0 + px)) * 4;
+				float a = float(p[3]) * w;
+				for (int k = 0; k < 3; ++k) acc[k] += float(p[k]) * a;
+				acc[3] += a;
+				weight += w;
+			};
 			float fx0 = float(x) * scale, fy0 = float(y) * scale;
 			if (scale > 1) {
 				int sx0 = int(fx0), sy0 = int(fy0), sx1 = std::max(sx0 + 1, int(fx0 + scale)), sy1 = std::max(sy0 + 1, int(fy0 + scale));
-				int n = 0;
 				for (int sy = sy0; sy < sy1 && sy < crop; ++sy) {
-					for (int sx = sx0; sx < sx1 && sx < crop; ++sx, ++n) {
-						const uint8_t *p = rgba.data() + (size_t(y0 + sy) * size_t(width) + size_t(x0 + sx)) * 4;
-						for (int k = 0; k < 4; ++k) acc[k] += p[k];
-					}
+					for (int sx = sx0; sx < sx1 && sx < crop; ++sx) add(sx, sy, 1);
 				}
-				for (float &a : acc) a /= float(std::max(n, 1));
 			} else {
 				float sx = std::clamp((float(x) + 0.5f) * scale - 0.5f, 0.0f, float(crop - 1));
 				float sy = std::clamp((float(y) + 0.5f) * scale - 0.5f, 0.0f, float(crop - 1));
 				int ix = int(sx), iy = int(sy), jx = std::min(ix + 1, crop - 1), jy = std::min(iy + 1, crop - 1);
 				float fx = sx - float(ix), fy = sy - float(iy);
-				auto at = [&](int px, int py, int k) {
-					return float(rgba[(size_t(y0 + py) * size_t(width) + size_t(x0 + px)) * 4 + size_t(k)]);
-				};
-				for (int k = 0; k < 4; ++k) {
-					acc[k] = (at(ix, iy, k) * (1 - fx) + at(jx, iy, k) * fx) * (1 - fy) + (at(ix, jy, k) * (1 - fx) + at(jx, jy, k) * fx) * fy;
-				}
+				add(ix, iy, (1 - fx) * (1 - fy));
+				add(jx, iy, fx * (1 - fy));
+				add(ix, jy, (1 - fx) * fy);
+				add(jx, jy, fx * fy);
 			}
-			for (int k = 0; k < 4; ++k) out[(size_t(y) * size_t(side) + size_t(x)) * 4 + size_t(k)] = uint8_t(std::lround(std::clamp(acc[k], 0.0f, 255.0f)));
+			uint8_t *o = out.data() + (size_t(y) * size_t(side) + size_t(x)) * 4;
+			for (int k = 0; k < 3; ++k) o[k] = acc[3] > 0 ? uint8_t(std::lround(std::clamp(acc[k] / acc[3], 0.0f, 255.0f))) : 0;
+			o[3] = uint8_t(std::lround(std::clamp(weight > 0 ? acc[3] / weight : 0.0f, 0.0f, 255.0f)));
 		}
 	}
 	return out;
