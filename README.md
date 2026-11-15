@@ -66,6 +66,29 @@ game, applies the bundled update offline and starts it. From a source checkout,
 run **`./launch.sh`** to build and open the launcher; see
 [launcher/README.md](launcher/README.md#linux) for the build packages.
 
+## Mods
+
+Mods are add-on `.DEObjects` files made with the content editor (`openbg-editor`). To choose
+which ones load, open the launcher's mod screen:
+
+- **macOS:** hold **Option** (or Shift) while opening `Battlegrounds.app`, or run
+  `open Battlegrounds.app --args --configure`. From a checkout: `./configure.command`.
+- **Windows:** double-click **`Configure Battlegrounds.cmd`** next to `Battlegrounds.exe`, hold
+  **Shift** while starting `Battlegrounds.exe`, or run `Battlegrounds.exe --configure`. From a
+  checkout: `configure.cmd`.
+- **Linux:** run `Battlegrounds/Battlegrounds --configure`, or right-click the menu entry made by
+  `--create-desktop-entry` and choose **Configure Mods**. From a checkout: `./configure.command`
+  (or `./launch.sh --configure`).
+- Whenever the launcher window shows (first-time setup, an error), **Mods** in its footer opens
+  the same screen.
+
+Tick the mods to load, put them in order with the arrows, **Add mod…** to pick a file anywhere,
+or drop files into your mods folder (**Open mods folder**). Missing or invalid files are flagged.
+**Play** starts the game with your choice, and the choice is remembered: later launches, and
+`openbg` started directly, load the same mods. The list is `mods.txt` in the game's settings
+folder (`~/Library/Application Support/openbg`, `%APPDATA%\openbg`, `~/.local/share/openbg`), and
+the mods folder is `mods/` beside it; [launcher/README.md](launcher/README.md#mods) has the format.
+
 ## You need the game
 
 You need your own copy of *One Must Fall: Battlegrounds*, either the original English
@@ -182,6 +205,9 @@ engine/build/openbg source/patched/v2123/Data
 
 (On Windows: `engine\build\openbg.exe source\patched\v2123\Data`.) This starts the game at its main menu. Choose **Single Player** and pick a tournament, Practice or
 Training.
+
+It loads the mods you chose in the launcher (see [Mods](#mods)). `--no-mods` starts without them,
+`--mods <file>` uses another list, and `--addon file.DEObjects` (repeatable) loads an add-on on top.
 
 **Fight controls:**
 

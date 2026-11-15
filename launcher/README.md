@@ -83,12 +83,61 @@ its preferences and recordings in its existing Application Support location.
 `OPENBG_PROJECT_ROOT=/absolute/path` enables legacy-data discovery.
 The app's `--preview` switch shows setup without installing or launching. For
 visual verification, `--screenshot /absolute/path.png` renders the actual native
-setup view and exits. `OPENBG_GAME_ARGS` supplies space-separated engine arguments
+setup view and exits (with `--configure`, the mod screen). `OPENBG_GAME_ARGS` supplies space-separated engine arguments
 for development smoke tests (for example `--headless 10`).
 
 First-time setup works offline and needs at least 3 GB free space.
 The supported source is the English 2.090 retail disc; other localizations and
 later disc editions fail validation rather than mixing incompatible game data.
+
+## Mods
+
+A ready installation goes straight into the game, so the mod screen opens only when asked for:
+
+| | Open the mod screen |
+|---|---|
+| macOS | Hold Option or Shift while the app starts; `--configure` (`open Battlegrounds.app --args --configure`); `./configure.command` in a checkout |
+| Windows | `Configure Battlegrounds.cmd` next to `Battlegrounds.exe`; hold Shift while it starts; `--configure`; `configure.cmd` in a checkout |
+| Linux | `--configure`; the **Configure Mods** action of the menu entry `--create-desktop-entry` adds; Shift or Alt held at start (X11); `./configure.command` or `./launch.sh --configure` in a checkout |
+
+**Mods** in the footer of any launcher window switches to it as well. The screen lists every add-on
+with its file name, where it comes from (MODS FOLDER, ADDED, CHECKOUT), size, path and what it
+adds (pilots, robots, robot models, arenas, tournaments, from `openbg --addon-info`). A missing
+file, a file that is not an add-on, and a second enabled mod with the same file name (only the
+first loads) are flagged. Check boxes enable a mod, the arrows change the load order, **Add mod…**
+adds files from anywhere (they stay where they are), ✕ removes one (a file in the mods folder goes
+to the Trash / Recycle Bin, since it would otherwise come back), **Open mods folder** opens it.
+Every change is saved at once; **Play** starts the game, which reads the saved list itself. In a
+source checkout, the add-ons `mods/*/build.sh` built (`mods/<name>/build/*.DEObjects`) are listed
+too, disabled until you tick them. Without a verified installation Play waits for setup.
+
+**The list** is `mods.txt` in the engine's settings folder (`~/Library/Application Support/openbg`,
+`%APPDATA%\openbg`, `$XDG_DATA_HOME/openbg` or `~/.local/share/openbg`: the folder of
+`registry.txt`, not the launcher's game folder). UTF-8 text, one add-on per line in load order:
+
+```text
+# OpenBG mods, in load order: "on" or "off", a space, the add-on file.
+on /Users/me/Library/Application Support/openbg/mods/Kreissack.DEObjects
+off /Users/me/Mods/Shadow.DEObjects
+```
+
+Other lines are ignored; a relative path is read from the list's folder; a file listed twice
+counts once. Then every `*.DEObjects` in the `mods` folder beside the list that the list does not
+name follows, enabled, in name order: dropping a file there enables it. The engine (`openbg`, in
+normal play) and all three launchers apply these same rules (`engine/src/de/mods.cpp`,
+`ModConfig` in `Launcher.swift`, `core.cpp`, `linux-launcher.c`).
+
+**Precedence in `openbg`.** The list's enabled mods that exist and parse load first, in order;
+then every `OPENBG_ADDONS` file and every `--addon` file, in that order. An explicit add-on
+replaces a listed mod with the same file name (so a freshly built copy wins over the installed
+one). `--no-mods` ignores the list and the folder; `--mods <file>` reads another list (with the
+`mods` folder beside that file). Screenshot and headless runs skip the default list, like the
+registry, so they stay reproducible; `--mods` still applies there. Add-ons load after the game's own
+`Data` files, so on a GUID clash the later one wins (FINDINGS 433: an add-on should add objects with
+new GUIDs, not override base ones). `openbg-fight`, `openbg-net` and the editor's Play in editor
+do not read the list: they load the add-ons named in `OPENBG_ADDONS` (and the editor its open
+add-on). The editor's **Launch Game** starts `openbg` normally, so your list's mods load beside
+the add-on being edited, which replaces an installed copy of the same name.
 
 ## Package for players
 
@@ -186,7 +235,9 @@ The backend emits JSON progress events. Unit tests cover checksum readiness,
 disc identity, corrupt updates, wrong versions, delta output bounds, cancellation,
 offline retry, atomic publication and rollback.
 Native tests cover shared Python/Swift caches, same-size edits, changed expected
-patches, missing game files, malformed caches, and setup consent. Launch tests
+patches, missing game files, malformed caches, setup consent and the mod list (format, mods
+folder, order, problems, toggle, move, add, remove; each launcher's test). `ctest`'s `mods-tests`
+checks the engine's reading of the same file. Launch tests
 cover rebuilding after changed/added/deleted inputs and refusing stale apps
 after failed builds. CI runs these tests and verifies the source fingerprint
 alongside the full app build on both supported architectures.
@@ -246,6 +297,7 @@ Differences from macOS:
   `--screenshot PATH` saves the setup window and exits. Without a display, a
   verified game still starts, and the launcher prints the terminal setup command
   (the `worker`/`bootstrap.sh` command under [Validation](#validation)).
+  `--configure` opens the mod screen; the menu entry gets a **Configure Mods** action.
 
 ### Run from this checkout
 
@@ -389,8 +441,9 @@ offline builds from local checkouts.
   downloaded ZIP keep its "downloaded from the internet" mark; right-click the
   ZIP, choose **Properties** and **Unblock** before extracting to avoid repeated
   prompts.
-- The `--preview` and `--screenshot C:\path\shot.png` switches and
-  `OPENBG_GAME_ARGS` behave as on macOS.
+- The `--preview`, `--configure` and `--screenshot C:\path\shot.png` switches and
+  `OPENBG_GAME_ARGS` behave as on macOS. The download carries `Configure Battlegrounds.cmd`, which
+  starts `Battlegrounds.exe --configure`.
 
 ### Windows validation
 
@@ -407,8 +460,8 @@ python launcher\check-bundle.py dist\Battlegrounds\resources
 
 `test-readiness.exe` covers the cache shared with Python (written by the real
 `install.py`), same-size edits, changed expected patches, malformed caches and
-missing files. `test-launcher.exe` covers setup consent, folder detection and
-command-line quoting. Given the app folder and a disc image, it also runs the
+missing files. `test-launcher.exe` covers setup consent, folder detection,
+command-line quoting and the mod list. Given the app folder and a disc image, it also runs the
 packaged setup through the launcher's own process, job and pipe handling; CI
 passes a generated image whose cabinets are fake, so the extractor's failure must
 arrive as a setup error. `check-bundle.py` runs the relocated bundle (in a folder
