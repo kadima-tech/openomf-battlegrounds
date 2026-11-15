@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 
+#include "content.h"
 #include "har.h"
 #include "help.h"
 #include "image_io.h"
@@ -374,7 +375,7 @@ void assets_startup(Editor &e) {
 			}
 		}
 	}
-	if (!o.tournament_sets.empty()) {
+	if (!o.tournament_sets.empty() || !o.tournament_image.empty() || !o.tournament_icon.empty()) {
 		std::string target = o.open_tournament;
 		if (target.empty() && !o.new_tournament.empty()) {
 			std::string from;
@@ -393,9 +394,29 @@ void assets_startup(Editor &e) {
 					e.log(LogLine::Error, "Tournament field " + spec + ": " + ex.what());
 				}
 			}
+			// The Choose Match image and list icon: the picture scaled to the image's size, as
+			// TournamentDocument::import_image does.
+			auto import = [&](const std::filesystem::path &path, int image, std::string *source, const char *what) {
+				if (path.empty()) return;
+				try {
+					if (image < 0) throw deo::Error("the tournament has no " + std::string(what));
+					ed::RgbaImage img = ed::load_image(path);
+					int w = 0, h = 0, type = 0;
+					ed::image_header(e.project()->file().objects.at(size_t(image)), &type, &w, &h);
+					if (w <= 0 || h <= 0) w = img.width, h = img.height;
+					ed::set_image_pixels(*e.project(), uint32_t(image), w, h, ed::resize_rgba(img.width, img.height, img.rgba, w, h),
+					                     path.filename().string());
+					*source = path.filename().string();
+					e.log(LogLine::Ok, "Imported " + path.filename().string() + " as the " + what + " (" + std::to_string(w) + " x " + std::to_string(h) + ")");
+				} catch (const std::exception &ex) {
+					e.log(LogLine::Error, "Cannot import " + path.filename().string() + ": " + ex.what());
+				}
+			};
+			import(o.tournament_image, to.image, &tour.image_source, "Choose Match image");
+			import(o.tournament_icon, to.icon, &tour.icon_source, "list icon");
 			try {
 				ed::write_tournament(*e.project(), to, tour);
-				e.log(LogLine::Ok, "Set " + std::to_string(o.tournament_sets.size()) + " field(s) of " + target);
+				if (!o.tournament_sets.empty()) e.log(LogLine::Ok, "Set " + std::to_string(o.tournament_sets.size()) + " field(s) of " + target);
 			} catch (const std::exception &ex) {
 				e.log(LogLine::Error, std::string("Cannot write the tournament: ") + ex.what());
 			}
