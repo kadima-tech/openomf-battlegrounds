@@ -71,6 +71,7 @@ int main(int argc, char **argv) {
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
 		else if (arg("--har-paint")) opt.har_paints.push_back(argv[++i]);
 		else if (arg("--har-script")) opt.har_scripts.push_back(argv[++i]);
+		else if (arg("--har-help")) opt.har_help.push_back(argv[++i]);
 		else if (arg("--har-title")) opt.har_title = argv[++i];
 		else if (arg("--har-text")) opt.har_text = argv[++i];
 		else if (arg("--har-picture")) opt.har_picture = argv[++i];

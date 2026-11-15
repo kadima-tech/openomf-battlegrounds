@@ -12,6 +12,8 @@ Shadow fights with Katana's basics (punches, kicks, throws, evades, the rising b
 | **Shadow Grab** | Double-tap Back + Punch | The projection leaps up, drops on the opponent and holds them for about a second and a half (light damage, fills the stun bar). |
 | **Shadow Barrage** (super) | Double-tap Back + both Punches, one energy bar | Three projections rise around the opponent and strike in turn; the last one destroys a beaten robot (2097's scrap and destruction). |
 
+His moves are also in the in-game Help, under "6. HAR (Robot) Reference" > Shadow (Quick Reference, Special Attacks, Super Attacks), in the shipped robots' notation; the pages come from `help.txt`.
+
 The projections are only as real as Shadow's concentration: they vanish the moment Shadow is hit, and what strikes one is dealt to Shadow himself. Shadow is open while he casts. The computer pilots use all four (the grab most, close in; the punch and kick at range; the barrage with a full energy bar).
 
 ## Files
@@ -27,6 +29,7 @@ The projections are only as real as Shadow's concentration: they vanish the mome
   - the "Stealth" paint job (`ShadowDark.png`), the 512 × 128 Choose Creature picture (four staged poses) and turntable and pose renders.
 - `blender/animate_shadow.py`: his own animations, keyframed on that rig after the 2097 sprites (FINDINGS 744): `Standing` (the deep side-on stance, replacing Katana's), `ShadowCast`, `ShadowGrabCast`, `ShadowSummon`, and one-pose `Ghost*` sequences the projections are posed from. Limbs are given as directions, the torso as turns; each key plants the lower foot.
 - `script/shadow.bgs`: the moves, a script patch for his copy of Katana's behaviors (`BKatana`: the casting states, inputs and AI choices; `BProjectile`: the projection), applied with `--har-script`. It holds only Shadow's own code.
+- `help.txt`: his Help topics (`--har-help`, docs/EDITOR_SPEC.md §5.6): his panel with the Choose Creature picture, the quick reference and one page per special and super, in the shipped pages' notation; the Special and Super Attacks topics show the shipped generic pages. Inputs checked against `script/shadow.bgs` and Katana's behavior (only the blade projectile, Sonic Blade, was replaced).
 - `blender/af_sprites.py`: extracts the sprite frames from 2097's `FIGHTR*.AF` files, which were used as references.
 - `blender/af_moves.py`: prints an `.AF` file's header and move table (inputs, animation strings, damage, stun, successors), as OpenOMF reads it; the source of the research in FINDINGS 741-746.
 - `source/`: what the import reads:
@@ -38,7 +41,7 @@ The projections are only as real as Shadow's concentration: they vanish the mome
 - `renders/`: Blender turntable (`shadow_front`, `front34`, `side`, `back34`, `back`) and pose (`stance`, `stance_side`, `guard`, `kick`) renders.
 
 ## How the moves are built
-`build.sh` imports `source/shadow.glb` onto Katana: the file's `Standing` replaces Katana's, its other animations become new sequences, `--import-ghost` poses LOD1 in each `Ghost*` sequence as a dark see-through afterimage under Katana's projectile actor, and `--har-script script/shadow.bgs` adds the moves, which `--compile` builds into VMC2. Nothing in the engine is specific to Shadow.
+`build.sh` imports `source/shadow.glb` onto Katana: the file's `Standing` replaces Katana's, its other animations become new sequences, `--import-ghost` poses LOD1 in each `Ghost*` sequence as a dark see-through afterimage under Katana's projectile actor, and `--har-script script/shadow.bgs` adds the moves, which `--compile` builds into VMC2, and `--har-help help.txt` adds his Help topics. Nothing in the engine is specific to Shadow.
 
 ## Rebuild
 ```sh
@@ -53,4 +56,5 @@ TEXTURE=tripo.png ./build.sh --model      # the same, with the model's own textu
 - The ribs are painted on: the FBX's limbs are smooth tubes.
 - His basics are still Katana's (walk, punches, kicks, throws); only the stance and the specials are his.
 - The projections are posed meshes that slide and switch poses, as 2097's held sprites do; they do not animate between poses, and they do not fade out.
+- His move pages in Help have text only; the shipped ones show a picture of the move.
 - 2097's aerial specials (the air Shadow Dive, `P632` in the air, and the enhanced air grab) and the Fire Pit destruction are not made.

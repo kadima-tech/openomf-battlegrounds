@@ -8,6 +8,7 @@
 #include <sstream>
 
 #include "har.h"
+#include "help.h"
 #include "image_io.h"
 #include "pilot.h"
 #include "script.h"
@@ -304,6 +305,22 @@ void assets_startup(Editor &e) {
 				e.log(LogLine::Ok, "Set " + target + "'s Choose Creature panel");
 			} catch (const std::exception &ex) {
 				e.log(LogLine::Error, std::string("Choose Creature panel: ") + ex.what());
+			}
+		}
+	}
+	if (!o.har_help.empty()) {
+		const std::string target = har_target;
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			ed::HarObjects ho = ed::har_objects(*e.project(), h);
+			for (auto &file : o.har_help) {
+				try {
+					auto topics = ed::parse_help_file(read_text_file(file));
+					ed::write_help(*e.project(), topics, ed::read_presentation(*e.project(), ho).picture);
+					e.log(LogLine::Ok, std::to_string(topics.size()) + " Help topic(s) from " + std::filesystem::path(file).filename().string());
+				} catch (const std::exception &ex) {
+					e.log(LogLine::Error, "Help topics " + file + ": " + ex.what());
+				}
 			}
 		}
 	}

@@ -234,7 +234,7 @@ FetchContent_MakeAvailable(cgltf stb)
 
 # The content editor's data model (docs/EDITOR_SPEC.md): add-on projects, pilots, validation.
 add_library(editor-core STATIC editor/core/addon.cpp editor/core/content.cpp editor/core/pilot.cpp editor/core/image_io.cpp
-	editor/core/validate.cpp editor/core/arena.cpp editor/core/script.cpp editor/core/tournament.cpp editor/core/har.cpp
+	editor/core/validate.cpp editor/core/arena.cpp editor/core/script.cpp editor/core/tournament.cpp editor/core/har.cpp editor/core/help.cpp
 	editor/core/gltf.cpp editor/core/gltf_libs.c editor/core/model_export.cpp editor/core/model_import.cpp editor/core/har_import.cpp
 	editor/core/mesh_simplify.cpp)
 target_include_directories(editor-core PUBLIC editor/core)
@@ -252,6 +252,7 @@ add_executable(editor-assets-tests tests/editor_assets_tests.cpp)
 target_link_libraries(editor-assets-tests PRIVATE editor-core game)
 add_test(NAME editor-tournament COMMAND editor-assets-tests "${OPENBG_DATA_DIR}" tournament)
 add_test(NAME editor-har COMMAND editor-assets-tests "${OPENBG_DATA_DIR}" har)
+add_test(NAME editor-help COMMAND editor-assets-tests "${OPENBG_DATA_DIR}" help)
 add_executable(editor-gltf-tests tests/editor_gltf_tests.cpp)
 target_link_libraries(editor-gltf-tests PRIVATE editor-core game)
 add_test(NAME editor-gltf COMMAND editor-gltf-tests)

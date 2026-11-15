@@ -53,6 +53,7 @@ struct Options {
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
 	std::vector<std::string> har_scripts;    // script patch files (ed::parse_script_patch) for the HAR's behaviors
+	std::vector<std::string> har_help;       // Help topic files (ed::parse_help_file); "image: picture" is the HAR's
 	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
 	std::vector<std::string> tournament_sets;  // KEY=VALUE: set in the tournament made or opened (ed::set_tournament_field)
 	std::string har_anim;  // the HAR preview's sequence, "Name" or "Name@t" (paused at t)

@@ -2,8 +2,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <mutex>
 #include <set>
 
+#include "de/objects_file.h"
+#include "de/scene.h"
 #include "pilot.h"
 #include "script.h"
 #include "vm/vmcode.h"
@@ -47,6 +54,7 @@ void check_passive(const Project &p, Sink &s, size_t object, const Bytes &body, 
 		return;
 	}
 	Guid agent = r.guid(), target = r.guid();
+	if (guid_zero(target)) return;
 	int local = p.find(target);
 	if (local >= 0) {
 		if (!(agent == p.agent())) {
@@ -60,6 +68,31 @@ void check_passive(const Project &p, Sink &s, size_t object, const Bytes &body, 
 	} else if (!(p.base().files()[b->file].agent == agent)) {
 		s.add(Issue::Warning, 8, int(object), object_label(p, object) + ": " + what + " carries the wrong agent GUID");
 	}
+}
+
+// The objects of the engine module's files (Engine\Core.ModuleDLL beside Data: COREMeshes' casts, fonts), which the game loads too.
+const std::set<std::string> &engine_guids(const std::filesystem::path &data) {
+	static std::mutex mutex;
+	static std::map<std::filesystem::path, std::set<std::string>> cache;
+	std::lock_guard<std::mutex> lock(mutex);
+	auto it = cache.find(data);
+	if (it != cache.end()) return it->second;
+	std::set<std::string> &out = cache[data];
+	std::ifstream in(data.parent_path() / "Engine" / "Core.ModuleDLL", std::ios::binary);
+	if (!in) return out;
+	std::vector<uint8_t> module((std::istreambuf_iterator<char>(in)), {});
+	for (auto &res : de::pe_deobjects_resources(module)) {
+		try {
+			de::ObjectsFile f(std::move(res));
+			for (auto &o : f.objects()) {
+				Guid g;
+				memcpy(g.b, o.guid.bytes, 16);
+				out.insert(guid_key(g));
+			}
+		} catch (const std::exception &) {
+		}
+	}
+	return out;
 }
 
 }  // namespace
@@ -140,7 +173,7 @@ std::vector<Issue> validate(const Project &p) {
 				s.add(Issue::Error, 6, int(i), object_label(p, i) + ": local reference out of range"), ++ref_problems;
 			} else if (r.kind == Ref::Pool && r.index >= f.guid_pool.size()) {
 				s.add(Issue::Error, 6, int(i), object_label(p, i) + ": GUID pool reference out of range"), ++ref_problems;
-			} else if (!p.target(r).resolved) {
+			} else if (!p.target(r).resolved && !engine_guids(base.dir()).count(guid_key(p.target(r).guid))) {
 				s.add(Issue::Warning, 6, int(i), object_label(p, i) + ": reference to " + p.target(r).guid.str() + " that no file has (loads as null)"), ++ref_problems;
 			}
 		}
@@ -161,7 +194,7 @@ std::vector<Issue> validate(const Project &p) {
 		if (cls == "Class" || cls == "Behavior") ++scripts;
 	}
 	for (const Guid &g : f.guid_pool) {
-		if (p.find(g) < 0 && !base.by_guid(g)) {
+		if (p.find(g) < 0 && !base.by_guid(g) && !engine_guids(base.dir()).count(guid_key(g))) {
 			s.add(Issue::Warning, 6, -1, "GUID pool entry " + g.str() + " is in no file"), ++ref_problems;
 		}
 	}

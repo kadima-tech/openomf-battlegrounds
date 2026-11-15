@@ -34,6 +34,8 @@ struct ObjectRef {
 
 // The add-on files OPENBG_ADDONS names, in its order.
 std::vector<std::filesystem::path> addon_paths();
+// The objects files a PE module (Core.ModuleDLL) carries as "DEOBJECTS" resources.
+std::vector<std::vector<uint8_t>> pe_deobjects_resources(const std::vector<uint8_t> &module);
 
 class World {
 public:

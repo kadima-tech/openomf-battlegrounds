@@ -592,9 +592,6 @@ std::vector<PaintImage> paint_images(const Project &p, uint32_t model_descriptio
 	return out;
 }
 
-namespace {
-
-// A Value\String's text: its second chunk's first block.
 std::string string_text(const deo::Object &o) {
 	Chunks c = split_chunks(o.contents);
 	if (c.chunks.size() < 2) return {};
@@ -619,6 +616,8 @@ void set_string_text(deo::Object &o, const std::string &text) {
 	o.packed.clear();
 	o.packed_as_is = false;
 }
+
+namespace {
 
 // The description's large representation and, under it, the panel's pieces, by GUID.
 struct Panel {

@@ -1,0 +1,105 @@
+# Shadow's pages in the in-game Help (openbg-editor --har-help, docs/EDITOR_SPEC.md 5.6), listed under
+# "6. HAR (Robot) Reference" with the shipped robots and in their notation (see its "(Control Notation)").
+# Inputs: script/shadow.bgs for Shadow's own moves, Katana's behavior for the ones he keeps.
+
+== 6. HAR (Robot) Reference/Shadow
+title: Shadow
+image: picture
+The most secretive project of the last twenty years. Shadow throws quasi-real projections of itself, though any damage they take is felt by the host.
+
+Expand this topic to access a list of Shadow's special and super attacks.
+
+== 6. HAR (Robot) Reference/Shadow/Quick Reference
+SHADOW
+
+-Specials-
+
+Razor Spin: f,f+K
+Rebound Kick: s,s+J / b,b+J / f,f+J
+Rising Blade: f,f+P / s,s+P
+Shadow Grab: b,b+P
+Shadow Kick: b,f+K
+Shadow Punch: b,f+P
+
+-Supers-
+
+Blade Storm: f,f+LK+RK
+Shadow Barrage: b,b+LP+RP
+Super Razor Spin: J,f,f+LK+RK
+Super Rising Blade: f,f+LP+RP
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks
+page: 6. HAR (Robot) Reference/Katana/Special Attacks
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks/Shadow Punch
+SHADOW PUNCH
+
+b,f+P
+
+Shadow casts a projection of himself that lunges at the opponent and uppercuts on arrival, popping them into the air.  The projection vanishes the moment Shadow is hit, and Shadow is open while he casts.
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks/Shadow Kick
+SHADOW KICK
+
+b,f+K
+
+The projection flies at the opponent in a side kick, reaching further and faster than the Shadow Punch, and knocks them down.
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks/Shadow Grab
+SHADOW GRAB
+
+b,b+P
+
+The projection leaps up, drops onto the opponent and holds them for about a second and a half while their stun bar fills.
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks/Razor Spin
+RAZOR SPIN
+
+f,f+K
+
+Shadow rolls forward with his blades out, cutting anyone close by.  LK keeps the roll low along the ground; RK carries it up off the floor.
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks/Rebound Kick
+REBOUND KICK
+
+f,f+J / s,s+J / b,b+J
+
+Shadow springs off a nearby wall and drives a flying kick into the closest opponent.
+
+== 6. HAR (Robot) Reference/Shadow/Special Attacks/Rising Blade
+RISING BLADE
+
+f,f+P / s,s+P
+
+Shadow spins upward, blades slashing.  The RP version is slower and climbs higher, and s,s+P sends it to the side.
+
+== 6. HAR (Robot) Reference/Shadow/Super Attacks
+page: 6. HAR (Robot) Reference/Katana/Super Attacks
+
+== 6. HAR (Robot) Reference/Shadow/Super Attacks/Shadow Barrage
+SHADOW BARRAGE
+
+b,b+LP+RP
+
+Three projections rise around the opponent and strike in turn.  The last strike destroys a beaten HAR.
+
+== 6. HAR (Robot) Reference/Shadow/Super Attacks/Blade Storm
+BLADE STORM
+
+f,f+LK+RK
+
+Shadow whirls forward with both blades, carrying any opponent he catches along with him.
+
+== 6. HAR (Robot) Reference/Shadow/Super Attacks/Super Razor Spin
+SUPER RAZOR SPIN
+
+J,f,f+LK+RK
+
+A longer Razor Spin, launched from the air.
+
+== 6. HAR (Robot) Reference/Shadow/Super Attacks/Super Rising Blade
+SUPER RISING BLADE
+
+f,f+LP+RP
+
+A longer, higher Rising Blade.
