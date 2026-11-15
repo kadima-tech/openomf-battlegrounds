@@ -2256,19 +2256,23 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		out.binds.push_back(c >= 0 ? bn[size_t(c)] : rig.skin[b].bind);
 	}
 	// Channel offsets stay in their parent channel's frame, scaled by the bone's change of length,
-	// so every limb points where the base's does.
+	// so every limb points where the base's does; hips and shoulders are turned to where the new
+	// ones sit, or their limbs leave the mesh bound to them (FINDINGS 760).
 	std::vector<float> k(nc, sc);
+	std::vector<de::Transform> swing(nc);
 	for (size_t c = 0; c < nc; ++c) {
 		int p = rig.bank.channels[c].parent;
 		if (!rig.required(int(c))) continue;
 		if (p >= 0 && size_t(p) < nc && rig.required(p)) {
 			float l0 = length(sub(jb[c], jb[size_t(p)]));
 			if (l0 > 1e-3f) k[c] = length(sub(jn[c], jn[size_t(p)])) / l0;
+			V3 ob = rig.bind[size_t(p)].inverse_rotate(sub(jb[c], jb[size_t(p)])), on = bn[size_t(p)].inverse_rotate(sub(jn[c], jn[size_t(p)]));
+			if (l0 > 1e-3f && length(on) > 1e-3f && dot(normalize(ob), normalize(on)) < std::cos(0.01f)) swing[c] = rotation_between(ob, on);
 		} else if (jb[c][1] > 1e-3f && jn[c][1] > 1e-3f) {
 			k[c] = jn[c][1] / jb[c][1];
 		}
 	}
-	auto map_pos = [&](size_t c, const V3 &p) { return mul(p, k[c]); };
+	auto map_pos = [&](size_t c, const V3 &p) { return mul(swing[c].rotate(p), k[c]); };
 	out.bank = rig.bank;
 	for (size_t c = 0; c < nc; ++c) out.bank.channels[c].rest_pos = map_pos(c, rig.bank.channels[c].rest_pos);
 	auto retarget = [&](const de::AnimSequence &seq) {

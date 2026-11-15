@@ -325,7 +325,8 @@ they can be redone.
   when bent, else from the facing, so the base's elbows and knees bend the new ones the same way
   round; hands and feet to their vertices, feet level; the head as modelled; FINDINGS 670); every
   sequence keeps the base's rotations, and each channel's offset is scaled by its bone's change of
-  length (others by the overall size). Contacts are then corrected by two-bone IK about the hinge on
+  length (others by the overall size); hips and shoulders are also turned to where the new joints sit
+  in their parent's frame, so the limbs stay on the mesh bound to them (FINDINGS 760). Contacts are then corrected by two-bone IK about the hinge on
   samples of each retargeted sequence (FINDINGS 671): where the base's foot is down, the new one
   stays on its floor and moves as the base's does (no sliding against the game's speeds); where a
   base hand or foot holds `ThrowFollowTarget` in a throw, the new one reaches the same place on it
