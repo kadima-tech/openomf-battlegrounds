@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "game/navigation.h"
+#include "game/perf.h"
 #include "game/forces.h"
 #include "game/session.h"
 
@@ -90,6 +91,7 @@ void Navigation::build() {
 // (null past 500); the first touched affector that is one of the links' areas. Touching only
 // others, the sphere grows by 100 while under 500 (2.112 tested the same sphere again, forever).
 GameObject *Navigation::area_at(const Vec &p) {
+	PERF_ZONE("nav.area_at");
 	GameObject *probe = w_.create("NavigationTestSphere", "Actor\\Affector\\Sphere");
 	if (probe->shape == GameObject::Shape::None) w_.shapes_changed();
 	probe->shape = GameObject::Shape::Sphere;
@@ -188,6 +190,7 @@ void Navigation::calculate(Path &path, GameObject &creature, const Vec &dest) {
 // creature's focal point to `to` at the same height above the ground: walkable floor in between
 // (a dune) does not count.
 bool Navigation::wall_between(GameObject &creature, const Vec &to) {
+	PERF_ZONE("nav.wall_between");
 	const Vec me = creature.world().t, from = focal_point(creature);
 	const Vec at = {to[0], to[1] + (from[1] - me[1]), to[2]};
 	auto c = segment(w_, from, at, 0x200000);
@@ -285,8 +288,22 @@ bool Navigation::steer(GameObject &creature, const Vec &dest, Vec *waypoint, flo
 	if (areas_.empty()) return false;
 	Path &path = paths_[&creature];
 	// DE_CMoveToCommand::Update: more than 500 ms since the last path was found (a new
-	// destination waits for that too).
-	if (std::fabs(scene_ms() - path.calculated) > 500) calculate(path, creature, dest);
+	// destination waits for that too). Not in the original: a search that found no path is not
+	// repeated within 500 ms while neither end has moved 50 units (it would find none again: on
+	// Volcano's ground both ends are in GroundBox, so without this each tick searched twice for
+	// areas, over 1 ms a creature); the destination is still followed.
+	if (std::fabs(scene_ms() - path.calculated) > 500) {
+		const Vec me = creature.world().t;
+		auto flat = [](const Vec &a, const Vec &b) { return std::hypot(a[0] - b[0], a[2] - b[2]); };
+		if (path.areas.empty() && std::fabs(scene_ms() - path.searched) <= 500 && flat(me, path.searched_from) < 50 && flat(dest, path.searched_dest) < 50) {
+			path.dest = dest;
+		} else {
+			calculate(path, creature, dest);
+			path.searched = scene_ms();
+			path.searched_from = me;
+			path.searched_dest = dest;
+		}
+	}
 	*waypoint = move_to(path, creature, distance);
 	static const bool debug = getenv("OPENBG_DEBUG_NAV") != nullptr;
 	if (debug && w_.frame() % 30 == 0) {

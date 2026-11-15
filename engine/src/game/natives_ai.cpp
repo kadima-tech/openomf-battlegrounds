@@ -17,6 +17,7 @@
 #include "game/navigation.h"
 #include "game/observer.h"
 #include "game/runtime.h"
+#include "game/perf.h"
 #include "game/session.h"
 #include "game/simple_physics.h"
 
@@ -528,7 +529,7 @@ void World::run_commands(GameObject &o) {
 			// DE_CMoveToCommand::Update: the next position on the navigation path.
 			c.step = c.pos;
 			c.step_distance = distance(me, c.pos);
-			navigation->steer(o, c.pos, &c.step, &c.step_distance);
+			{ PERF_ZONE("cmd.steer"); navigation->steer(o, c.pos, &c.step, &c.step_distance); }
 		} else if (c.type == kTypeLookAt && c.target) {
 			// DE_CLookAtCommand::Update: the target's position (+ an offset, not used by scripts).
 			if (GameObject *t = object(c.target)) c.pos = t->world().t;
@@ -588,7 +589,7 @@ void World::run_commands(GameObject &o) {
 			break;
 		}
 		}
-		if (hook) o.brain->call_handle(*this, hook, args);
+		if (hook) { PERF_ZONE("cmd.hook"); o.brain->call_handle(*this, hook, args); }
 		return m.acted;
 	};
 	GameObject::Command *active = m.active ? m.find(m.active) : nullptr;

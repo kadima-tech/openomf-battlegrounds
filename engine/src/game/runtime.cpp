@@ -288,7 +288,8 @@ std::vector<GameObject *> World::scene_objects() {
 	for (size_t i = 0; i < todo.size(); ++i) {
 		if (!todo[i] || todo[i]->scene_walk == walk) continue;
 		todo[i]->scene_walk = walk;
-		if (!by_handle_.count(todo[i]->handle)) continue;
+		// Destroyed objects leave by_handle_ (destroy, which also sets destroyed_seq; handles are not reused).
+		if (todo[i]->destroyed_seq) continue;
 		// Out of the scene with its branch: removed (CScene::Remove), not at this detail level, or
 		// (below a root) parked inactive.
 		if (todo[i]->removed || (todo[i]->is_actor && !de::shown_at_detail(todo[i]->actor_flags))) continue;
@@ -1639,17 +1640,31 @@ static void pulse(World &w, Brain *b) {
 void World::creature_tick(GameObject &o) {
 	PERF_ZONE("w.creature_tick");
 	if (o.fighter) {
-		validate_animation(o);  // as InternalWorldUpdate does when something needs positions
-		if (!temporal_updating) run_commands(o);
+		{
+			PERF_ZONE("ct.validate");
+			validate_animation(o);  // as InternalWorldUpdate does when something needs positions
+		}
+		if (!temporal_updating) {
+			PERF_ZONE("ct.commands");
+			run_commands(o);
+		}
 	}
 	// A replay's held creature, or one re-taking its state for this tick, skips physics and brain.
 	bool skip = creature_state_tick(*this, o);
 	if (!skip) {
-		if (!o.fighter) simple_physics->creature_tick(o);
-		else if (!net_awaiting_first_state(*this, o)) physics_step(o);
+		if (!o.fighter) {
+			PERF_ZONE("ct.simple_physics");
+			simple_physics->creature_tick(o);
+		} else if (!net_awaiting_first_state(*this, o)) {
+			PERF_ZONE("ct.fighter_physics");
+			physics_step(o);
+		}
 	}
 	// Its first brain (o.brain: the first made with it as owner).
-	if (Brain *bp = o.brain; bp && !skip && is_creature_behaviour(*this, *bp)) pulse(*this, bp);
+	if (Brain *bp = o.brain; bp && !skip && is_creature_behaviour(*this, *bp)) {
+		PERF_ZONE(o.fighter ? "ct.script_fighter" : "ct.script_other");
+		pulse(*this, bp);
+	}
 	if (object(o.handle)) run_state_hooks(o);
 	creature_state_tick_end(*this, o);
 	++o.creature_ticks;
