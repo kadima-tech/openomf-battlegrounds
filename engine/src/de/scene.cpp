@@ -242,12 +242,9 @@ World::World(const std::filesystem::path &dir, const std::function<bool(const st
 		for (char &ch : upper) ch = char(toupper(uint8_t(ch)));
 		paths.emplace_back(upper, e.path());
 	}
-	for (const auto &p : addon_paths()) {
-		std::string upper = p.filename().string();
-		for (char &ch : upper) ch = char(toupper(uint8_t(ch)));
-		paths.emplace_back(upper, p);
-	}
 	std::sort(paths.begin(), paths.end());
+	// Add-ons after the game's own files, in the order given: a later one wins a GUID clash.
+	for (const auto &p : addon_paths()) paths.emplace_back(std::string(), p);
 	for (auto &[upper, p] : paths) add(p.stem().string(), read_file(p), true);
 	// The objects files built into the engine modules, named after their master object
 	// (COREMeshes, COREImages).

@@ -14,6 +14,11 @@
 // without a window and lists the natives still missing. --start-match N starts a tournament at
 // its match N whatever is unlocked (the editor's Play from match).
 //
+// Mods: normal play loads the enabled add-ons of the player's mod list (de/mods.h; --mods <file>
+// reads another list, also in screenshot and headless runs; --no-mods none), then every --addon /
+// OPENBG_ADDONS file, which replaces a listed mod of the same file name. --addon-info <file> prints
+// what an add-on adds ("<kind>\t<name>" lines) for the launchers.
+//
 // MOUSE="x,y@frame;down@frame;up@frame;key@frame;esc@frame;char c@frame;wheel n@frame;..." scripts the mouse (and Enter, Esc, a character key, the wheel) in screenshot runs (x, y fractions
 // of the window, y down); SHOTS="40,80" also writes <out>-<frame>.png.
 #include <SDL.h>
@@ -36,6 +41,7 @@
 
 #include "de/contents.h"
 #include "de/lighting.h"
+#include "de/mods.h"
 #include "de/platform.h"
 #include "game/replay.h"
 #include "game/runtime.h"
@@ -55,6 +61,12 @@
 #include "vm/disasm.h"
 
 namespace {
+
+#ifdef _WIN32
+constexpr char kAddonSeparator = ';';
+#else
+constexpr char kAddonSeparator = ':';
+#endif
 
 // BFighter's m_LastDamageInflictor, a reference member VMC2 leaves unnamed: the one SendDeathEvent reads.
 int last_damage_inflictor_member(const vm::ScriptClass &cls) {
@@ -154,8 +166,18 @@ int main(int argc, char **argv) {
 		if (!strcmp(c, "throw")) std::thread([] { throw std::runtime_error("OPENBG_TEST_CRASH"); }).join();
 		if (!strcmp(c, "abort")) abort();
 	}
+	if (argc == 3 && !strcmp(argv[1], "--addon-info")) {
+		try {
+			for (auto &[kind, name] : de::addon_contents(argv[2])) printf("%s\t%s\n", kind.c_str(), name.c_str());
+			return 0;
+		} catch (const std::exception &ex) {
+			fprintf(stderr, "%s: not an add-on: %s\n", argv[2], ex.what());
+			return 1;
+		}
+	}
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <Data dir> [--addon file.DEObjects] [--screenshot out.png --frames N]\n", argv[0]);
+		fprintf(stderr, "usage: %s <Data dir> [--addon file.DEObjects] [--mods mods.txt | --no-mods] [--screenshot out.png --frames N]\n"
+		        "       %s --addon-info file.DEObjects\n", argv[0], argv[0]);
 		return 2;
 	}
 	std::string data = argv[1];
@@ -172,6 +194,9 @@ int main(int argc, char **argv) {
 	int port = 0;      // --port
 	std::string lobby;  // --lobby: the lobby server, for this run
 	int shot_w = 1024, shot_h = 768;  // --size WxH: a screenshot run's frame
+	bool no_mods = false;
+	std::string mods_file;
+	std::vector<std::filesystem::path> extra_addons;  // --addon
 	for (int i = 2; i < argc; ++i) {
 		if (!strcmp(argv[i], "--screenshot") && i + 1 < argc) shot = argv[++i];
 		else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
@@ -183,6 +208,8 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--join") && i + 1 < argc) join = argv[++i];
 		else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--lobby") && i + 1 < argc) lobby = argv[++i];
+		else if (!strcmp(argv[i], "--no-mods")) no_mods = true;
+		else if (!strcmp(argv[i], "--mods") && i + 1 < argc) mods_file = argv[++i];
 		else if (!strcmp(argv[i], "simulatefullscreen") || !strcmp(argv[i], "-simulatefullscreen")) continue;  // the launcher's switch
 		else if (!strcmp(argv[i], "--highlight") && i + 1 < argc) highlight.push_back(argv[++i]);
 		else if (!strcmp(argv[i], "--choose") && i + 1 < argc) {
@@ -194,21 +221,35 @@ int main(int argc, char **argv) {
 				p = q + 1;
 			}
 		}
-		else if (!strcmp(argv[i], "--addon") && i + 1 < argc) {
-			// An extra add-on .DEObjects, loaded as if it were in the Data folder (OPENBG_ADDONS).
-			std::string list = getenv("OPENBG_ADDONS") ? getenv("OPENBG_ADDONS") : "";
-#ifdef _WIN32
-			list += (list.empty() ? "" : ";") + std::string(argv[++i]);
-			_putenv_s("OPENBG_ADDONS", list.c_str());
-#else
-			list += (list.empty() ? "" : ":") + std::string(argv[++i]);
-			setenv("OPENBG_ADDONS", list.c_str(), 1);
-#endif
-		}
+		else if (!strcmp(argv[i], "--addon") && i + 1 < argc) extra_addons.emplace_back(argv[++i]);
 		else if (!strcmp(argv[i], "--headless")) {
 			headless = true;
 			if (i + 1 < argc && argv[i + 1][0] != '-') frames = atoi(argv[++i]);
 		}
+	}
+	{
+		std::vector<std::filesystem::path> addons;
+		if (!no_mods && (!mods_file.empty() || (!shot && !headless))) {
+			auto mods = de::read_mods(mods_file.empty() ? de::default_mods_file() : std::filesystem::path(mods_file));
+			addons = de::mods_to_load(mods, [](const std::string &m) { fprintf(stderr, "mods: %s\n", m.c_str()); });
+		}
+		auto explicit_addons = de::addon_paths();
+		explicit_addons.insert(explicit_addons.end(), extra_addons.begin(), extra_addons.end());
+		for (const auto &e : explicit_addons) {
+			std::erase_if(addons, [&](const std::filesystem::path &a) { return a.filename() == e.filename(); });
+			addons.push_back(e);
+		}
+		std::string list;
+		for (const auto &a : addons) {
+			if (!list.empty()) list += kAddonSeparator;
+			list += a.string();
+			fprintf(stderr, "Add-on: %s\n", a.string().c_str());
+		}
+#ifdef _WIN32
+		_putenv_s("OPENBG_ADDONS", list.c_str());
+#else
+		setenv("OPENBG_ADDONS", list.c_str(), 1);
+#endif
 	}
 	struct MouseStep {
 		int frame;

@@ -87,6 +87,7 @@ add_library(de STATIC
 	src/de/anim.cpp
 	src/de/lighting.cpp
 	src/de/platform.cpp
+	src/de/mods.cpp
 )
 target_include_directories(de PUBLIC src)
 target_link_libraries(de PRIVATE openindeo)
@@ -186,6 +187,10 @@ add_test(NAME net-tests COMMAND net-tests)
 add_executable(game-unit-tests tests/game_unit_tests.cpp)
 target_include_directories(game-unit-tests PRIVATE src)
 add_test(NAME game-unit-tests COMMAND game-unit-tests)
+# The player's mod list (src/de/mods.h) as the launchers write it, no game data needed.
+add_executable(mods-tests tests/mods_tests.cpp)
+target_link_libraries(mods-tests PRIVATE de)
+add_test(NAME mods-tests COMMAND mods-tests)
 # The port follows the last official patch, 2.123 (PATCHES.md); the disc's 2.090 data still loads.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../source/patched/v2123/Data")
 	set(OPENBG_DEFAULT_DATA "${CMAKE_CURRENT_SOURCE_DIR}/../source/patched/v2123/Data")
@@ -336,7 +341,7 @@ endif()
 
 if(WIN32)
 	# Every program gets the manifest: UTF-8 arguments and paths, DPI awareness, Windows 10/11.
-	foreach(program deobj-dump de-tests net-tests vmc2-tests deobjects-data-tests editor-tests editor-arena-tests editor-assets-tests editor-gltf-tests editor-har-import-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
+	foreach(program deobj-dump de-tests net-tests mods-tests vmc2-tests deobjects-data-tests editor-tests editor-arena-tests editor-assets-tests editor-gltf-tests editor-har-import-tests openbg-viewer openbg-arena pcc openbg-brain openbg-fight openbg-net openbg openbg-editor)
 		target_sources(${program} PRIVATE ${OPENBG_WINDOWS_RESOURCES})
 	endforeach()
 endif()
