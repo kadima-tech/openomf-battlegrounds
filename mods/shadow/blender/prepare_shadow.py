@@ -1,6 +1,7 @@
 """Prepare Shadow, the One Must Fall 2097 robot, from the user's model (shadow-model.fbx) for the
-editor's robot import: scaled, rigged with Mixamo bones, weighted, textured and exported as a
-skinned glTF. The mesh keeps all its triangles unless --tris asks for fewer.
+editor's robot import: scaled, rigged with Mixamo bones, weighted, textured, animated (his 2097
+stance and moves, animate_shadow.py) and exported as a skinned glTF. The mesh keeps all its
+triangles unless --tris asks for fewer.
 
 blender -b --factory-startup --python prepare_shadow.py -- --fbx shadow-model.fbx --out shadow.glb
     [--blend shadow.blend] [--texture tripo.png] [--paint-out dir] [--picture choose_creature.png]
@@ -21,6 +22,9 @@ import bmesh
 import bpy
 import numpy as np
 from mathutils import Quaternion, Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import animate_shadow  # noqa: E402
 
 P = "mixamorig:"
 SIDES = (("Left", 1.0), ("Right", -1.0))
@@ -627,7 +631,8 @@ def weights(mo, ao, bones, H):
 def export(path):
     glb = path.lower().endswith(".glb")
     bpy.ops.export_scene.gltf(filepath=os.path.abspath(path), export_format="GLB" if glb else "GLTF_SEPARATE",
-                              export_yup=True, export_skins=True, export_animations=False, export_cameras=False,
+                              export_yup=True, export_skins=True, export_animations=True, export_animation_mode="ACTIONS",
+                              export_force_sampling=True, export_frame_step=1, export_cameras=False,
                               export_lights=False, export_image_format="AUTO", export_apply=False, export_extras=True,
                               use_selection=False)
 
@@ -781,6 +786,9 @@ def main():
     counts = materials(mo, look, glow, cat)
     ao = armature(bones)
     fixed, sided, loose = weights(mo, ao, bones, H)
+    bpy.context.scene.render.fps = animate_shadow.FPS
+    actions = animate_shadow.build(ao)
+    print("SHADOW actions " + ", ".join(actions))
     vs = np.array([v.co[:] for v in mo.data.vertices])
     print("SHADOW triangles %d -> %d, vertices %d, height %.3f m, width %.3f m" % (before, after, len(vs), np.ptp(vs[:, 2]), np.ptp(vs[:, 0])))
     print("SHADOW materials " + ", ".join("%s %d" % (n, c) for n, c in zip(MATERIALS, counts)))

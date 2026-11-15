@@ -1,0 +1,495 @@
+Shadow's moves from One Must Fall 2097, as a script patch for his copy of Katana's behaviors
+(openbg-editor --har-script; the sections replace or add methods, docs/EDITOR_SPEC.md 5.5).
+
+  Shadow Punch    Back, Forward + Punch       a projection lunges at the target and uppercuts
+  Shadow Kick     Back, Forward + Kick        a projection flies at the target in a side kick
+  Shadow Grab     Double-tap Back + Punch     a projection leaps, drops on the target and holds it
+  Shadow Barrage  Double-tap Back + both Punches (one energy bar): three projections strike in turn;
+                  it destroys a beaten robot, as 2097's scrap and destruction finish one
+
+The projections are Katana's projectile actor (PProjectile) with Shadow's afterimages on it
+(--import-ghost); they vanish as soon as Shadow is hit, and what hits one is dealt to Shadow
+(2097's "ud" tag and its description: "any damage they take is felt by the host").
+
+// ---- behavior BKatana
+
+// ---- members
+final byte m_ShadowPunch=1;
+final byte m_ShadowKick=2;
+final byte m_ShadowGrab=3;
+final byte m_ShadowBarrageStrike=4;
+final byte m_ShadowBarrageFinish=5;
+final float m_ShadowProjectionLife=1400;
+interface BProjectile m_ShadowProjection0;
+interface BProjectile m_ShadowProjection1;
+interface BProjectile m_ShadowProjection2;
+float m_ShadowLaunchTime;
+
+// ---- method ReceiveDamage
+param interface BAttacker AttackerInterface;
+param CAttackInfo AttackInfo;
+
+// Shadow hit: his projections vanish (2097's "ud" tag). Each lives longer than m_ShadowProjectionLife.
+if (DifferenceBetween(m_ShadowLaunchTime,Scene().Time())<m_ShadowProjectionLife)
+	{
+	if (IsValid(m_ShadowProjection0))
+		m_ShadowProjection0.ShadowDispel();
+	if (IsValid(m_ShadowProjection1))
+		m_ShadowProjection1.ShadowDispel();
+	if (IsValid(m_ShadowProjection2))
+		m_ShadowProjection2.ShadowDispel();
+	}
+BFighter::ReceiveDamage(AttackerInterface,AttackInfo);
+
+// ---- method Control.Ground.TestSpecials
+Ground.LeftBlockCounter.TryLaunch(false);
+Ground.RightBlockCounter.TryLaunch(false);
+
+master Ground.SuperShadowBarrage.TryLaunch();
+master Ground.ShadowProjection.TryLaunch();
+master Ground.SuperRisingBlade.TryLaunch();
+master Ground.RightRisingBlade.TryLaunch();
+master Ground.LeftRisingBlade.TryLaunch();
+master Ground.RazorSpin.TryLaunch();
+master Ground.Grapple.TryLaunch();
+
+// ---- state Ground.ShadowProjection
+replicate param byte Kind;
+float Frame;
+bool Launched;
+
+exKillCallers();
+RegisterStandardAttack();
+RegisterHighSignificanceState();
+GuideToBestMeleeTarget(0,0);
+m_FighterStatsInterface.FighterLoseStamina(m_StaminaLossHeavyAttack);
+m_CurrentVulnerability=m_AIProjectileVulnerability;
+
+if (Kind==m_ShadowGrab)
+	AnimActivatePrelude(seqShadowGrabCast);
+else
+	AnimActivatePrelude(seqShadowCast);
+
+for (Frame=0;Frame<1;Frame+=1.0/5)
+	{
+	AnimSetTime(Frame);
+	exEndFrame();
+	}
+
+if (Kind==m_ShadowGrab)
+	AnimActivate(seqShadowGrabCast);
+else
+	AnimActivate(seqShadowCast);
+
+FighterIncrementDelayOnMiss(30.0,0);
+
+for (Frame=0;Frame<1;Frame+=1.0/40)
+	{
+	AnimSetTime(Frame);
+	if (!Launched && Frame>=.4)
+		{
+		Launched=true;
+		master ShadowLaunch(Kind,0);
+		m_CurrentVulnerability=m_AIMissedAttackVulnerability;
+		}
+	exEndFrame();
+	}
+
+// ---- method ShadowLaunch
+param byte Kind;
+param byte Delay;
+COMF2Projectile Projectile;
+interface BProjectile ProjectileInterface;
+
+Projectile=(COMF2Projectile)m_ProjectileRef.Create();
+Projectile.SetOwner(this);
+Projectile.SetLocalOrientation(WorldOrientation());
+Projectile.LocalPosition().Set(WorldPosition());
+Scene().Add(Projectile);
+ProjectileInterface=Projectile.Interface(BProjectile);
+ProjectileInterface.SetTarget(CurrentTarget());
+ProjectileInterface.ShadowSetup(Kind,Delay,m_PilotStatEnergyProjectileMultiplier);
+if (Delay==0)
+	m_ShadowProjection0=ProjectileInterface;
+else if (Delay==1)
+	m_ShadowProjection1=ProjectileInterface;
+else
+	m_ShadowProjection2=ProjectileInterface;
+m_ShadowLaunchTime=Scene().Time();
+Scene().PlayNoiseSphere(g_ProjectileNoise,WorldPosition(),m_StandardSoundHotspot,m_StandardSoundFalloff,.8);
+
+// ---- method Ground.ShadowProjection.TryLaunch
+if (IsUserControlled())
+	{
+	if (Input.Verify(g_StandardInput.seqBackToForward))
+		{
+		if (Input.Verify(g_StandardInput.seqRightPunch) || Input.Verify(g_StandardInput.seqLeftPunch))
+			Ground.ShadowProjection(m_ShadowPunch);
+		if (Input.Verify(g_StandardInput.seqRightKick) || Input.Verify(g_StandardInput.seqLeftKick))
+			Ground.ShadowProjection(m_ShadowKick);
+		}
+	if (Input.Verify(g_StandardInput.seqDoubleTapBack))
+		{
+		if (Input.Verify(g_StandardInput.seqRightPunch) || Input.Verify(g_StandardInput.seqLeftPunch))
+			Ground.ShadowProjection(m_ShadowGrab);
+		}
+	}
+else
+	{
+	// The target ahead: the punch at middle range, the kick further out, the grab close in.
+	if (m_AIAttackAngle.y>-.3 && m_AIAttackAngle.y<.4 && m_AIAttackAngle.z>.8)
+		{
+		if (m_AIAttackPosition.z>90 && m_AIAttackPosition.z<420.0*m_PilotStatMovementSpeedMultiplier)
+			{
+			m_AIAttackCurrentConfidence=m_AIAttackLikliehood*(m_AIAttackAngle.z-.6)*7.0;
+			m_AIAttackCurrentConfidence-=Abs(m_AIAttackAngle.y)*2.0;
+			if (AITestAttackAffinity(m_AIAttackCurrentConfidence,CPilot::aiAffinitySpecial | CPilot::aiAffinityRight))
+				Ground.ShadowProjection(m_ShadowPunch);
+			}
+		if (m_AIAttackPosition.z>160 && m_AIAttackPosition.z<700.0*m_PilotStatMovementSpeedMultiplier)
+			{
+			m_AIAttackCurrentConfidence=m_AIAttackLikliehood*(m_AIAttackAngle.z-.6)*6.0;
+			m_AIAttackCurrentConfidence-=Abs(m_AIAttackAngle.y)*2.0;
+			if (AITestAttackAffinity(m_AIAttackCurrentConfidence,CPilot::aiAffinitySpecial | CPilot::aiAffinityLeft))
+				Ground.ShadowProjection(m_ShadowKick);
+			}
+		if (m_AIAttackPosition.z>60 && m_AIAttackPosition.z<260.0)
+			{
+			m_AIAttackCurrentConfidence=m_AIAttackLikliehood*(m_AIAttackAngle.z-.6)*7.0;
+			if (AITestAttackAffinity(m_AIAttackCurrentConfidence,CPilot::aiAffinitySpecial | CPilot::aiAffinityHeavy))
+				Ground.ShadowProjection(m_ShadowGrab);
+			}
+		}
+	}
+
+// ---- state Ground.SuperShadowBarrage
+float Frame;
+byte Launched;
+
+exKillCallers();
+RegisterStandardAttack();
+RegisterHighSignificanceState();
+GuideToBestMeleeTarget(0,0);
+
+UseEnergy(1);
+Ground.StartSuperEffect();
+m_CurrentVulnerability=m_AIProjectileVulnerability;
+
+AnimActivatePrelude(seqShadowSummon);
+for (Frame=0;Frame<1;Frame+=1.0/6)
+	{
+	AnimSetTime(Frame);
+	exEndFrame();
+	}
+AnimActivate(seqShadowSummon);
+
+FighterIncrementDelayOnMiss(40.0,0);
+
+for (Frame=0;Frame<1;Frame+=1.0/80)
+	{
+	AnimSetTime(Frame);
+	if (Launched==0 && Frame>=.18)
+		{
+		Launched=1;
+		master ShadowLaunch(m_ShadowBarrageStrike,0);
+		}
+	if (Launched==1 && Frame>=.36)
+		{
+		Launched=2;
+		master ShadowLaunch(m_ShadowBarrageStrike,1);
+		}
+	if (Launched==2 && Frame>=.54)
+		{
+		Launched=3;
+		master ShadowLaunch(m_ShadowBarrageFinish,2);
+		}
+	exEndFrame();
+	}
+
+// ---- method Ground.SuperShadowBarrage.TryLaunch
+if (m_FighterStatsInterface.CurrentEnergy()<1)
+	return;
+
+if (IsUserControlled())
+	{
+	if (Input.Verify(g_StandardInput.seqDoubleTapBack) && Input.Verify(g_StandardInput.seqRecentRightPunch) && Input.Verify(g_StandardInput.seqRecentLeftPunch))
+		Ground.SuperShadowBarrage();
+	}
+else
+	{
+	if (m_AIAttackAngle.z>.85 && m_AIAttackPosition.z>60 && m_AIAttackPosition.z<500.0)
+		{
+		m_AIAttackCurrentConfidence=m_AIAttackLikliehood*(m_AIAttackAngle.z-.75)*3.0;
+		if (AITestAttackAffinity(m_AIAttackCurrentConfidence*.8,CPilot::aiAffinitySuper))
+			Ground.SuperShadowBarrage();
+		}
+	}
+
+// ---- behavior BProjectile
+
+// ---- members
+final byte m_ShadowPunchKind=1;
+final byte m_ShadowKickKind=2;
+final byte m_ShadowGrabKind=3;
+final byte m_ShadowBarrageFinishKind=5;
+final byte m_GhostNone=0;
+final byte m_GhostPunchLunge=1;
+final byte m_GhostPunchUppercut=2;
+final byte m_GhostKick=3;
+final byte m_GhostGrabLeap=4;
+final byte m_GhostGrabHold=5;
+byte m_ShadowKind;
+byte m_ShadowDelay;
+float m_ShadowPower;
+bool m_ShadowDispelled;
+float m_ShadowBorn;
+bool m_ShadowStruck;
+
+// ---- method ShadowSetup
+param byte Kind;
+param byte Delay;
+param float Power;
+
+m_ShadowKind=Kind;
+m_ShadowDelay=Delay;
+m_ShadowBorn=Scene().Time();
+m_ShadowPower=Power;
+ShadowProjection();
+
+// ---- method ShadowShow
+param byte Pose;
+
+ShadowShowOne((CActor)FindChildByName("GhostPunchLunge"),Pose==m_GhostPunchLunge);
+ShadowShowOne((CActor)FindChildByName("GhostPunchUppercut"),Pose==m_GhostPunchUppercut);
+ShadowShowOne((CActor)FindChildByName("GhostKick"),Pose==m_GhostKick);
+ShadowShowOne((CActor)FindChildByName("GhostGrabLeap"),Pose==m_GhostGrabLeap);
+ShadowShowOne((CActor)FindChildByName("GhostGrabHold"),Pose==m_GhostGrabHold);
+
+// ---- method ShadowShowOne
+param CActor Ghost;
+param bool Shown;
+
+if (!Ghost)
+	return;
+if (Shown)
+	Ghost.SetRendered();
+else
+	Ghost.SetUnrendered();
+
+// ---- method ShadowRise
+param float Amount;
+instance CVector Place;
+
+Place=LocalPosition();
+Place.y+=Amount;
+LocalPosition().Set(Place);
+
+// ---- method ShadowDispel
+m_ShadowDispelled=true;
+
+// ---- method ShadowOwnerHit
+rparam bool RetValue;
+
+return m_ShadowDispelled;
+
+// ---- method ShadowTargetDistance
+rparam float RetValue;
+instance CVector Delta;
+
+if (!m_SeekTarget)
+	return 10000;
+Delta=m_SeekTarget.FocalPoint();
+Delta-=WorldPosition();
+Delta.y=0;
+return Delta.Length();
+
+// ---- method ShadowStrike
+interface BAttackable AttackableInterface;
+
+if (!m_SeekTarget)
+	return;
+AttackableInterface=m_SeekTarget.Interface(BAttackable);
+if (!IsValid(AttackableInterface) || !m_AttackInfo.AddPotentialVictim(m_SeekTarget))
+	return;
+
+if (m_ShadowKind==m_ShadowGrabKind)
+	{
+	// The hold: little damage, a long recovery and the stun bar filled.
+	m_AttackInfo.StartSimpleAttack(m_DamageMedium*.6*m_ShadowPower,m_GetHitRecoverTimeLong);
+	m_AttackInfo.m_StunDamage=m_DamageHeavy*1.6;
+	m_AttackInfo.m_TransferedMomentum.Set(0,0,0);
+	}
+else if (m_ShadowKind==m_ShadowKickKind)
+	{
+	m_AttackInfo.StartSimpleAttack(m_DamageHeavy*m_ShadowPower,m_GetHitRecoverTimeHeavy);
+	m_AttackInfo.m_TransferedMomentum.Set(0,.5,1.4);
+	}
+else if (m_ShadowKind==m_ShadowPunchKind)
+	{
+	m_AttackInfo.StartSimpleAttack(m_DamageHeavy*m_ShadowPower,m_GetHitRecoverTimeHeavy);
+	m_AttackInfo.m_TransferedMomentum.Set(0,1.3,.6);
+	}
+else
+	{
+	m_AttackInfo.StartSimpleAttack(m_DamageMedium*m_ShadowPower,m_GetHitRecoverTimeHeavy);
+	m_AttackInfo.m_TransferedMomentum.Set(0,.9,.9);
+	m_AttackInfo.SetSuper();
+	}
+RotateFromLocalToWorld(m_AttackInfo.m_TransferedMomentum);
+m_AttackInfo.m_ConnectPoint=m_SeekTarget.FocalPoint();
+m_AttackInfo.m_ReelDirection=m_AttackInfo.m_TransferedMomentum;
+m_AttackInfo.m_ReelDirection.SetLength(m_GetHitEffectDirectionMedium*m_AttackGetHitEffectIntensityMultiplier);
+m_AttackInfo.m_EffectDirection=m_AttackInfo.m_ReelDirection;
+m_AttackInfo.m_MomentumAdjustAmount=0;
+
+if (m_ShadowKind!=m_ShadowGrabKind && AttackableInterface.AttackableIsBlocking() && m_AttackInfo.TestForFighterBlock(m_SeekTarget,WorldOrientation().AxisZ,m_AttackBlockZones))
+	{
+	m_AttackInfo.m_TransferedMomentum.y=0;
+	m_AttackInfo.m_TransferedMomentum.SetLength(m_BlockSlideMedium*m_AttackBlockTransferedMomentumMultiplier);
+	m_AttackInfo.m_RecoveryTime=m_BlockRecoverTimeMedium*m_AttackBlockRecoveryTimeMultiplier;
+	m_AttackInfo.GainEnergy(m_EnergyGainBlockMedium);
+	}
+else if (m_ShadowKind==m_ShadowBarrageFinishKind && AttackableInterface.AttackableIsDestroyable())
+	{
+	AttackableInterface.AttackableDestroy(1000);
+	}
+
+AttackableInterface.AttackableReceiveAttack(Interface(BAttacker),m_AttackInfo);
+m_ShadowStruck=true;
+
+// ---- method AttackableReceiveAttack
+param interface BAttacker AttackerInterface;
+param CAttackInfo AttackInfo;
+interface BAttackable OwnerInterface;
+
+// What strikes a projection is dealt to Shadow, and the projection is gone.
+if (m_ShadowKind && Owner())
+	{
+	OwnerInterface=Owner().Interface(BAttackable);
+	if (IsValid(OwnerInterface))
+		OwnerInterface.AttackableReceiveAttack(AttackerInterface,AttackInfo);
+	m_ShadowDispelled=true;
+	}
+
+// ---- state ShadowProjection
+int Frame;
+int Phase;
+float Rise;
+instance CVector Place;
+int Life;
+
+ResolveMembers();
+exKillCallers();
+m_Danger.Deactivate();
+((CParticleModifier)FindChildByName("TravelingParticleSpawner")).SpawningOff();
+((CActor)FindChildByName("VisualMesh")).SetUnrendered();
+((CActor)FindChildByName("Cone")).Deactivate();
+m_LightProperty.SetColor(.25,.35,1.0);
+ShadowShow(m_GhostNone);
+m_AttackInfo.Prepare(m_ShadowDelay);
+RegisterStandardState();
+
+for (Frame=0;Frame<(int)m_ShadowDelay*6;Frame++)
+	exEndFrame();
+
+if (m_ShadowKind==m_ShadowGrabKind)
+	{
+	// It leaps from Shadow, comes down on the target and holds it (2097 moves 37, 39, 40, 50).
+	ShadowShow(m_GhostGrabLeap);
+	MoveLocalZ(20);
+	for (Frame=0;Frame<14 && !ShadowOwnerHit();Frame++)
+		{
+		ShadowRise(7.0-(float)Frame*.4);
+		exEndFrame();
+		}
+	if (m_SeekTarget && ShadowTargetDistance()<450.0 && !ShadowOwnerHit())
+		{
+		Place=m_SeekTarget.WorldPosition();
+		Place.y+=110;
+		LocalPosition().Set(Place);
+		for (Frame=0;Frame<10 && !ShadowOwnerHit();Frame++)
+			{
+			ShadowRise(-11.0);
+			exEndFrame();
+			}
+		if (!ShadowOwnerHit())
+			{
+			PointZ(m_SeekTarget);
+			LocalOrientation().RotateYDeg(180);
+			ShadowShow(m_GhostGrabHold);
+			ShadowStrike();
+			for (Frame=0;Frame<55 && m_ShadowStruck && !ShadowOwnerHit();Frame++)
+				{
+				Place=m_SeekTarget.WorldPosition();
+				LocalPosition().Set(Place);
+				MoveLocalZ(-14);
+				exEndFrame();
+				}
+			}
+		}
+	}
+else
+	{
+	// It closes in, held in one pose, and strikes on arrival (2097 moves 22, 25, 26).
+	if (m_ShadowKind==m_ShadowKickKind)
+		{
+		ShadowShow(m_GhostKick);
+		MoveLocalZ(40);
+		ShadowRise(18);
+		}
+	else
+		{
+		ShadowShow(m_GhostPunchLunge);
+		MoveLocalZ(30);
+		}
+	if (m_ShadowKind>m_ShadowGrabKind && m_SeekTarget)
+		{
+		// The barrage's shadows rise around the target.
+		Place=m_SeekTarget.WorldPosition();
+		LocalPosition().Set(Place);
+		RotateLocalYDeg(-60.0+60.0*(float)m_ShadowDelay);
+		MoveLocalZ(-70);
+		PointZ(m_SeekTarget);
+		}
+	for (Frame=0;Frame<90 && !ShadowOwnerHit();Frame++)
+		{
+		if (m_SeekTarget)
+			{
+			PointZ(m_SeekTarget);
+			if (ShadowTargetDistance()<45.0)
+				{
+				ShadowStrike();
+				Frame=90;
+				}
+			}
+		if (Frame<90 && m_ShadowKind==m_ShadowKickKind)
+			MoveLocalZ(10.0);
+		else if (Frame<90)
+			MoveLocalZ(7.0);
+		exEndFrame();
+		}
+	if (m_ShadowStruck && m_ShadowKind!=m_ShadowKickKind)
+		{
+		ShadowShow(m_GhostPunchUppercut);
+		for (Frame=0;Frame<12;Frame++)
+			{
+			ShadowRise(1.5);
+			exEndFrame();
+			}
+		}
+	else
+		{
+		for (Frame=0;Frame<8;Frame++)
+			{
+			MoveLocalZ(4);
+			exEndFrame();
+			}
+		}
+	}
+
+ShadowShow(m_GhostNone);
+m_LightProperty.SetColor(0,0,0);
+// Kept a while, hidden, so Shadow never calls one that is gone.
+for (Life=0;DifferenceBetween(m_ShadowBorn,Scene().Time())<2000;Life++)
+	exEndFrame();
+Die();

@@ -413,6 +413,12 @@ they can be redone.
   in Choose Creature, and fights in `openbg-fight` in each pilot's colours, as player and as AI, hits
   landing both ways (`editor-har-import-tests <Data> --check shadow.glb Katana`: limbs on the base's,
   worst edge stretch 1.21 of the base's, 4 of 1,865 planted samples sliding).
+- Verified (2026-11-15, later): Shadow's 2097 moves are built by `build.sh` alone: Blender actions
+  (`animate_shadow.py`) replace Katana's Standing and add his casts and afterimage poses as new
+  sequences, `--import-ghost` hangs five afterimages under the projectile actor, and `--har-script
+  script/shadow.bgs` adds the states, inputs, AI choices and the projection; both classes compile.
+  In `openbg-fight` each special lands by scripted input against an idle Jaguar 300 units away, the
+  AI casts them, and AI matches repeat byte for byte (FINDINGS 741-746).
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the

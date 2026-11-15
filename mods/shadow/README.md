@@ -1,6 +1,18 @@
 # Shadow
 
-Shadow, the One Must Fall: 2097 robot, made from the user's model `blender/shadow-model.fbx` and imported with the editor's robot import onto **Katana's moveset**. He has no special moves of his own yet.
+Shadow, the One Must Fall: 2097 robot, made from the user's model `blender/shadow-model.fbx` and imported with the editor's robot import onto **Katana's moveset**, with his own 2097 stance and special moves.
+
+## Moves
+Shadow fights with Katana's basics (punches, kicks, throws, evades, the rising blade, razor spin, grapple, super rising blade and the block counters) and adds his 2097 specials. "Back" and "Forward" are the stick pulled away from and pushed towards the opponent; either punch or kick button works.
+
+| Move | Input | What it does |
+|---|---|---|
+| **Shadow Punch** | Back, Forward + Punch | Shadow throws a projection of himself: it lunges at the opponent and uppercuts on arrival (heavy damage, pops up). Replaces Katana's blade projectile. |
+| **Shadow Kick** | Back, Forward + Kick | The projection flies at the opponent in a side kick, further and faster (heavy damage, knocks down). |
+| **Shadow Grab** | Double-tap Back + Punch | The projection leaps up, drops on the opponent and holds them for about a second and a half (light damage, fills the stun bar). |
+| **Shadow Barrage** (super) | Double-tap Back + both Punches, one energy bar | Three projections rise around the opponent and strike in turn; the last one destroys a beaten robot (2097's scrap and destruction). |
+
+The projections are only as real as Shadow's concentration: they vanish the moment Shadow is hit, and what strikes one is dealt to Shadow himself. Shadow is open while he casts. The computer pilots use all four (the grab most, close in; the punch and kick at range; the barrage with a full energy bar).
 
 ## Files
 - `blender/shadow-model.fbx`: the source model. It is a single AI-generated mesh (Tripo): 5,406 triangles, one UV layer, no texture, no rig, no animation; 1 m tall, in a T-pose, facing -Y.
@@ -13,13 +25,20 @@ Shadow, the One Must Fall: 2097 robot, made from the user's model `blender/shado
   - materials: six, all sharing the one texture, each with a `de_paint` custom property and metallic for the reflection. Armour takes the pilot's first colour, limbs the second, hands the third; face, studs and blades keep their own colours;
   - glow: the studs, visor, ear pods and the blades' bright edges are emissive (`ShadowGlow.png`, the glTF emissive texture of the Glow and Blade materials); the import draws them into the game's glow layer;
   - the "Stealth" paint job (`ShadowDark.png`), the 512 × 128 Choose Creature picture (four staged poses) and turntable and pose renders.
+- `blender/animate_shadow.py`: his own animations, keyframed on that rig after the 2097 sprites (FINDINGS 744): `Standing` (the deep side-on stance, replacing Katana's), `ShadowCast`, `ShadowGrabCast`, `ShadowSummon`, and one-pose `Ghost*` sequences the projections are posed from. Limbs are given as directions, the torso as turns; each key plants the lower foot.
+- `script/shadow.bgs`: the moves, a script patch for his copy of Katana's behaviors (`BKatana`: the casting states, inputs and AI choices; `BProjectile`: the projection), applied with `--har-script`. It holds only Shadow's own code.
 - `blender/af_sprites.py`: extracts the sprite frames from 2097's `FIGHTR*.AF` files, which were used as references.
+- `blender/af_moves.py`: prints an `.AF` file's header and move table (inputs, animation strings, damage, stun, successors), as OpenOMF reads it; the source of the research in FINDINGS 741-746.
 - `source/`: what the import reads:
   - `shadow.glb` and `shadow.blend`;
   - `ShadowColours.png` (the texture), `ShadowGlow.png` (what glows) and `ShadowDark.png` (the Stealth paint job);
   - `choose_creature.png`;
+  - `ShadowGlow.png`: what glows;
   - `mapping.json`: what the import chose (15/15 bones by name and the Mixamo preset; mirrored and turned 180°).
 - `renders/`: Blender turntable (`shadow_front`, `front34`, `side`, `back34`, `back`) and pose (`stance`, `stance_side`, `guard`, `kick`) renders.
+
+## How the moves are built
+`build.sh` imports `source/shadow.glb` onto Katana: the file's `Standing` replaces Katana's, its other animations become new sequences, `--import-ghost` poses LOD1 in each `Ghost*` sequence as a dark see-through afterimage under Katana's projectile actor, and `--har-script script/shadow.bgs` adds the moves, which `--compile` builds into VMC2. Nothing in the engine is specific to Shadow.
 
 ## Rebuild
 ```sh
@@ -32,4 +51,6 @@ TEXTURE=tripo.png ./build.sh --model      # the same, with the model's own textu
 ## Not done yet
 - The Tripo texture is missing from the FBX (its material has a normal map node but no image), so the texture is generated. If it turns up, pass it with `TEXTURE=`.
 - The ribs are painted on: the FBX's limbs are smooth tubes.
-- No special moves: he fights with Katana's moves.
+- His basics are still Katana's (walk, punches, kicks, throws); only the stance and the specials are his.
+- The projections are posed meshes that slide and switch poses, as 2097's held sprites do; they do not animate between poses, and they do not fade out.
+- 2097's aerial specials (the air Shadow Dive, `P632` in the air, and the enhanced air grab) and the Fire Pit destruction are not made.
