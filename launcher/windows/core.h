@@ -99,6 +99,33 @@ struct Locations {
 // Windows command-line quoting that CommandLineToArgvW and the C runtime parse back exactly.
 std::wstring quote_argument(const std::wstring &argument);
 
+// --- The player's mod list, read by the engine itself (engine/src/de/mods.h): mods.txt in the
+// engine's settings folder, "on <path>" / "off <path>" lines (UTF-8) in load order, then the
+// unlisted add-ons of the "mods" folder beside it, enabled, in name order ---
+struct ModEntry {
+	fs::path path;
+	bool enabled = true;
+	bool operator==(const ModEntry &) const = default;
+};
+struct ModInfo {
+	bool exists = false, invalid = false;
+	uint64_t size = 0;
+	std::wstring adds;  // "pilot Major Kreissack \u00B7 tournament WAR Finale"
+};
+fs::path mods_settings_folder();  // %APPDATA%\openbg, as the engine's
+std::wstring mod_key(const fs::path &path);
+std::vector<ModEntry> parse_mods(std::string_view text, const fs::path &base);
+std::string format_mods(const std::vector<ModEntry> &mods);
+std::vector<fs::path> folder_mods(const fs::path &folder);
+std::vector<ModEntry> read_mods(const fs::path &file);
+bool write_mods(const std::vector<ModEntry> &mods, const fs::path &file);
+// In a source checkout: the add-ons mods\<name>\build.sh wrote.
+std::vector<fs::path> checkout_mods(const fs::path &project);
+// The problem that keeps a mod from loading, if any.
+std::optional<std::wstring> mod_problem(const std::vector<ModEntry> &mods, size_t index, const ModInfo *info);
+// Presence, size and contents (`openbg --addon-info`) of an add-on file.
+ModInfo inspect_mod(const fs::path &engine, const fs::path &path);
+
 // --- The launcher's state, independent of the window ---
 struct Stage {
 	std::wstring title, detail;
@@ -118,6 +145,11 @@ public:
 	Locations where;
 	bool preview;
 	HANDLE worker = nullptr, job = nullptr, game = nullptr;
+	bool configuring = false;
+	std::vector<ModEntry> mods;
+	std::map<std::wstring, ModInfo> mod_info;
+	fs::path mods_file = mods_settings_folder() / L"mods.txt";
+	std::function<bool(const fs::path &)> trash;  // moves a file to the Recycle Bin
 
 	// Hooks the window provides. post() runs a function later on the UI thread.
 	std::function<void(std::function<void()>)> post = [](std::function<void()> f) { f(); };
@@ -132,6 +164,17 @@ public:
 	void launch();
 	void cancel();  // stops setup and everything it started
 	std::wstring log_to_open() const;
+
+	fs::path mods_folder() const { return mods_file.parent_path() / L"mods"; }
+	void load_mods();
+	void save_mods();
+	void toggle_mod(size_t index);
+	void move_mod(size_t index, int offset);
+	// A file in the mods folder would come back on the next read, so it goes to the Recycle Bin.
+	void remove_mod(size_t index);
+	void add_mod(const fs::path &path);
+	const ModInfo &info(const fs::path &path);
+	size_t active_mods();
 
 private:
 	void install(const fs::path &source);

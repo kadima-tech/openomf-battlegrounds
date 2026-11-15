@@ -1,9 +1,12 @@
 #include "core.h"
 
 #include <bcrypt.h>
+#include <shellapi.h>
 #include <shlobj.h>
 
 #include <algorithm>
+#include <cwctype>
+#include <set>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -551,6 +554,232 @@ std::wstring quote_argument(const std::wstring &a) {
 	return r + L"\"";
 }
 
+// ---------------------------------------------------------------- mods
+
+fs::path mods_settings_folder() { return known_folder(FOLDERID_RoamingAppData, L"APPDATA") / L"openbg"; }
+
+namespace {
+
+std::wstring lower(std::wstring s) {
+	for (auto &c : s) c = wchar_t(towlower(c));
+	return s;
+}
+
+}  // namespace
+
+std::wstring mod_key(const fs::path &path) {
+	if (auto c = canonical_path(path)) return lower(*c);
+	return lower(path.lexically_normal().wstring());
+}
+
+std::vector<ModEntry> parse_mods(std::string_view text, const fs::path &base) {
+	std::vector<ModEntry> out;
+	std::set<std::wstring> seen;
+	while (!text.empty()) {
+		size_t end = text.find('\n');
+		std::string_view line = text.substr(0, end);
+		text = end == std::string_view::npos ? std::string_view() : text.substr(end + 1);
+		if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+		bool on = line.starts_with("on "), off = line.starts_with("off ");
+		if (!on && !off) continue;
+		std::string_view value = line.substr(on ? 3 : 4);
+		if (value.empty()) continue;
+		fs::path p(widen(value));
+		if (p.is_relative()) p = base / p;
+		p = p.lexically_normal();
+		if (seen.insert(mod_key(p)).second) out.push_back({p, on});
+	}
+	return out;
+}
+
+std::string format_mods(const std::vector<ModEntry> &mods) {
+	std::string text = "# OpenBG mods, in load order: \"on\" or \"off\", a space, the add-on file.\r\n";
+	for (auto &m : mods) text += (m.enabled ? "on " : "off ") + narrow(m.path.wstring()) + "\r\n";
+	return text;
+}
+
+std::vector<fs::path> folder_mods(const fs::path &folder) {
+	std::vector<fs::path> out;
+	std::error_code ec;
+	for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+		if (lower(it->path().extension().wstring()) == L".deobjects" && it->is_regular_file(ec)) out.push_back(it->path());
+	std::sort(out.begin(), out.end(), [](const fs::path &a, const fs::path &b) { return lower(a.filename().wstring()) < lower(b.filename().wstring()); });
+	return out;
+}
+
+std::vector<ModEntry> read_mods(const fs::path &file) {
+	auto text = read_file(file);
+	std::vector<ModEntry> mods = text ? parse_mods(*text, file.parent_path()) : std::vector<ModEntry>{};
+	std::set<std::wstring> seen;
+	for (auto &m : mods) seen.insert(mod_key(m.path));
+	for (auto &p : folder_mods(file.parent_path() / L"mods"))
+		if (seen.insert(mod_key(p)).second) mods.push_back({p, true});
+	return mods;
+}
+
+bool write_mods(const std::vector<ModEntry> &mods, const fs::path &file) {
+	std::error_code ec;
+	fs::create_directories(file.parent_path(), ec);
+	fs::path temporary = file;
+	temporary += L".tmp";
+	{
+		std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+		out << format_mods(mods);
+		if (!out) return false;
+	}
+	return MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+std::vector<fs::path> checkout_mods(const fs::path &project) {
+	std::vector<fs::path> names, out;
+	std::error_code ec;
+	for (fs::directory_iterator it(project / L"mods", ec), end; !ec && it != end; it.increment(ec))
+		if (it->is_directory(ec)) names.push_back(it->path());
+	std::sort(names.begin(), names.end(), [](const fs::path &a, const fs::path &b) { return lower(a.filename().wstring()) < lower(b.filename().wstring()); });
+	for (auto &n : names)
+		for (auto &p : folder_mods(n / L"build")) out.push_back(p);
+	return out;
+}
+
+std::optional<std::wstring> mod_problem(const std::vector<ModEntry> &mods, size_t index, const ModInfo *info) {
+	if (!info) return std::nullopt;
+	if (!info->exists) return L"File not found. Remove it, or put the file back.";
+	if (info->invalid) return L"Not a Battlegrounds add-on (.DEObjects).";
+	if (!mods[index].enabled) return std::nullopt;
+	std::wstring name = lower(mods[index].path.filename().wstring());
+	for (size_t i = 0; i < index; ++i)
+		if (mods[i].enabled && lower(mods[i].path.filename().wstring()) == name) {
+			wchar_t text[96];
+			swprintf(text, 96, L"Same file name as mod %02d, so only that one loads.", int(i + 1));
+			return text;
+		}
+	return std::nullopt;
+}
+
+ModInfo inspect_mod(const fs::path &engine, const fs::path &path) {
+	ModInfo info;
+	std::error_code ec;
+	if (!fs::is_regular_file(path, ec)) return info;
+	info.exists = true;
+	info.size = fs::file_size(path, ec);
+	if (!fs::exists(engine, ec)) return info;
+	SECURITY_ATTRIBUTES inherit{sizeof inherit, nullptr, TRUE};
+	HANDLE read = nullptr, write = nullptr;
+	if (!CreatePipe(&read, &write, &inherit, 0)) return info;
+	SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
+	std::wstring command = quote_argument(engine.wstring()) + L" --addon-info " + quote_argument(path.wstring());
+	STARTUPINFOW si{};
+	si.cb = sizeof si;
+	si.dwFlags = STARTF_USESTDHANDLES;
+	si.hStdOutput = write;
+	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	PROCESS_INFORMATION pi{};
+	BOOL started = CreateProcessW(engine.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+	CloseHandle(write);
+	if (started) {
+		std::string out;
+		char buffer[4096];
+		DWORD n = 0;
+		while (ReadFile(read, buffer, sizeof buffer, &n, nullptr) && n) out.append(buffer, n);
+		WaitForSingleObject(pi.hProcess, INFINITE);
+		DWORD code = 1;
+		GetExitCodeProcess(pi.hProcess, &code);
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+		info.invalid = code != 0;
+		std::wistringstream lines(widen(out));
+		for (std::wstring line; std::getline(lines, line);) {
+			if (!line.empty() && line.back() == L'\r') line.pop_back();
+			std::replace(line.begin(), line.end(), L'\t', L' ');
+			if (line.empty()) continue;
+			if (!info.adds.empty()) info.adds += L" · ";
+			info.adds += line;
+		}
+	}
+	CloseHandle(read);
+	return info;
+}
+
+void LauncherModel::load_mods() {
+	mods = read_mods(mods_file);
+	if (where.project) {
+		std::set<std::wstring> seen;
+		for (auto &m : mods) seen.insert(mod_key(m.path));
+		for (auto &p : checkout_mods(*where.project))
+			if (seen.insert(mod_key(p)).second) mods.push_back({p, false});
+	}
+	mod_info.clear();
+}
+
+void LauncherModel::save_mods() {
+	if (!write_mods(mods, mods_file)) error = L"Your mod list could not be saved in " + mods_file.wstring() + L".";
+	changed();
+}
+
+void LauncherModel::toggle_mod(size_t index) {
+	if (index >= mods.size()) return;
+	mods[index].enabled = !mods[index].enabled;
+	save_mods();
+}
+
+void LauncherModel::move_mod(size_t index, int offset) {
+	size_t target = index + offset;
+	if (index >= mods.size() || target >= mods.size()) return;
+	std::swap(mods[index], mods[target]);
+	save_mods();
+}
+
+void LauncherModel::remove_mod(size_t index) {
+	if (index >= mods.size()) return;
+	std::error_code ec;
+	fs::path file = mods[index].path;
+	if (mod_key(file.parent_path()) == mod_key(mods_folder()) && fs::exists(file, ec)) {
+		bool trashed = false;
+		if (trash) {
+			trashed = trash(file);
+		} else {
+			std::wstring from = file.wstring() + L'\0';  // SHFileOperation takes a double-NUL-terminated list
+			SHFILEOPSTRUCTW op{};
+			op.wFunc = FO_DELETE;
+			op.pFrom = from.c_str();
+			op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+			trashed = SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted;
+		}
+		if (!trashed) {
+			mods[index].enabled = false;
+			error = file.filename().wstring() + L" could not be moved to the Recycle Bin.";
+			save_mods();
+			return;
+		}
+	}
+	mods.erase(mods.begin() + std::ptrdiff_t(index));
+	save_mods();
+}
+
+void LauncherModel::add_mod(const fs::path &path) {
+	std::error_code ec;
+	fs::path absolute = fs::absolute(path, ec).lexically_normal();
+	std::wstring key = mod_key(absolute);
+	auto found = std::find_if(mods.begin(), mods.end(), [&](const ModEntry &m) { return mod_key(m.path) == key; });
+	if (found != mods.end()) found->enabled = true;
+	else mods.push_back({absolute, true});
+	mod_info.erase(absolute.wstring());
+	save_mods();
+}
+
+const ModInfo &LauncherModel::info(const fs::path &path) {
+	auto it = mod_info.find(path.wstring());
+	if (it == mod_info.end()) it = mod_info.emplace(path.wstring(), inspect_mod(where.resources / L"bin" / L"openbg.exe", path)).first;
+	return it->second;
+}
+
+size_t LauncherModel::active_mods() {
+	size_t n = 0;
+	for (size_t i = 0; i < mods.size(); ++i)
+		if (mods[i].enabled && !mod_problem(mods, i, &info(mods[i].path))) ++n;
+	return n;
+}
+
 // ---------------------------------------------------------------- model
 
 LauncherModel::LauncherModel(Locations w, bool p) : where(std::move(w)), preview(p) {
@@ -573,7 +802,8 @@ void LauncherModel::fail(std::wstring message) {
 }
 
 void LauncherModel::start() {
-	if (preview) {
+	if (configuring) load_mods();
+	if (preview && !configuring) {
 		needs_window();
 		return;
 	}
@@ -596,7 +826,12 @@ void LauncherModel::start() {
 			if (installed && engine) {
 				ready_game = installed;
 				ready = true;
-				launch();
+				if (configuring) {
+					needs_window();
+					changed();
+				} else {
+					launch();
+				}
 			} else {
 				needs_window();
 				if (!has_manifest) error = L"The app is incomplete. Rebuild or download a complete copy.";
