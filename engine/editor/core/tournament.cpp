@@ -1451,7 +1451,21 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 	else if (f == "lose-commentary") m.lose_commentary = v;
 	else if (f == "arena") m.arena = guid_of("Description\\Environment", v);
 	else if (f == "ai-offset") m.ai_offset = integer(trim(v), -5, 5);
-	else if (f == "opponents") m.opponents.resize(size_t(integer(trim(v), 1, 5)));
+	else if (f == "drop-ons") {
+		if (!trim(v).empty()) throw deo::Error(key + ": only an empty value (clear) is taken");
+		m.drop_ons.clear();
+	} else if (f == "drop-on+") {
+		// slot:actor[:delay ms]: the actor dropped on that slot's creature (AddDropActorOnSlotCreature),
+		// as the North American Open drops RavensHandler on Raven.
+		size_t a = v.find(':'), b = a == std::string::npos ? a : v.find(':', a + 1);
+		if (a == std::string::npos) throw deo::Error(key + ": give slot:actor[:delay]");
+		TDropOn d;
+		d.slot = integer(trim(v.substr(0, a)), 0, 5);
+		d.actor = guid_of("Actor", v.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1));
+		if (d.actor == Guid{}) throw deo::Error(key + ": no actor named");
+		d.delay = b == std::string::npos ? 0.0f : float(integer(trim(v.substr(b + 1)), 0, 600000));
+		m.drop_ons.push_back(d);
+	} else if (f == "opponents") m.opponents.resize(size_t(integer(trim(v), 1, 5)));
 	else if (f.rfind("opponent.", 0) == 0) {
 		int k = integer(f.substr(9), 1, long(std::min<size_t>(m.opponents.size() + 1, 5)));
 		if (size_t(k) > m.opponents.size()) m.opponents.resize(size_t(k));

@@ -53,6 +53,9 @@ struct Options {
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
 	std::vector<std::string> har_scripts;    // script patch files (ed::parse_script_patch) for the HAR's behaviors
+	// Base objects copied into the add-on with what they hold (Class:Name), the copies' names then
+	// changed (Old=New, every occurrence), and script patches for the add-on's own behaviors.
+	std::vector<std::string> copy_trees, copy_renames, script_patches;
 	std::vector<std::string> har_help;       // Help topic files (ed::parse_help_file); "image: picture" is the HAR's
 	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
 	// The tournament made or opened's Choose Match image and list icon (PNG or BMP, scaled to the

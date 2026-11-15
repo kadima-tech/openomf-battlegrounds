@@ -7,8 +7,10 @@
 #include <set>
 #include <sstream>
 
+#include "arena.h"
 #include "content.h"
 #include "har.h"
+#include "model_build.h"
 #include "help.h"
 #include "image_io.h"
 #include "pilot.h"
@@ -373,6 +375,65 @@ void assets_startup(Editor &e) {
 					e.log(LogLine::Error, "Script patch " + file + ": " + ex.what());
 				}
 			}
+		}
+	}
+	// --copy-tree Class:Name: a base object and everything it holds, copied with fresh GUIDs
+	// (ed::copy_tree); --copy-rename Old=New then changes the copies' names.
+	for (auto &spec : o.copy_trees) {
+		try {
+			auto colon = spec.find(':');
+			if (colon == std::string::npos) throw deo::Error("give Class:Name");
+			const std::string cls = spec.substr(0, colon), name = spec.substr(colon + 1);
+			const ed::BaseObject *found = nullptr;
+			for (const ed::BaseObject *b : e.base()->of_class(cls)) {
+				if (b->name == name) {
+					found = b;
+					break;
+				}
+			}
+			if (!found) throw deo::Error("no base " + cls + " named " + name);
+			std::map<uint32_t, uint32_t> copies;
+			ed::copy_tree(*e.project(), e.base()->model(found->file), false, {found->index}, &copies);
+			auto &objs = e.project()->file().objects;
+			for (auto &[from, to] : copies) {
+				std::string n = objs[to].info.name_text();
+				for (auto &r : o.copy_renames) {
+					auto eq = r.find('=');
+					if (eq == std::string::npos || eq == 0) continue;
+					const std::string old = r.substr(0, eq), fresh = r.substr(eq + 1);
+					for (size_t at = n.find(old); at != std::string::npos; at = n.find(old, at + fresh.size())) n.replace(at, old.size(), fresh);
+				}
+				if (n != objs[to].info.name_text()) objs[to].info.name = ed::build::stored(n);
+			}
+			e.project()->touch();
+			e.log(LogLine::Ok, "Copied " + spec + " (" + std::to_string(copies.size()) + " objects)");
+		} catch (const std::exception &ex) {
+			e.log(LogLine::Error, "Copy " + spec + ": " + ex.what());
+		}
+	}
+	// --script-patch: sections for the add-on's own behaviors, by name.
+	for (auto &file : o.script_patches) {
+		try {
+			auto sections = ed::parse_script_patch(read_text_file(file));
+			std::set<std::string> names;
+			for (auto &s : sections) names.insert(s.behavior);
+			auto &objs = e.project()->file().objects;
+			for (auto &name : names) {
+				int beh = -1;
+				for (size_t i = 0; i < objs.size() && beh < 0; ++i) {
+					if (objs[i].info.class_text() == "Behavior" && objs[i].info.name_text() == name) beh = int(i);
+				}
+				if (beh < 0) throw deo::Error("no add-on behavior " + name);
+				de::PCode code = ed::read_pcode(objs[size_t(beh)]);
+				code.name = name;  // a renamed copy (--copy-rename) still carries its source's name
+				ed::ScriptPatchResult r = ed::apply_script_patch(code, sections);
+				if (r.replaced + r.added + r.members == 0) throw deo::Error("nothing in it matched " + name);
+				ed::write_behavior(*e.project(), uint32_t(beh), code, ed::behavior_global_targets(*e.project(), uint32_t(beh)));
+				e.log(LogLine::Ok, name + ": " + std::to_string(r.replaced) + " method(s) replaced, " + std::to_string(r.added) + " added" + (r.members ? ", members extended" : "") +
+				                       " from " + std::filesystem::path(file).filename().string());
+			}
+		} catch (const std::exception &ex) {
+			e.log(LogLine::Error, "Script patch " + file + ": " + ex.what());
 		}
 	}
 	if (!o.tournament_sets.empty() || !o.tournament_image.empty() || !o.tournament_icon.empty()) {

@@ -7,8 +7,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "arena.h"
 #include "de/contents.h"
 #include "image_io.h"
+#include "model_build.h"
 
 namespace ed {
 
@@ -256,7 +258,19 @@ PilotData read_pilot(const Project &p, const PilotObjects &o) {
 	return d;
 }
 
-void write_pilot(Project &p, const PilotObjects &o, const PilotData &d) {
+void write_pilot(Project &p, const PilotObjects &given, const PilotData &d) {
+	PilotObjects o = given;
+	// A pilot whose description has no PilotDescription string (Li-Megui) gets one for a bio: a
+	// base pilot's, copied under its description, then written below like any other.
+	if (!d.bio.empty() && o.bio < 0 && o.description >= 0) {
+		for (const BaseObject *b : p.base().of_class("Value\\String")) {
+			if (b->name != "PilotDescription") continue;
+			std::vector<uint32_t> made = copy_tree(p, p.base().model(b->file), false, {b->index});
+			build::add_child(p, uint32_t(o.description), made.at(0));
+			o.bio = int(made.at(0));
+			break;
+		}
+	}
 	auto &objs = p.file().objects;
 	deo::Object &pilot = objs.at(size_t(o.pilot));
 	set_name(pilot, d.name);
