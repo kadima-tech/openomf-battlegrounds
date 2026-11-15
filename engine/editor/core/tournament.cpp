@@ -1470,7 +1470,16 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 		if (a == std::string::npos) throw deo::Error(key + ": give slot:actor[:delay]");
 		TDropOn d;
 		d.slot = integer(trim(v.substr(0, a)), 0, 5);
-		d.actor = guid_of("Actor", v.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1));
+		// What the base tournaments drop (the Settings form's list: Acid, SabotageExplosion, EndlessGW...),
+		// then any actor of the add-on or the base game by name.
+		const std::string actor = trim(v.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1));
+		for (auto &[label, g] : drop_on_choices(p.base())) {
+			if (label == actor) {
+				d.actor = g;
+				break;
+			}
+		}
+		if (d.actor == Guid{}) d.actor = guid_of("Actor", actor);
 		if (d.actor == Guid{}) throw deo::Error(key + ": no actor named");
 		d.delay = b == std::string::npos ? 0.0f : float(integer(trim(v.substr(b + 1)), 0, 600000));
 		m.drop_ons.push_back(d);
