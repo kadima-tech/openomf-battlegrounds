@@ -120,6 +120,12 @@ std::vector<std::pair<std::string, std::string>> user_blocks(const std::string &
 // Choices for the editor's dropdowns (base and add-on objects of a class), by name.
 std::vector<std::pair<std::string, Guid>> class_choices(const Project &p, const std::string &class_path);
 std::string match_label(const Tournament &t, int target, bool lose);
+// One field from text, as --tournament-set KEY=VALUE gives it: name, choose-text, listed, locked,
+// ai-difficulty, unlock+ (name[:text]), match+ (a new last match, by name), and per match (1-based) match.N.name,
+// .description, .intro, .arena, .ai-offset, .win-commentary, .lose-commentary, .opponents (a count),
+// .opponent.K (pilot[,robot]; names, "random" or empty), .pre-quote+ / .win-quote+ / .lose-quote+
+// (slot:text) and .pre-quotes / .win-quotes / .lose-quotes (empty: clear). \n is a line break.
+void set_tournament_field(const Project &p, Tournament &t, const std::string &key, const std::string &value);
 // Actors the base tournaments drop on fighters (their BSubSession globals' actors).
 std::vector<std::pair<std::string, Guid>> drop_on_choices(const BaseData &base);
 // A script text with its user blocks' contents taken out (what the generator owns).

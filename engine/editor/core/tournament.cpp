@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -1372,6 +1373,105 @@ std::vector<std::pair<std::string, Guid>> class_choices(const Project &p, const 
 	std::sort(base.begin(), base.end(), [](auto &a, auto &b) { return a.first < b.first; });
 	out.insert(out.end(), base.begin(), base.end());
 	return out;
+}
+
+void set_tournament_field(const Project &p, Tournament &t, const std::string &key_in, const std::string &value_in) {
+	auto trim = [](const std::string &s) {
+		size_t a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
+		return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+	};
+	const std::string key = trim(key_in);
+	std::string v;
+	for (size_t i = 0; i < value_in.size(); ++i) {
+		if (value_in[i] == '\\' && i + 1 < value_in.size() && value_in[i + 1] == 'n') v += '\n', ++i;
+		else v += value_in[i];
+	}
+	auto integer = [&](const std::string &s, long lo, long hi) {
+		char *end = nullptr;
+		long n = std::strtol(s.c_str(), &end, 10);
+		if (s.empty() || *end || n < lo || n > hi) throw deo::Error(key + ": \"" + s + "\" is not a number from " + std::to_string(lo) + " to " + std::to_string(hi));
+		return int(n);
+	};
+	auto on = [&](const std::string &s) {
+		if (s == "1" || s == "true" || s == "on" || s == "yes") return true;
+		if (s == "0" || s == "false" || s == "off" || s == "no") return false;
+		throw deo::Error(key + ": \"" + s + "\" is not on or off");
+	};
+	auto guid_of = [&](const std::string &cls, const std::string &name) {
+		std::string n = trim(name);
+		if (n.empty() || n == "random") return Guid{};
+		for (auto &[label, g] : class_choices(p, cls)) {
+			if (label == n || label == n + "  (add-on)") return g;
+		}
+		throw deo::Error(key + ": no " + cls + " named " + n);
+	};
+	if (key == "name") {
+		if (v.empty()) throw deo::Error("name: empty");
+		t.name = v;
+		return;
+	}
+	if (key == "choose-text") return void(t.choose_text = v);
+	if (key == "listed") return void(t.listed = on(trim(v)));
+	if (key == "locked") return void(t.locked = on(trim(v)));
+	if (key == "ai-difficulty") return void(t.ai_difficulty = float(integer(trim(v), -3, 5)));
+	if (key == "unlock+") {
+		size_t colon = v.find(':');
+		std::string what = trim(v.substr(0, colon));
+		for (const char *cls : {"Description\\Pilot", "Description\\Creature\\Fighter", "Description\\Environment", "Description\\SessionMaster"}) {
+			for (auto &[label, g] : class_choices(p, cls)) {
+				if (label != what && label != what + "  (add-on)") continue;
+				t.unlocks.push_back({g, colon == std::string::npos ? what + " will now be available." : trim(v.substr(colon + 1))});
+				return;
+			}
+		}
+		throw deo::Error(key + ": no pilot, robot, arena or tournament named " + what);
+	}
+	if (key == "match+") {
+		TMatch m;
+		int n = int(t.matches.size()) + 1;
+		for (;; ++n) {
+			m.key = "Match" + std::to_string(n);
+			if (std::none_of(t.matches.begin(), t.matches.end(), [&](const TMatch &x) { return x.key == m.key; })) break;
+		}
+		m.name = v.empty() ? "Match " + std::to_string(t.matches.size() + 1) : v;
+		m.description = "<Slot0Name> faces <Slot1Name> in <EnvironmentName>.";
+		m.opponents.resize(1);
+		t.matches.push_back(m);
+		return;
+	}
+	if (key.rfind("match.", 0) != 0) throw deo::Error("unknown tournament field " + key);
+	size_t dot = key.find('.', 6);
+	if (dot == std::string::npos) throw deo::Error(key + ": give match.N.<field>");
+	TMatch &m = t.matches.at(size_t(integer(key.substr(6, dot - 6), 1, long(t.matches.size())) - 1));
+	const std::string f = key.substr(dot + 1);
+	if (f == "name") m.name = v;
+	else if (f == "description") m.description = v;
+	else if (f == "intro") m.intro = v;
+	else if (f == "win-commentary") m.win_commentary = v;
+	else if (f == "lose-commentary") m.lose_commentary = v;
+	else if (f == "arena") m.arena = guid_of("Description\\Environment", v);
+	else if (f == "ai-offset") m.ai_offset = integer(trim(v), -5, 5);
+	else if (f == "opponents") m.opponents.resize(size_t(integer(trim(v), 1, 5)));
+	else if (f.rfind("opponent.", 0) == 0) {
+		int k = integer(f.substr(9), 1, long(std::min<size_t>(m.opponents.size() + 1, 5)));
+		if (size_t(k) > m.opponents.size()) m.opponents.resize(size_t(k));
+		size_t comma = v.find(',');
+		m.opponents[size_t(k - 1)].pilot = guid_of("Description\\Pilot", v.substr(0, comma));
+		m.opponents[size_t(k - 1)].robot = comma == std::string::npos ? Guid{} : guid_of("Description\\Creature\\Fighter", v.substr(comma + 1));
+	} else {
+		std::vector<TQuote> *qs = f.rfind("pre-quote", 0) == 0 ? &m.pre_quotes : f.rfind("win-quote", 0) == 0 ? &m.win_quotes
+		                         : f.rfind("lose-quote", 0) == 0 ? &m.lose_quotes : nullptr;
+		std::string rest = qs ? f.substr(f.find("quote") + 5) : "";
+		if (!qs || (rest != "+" && rest != "s")) throw deo::Error("unknown match field " + f);
+		if (rest == "s") {
+			if (!trim(v).empty()) throw deo::Error(key + ": only an empty value (clear) is taken");
+			qs->clear();
+			return;
+		}
+		size_t colon = v.find(':');
+		if (colon == std::string::npos) throw deo::Error(key + ": give slot:text");
+		qs->push_back({integer(trim(v.substr(0, colon)), 0, 5), trim(v.substr(colon + 1))});
+	}
 }
 
 std::string match_label(const Tournament &t, int target, bool lose) {

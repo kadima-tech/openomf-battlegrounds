@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "de/contents.h"
@@ -502,6 +504,126 @@ std::vector<std::string> base_pilot_names(const BaseData &base) {
 	std::sort(out.begin(), out.end());
 	out.erase(std::unique(out.begin(), out.end()), out.end());
 	return out;
+}
+
+std::array<PilotTrait, 31> base_pilot_traits(const BaseData &base, const std::string &name) {
+	Project scratch(base, "", Project::create(base, "Scratch.DEObjects")->file());
+	uint32_t made = create_pilot(scratch, name, "scratch");
+	return read_pilot(scratch, pilot_objects(scratch, made)).traits;
+}
+
+namespace {
+
+std::string trimmed(const std::string &s) {
+	size_t a = s.find_first_not_of(" \t"), b = s.find_last_not_of(" \t");
+	return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+}
+
+std::string lowered(std::string s) {
+	for (char &c : s) c = char(std::tolower(uint8_t(c)));
+	return s;
+}
+
+float number(const std::string &key, const std::string &v, float lo, float hi) {
+	char *end = nullptr;
+	float f = std::strtof(v.c_str(), &end);
+	if (v.empty() || *end || !(f >= lo && f <= hi)) {
+		char range[64];
+		snprintf(range, sizeof range, " (%g-%g)", lo, hi);
+		throw deo::Error(key + ": \"" + v + "\" is not a number" + range);
+	}
+	return f;
+}
+
+std::vector<std::string> split_commas(const std::string &v) {
+	std::vector<std::string> out;
+	size_t at = 0;
+	for (;;) {
+		size_t comma = v.find(',', at);
+		out.push_back(trimmed(v.substr(at, comma - at)));
+		if (comma == std::string::npos) return out;
+		at = comma + 1;
+	}
+}
+
+bool flag(const std::string &key, const std::string &v) {
+	std::string l = lowered(v);
+	if (l == "1" || l == "true" || l == "yes" || l == "on") return true;
+	if (l == "0" || l == "false" || l == "no" || l == "off") return false;
+	throw deo::Error(key + ": \"" + v + "\" is not on or off");
+}
+
+}  // namespace
+
+void set_pilot_field(const Project &p, PilotData &d, const std::string &key_in, const std::string &value_in) {
+	const std::string key = lowered(trimmed(key_in)), v = trimmed(value_in);
+	static const char *const stat_keys[4] = {"power", "agility", "endurance", "focus"};
+	for (int k = 0; k < 4; ++k) {
+		if (key == stat_keys[k]) {
+			d.stats[size_t(k)] = std::round(number(key, v, 0, 100));
+			return;
+		}
+	}
+	if (key == "name") {
+		if (v.empty()) throw deo::Error("name: empty");
+		d.name = v;
+	} else if (key == "sex") {
+		std::string l = lowered(v);
+		if (l == "male" || l == "0") d.sex = kMale;
+		else if (l == "female" || l == "1") d.sex = kFemale;
+		else if (l == "undefined" || l == "2") d.sex = kSexUndefined;
+		else throw deo::Error("sex: \"" + v + "\" is not male, female or undefined");
+	} else if (key == "bio") {
+		std::string bio;
+		for (size_t i = 0; i < value_in.size(); ++i) {
+			if (value_in[i] == '\\' && i + 1 < value_in.size() && value_in[i + 1] == 'n') bio += '\n', ++i;
+			else bio += value_in[i];
+		}
+		d.bio = bio;
+	} else if (key == "listed") {
+		d.listed = flag(key, v);
+	} else if (key == "locked") {
+		d.locked = flag(key, v);
+	} else if (key == "visible") {
+		d.visible_when_locked = flag(key, v);
+	} else if (key.size() == 7 && key.rfind("colour", 0) == 0 && key[6] >= '1' && key[6] <= '3') {
+		auto parts = split_commas(v);
+		if (parts.size() != 3) throw deo::Error(key + ": give r,g,b");
+		for (int j = 0; j < 3; ++j) d.colours[size_t(key[6] - '1')][size_t(j)] = number(key, parts[size_t(j)], 0, 1);
+	} else if (key.size() == 7 && key.rfind("weight", 0) == 0 && key[6] >= '1' && key[6] <= '3') {
+		d.weights[size_t(key[6] - '1')] = number(key, v, 0, 10);
+	} else if (key.rfind("trait.", 0) == 0) {
+		const std::string which = key.substr(6);
+		const auto &info = trait_infos();
+		size_t t = info.size();
+		for (size_t k = 0; k < info.size(); ++k) {
+			if (lowered(info[k].name) == which || lowered(info[k].label) == which) t = k;
+		}
+		if (t == info.size()) throw deo::Error("no AI trait " + key.substr(6));
+		auto parts = split_commas(v);
+		if (parts.empty() || parts.size() > 3) throw deo::Error(key + ": give level[,variation[,wave]]");
+		PilotTrait &tr = d.traits[t];
+		int level = -1;
+		for (int k = 0; k < 9; ++k) {
+			if (lowered(kTraitLevels[k]) == lowered(parts[0])) level = k;
+		}
+		tr.level = uint8_t(level >= 0 ? level : int(number(key, parts[0], 0, 8)));
+		if (parts.size() > 1) tr.variation = uint8_t(number(key, parts[1], 0, 5));
+		if (parts.size() > 2) tr.wave = uint8_t(number(key, parts[2], 0, 3));
+	} else if (key == "traits-from") {
+		d.traits = base_pilot_traits(p.base(), v);
+	} else if (key == "cast+" || key == "cast-") {
+		const BaseObject *cast = nullptr;
+		for (const BaseObject *o : p.base().of_class("Description\\Cast")) {
+			if (o->name == v) cast = o;
+		}
+		if (!cast) throw deo::Error(key + ": no cast named " + v);
+		auto it = std::find(d.casts.begin(), d.casts.end(), cast->guid);
+		if (key == "cast+" && it == d.casts.end()) d.casts.push_back(cast->guid);
+		if (key == "cast-" && it != d.casts.end()) d.casts.erase(it);
+	} else {
+		throw deo::Error("unknown pilot field " + key_in);
+	}
 }
 
 std::string object_name(const Project &p, const Guid &g) {

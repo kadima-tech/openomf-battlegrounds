@@ -225,6 +225,84 @@ int main(int argc, char **argv) {
 		set_env("OPENBG_ADDONS", "");
 	}
 
+	// Scripted fields (--pilot-set, the console's set): every key, refusals, and the engine's reader.
+	{
+		auto p = ed::Project::create(base, tmp / "Scripted.DEObjects");
+		uint32_t made = ed::create_pilot(*p, "General Brander", "Major Kreissack");
+		ed::PilotObjects o = ed::pilot_objects(*p, made);
+		ed::PilotData d = ed::read_pilot(*p, o);
+		const std::pair<const char *, const char *> sets[] = {
+		    {"sex", "female"},         {"bio", "Line one.\\nLine two."}, {"power", "70"},        {"agility", "65"},
+		    {"endurance", "70"},       {"focus", "45"},                  {"colour1", "0.36,0.1,0.55"}, {"weight3", "1.5"},
+		    {"locked", "on"},          {"visible", "yes"},               {"listed", "1"},         {"traits-from", "Raven"},
+		    {"trait.AffinityGrapple", "Massive"}, {"trait.Special Moves", "7,3,2"}, {"Trait.affinitymercy", "0,0"},
+		    {"cast-", "PilotSPLadder"}, {"cast+", "MultiplayerPilot"}, {"name", "Hans Kreissack"},
+		};
+		for (auto &[k, v] : sets) {
+			try {
+				ed::set_pilot_field(*p, d, k, v);
+			} catch (const std::exception &ex) {
+				fprintf(stderr, "set %s=%s: %s\n", k, v, ex.what());
+				CHECK(false);
+			}
+		}
+		const auto raven = ed::base_pilot_traits(base, "Raven");
+		CHECK(d.name == "Hans Kreissack" && d.sex == ed::kFemale && d.bio == "Line one.\nLine two.");
+		CHECK(d.stats[0] == 70 && d.stats[1] == 65 && d.stats[2] == 70 && d.stats[3] == 45);
+		CHECK(std::abs(d.colours[0][2] - 0.55f) < 1e-6f && d.weights[2] == 1.5f);
+		CHECK(d.locked && d.visible_when_locked && d.listed);
+		CHECK(d.traits[13].level == 8 && d.traits[6] == (ed::PilotTrait{7, 3, 2}) && d.traits[29].level == 0 && d.traits[29].variation == 0);
+		CHECK(d.traits[0] == raven[0] && d.traits[30] == raven[30]);
+		const ed::BaseObject *mp = base_named(base, "Description\\Cast", "MultiplayerPilot");
+		CHECK(mp && d.casts.size() == 1 && d.casts[0] == mp->guid);
+		for (auto &[k, v] : std::vector<std::pair<const char *, const char *>>{{"power", "101"}, {"power", "lots"}, {"sex", "robot"}, {"colour2", "1,1"},
+		                                                                       {"trait.Nonsense", "4"}, {"trait.AffinityJump", "9"}, {"cast+", "NoSuchCast"},
+		                                                                       {"locked", "maybe"}, {"traits-from", "Nobody"}, {"name", ""}, {"hair", "grey"}}) {
+			bool refused = false;
+			try {
+				ed::set_pilot_field(*p, d, k, v);
+			} catch (const deo::Error &) {
+				refused = true;
+			}
+			if (!refused) fprintf(stderr, "set %s=%s was taken\n", k, v);
+			CHECK(refused);
+		}
+		CHECK(d.stats[0] == 70 && d.name == "Hans Kreissack");
+		ed::write_pilot(*p, o, d);
+		ed::PilotData back = ed::read_pilot(*p, o);
+		back.photo_source = d.photo_source;
+		CHECK(back == d);
+		auto bytes = p->bytes();
+		de::ObjectsFile f(std::vector<uint8_t>(bytes.begin(), bytes.end()));
+		for (auto &info : f.objects()) {
+			if (info.class_path != "Actor\\Creature\\Pilot") continue;
+			auto gp = game::read_pilot(f, info, 0);
+			CHECK(gp && gp->stats.power == 70 && gp->stats.focus == 45 && gp->sex == ed::kFemale);
+			if (gp) CHECK(gp->ai.at(0x588).level == 8 && gp->ai.at(0x4a8).level == 7 && gp->ai.at(0x668).level == 0);
+		}
+	}
+
+	// Photo import weighs colours by alpha: what lies under transparent pixels never reaches the edges.
+	{
+		ed::RgbaImage cut;
+		cut.width = cut.height = 512;
+		for (int y = 0; y < 512; ++y) {
+			for (int x = 0; x < 512; ++x) {
+				uint8_t v = x >= 201 ? 255 : 0;  // red under the transparent part
+				cut.rgba.insert(cut.rgba.end(), {255, v, v, v});
+			}
+		}
+		for (int side : {256, 1024}) {
+			auto px = ed::crop_square_resize(cut.width, cut.height, cut.rgba, side);
+			int tinted = 0, edges = 0, dirty = 0;
+			for (size_t i = 0; i < px.size(); i += 4) {
+				if (px[i + 3] == 0) dirty += px[i] || px[i + 1] || px[i + 2];
+				else tinted += px[i + 1] != 255 || px[i + 2] != 255, edges += px[i + 3] < 255;
+			}
+			CHECK(tinted == 0 && dirty == 0 && edges > 0);
+		}
+	}
+
 	// Copy to a chosen, existing add-on: nothing is written before the user picks or creates
 	// one, and the add-on's file changes only when saved.
 	{

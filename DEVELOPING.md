@@ -56,7 +56,7 @@ The port follows the final official patch, 2.123. `re/scripts/rtpatch_chain.sh` 
   Last Man Standing session scripts (countdown, READY/FIGHT, knockouts, rounds, winner), both robots
   driven by their own compiled script brains, in an arena:
   `engine/build/openbg-fight source/patched/v2123/Data Jaguar --opponent Katana --arena Desert`
-  (`--opponent none` for solo; `--arena PracticeArena` is Training's room; `--pilot` / `--opponent-pilot` pick pilots from Pilots.DEObjects,
+  (`--opponent none` for solo; `--arena PracticeArena` is Training's room; `--pilot` / `--opponent-pilot` pick pilots from Pilots.DEObjects or an add-on in `OPENBG_ADDONS`,
   `--difficulty rookie|amateur|veteran|champion|world-champion|master` sets the AI difficulty (default rookie, as the registry's), `--wins 1|2|5|10|20|50`
   the score limit (default 2); `--direct` skips the session and spawns both robots straight away (in the real arena, at the session's spawn points, each with its pilot driving it as in a session; the same robot can be both fighters); `--watch` lets the computer drive your robot too, for watching AI against AI.)
   The arena's song plays and follows the fight's moods (DirectMusic segments rendered by GothicKit
@@ -227,9 +227,10 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   Content Browser, Output Log, Validation, Script Console, status bar) and the **pilot editor**:
   Content > New Pilot copies a base pilot (its description, bio and photo) with fresh GUIDs, listed and
   unlocked; the tabs edit name, sex, photo (PNG or BMP import, cropped and stored as an uncompressed
-  256 x 256 `Image\Standard`), bio, listed / locked flags, casts, the four attributes, the 31 AI
+  256 x 256 `Image\Standard`; colours are weighted by alpha, so a cut-out keeps clean edges), bio, listed / locked flags, casts, the four attributes, the 31 AI
   traits and the three paint colours. The preview shows the photo, or the robot posed and painted in
-  the pilot's colours (the viewer's fighter code, `app/fighter_model.*`). Ctrl+S saves, Ctrl+Z undoes.
+  the pilot's colours (the viewer's fighter code, `app/fighter_model.*`); the photo is shown whole, as
+  Choose Pilot shows it. Ctrl+S saves, Ctrl+Z undoes.
   Tournaments and HAR variants have their own editors (below); arenas and Play are the world side.
 - **Validate** (F7) runs the §7 checks that apply (rules 9-10: current VMC2 and the last compile's errors, a click opens the script at the line); rules only the original 2.123 enforces are warnings.
 - **Launch Game** (F5) writes the add-on to `<user data>/openbg/editor/launch/` and starts `openbg`
@@ -237,14 +238,20 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   `openbg --addon file.DEObjects` (repeatable) and `OPENBG_ADDONS` (paths separated by `:`, `;` on
   Windows; read by every program's `de::World`) load add-on files as if they were in `Data`.
 - **Scripted runs** for screenshots and checks: `--new-pilot Lucas:Jetta`, `--open-pilot Jetta`,
-  `--tab 0-4`, `--preview photo|robot`, `--photo file.png`, `--content <type>`, `--base-content`,
+  `--tab 0-4`, `--preview photo|robot`, `--photo file.png`, `--pilot-set KEY=VALUE` (repeatable: every
+  field of the opened pilot, `ed::set_pilot_field`: `name`, `sex`, `bio` (`\n` breaks), `listed`,
+  `locked`, `visible`, `power`, `agility`, `endurance`, `focus`, `colour1-3=r,g,b`, `weight1-3`,
+  `trait.<GetStat name or label>=level[,variation[,wave]]` (the level a number or its word),
+  `traits-from=<base pilot>`, `cast+=` / `cast-=<cast>`; the Script Console's `set KEY=VALUE` does the
+  same on the open pilot), `--content <type>`, `--base-content`,
   `--browse-file <stem>`, `--open-base Class:Name`, `--select-base Class:Name`, `--copy-base <pilot>`,
   `--select <object>`, `--level`, `--save`, `--launch-game`, and `--screenshot out.png [--frames N]
   [--size WxH] [--scale S]` (a hidden window, 1600x1000 points at 2 pixels per point by default).
 - `editor-tests` (ctest `editor-pilot`) checks the base content index (object counts per type),
   reference decoding and behavior source, new pilot -> edit every field -> photo import -> save ->
-  reopen (then the engine's own readers on the add-on), and copying a base pilot into a chosen,
-  existing add-on with nothing written before the add-on is chosen or saved.
+  reopen (then the engine's own readers on the add-on), every `--pilot-set` key and the values it
+  refuses (and the engine's reader on the result), the alpha-weighted photo resampling, and copying a
+  base pilot into a chosen, existing add-on with nothing written before the add-on is chosen or saved.
 - **Tournaments** (Content > New Tournament): pick a base tournament (Single Player's ten that run a
   BMaster) and a name; "Blank ladder" starts with one match instead of the base's. The copy holds the
   description, session master (and its ExcludePilots / PlayerPilots values), sub-session handler,
@@ -268,8 +275,14 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
 - More scripted options: `--new-tournament "<Base>:<Name>"` (`blank=<Base>:<Name>` for a blank ladder),
   `--open-tournament <Name>`, `--new-har "<Robot>:<Name>"`, `--open-har <Name>`, `--asset-tab N`,
   `--asset-select N` (the tournament tree's row: a match index, -1 settings, -2 ending, -3 branches,
-  -4 unlocks; the HAR's sphere), `--compile`. `editor-assets-tests` (ctest `editor-tournament`,
-  `editor-har`) copies North American Open, edits it, regenerates (a user block survives), compiles,
+  -4 unlocks; the HAR's sphere), `--compile`, `--tournament-set KEY=VALUE` (repeatable, on the
+  tournament made or opened: `name`, `choose-text`, `listed`, `locked`, `ai-difficulty`,
+  `unlock+=<pilot, robot, arena or tournament>[:text]`, `match+=<name>`, and `match.N.name`,
+  `.description`, `.intro`, `.arena`, `.ai-offset`, `.win-commentary`, `.lose-commentary`,
+  `.opponents=<count>`, `.opponent.K=<pilot>[,<robot>]` (`random` or empty for a random one),
+  `.pre-quote+` / `.win-quote+` / `.lose-quote+=<slot>:<text>`, `.pre-quotes=` (clears); N and K from
+  1). `editor-assets-tests` (ctest `editor-tournament`,
+  `editor-har`) copies North American Open, edits it (also through every `--tournament-set` key), regenerates (a user block survives), compiles,
   validates, saves, reopens and checks the engine's description reader and the VMC2 change
   information; and makes Jaguar Mk2, edits stats, spheres, inputs, a constant and a paint job, and
   checks `read_fighter_stats` and `fighter_models` through `OPENBG_ADDONS`. `EDITOR_ASSETS_OUT=<dir>`
@@ -316,7 +329,8 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
 - Scripted runs: `--arena <name|stem>`, `--variant`, `--select-node <name>`, `--move-to x,y,z`,
   `--light-colour r,g,b,intensity`, `--camera x,y,z,yaw,pitch`, `--layout 1|2|4`, `--shading 0|1|2`,
   `--play`, `--simulate`, `--play-ticks N`, `--replay` (Stop and Play again), `--eject`,
-  `--inspector`, `--debug hits,nav,energy`, `--play-robot <name>`, `--play-opponent <name>`.
+  `--inspector`, `--debug hits,nav,energy`, `--play-robot <name>`, `--play-opponent <name>`, `--play-pilot <name>`,
+  `--play-opponent-pilot <name>` (base or add-on pilots).
 - `editor-arena-tests` (ctest `editor-arena`): the arena list, Desert's tree (16 spawn points, nav
   links resolved, checks pass), a variant -> description, spawn moved and duplicated, light recoloured
   -> save -> reopen, and the engine reading the saved variant: same counts, and for 431 copied

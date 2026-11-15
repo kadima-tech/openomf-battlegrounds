@@ -74,6 +74,14 @@ std::vector<uint8_t> base_pilot_photo(const BaseData &base, const BaseObject &pi
 
 // The base game's pilot descriptions, by name, for "copy from".
 std::vector<std::string> base_pilot_names(const BaseData &base);
+// A base pilot's 31 AI traits (the AI Traits tab's preset). Throws deo::Error for an unknown name.
+std::array<PilotTrait, 31> base_pilot_traits(const BaseData &base, const std::string &name);
+// One field from text, as --pilot-set KEY=VALUE and the console's set command give it: name, sex
+// (male, female, undefined or 0-2), bio (\n for a line break), listed, locked, visible, power,
+// agility, endurance, focus, colour1-3 (r,g,b in 0-1), weight1-3, trait.<GetStat name or label>
+// (level[,variation[,wave]], the level a number or its word), traits-from (a base pilot), cast+ and
+// cast- (a Description\Cast by name). Throws deo::Error for a key or value it does not take.
+void set_pilot_field(const Project &p, PilotData &d, const std::string &key, const std::string &value);
 // A name for a GUID: an add-on object's or a base object's, or the GUID's text.
 std::string object_name(const Project &p, const Guid &g);
 

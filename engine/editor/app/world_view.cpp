@@ -466,6 +466,8 @@ void WorldEditor::run_script() {
 		if (o.shading >= 0) panes_[0].shading = o.shading;
 		if (!o.play_robot.empty()) settings_.robot = o.play_robot;
 		if (!o.play_opponent.empty()) settings_.opponent = o.play_opponent;
+		if (!o.play_pilot.empty()) settings_.pilot = o.play_pilot;
+		if (!o.play_opponent_pilot.empty()) settings_.opponent_pilot = o.play_opponent_pilot;
 		for (const char *f : {"hits", "nav", "energy"}) {
 			if (o.debug.find(f) == std::string::npos) continue;
 			if (!strcmp(f, "hits")) debug_.hit_spheres = true;

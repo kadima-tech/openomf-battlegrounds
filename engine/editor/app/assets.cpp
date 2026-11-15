@@ -318,6 +318,34 @@ void assets_startup(Editor &e) {
 			ed::write_har(*e.project(), ho, d);
 		}
 	}
+	if (!o.tournament_sets.empty()) {
+		std::string target = o.open_tournament;
+		if (target.empty() && !o.new_tournament.empty()) {
+			std::string from;
+			split(o.new_tournament, &from, &target);
+		}
+		for (uint32_t t : ed::addon_tournaments(*e.project())) {
+			if (tutf8(e.project()->file().objects[t].info.name_text()) != target) continue;
+			ed::TournamentObjects to = ed::tournament_objects(*e.project(), t);
+			ed::Tournament tour = ed::read_tournament(*e.project(), to);
+			for (auto &spec : o.tournament_sets) {
+				auto eq = spec.find('=');
+				try {
+					if (eq == std::string::npos) throw deo::Error("give KEY=VALUE");
+					ed::set_tournament_field(*e.project(), tour, spec.substr(0, eq), spec.substr(eq + 1));
+				} catch (const std::exception &ex) {
+					e.log(LogLine::Error, "Tournament field " + spec + ": " + ex.what());
+				}
+			}
+			try {
+				ed::write_tournament(*e.project(), to, tour);
+				e.log(LogLine::Ok, "Set " + std::to_string(o.tournament_sets.size()) + " field(s) of " + target);
+			} catch (const std::exception &ex) {
+				e.log(LogLine::Error, std::string("Cannot write the tournament: ") + ex.what());
+			}
+			break;
+		}
+	}
 	if (o.compile) compile_scripts(e);
 	for (uint32_t t : ed::addon_tournaments(*e.project())) {
 		if (!o.open_tournament.empty() && tutf8(e.project()->file().objects[t].info.name_text()) == o.open_tournament) open_tournament(e, t);

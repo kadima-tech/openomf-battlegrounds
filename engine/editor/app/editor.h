@@ -30,6 +30,7 @@ struct Options {
 	int pilot_tab = 0;
 	std::string preview;      // "photo" or "robot"
 	std::filesystem::path photo;  // import into the opened pilot
+	std::vector<std::string> pilot_sets;  // KEY=VALUE: set in the opened pilot (ed::set_pilot_field)
 	std::string content;      // Content Browser type (Pilots, Images, ...)
 	bool base_content = false;  // show the base game's folder
 	std::string browse_file;  // Content Browser by file: this file's objects
@@ -46,11 +47,13 @@ struct Options {
 	bool variant = false, play = false, simulate = false, eject = false, inspector = false, replay = false;
 	int play_ticks = 0, layout = 0, shading = -1;
 	std::string play_robot, play_opponent;  // Play Mode's robots
+	std::string play_pilot, play_opponent_pilot;  // and pilots (base or add-on, by name)
 	// The asset side (assets.h): tournaments and HAR variants.
 	std::string new_tournament, open_tournament, new_har, open_har;
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
 	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
+	std::vector<std::string> tournament_sets;  // KEY=VALUE: set in the tournament made or opened (ed::set_tournament_field)
 	int asset_tab = -1, asset_select = -100, paint_job = -1;
 	bool compile = false;
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an
@@ -139,6 +142,8 @@ public:
 	bool sound_playing();
 	void import_photo_dialog(const ed::Guid &pilot);
 	void import_photo(const ed::Guid &pilot, const std::filesystem::path &file);
+	// KEY=VALUE into an add-on pilot (ed::set_pilot_field); false (and logged) when refused.
+	bool set_pilot_field(const ed::Guid &pilot, const std::string &key_value);
 	// A file dropped on the window.
 	void drop_file(const std::filesystem::path &file);
 	int find_object(const ed::Guid &g) const { return project_ ? project_->find(g) : -1; }

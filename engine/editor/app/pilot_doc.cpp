@@ -155,19 +155,12 @@ void PilotDocument::draw_preview(Editor &e, ImVec2 size) {
 			photo_revision_ = p.revision();
 		}
 		if (photo_ && photo_w_ > 0) {
-			// Cover the area, cropping the photo's sides.
-			float aw = p1.x - p0.x, ah = p1.y - p0.y;
-			float img_aspect = float(photo_w_) / float(photo_h_), area_aspect = aw / ah;
-			ImVec2 uv0(0, 0), uv1(1, 1);
-			if (img_aspect > area_aspect) {
-				float u = area_aspect / img_aspect;
-				uv0.x = (1 - u) * 0.5f, uv1.x = 1 - uv0.x;
-			} else {
-				float v = img_aspect / area_aspect;
-				uv0.y = (1 - v) * 0.5f, uv1.y = 1 - uv0.y;
-			}
-			dl->AddImageRounded((ImTextureID)(intptr_t)photo_, p0 + ImVec2(1, 1), p1 - ImVec2(1, 0), uv0, uv1, IM_COL32_WHITE, r - 1,
-			                    ImDrawFlags_RoundCornersTop);
+			// The whole photo, as Choose Pilot and the quotes show it: fitted, standing on the footer.
+			float aw = p1.x - p0.x - 2, ah = p1.y - p0.y - 1;
+			float s = std::min(aw / float(photo_w_), ah / float(photo_h_));
+			ImVec2 sz(float(photo_w_) * s, float(photo_h_) * s);
+			ImVec2 at(p0.x + 1 + (aw - sz.x) * 0.5f, p1.y - sz.y);
+			dl->AddImage((ImTextureID)(intptr_t)photo_, at, at + sz);
 		} else {
 			ImGui::SetCursorScreenPos(p0);
 			ImGui::BeginChild("nophoto", p1 - p0, 0, ImGuiWindowFlags_NoBackground);
@@ -429,9 +422,7 @@ void PilotDocument::traits(Editor &e) {
 	ImGui::SameLine();
 	if (ui::toolbar_button(ICON_COPY, "Apply traits", ui::Tone::Normal, true, "Copy the 31 traits from that pilot", ImGui::GetFrameHeight())) {
 		try {
-			ed::Project scratch(*e.base(), "", ed::Project::create(*e.base(), "scratch.DEObjects")->file());
-			uint32_t made = ed::create_pilot(scratch, traits_from_, "scratch");
-			data_.traits = ed::read_pilot(scratch, ed::pilot_objects(scratch, made)).traits;
+			data_.traits = ed::base_pilot_traits(*e.base(), traits_from_);
 			e.log(LogLine::Info, "AI traits copied from " + traits_from_);
 		} catch (const std::exception &ex) {
 			e.log(LogLine::Error, ex.what());
