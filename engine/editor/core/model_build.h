@@ -8,6 +8,7 @@
 
 #include "addon.h"
 #include "de/mesh.h"
+#include "de/scene.h"
 
 namespace ed::build {
 
@@ -24,6 +25,8 @@ void put_f32(deo::Writer &w, float f);
 // Image\Standard, RGB (mask 7, format 20) or RGBA (mask 15, format 0), one uncompressed level.
 uint32_t add_image(Project &p, const std::string &name, int width, int height, const std::vector<uint8_t> &rgba);
 int pow2_at_most(int v, int cap);
+// An Actor (contents v7, active, rendered) at `t` whose components are `meshes`, also its children.
+uint32_t add_actor(Project &p, const std::string &name, const de::Transform &t, const std::vector<uint32_t> &meshes);
 
 // The face across each edge (0xffff at an open edge).
 void mesh_adjacency(std::vector<de::Mesh::Face> &faces);

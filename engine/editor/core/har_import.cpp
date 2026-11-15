@@ -1236,6 +1236,25 @@ void analyse_robot(ImportPlan &plan, const BaseData &base) {
 		if (auto it = anims.find(anim_key(seq.name)); it != anims.end()) m.animation = it->second, m.source = MapSource::Name;
 		h.sequences.push_back(m);
 	}
+	// The file's other animations become new sequences, which the scripts name seq<Name>.
+	if (!plan.from_editor) {
+		std::set<int> named;
+		std::set<std::string> taken;
+		for (auto &m : h.sequences) {
+			if (m.animation >= 0) named.insert(m.animation);
+			taken.insert(anim_key(m.sequence));
+		}
+		for (size_t a = 0; a < s.animations.size(); ++a) {
+			if (named.count(int(a))) continue;
+			std::string n = s.animations[a].name;
+			if (auto p = n.find_last_of('|'); p != std::string::npos) n = n.substr(p + 1);
+			n.erase(std::remove_if(n.begin(), n.end(), [](char c) { return !isalnum(uint8_t(c)) && c != '_'; }), n.end());
+			if (n.empty() || isdigit(uint8_t(n[0])) || !taken.insert(anim_key(n)).second) continue;
+			SequenceMapping m;
+			m.sequence = n, m.animation = int(a), m.source = MapSource::Name, m.added = true;
+			h.sequences.push_back(m);
+		}
+	}
 	h.spheres.clear();
 	for (size_t i = 0; i < s.nodes.size(); ++i) {
 		const std::string &n = s.nodes[i].name;
@@ -1320,7 +1339,7 @@ void robot_issues(const ImportPlan &plan, std::vector<Issue> &out) {
 	for (auto &pc : lod_pieces(plan, 0)) verts += pc.prim->positions.size(), faces += pc.prim->triangles();
 	if (h.lods[0].empty()) add(Issue::Error, "No mesh for LOD0");
 	if (faces > kMaxMeshFaces || verts > kMaxMeshVertices) add(Issue::Warning, "LOD0 has " + std::to_string(faces) + " triangles: past a mesh's 65,535, it is decimated to fit");
-	else if (faces > 12000 && !h.decimate_lod0) add(Issue::Warning, "LOD0 has " + std::to_string(faces) + " triangles (the base robot's has " + std::to_string(rig.lods[0].faces) + "); the game skins it on the CPU");
+	else if (faces > 12000 && h.lod0_triangles == 0) add(Issue::Warning, "LOD0 has " + std::to_string(faces) + " triangles (the base robot's has " + std::to_string(rig.lods[0].faces) + "); the game skins it on the CPU");
 	std::vector<std::string> unused;
 	std::set<int> used_anims;
 	for (auto &m : h.sequences) {
@@ -1737,8 +1756,20 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		for (int m : mats) {
 			if (m >= 0 && s.materials[size_t(m)].metallic_roughness_texture) metal_px[m] = image_rgba(s, s.materials[size_t(m)].metallic_roughness_texture.image, atlas.tile, atlas.tile);
 		}
+		std::map<int, std::vector<uint8_t>> emissive_px;
+		std::map<int, gltf::Vec3> emission;
+		for (int m : mats) {
+			if (m < 0) continue;
+			const gltf::Material &gm = s.materials[size_t(m)];
+			gltf::Vec3 e{gm.emissive[0] * gm.emissive_strength, gm.emissive[1] * gm.emissive_strength, gm.emissive[2] * gm.emissive_strength};
+			if (std::max({e[0], e[1], e[2]}) <= 0) continue;
+			emission[m] = e;
+			if (gm.emissive_texture) emissive_px[m] = image_rgba(s, gm.emissive_texture.image, atlas.tile, atlas.tile);
+		}
 		std::vector<uint8_t> colours(size_t(A) * size_t(A) * 4, 0), mask(size_t(A) * size_t(A) * 4, 0), refl(size_t(A) * size_t(A) * 4, 0);
+		std::vector<uint8_t> glow(emission.empty() ? 0 : size_t(A) * size_t(A) * 4, 0);
 		for (size_t i = 3; i < mask.size(); i += 4) mask[i] = colours[i] = refl[i] = 255;
+		for (size_t i = 3; i < glow.size(); i += 4) glow[i] = 255;
 		out.paint_channel.assign(size_t(A) * size_t(A), int8_t(mats.empty() ? -1 : chan[mats[0]]));
 		bool any_own = false;
 		for (size_t ti = 0; ti < atlas.tiles.size(); ++ti) {
@@ -1766,6 +1797,13 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 					float metal = m >= 0 ? s.materials[size_t(m)].metallic : 0;
 					if (auto mp = metal_px.find(m); mp != metal_px.end()) metal *= float(mp->second[src + 2]) / 255.0f;
 					refl[dst + size_t(std::max(c, 0))] = uint8_t(std::clamp(metal * (0.5f + 0.5f * lum / 255.0f) * 255.0f, 0.0f, 255.0f));
+					if (auto em = emission.find(m); em != emission.end()) {
+						auto ep = emissive_px.find(m);
+						for (int k = 0; k < 3; ++k) {
+							float v = em->second[size_t(k)] * (ep != emissive_px.end() ? float(ep->second[src + size_t(k)]) : 255.0f);
+							glow[dst + size_t(k)] = uint8_t(std::clamp(v, 0.0f, 255.0f));
+						}
+					}
 				}
 			}
 		}
@@ -1784,6 +1822,10 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		if (any_own) {
 			out.colours.width = out.colours.height = A;
 			out.colours.rgba = colours;
+		}
+		if (!glow.empty()) {
+			out.glow.width = out.glow.height = A;
+			out.glow.rgba = std::move(glow);
 		}
 		int named_refl = find_image(s, {"reflectionmask", "reflection"}, "de_reflection_mask", materials);
 		if (named_refl >= 0 && atlas.identity) set_image(out.reflection, named_refl, A, A);
@@ -2012,7 +2054,8 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	LodData lod0 = build_lod(0);
 	if (lod0.faces.empty()) throw std::runtime_error("LOD0 has no triangles");
 	size_t target0 = lod0.faces.size();
-	if (h.decimate_lod0) target0 = std::min(target0, rig.lods[0].faces);
+	if (h.lod0_triangles < 0) target0 = std::min(target0, rig.lods[0].faces);
+	else if (h.lod0_triangles > 0) target0 = std::min(target0, size_t(h.lod0_triangles));
 	if (lod0.verts.size() > kMaxMeshVertices || target0 > 65000) target0 = std::min<size_t>(target0, 60000);
 	auto fits = [](const LodData &d) {
 		std::set<uint32_t> used;
@@ -2025,6 +2068,41 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		out.notes.push_back("LOD0 decimated to " + std::to_string(lod0.faces.size()) + " triangles");
 	}
 	out.lods.push_back(finish_lod(lod0));
+	if (out.glow.width > 0 && !out.lods[0].uvs.empty()) {
+		const RobotLod &l0 = out.lods[0];
+		const auto &uv0 = l0.uvs[0];
+		auto glow_at = [&](float u, float v) {
+			int x = std::clamp(int(u * float(out.glow.width)), 0, out.glow.width - 1);
+			int y = std::clamp(int(v * float(out.glow.height)), 0, out.glow.height - 1);
+			const uint8_t *px = &out.glow.rgba[(size_t(y) * size_t(out.glow.width) + size_t(x)) * 4];
+			return std::max({px[0], px[1], px[2]});
+		};
+		RobotLod &g = out.glow_lod;
+		std::vector<int> remap(l0.vertices.size(), -1);
+		g.uvs.resize(1);
+		g.weights.assign(l0.weights.size(), {});
+		for (size_t f = 0; f < l0.faces.size() && f < uv0.size(); ++f) {
+			const auto &t = uv0[f];
+			int lit = glow_at((t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][1] + t[1][1] + t[2][1]) / 3);
+			for (int k = 0; k < 3; ++k) lit = std::max(lit, int(glow_at(t[size_t(k)][0], t[size_t(k)][1])));
+			if (lit < 24) continue;
+			de::Mesh::Face face{};
+			for (int k = 0; k < 3; ++k) {
+				uint16_t v = l0.faces[f].v[size_t(k)];
+				if (remap[v] < 0) {
+					remap[v] = int(g.vertices.size());
+					g.vertices.push_back(l0.vertices[v]);
+					for (size_t b = 0; b < l0.weights.size(); ++b) g.weights[b].push_back(l0.weights[b][v]);
+				}
+				face.v[size_t(k)] = uint16_t(remap[v]);
+			}
+			face.flags = l0.faces[f].flags;
+			g.faces.push_back(face);
+			g.uvs[0].push_back(t);
+		}
+		build::mesh_adjacency(g.faces);
+		if (!g.faces.empty()) out.notes.push_back("Glow: " + std::to_string(g.faces.size()) + " emissive triangles");
+	}
 	for (size_t k = 1; k < lod_count; ++k) {
 		if (!h.lods[k].empty()) {
 			LodData d = build_lod(int(k));
@@ -2437,8 +2515,22 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 	std::map<int, size_t> skin_index;
 	for (size_t k = 0; k < joints.size(); ++k) skin_index[joints[k]] = k;
 	const gltf::Mat4 Finv = gltf::inverse(F);
+	// New sequences start as the standing pose (channels the file does not drive keep it).
+	std::set<int> on_base;
+	for (const SequenceMapping &m : h.sequences) {
+		if (!m.added && m.animation >= 0) on_base.insert(m.animation);
+	}
+	const de::AnimSequence standing = out.bank.find("Standing") ? *out.bank.find("Standing") : de::AnimSequence{};
+	for (const SequenceMapping &m : h.sequences) {
+		if (!m.added || m.animation < 0 || on_base.count(m.animation) || out.bank.find(m.sequence)) continue;
+		de::AnimSequence q = standing;
+		q.name = m.sequence;
+		out.bank.sequences.push_back(std::move(q));
+		supplied.push_back(false);
+	}
 	for (const SequenceMapping &m : h.sequences) {
 		if (m.animation < 0 || size_t(m.animation) >= s.animations.size()) continue;
+		if (m.added && on_base.count(m.animation)) continue;
 		de::AnimSequence *seq = nullptr;
 		for (auto &q : out.bank.sequences) {
 			if (q.name == m.sequence) seq = &q;
@@ -2613,6 +2705,60 @@ RobotBuild build_robot(const ImportPlan &plan, bool lod0_only) {
 		o.name = sp.sphere;
 		place(o, rig.spheres[size_t(sp.copies)], sp);
 		out.spheres.push_back(o);
+	}
+	if (!lod0_only && !h.ghosts.empty() && !out.lods.empty()) {
+		const RobotLod &src = out.lods[std::min<size_t>(1, out.lods.size() - 1)];
+		std::vector<int> channel;
+		std::vector<de::Transform> inv_bind;
+		for (size_t b = 0; b < rig.skin.size(); ++b) {
+			channel.push_back(out.bank.channel(rig.skin[b].name));
+			inv_bind.push_back(affine_inverse(out.binds[b]));
+		}
+		for (const auto &g : h.ghosts) {
+			const de::AnimSequence *seq = out.bank.find(g.sequence);
+			if (!seq) {
+				out.notes.push_back("Ghost " + g.name + ": no sequence " + g.sequence);
+				continue;
+			}
+			auto pose = out.bank.pose(*seq, std::clamp(g.t, 0.0f, 1.0f));
+			RobotBuild::Ghost gh;
+			gh.name = g.name;
+			gh.lod.faces = src.faces;
+			gh.lod.uvs = src.uvs;
+			for (size_t v = 0; v < src.vertices.size(); ++v) {
+				V3 acc{0, 0, 0};
+				float sum = 0;
+				for (size_t b = 0; b < src.weights.size() && b < channel.size(); ++b) {
+					float w = float(src.weights[b][v]) / 255.0f;
+					if (w <= 0 || channel[b] < 0) continue;
+					acc = add(acc, mul(pose[size_t(channel[b])].then(inv_bind[b]).apply(src.vertices[v]), w));
+					sum += w;
+				}
+				gh.lod.vertices.push_back(sum > 0 ? mul(acc, 1.0f / sum) : src.vertices[v]);
+			}
+			out.ghosts.push_back(std::move(gh));
+		}
+		// Dark and see-through, the glow kept: the 2097 projection's dark tint (OpenOMF's "bt").
+		const RobotImage &shade = out.mask;
+		if (!out.ghosts.empty() && shade.width > 0) {
+			RobotImage &gi = out.ghost_image;
+			gi.width = shade.width, gi.height = shade.height;
+			gi.rgba.assign(shade.rgba.size(), 0);
+			const bool glow = out.glow.width == shade.width && out.glow.height == shade.height;
+			const bool own = out.colours.width == shade.width && out.colours.height == shade.height;
+			for (size_t i = 0; i + 3 < shade.rgba.size(); i += 4) {
+				float lum = float(std::max({shade.rgba[i], shade.rgba[i + 1], shade.rgba[i + 2]}));
+				if (own) lum = std::max(lum, 0.3f * out.colours.rgba[i] + 0.59f * out.colours.rgba[i + 1] + 0.11f * out.colours.rgba[i + 2]);
+				const float tint[3] = {0.10f, 0.12f, 0.30f}, base[3] = {8, 10, 26};
+				float a = 150;
+				for (int k = 0; k < 3; ++k) {
+					float g = glow ? float(out.glow.rgba[i + size_t(k)]) : 0;
+					gi.rgba[i + size_t(k)] = uint8_t(std::clamp(base[k] + lum * tint[k] + g, 0.0f, 255.0f));
+					a = std::max(a, std::min(255.0f, 150 + g));
+				}
+				gi.rgba[i + 3] = uint8_t(a);
+			}
+		}
 	}
 	return out;
 }
@@ -2858,6 +3004,94 @@ void write_mesh(Project &p, uint32_t mesh, const RobotLod &lod, const RobotBuild
 	}
 }
 
+// A Mesh\Standard drawing `lod` with one stage of `image` in blend `mode` (1 Add, 4 SemiTranslucent)
+// and a GlowFactor child, its contents (flags) a copy of the LOD mesh `like`'s; `channels` copies
+// that mesh's deform channels too, which write_mesh fills from the LOD's weights.
+uint32_t write_extra_mesh(Project &p, uint32_t like, const std::string &name, const RobotLod &lod, uint32_t image, int32_t mode, float glow,
+                          bool channels, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
+	auto &objs = p.file().objects;
+	deo::Writer tc;
+	size_t at = tc.begin_chunk(3);
+	tc.block(build::stored(name));
+	tc.u32(0);
+	tc.end_chunk(at);
+	deo::Writer tr;
+	tr.u8(2), tr.u8(0);
+	at = tr.begin_chunk(2);
+	tr.u32(1);
+	write_ref(tr, build::local_ref(image));
+	tr.end_chunk(at);
+	const uint32_t tm = build::add_object(p, "TextureManager", name, tc.data(), tr.data());
+	deo::Writer mc;
+	at = mc.begin_chunk(1);
+	mc.block(build::stored(name));
+	mc.end_chunk(at);
+	mc.u8(1), mc.u8(0);
+	deo::Writer mr;
+	mr.u8(2), mr.u8(0), mr.u8(1), mr.u8(0);
+	at = mr.begin_chunk(8);
+	mr.u32(1);
+	write_ref(mr, build::local_ref(tm));
+	mr.u8(0);
+	for (int k = 0; k < 4; ++k) build::put_f32(mr, 1.0f);
+	mr.u32(uint32_t(mode));
+	mr.u8(0);
+	mr.u32(0);
+	mr.u8(0), mr.u8(0);
+	mr.end_chunk(at);
+	const uint32_t material = build::add_object(p, "TextureProcess\\MultiStage", name, mc.data(), mr.data());
+	build::set_children(p, material, {tm});
+	deo::Writer gc;
+	at = gc.begin_chunk(1);
+	gc.block(build::stored("GlowFactor"));
+	gc.end_chunk(at);
+	at = gc.begin_chunk(1);
+	build::put_f32(gc, glow);
+	gc.end_chunk(at);
+	const uint32_t factor = build::add_object(p, "Value\\FLOAT", "GlowFactor", gc.data(), Bytes{2, 0, 1, 0, 1, 0});
+	deo::Object mesh_copy = objs[like];
+	mesh_copy.info.guid = fresh_guid();
+	mesh_copy.hierarchy = {1, 1, 0};
+	mesh_copy.ex.clear();
+	objs.push_back(mesh_copy);
+	const uint32_t mesh = uint32_t(objs.size() - 1);
+	build::rename(p, mesh, name);
+	{
+		deo::Writer r;
+		r.u8(2), r.u8(0);
+		at = r.begin_chunk(1);
+		r.u8(1);
+		write_ref(r, build::local_ref(material));
+		r.u8(0);
+		r.end_chunk(at);
+		r.u8(1), r.u8(0);
+		objs[mesh].references = r.data();
+	}
+	std::vector<uint32_t> kids{material, factor};
+	for (uint32_t c : channels ? p.children(like) : std::vector<uint32_t>{}) {
+		if (objs[c].info.class_text() != "DataChannel\\UnitFloats") continue;
+		deo::Object ch = objs[c];
+		ch.info.guid = fresh_guid();
+		ch.hierarchy = {1, 1, 0};
+		objs.push_back(ch);
+		kids.push_back(uint32_t(objs.size() - 1));
+	}
+	build::set_children(p, mesh, kids);
+	write_mesh(p, mesh, lod, b, channels ? skin : std::vector<de::SkinBone>{});
+	touched(objs[mesh]);
+	return mesh;
+}
+
+// The emissive faces beside the LODs, as Gargoyle's wing mesh sits beside them (FINDINGS 673): the
+// body's deform channels, an Add stage of the emission image (named so the fighter filter leaves it
+// unpainted) and a GlowFactor, which draws it into the glow layer.
+void write_glow_mesh(Project &p, uint32_t model, uint32_t lod0, const RobotBuild &b, const std::vector<de::SkinBone> &skin) {
+	const uint32_t image = build::add_image(p, "Glow", b.glow.width, b.glow.height, b.glow.rgba);
+	const uint32_t mesh = write_extra_mesh(p, lod0, "Glow", b.glow_lod, image, 1, 4.0f, true, b, skin);
+	build::add_child(p, mesh, image);
+	build::add_child(p, model, mesh);
+}
+
 size_t model_fighter_at(const deo::Object &m) {
 	Chunks c = split_chunks(m.contents);
 	if (c.chunks.size() < 2) return SIZE_MAX;
@@ -3064,6 +3298,29 @@ ImportResult import_robot(Project &p, const ImportPlan &plan) {
 		const RobotLod &lod = b.lods[std::min(k, b.lods.size() - 1)];
 		write_mesh(p, meshes[k].second, lod, b, rig.skin);
 		++res.meshes;
+	}
+	if (!b.glow_lod.faces.empty() && !meshes.empty()) {
+		write_glow_mesh(p, model, meshes[0].second, b, rig.skin);
+		++res.meshes;
+	}
+	if (!b.ghosts.empty() && b.ghost_image.width > 0 && !meshes.empty()) {
+		int projectile = -1;
+		for (size_t i = first_new; i < end && projectile < 0; ++i) {
+			if (objs[i].info.class_text() == "Actor\\Creature\\OMF2Projectile") projectile = int(i);
+		}
+		if (projectile < 0) {
+			res.notes.push_back(rig.robot + " has no projectile actor: the ghosts are left out");
+		} else {
+			const uint32_t image = build::add_image(p, "GhostColours", b.ghost_image.width, b.ghost_image.height, b.ghost_image.rgba);
+			build::add_child(p, uint32_t(projectile), image);
+			for (const auto &g : b.ghosts) {
+				const uint32_t mesh = write_extra_mesh(p, meshes[0].second, g.name + " Mesh", g.lod, image, 4, 2.0f, false, b, rig.skin);
+				const uint32_t actor = build::add_actor(p, g.name, de::Transform{}, {mesh});
+				build::add_child(p, uint32_t(projectile), actor);
+				++res.meshes;
+			}
+			res.notes.push_back(std::to_string(b.ghosts.size()) + " ghost(s) under " + objs[size_t(projectile)].info.name_text());
+		}
 	}
 	// The parts' deform infos, banks and bone actors.
 	auto write_binds = [&](uint32_t deform_obj, const std::vector<de::Transform> &binds) {

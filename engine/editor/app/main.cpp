@@ -8,7 +8,7 @@
 //                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
 //                 [--layout 1|2|4] [--shading 0|1|2] [--move-to x,y,z] [--light-colour r,g,b,i]
 //                 [--play | --simulate] [--play-ticks N] [--eject] [--inspector] [--debug hits,nav,energy]
-//                 [--import model.glb [--import-kind prop|arena|robot] [--import-name N] [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>]
+//                 [--import model.glb [--import-kind prop|arena|robot] [--import-name N] [--import-template <arena>] [--import-base <robot>] [--import-pose <sequence>] [--import-lod0 keep|base|N]
 //                  [--import-dialog | --import-step 0-3]] [--place-prop <prop>]
 //                 [--export <Class:Name or name> [--export-out file.glb|.gltf]]
 //                 [--screenshot out.png [--frames N] [--size WxH] [--scale S]] [--batch [--frames N]]
@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
 		else if (arg("--open-har")) opt.open_har = argv[++i];
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
 		else if (arg("--har-paint")) opt.har_paints.push_back(argv[++i]);
+		else if (arg("--har-script")) opt.har_scripts.push_back(argv[++i]);
 		else if (arg("--har-title")) opt.har_title = argv[++i];
 		else if (arg("--har-text")) opt.har_text = argv[++i];
 		else if (arg("--har-picture")) opt.har_picture = argv[++i];
@@ -105,7 +106,9 @@ int main(int argc, char **argv) {
 		else if (arg("--import-template")) opt.import_template = argv[++i];
 		else if (arg("--import-base")) opt.import_base = argv[++i];
 		else if (arg("--import-pose")) opt.import_pose = argv[++i];
+		else if (arg("--import-lod0")) opt.import_lod0 = argv[++i];
 		else if (arg("--import-paint")) opt.import_paints.push_back(argv[++i]);
+		else if (arg("--import-ghost")) opt.import_ghosts.push_back(argv[++i]);
 		else if (!strcmp(argv[i], "--import-dialog")) opt.import_dialog = true;
 		else if (arg("--import-step")) opt.import_step = atoi(argv[++i]), opt.import_dialog = true;
 		else if (arg("--export")) opt.export_spec = argv[++i];

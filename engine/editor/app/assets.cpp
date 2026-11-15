@@ -1,11 +1,16 @@
 #include "assets.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 #include <map>
+#include <set>
+#include <sstream>
 
 #include "har.h"
 #include "image_io.h"
 #include "pilot.h"
+#include "script.h"
 #include "icons.h"
 #include "imgui_stdlib.h"
 #include "theme.h"
@@ -16,6 +21,14 @@
 using namespace theme;
 
 namespace {
+
+std::string read_text_file(const std::string &path) {
+	std::ifstream in(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::binary);
+	if (!in) throw deo::Error("cannot read " + path);
+	std::stringstream ss;
+	ss << in.rdbuf();
+	return ss.str();
+}
 
 struct AssetDialogs {
 	bool tournament_open = false, har_open = false;
@@ -311,6 +324,37 @@ void assets_startup(Editor &e) {
 				e.log(found ? LogLine::Ok : LogLine::Error, (found ? "Set " : "No tunable constant ") + spec);
 			}
 			ed::write_har(*e.project(), ho, d);
+		}
+	}
+	if (!o.har_scripts.empty()) {
+		const std::string target = har_target;
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			ed::HarObjects ho = ed::har_objects(*e.project(), h);
+			for (auto &file : o.har_scripts) {
+				try {
+					auto sections = ed::parse_script_patch(read_text_file(file));
+					std::set<std::string> names;
+					for (auto &s : sections) names.insert(s.behavior);
+					for (auto &name : names) {
+						// The HAR's copy: the add-on Behavior of that name nearest its fighter behavior.
+						int beh = -1;
+						auto &objs = e.project()->file().objects;
+						for (size_t i = 0; i < objs.size(); ++i) {
+							if (objs[i].info.class_text() != "Behavior" || objs[i].info.name_text() != name) continue;
+							if (beh < 0 || std::abs(int(i) - ho.behavior) < std::abs(beh - ho.behavior)) beh = int(i);
+						}
+						if (beh < 0) throw deo::Error("no behavior " + name);
+						de::PCode code = ed::read_pcode(objs[size_t(beh)]);
+						ed::ScriptPatchResult r = ed::apply_script_patch(code, sections);
+						ed::write_behavior(*e.project(), uint32_t(beh), code, ed::behavior_global_targets(*e.project(), uint32_t(beh)));
+						e.log(LogLine::Ok, name + ": " + std::to_string(r.replaced) + " method(s) replaced, " + std::to_string(r.added) + " added" + (r.members ? ", members extended" : "") +
+						                       " from " + std::filesystem::path(file).filename().string());
+					}
+				} catch (const std::exception &ex) {
+					e.log(LogLine::Error, "Script patch " + file + ": " + ex.what());
+				}
+			}
 		}
 	}
 	if (!o.tournament_sets.empty()) {

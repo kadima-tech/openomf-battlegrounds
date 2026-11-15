@@ -334,10 +334,18 @@ they can be redone.
   `Armature|` prefix ignored, or chosen on the Animations page) replaces it: sampled at 30 keys a
   second and normalised to 0..1 (`extras.de_normalised` exports are 0..1 already), each mapped bone
   following its joint; the root's horizontal drift is removed unless the file has a `Body` node.
-  Every sequence the scripts name (`seq<Name>` globals) is kept, so none can go missing.
+  Every sequence the scripts name (`seq<Name>` globals) is kept, so none can go missing. The file's
+  other animations become new sequences of their names (letters, digits and `_`), starting from the
+  stance where the file does not drive a channel; the compiler resolves `seq<Name>` against the
+  add-on's bank, so a script can play them (an animation named by hand onto a base sequence is not
+  added as well).
+- Afterimages (`--import-ghost Name=Sequence@t`, repeatable): LOD1 posed at that time of a sequence
+  (base, retargeted or new) as a static mesh on an Actor `Name` under the HAR's projectile actor, with
+  one SemiTranslucent stage of a dark see-through copy of the colours (the glow kept) and a
+  `GlowFactor`; a script shows, hides and moves them (Shadow's projections).
 - LODs: nodes named `LOD0`-`LOD2` (or ending so), else every mesh is LOD0; missing LODs are quadric
-  decimations to the base's triangle counts; LOD0 is decimated to fit 65,535 vertices (or to the
-  base's budget when asked). Meshes parented to a joint without a skin follow that joint.
+  decimations to the base's triangle counts; LOD0 keeps the file's mesh unless it passes 65,535
+  vertices, or a budget is asked for (`--import-lod0 keep|base|N`, the Level of detail box). Meshes parented to a joint without a skin follow that joint.
 - Materials: an export's `extras.de_stages` give the RGBMain and ReflectionMask images and each
   stage's UV set back; otherwise the materials' textures and colours go into one atlas (or, when
   they all share one texture, that texture with each texel given to the material whose faces cover
@@ -350,6 +358,11 @@ they can be redone.
   `PaintMask`, `ReflectionMask` or `Bump` (or material extras `de_paint_mask`, `de_reflection_mask`,
   `de_bump`) are used as such; an image a material uses as metallic-roughness or occlusion is not
   (exporters pack and rename those).
+- Glow: glTF emission (`emissiveFactor` x `KHR_materials_emissive_strength` x `emissiveTexture`)
+  goes into a `Glow` image in the model texture's layout; LOD0's faces showing it become a `Glow`
+  Mesh\Standard beside the LODs (as Gargoyle's wing mesh sits beside them) with the body's deform
+  channels, one Add stage of that image and a `GlowFactor` child, which draws its passes into the
+  glow layer (FINDINGS 92, 740). Shipped robots glow only through effects and specular passes.
 - Hitboxes: an empty `Sphere:<affector>` under a joint moves that sphere to the joint's bone (its
   scale the falloff, in metres; the second of a name the second sphere, Blender's `.001` ignored);
   further ones named `GetHitAffector...` or after an attack prefix the fighter scripts gather
@@ -391,7 +404,7 @@ they can be redone.
 
 - Verified (2026-11-15): Shadow, the One Must Fall 2097 robot, from the user's AI-generated model
   (`mods/shadow/blender/shadow-model.fbx`: 5,406 triangles, no rig, texture or animation) prepared
-  in Blender (`mods/shadow/blender/prepare_shadow.py`: 2,544 triangles, Mixamo bones at joints
+  in Blender (`mods/shadow/blender/prepare_shadow.py`: all 5,406 triangles, Mixamo bones at joints
   measured from the mesh in its T-pose, automatic weights through a voxel proxy, six materials
   sharing one generated 1024 texture with `de_paint` and metallic set, glowing studs in their own
   colours) imports onto Katana in batch (`mods/shadow/build.sh`: bones by name and the Mixamo preset;
@@ -400,6 +413,12 @@ they can be redone.
   in Choose Creature, and fights in `openbg-fight` in each pilot's colours, as player and as AI, hits
   landing both ways (`editor-har-import-tests <Data> --check shadow.glb Katana`: limbs on the base's,
   worst edge stretch 1.21 of the base's, 4 of 1,865 planted samples sliding).
+- Verified (2026-11-15, later): Shadow's 2097 moves are built by `build.sh` alone: Blender actions
+  (`animate_shadow.py`) replace Katana's Standing and add his casts and afterimage poses as new
+  sequences, `--import-ghost` hangs five afterimages under the projectile actor, and `--har-script
+  script/shadow.bgs` adds the states, inputs, AI choices and the projection; both classes compile.
+  In `openbg-fight` each special lands by scripted input against an idle Jaguar 300 units away, the
+  AI casts them, and AI matches repeat byte for byte (FINDINGS 741-746).
 
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the

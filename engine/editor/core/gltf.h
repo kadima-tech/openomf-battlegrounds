@@ -68,6 +68,7 @@ struct Material {
 	TextureRef base_texture;
 	TextureRef normal_texture, emissive_texture, metallic_roughness_texture, occlusion_texture;
 	Vec3 emissive{0, 0, 0};
+	float emissive_strength = 1;  // KHR_materials_emissive_strength
 	float metallic = 1, roughness = 1;
 	enum class Alpha : uint8_t { Opaque, Mask, Blend } alpha = Alpha::Opaque;
 	float alpha_cutoff = 0.5f;

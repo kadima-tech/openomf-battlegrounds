@@ -652,7 +652,7 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 		}
 	}
 	int supplied = 0;
-	for (auto &m : plan.har.sequences) supplied += m.animation >= 0;
+	for (auto &m : plan.har.sequences) supplied += m.animation >= 0 && !m.added;
 	// A base without the file's sequence name: the animation is named by hand (the Animations page).
 	std::string manual;
 	if (supplied == 0) {
@@ -666,7 +666,7 @@ static void test_generated(const fs::path &data, ed::BaseData &base, Naming nami
 	ed::RobotBuild b = ed::build_robot(plan);
 	std::set<std::string> from_file;
 	for (auto &m : plan.har.sequences) {
-		if (m.animation >= 0) from_file.insert(m.sequence);
+		if (m.animation >= 0 && !m.added) from_file.insert(m.sequence);
 	}
 	PoseStats ps = pose_stats(b, *plan.har.rig, from_file);
 	printf("  scale %.2f, LODs %zu / %zu / %zu triangles, %zu sequences (%zu from the file); worst edge stretch %.2f (%s), reach %.1f units, limbs within %.0f deg of the base, their meshes within %.0f deg of the limbs (base %.0f)\n", b.scale, b.lods[0].faces.size(),
@@ -778,6 +778,99 @@ static void test_heeled_feet(ed::BaseData &base) {
 	fs::remove_all(dir);
 }
 
+// A file animation no base sequence is named after (Katana has no Winning1) is a new sequence.
+static void test_new_sequence(const fs::path &data, ed::BaseData &base) {
+	fs::path dir = scratch();
+	gltf::write(humanoid(Naming::Mixamo, 1.0f, 1.0f, true), dir / "newseq.glb");
+	ed::ImportPlan plan = robot_plan(dir / "newseq.glb", base, "Katana", "Sequence Bot");
+	const ed::SequenceMapping *added = nullptr;
+	for (auto &m : plan.har.sequences) {
+		if (m.added) added = &m;
+	}
+	CHECK(added && added->sequence == "Winning1" && added->animation == 0);
+	ed::RobotBuild b = ed::build_robot(plan, true);
+	const size_t base_count = plan.har.rig->bank.sequences.size();
+	printf("new sequence: %zu sequences (Katana %zu), %zu from the file\n", b.bank.sequences.size(), base_count, b.supplied);
+	CHECK(b.bank.sequences.size() == base_count + 1 && b.bank.sequences.back().name == "Winning1" && b.supplied == 1);
+	const de::AnimSequence *standing = b.bank.find("Standing");
+	CHECK(standing);
+	if (!standing || b.bank.sequences.size() != base_count + 1) return;
+	auto a = b.bank.pose(b.bank.sequences.back(), 0.5f), s = b.bank.pose(*standing, 0.5f);
+	float moved = 0;
+	for (size_t c = 0; c < a.size(); ++c) moved = std::max(moved, dist(a[c].t, s[c].t));
+	CHECK(moved > 0.5f);
+	// Named by hand onto a base sequence, the animation is not added as well.
+	int named = 0;
+	for (auto &m : plan.har.sequences) {
+		if (!m.added && m.sequence.find("Win") != std::string::npos && !named++) m.animation = 0, m.source = ed::MapSource::Manual;
+	}
+	CHECK(named > 0);
+	CHECK(ed::build_robot(plan, true).bank.sequences.size() == base_count);
+	auto project = ed::Project::create(base, dir / "HarNewSequence.DEObjects");
+	for (auto &m : plan.har.sequences) {
+		if (m.source == ed::MapSource::Manual) m.animation = -1, m.source = ed::MapSource::None;
+	}
+	plan.har.ghosts.push_back({"GhostWin", "Standing", 0.5f});
+	{
+		// The afterimage: LOD1 posed in the (retargeted) stance, not the file's T-pose.
+		ed::RobotBuild gb = ed::build_robot(plan);
+		CHECK(gb.ghosts.size() == 1 && gb.ghost_image.width > 0);
+		if (gb.ghosts.size() == 1 && gb.lods.size() > 1) {
+			float moved_v = 0;
+			for (size_t v = 0; v < gb.lods[1].vertices.size(); ++v) moved_v = std::max(moved_v, dist(gb.ghosts[0].lod.vertices[v], gb.lods[1].vertices[v]));
+			printf("  ghost: %zu faces (LOD1 %zu), vertices moved up to %.1f units from rest\n", gb.ghosts[0].lod.faces.size(), gb.lods[1].faces.size(), moved_v);
+			CHECK(gb.ghosts[0].lod.faces.size() == gb.lods[1].faces.size() && moved_v > 0.5f);
+		}
+	}
+	ed::import_robot(*project, plan);
+	project->save();
+	set_env("OPENBG_ADDONS", (dir / "HarNewSequence.DEObjects").string());
+	std::set<std::string> keep{"HarNewSequence", "Katana", "KatanaModel1", "SharedObjects", "Fighter"};
+	de::World w(data, [&](const std::string &s2) { return keep.count(s2) > 0; });
+	set_env("OPENBG_ADDONS", "");
+	const de::ObjectsFile *f = w.file("HarNewSequence");
+	bool found = false;
+	for (uint32_t i = 0; f && i < f->objects().size(); ++i) {
+		if (f->objects()[i].class_path == "AnimationSequenceGroup") found = found || de::read_anim_bank(*f, f->objects()[i]).find("Winning1");
+	}
+	CHECK(found);
+	bool ghost = false;
+	for (uint32_t i = 0; f && i < f->objects().size(); ++i) {
+		if (f->objects()[i].class_path != "Actor\\Creature\\OMF2Projectile") continue;
+		for (uint32_t c : de::ObjectsFile::children(f->object_links(f->objects()[i]))) {
+			if (f->objects()[c].name != "GhostWin") continue;
+			for (uint32_t m : de::ObjectsFile::children(f->object_links(f->objects()[c]))) {
+				if (f->objects()[m].class_path != "Mesh\\Standard") continue;
+				auto mats = de::read_materials(w, {f, m});
+				ghost = mats.size() == 1 && !mats[0].layers.empty() && mats[0].layers[0].mode == 4 && mats[0].glow > 0 && !de::read_mesh(*f, f->objects()[m]).faces.empty();
+			}
+		}
+	}
+	CHECK(ghost);
+	printf("  the afterimage GhostWin hangs from the projectile actor\n");
+	fs::remove_all(dir);
+}
+
+static void test_lod0_budget(ed::BaseData &base) {
+	fs::path dir = scratch();
+	gltf::write(humanoid(Naming::Mixamo, 1.0f, 1.0f, false), dir / "budget.glb");
+	ed::ImportPlan plan = robot_plan(dir / "budget.glb", base, "Katana", "Budget Bot");
+	size_t file = 0;
+	for (auto &m : plan.scene.meshes)
+		for (auto &P : m.primitives) file += P.triangles();
+	const size_t keep = ed::build_robot(plan, true).lods[0].faces.size();
+	plan.har.lod0_triangles = int(file / 2);
+	const size_t half = ed::build_robot(plan, true).lods[0].faces.size();
+	plan.har.lod0_triangles = -1;
+	const size_t base_budget = ed::build_robot(plan, true).lods[0].faces.size();
+	printf("LOD0 budget: the file's %zu triangles kept as %zu, %zu asked for %zu, the base's budget %zu (Katana %zu)\n", file, keep, file / 2, half, base_budget,
+	       plan.har.rig->lods[0].faces);
+	CHECK(keep == file);
+	CHECK(half <= file / 2 + 8 && half * 10 > file * 4);
+	CHECK(base_budget <= std::max(file, plan.har.rig->lods[0].faces));
+	CHECK(base_budget <= plan.har.rig->lods[0].faces + 8 || base_budget == file);
+}
+
 static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 	fs::path dir = scratch();
 	gltf::Scene s = humanoid(Naming::Mixamo, 1.0f, 1.0f, false);
@@ -805,6 +898,7 @@ static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 		mat.metallic_roughness_texture.image = 1;
 		mat.extras = json::Value::object();
 		mat.extras["de_paint"] = m == 0 ? 0 : -1;
+		if (m == 1) mat.emissive = {0.2f, 0.8f, 1.0f};
 	}
 	for (auto &P : s.meshes[0].primitives) {
 		const float lo = P.material == 0 ? 0.05f : 0.55f;
@@ -837,6 +931,14 @@ static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 		CHECK(texel(b.colours, 0.75f, v, 0) == 40 && texel(b.colours, 0.75f, v, 2) == 255);
 		CHECK(texel(b.mask, 0.75f, v, 0) == 0 && texel(b.mask, 0.75f, v, 1) == 0 && texel(b.mask, 0.75f, v, 2) == 0);
 		CHECK(texel(b.reflection, 0.75f, v, 0) == 0);
+		// Joints glow: glTF's emissive factor in the glow image, nothing for Body.
+		CHECK(b.glow.width == T && texel(b.glow, 0.75f, v, 1) == 204 && texel(b.glow, 0.75f, v, 2) == 255 && texel(b.glow, 0.25f, v, 2) == 0);
+	}
+	{
+		size_t joints = 0;
+		for (auto &f : b.lods[0].uvs[0]) joints += (f[0][0] + f[1][0] + f[2][0]) / 3 > 0.5f;
+		printf("  glow: %zu of %zu triangles emissive (%zu on the glowing material)\n", b.glow_lod.faces.size(), b.lods[0].faces.size(), joints);
+		CHECK(joints > 0 && b.glow_lod.faces.size() == joints && b.glow_lod.weights.size() == plan.har.rig->skin.size());
 	}
 	// A choice on the Materials page wins over the file's, and a re-import keeps it.
 	plan.har.material_paint[1] = 2;
@@ -870,8 +972,39 @@ static void test_material_paint(const fs::path &data, ed::BaseData &base) {
 		}
 		CHECK(main && own);
 	}
+	for (auto &i : ed::validate(*project)) {
+		if (i.severity == ed::Issue::Error) fprintf(stderr, "  validation: %s\n", i.text.c_str());
+		CHECK(i.severity != ed::Issue::Error);
+	}
 	project->save();
 	check_engine_reads(data, dir / "HarPainted.DEObjects", "Paint Bot", b.lods[0].faces.size(), 2);
+	{
+		// Each paint job's model holds the Glow mesh: drawn into the glow layer, weighted by the body's deform info.
+		set_env("OPENBG_ADDONS", (dir / "HarPainted.DEObjects").string());
+		std::set<std::string> keep{"HarPainted", "Katana", "KatanaModel1", "SharedObjects", "Fighter"};
+		de::World w(data, [&](const std::string &s) { return keep.count(s) > 0; });
+		set_env("OPENBG_ADDONS", "");
+		const de::ObjectsFile *f = w.file("HarPainted");
+		const de::ObjectInfo *deform = nullptr;
+		size_t glows = 0;
+		for (auto &oi : f ? f->objects() : std::vector<de::ObjectInfo>{}) {
+			if (!deform && oi.class_path == "ActorDeformInfo") deform = &oi;
+		}
+		for (uint32_t i = 0; f && deform && i < f->objects().size(); ++i) {
+			if (f->objects()[i].class_path != "FighterModel") continue;
+			for (uint32_t c : de::ObjectsFile::children(f->object_links(f->objects()[i]))) {
+				if (f->objects()[c].name != "Glow" || f->objects()[c].class_path != "Mesh\\Standard") continue;
+				auto mats = de::read_materials(w, {f, c});
+				auto skin = de::read_skin(*f, *deform, *f, c);
+				size_t weighted = 0;
+				for (auto &sb : skin) weighted += std::count_if(sb.weights.begin(), sb.weights.end(), [](uint8_t x) { return x != 0; });
+				CHECK(mats.size() == 1 && !mats[0].layers.empty() && mats[0].glow == 4.0f && mats[0].layers[0].mode == 1);
+				CHECK(de::read_mesh(*f, f->objects()[c]).faces.size() == b.glow_lod.faces.size() && weighted > 0);
+				++glows;
+			}
+		}
+		CHECK(glows == 2);
+	}
 	fs::remove_all(dir);
 	printf("  ok\n");
 }
@@ -993,6 +1126,8 @@ int main(int argc, char **argv) {
 	test_wings(data, base, false, keep);
 	test_wings(data, base, true, keep);
 	test_material_paint(data, base);
+	test_lod0_budget(base);
+	test_new_sequence(data, base);
 	test_heeled_feet(base);
 	if (failures) {
 		fprintf(stderr, "%d check(s) failed\n", failures);

@@ -37,6 +37,22 @@ ScriptText script_text(const de::PCode &p);
 // (an add-on object or a base GUID; zero for none), one empty reference chunk per element, and
 // a new revision (value84). The behaviors it imports are kept.
 void write_behavior(Project &p, uint32_t behavior, const de::PCode &code, const std::vector<Guid> &global_targets);
+// A script patch, in the sections script_text() writes: "// ---- behavior <name>" picks the
+// Behavior the sections after it change, "// ---- members" appends to its members, and
+// "// ---- state <name>" / "// ---- method <name>" (qualified, e.g. Ground.ShadowPunch.TryLaunch)
+// replaces that element's source, or adds it under the element its name's prefix names. Lines
+// before the first section are comments.
+struct ScriptPatchSection {
+	std::string behavior, kind, name, source;  // kind: members, state or method
+};
+std::vector<ScriptPatchSection> parse_script_patch(const std::string &text);
+struct ScriptPatchResult {
+	int replaced = 0, added = 0, members = 0;
+};
+// Applies the sections whose behavior is `p`'s name; throws deo::Error for a new element whose
+// parent is missing.
+ScriptPatchResult apply_script_patch(de::PCode &p, const std::vector<ScriptPatchSection> &sections);
+
 // What a Behavior's globals reference, in order.
 std::vector<Guid> behavior_global_targets(const Project &p, uint32_t behavior);
 

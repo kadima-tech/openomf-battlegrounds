@@ -315,7 +315,8 @@ void robot_source_section(Editor &e, ed::ImportPlan &plan) {
 	}
 	ImGui::EndGroup();
 	ui::form_label("Level of detail", lw);
-	ui::checkbox("##dec", &h.decimate_lod0);
+	bool to_base = h.lod0_triangles < 0;
+	if (ui::checkbox("##dec", &to_base)) h.lod0_triangles = to_base ? -1 : 0;
 	ImGui::SameLine();
 	ImGui::TextUnformatted(h.rig && !h.rig->lods.empty() ? ("LOD0 to " + std::to_string(h.rig->lods[0].faces) + " triangles too").c_str() : "LOD0 decimated too");
 	ImGui::SameLine();

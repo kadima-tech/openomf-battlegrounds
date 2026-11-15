@@ -1,10 +1,11 @@
 """Prepare Shadow, the One Must Fall 2097 robot, from the user's model (shadow-model.fbx) for the
-editor's robot import: scaled, decimated to the robot budget, rigged with Mixamo bones, weighted,
-textured and exported as a skinned glTF.
+editor's robot import: scaled, rigged with Mixamo bones, weighted, textured, animated (his 2097
+stance and moves, animate_shadow.py) and exported as a skinned glTF. The mesh keeps all its
+triangles unless --tris asks for fewer.
 
 blender -b --factory-startup --python prepare_shadow.py -- --fbx shadow-model.fbx --out shadow.glb
     [--blend shadow.blend] [--texture tripo.png] [--paint-out dir] [--picture choose_creature.png]
-    [--preview prefix] [--height 3.1] [--tris 2540]
+    [--preview prefix] [--height 3.1] [--tris N]
 
 The FBX is a single untextured, unrigged mesh in a T-pose, 1 m tall, facing -Y. Joints are measured
 from its surface; the texture is painted per texel in its own UV layout (silver armour, striped
@@ -22,6 +23,9 @@ import bpy
 import numpy as np
 from mathutils import Quaternion, Vector
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import animate_shadow  # noqa: E402
+
 P = "mixamorig:"
 SIDES = (("Left", 1.0), ("Right", -1.0))
 TEX = 1024
@@ -33,8 +37,8 @@ MATERIALS = {
     "Limbs": (LIMB, 1, 0.75, 0.35, 0.0),
     "Hands": (HAND, 2, 0.80, 0.35, 0.0),
     "Dark": (DARK, -1, 0.50, 0.45, 0.0),
-    "Glow": (GLOW, -1, 0.00, 0.50, 1.6),
-    "Blade": (BLADE, -1, 0.30, 0.30, 0.7),
+    "Glow": (GLOW, -1, 0.00, 0.50, 1.0),
+    "Blade": (BLADE, -1, 0.30, 0.30, 1.0),
 }
 
 
@@ -53,7 +57,7 @@ def parse_args():
     p.add_argument("--picture", default=None, help="Choose Creature's picture, a 512 x 128 PNG")
     p.add_argument("--preview", default=None, help="PNG path prefix for turntable and pose renders")
     p.add_argument("--height", type=float, default=3.1, help="metres")
-    p.add_argument("--tris", type=int, default=2540, help="LOD0 triangle budget")
+    p.add_argument("--tris", type=int, default=0, help="decimate LOD0 to this many triangles (0: keep the model's)")
     return p.parse_args(argv)
 
 
@@ -352,7 +356,7 @@ def dilate(img, filled, steps):
 
 
 def paint(co, nr, tri, uv, cat, bone, rel, J, H):
-    """The robot's colours in its UV layout, and the category map (per texel)."""
+    """The robot's colours in its UV layout, what of them glows, and the category map (per texel)."""
     face, bary = rasterise(tri, uv, TEX)
     on = face >= 0
     f = face[on]
@@ -365,6 +369,7 @@ def paint(co, nr, tri, uv, cat, bone, rel, J, H):
     b = bone[f]
     z = pos[:, 2] / H
     out = np.zeros((len(f), 3), np.float32)
+    emit = np.zeros((len(f), 3), np.float32)
     shade = np.clip(1.0 + rv * 60.0, 0.55, 1.15)  # sunken joints darker, edges brighter
 
     m = c == ARMOUR
@@ -396,9 +401,11 @@ def paint(co, nr, tri, uv, cat, bone, rel, J, H):
     m = c == GLOW
     core = np.clip(0.5 + 0.5 * -nrm[m, 1] * 0.6 + rv[m] * 40, 0, 1)
     out[m] = np.stack([0.10 + 0.55 * core ** 2, 0.62 + 0.33 * core, np.ones(m.sum())], -1)
+    emit[m] = out[m]
     m = c == BLADE
     edge = np.clip(0.35 + rv[m] * 90 + 0.4 * (1 - np.abs(nrm[m, 2])), 0, 1)
     out[m] = np.stack([0.03 + 0.25 * edge ** 2, 0.22 + 0.62 * edge, 0.55 + 0.45 * edge], -1)
+    emit[m] = out[m] * np.clip((edge - 0.55) / 0.4, 0, 1)[:, None]
 
     img = np.zeros((TEX, TEX, 3), np.float32)
     img[on] = np.clip(out, 0, 1)
@@ -406,7 +413,10 @@ def paint(co, nr, tri, uv, cat, bone, rel, J, H):
     cmap[on] = c
     img = dilate(img, on, 8)
     img[~(dilate(on[..., None].astype(np.float32), on, 8)[..., 0] > 0)] = (0.08, 0.09, 0.11)
-    return img, cmap
+    glow = np.zeros((TEX, TEX, 3), np.float32)
+    glow[on] = np.clip(emit, 0, 1)
+    glow = dilate(glow, on, 8)
+    return img, glow, cmap
 
 
 def stealth(look, cmap):
@@ -431,7 +441,7 @@ def tri_count(mo):
 
 def decimate(mo, target):
     before = sum(len(p.vertices) - 2 for p in mo.data.polygons)
-    if before <= target:
+    if target <= 0 or before <= target:
         return before, before
     mod = mo.modifiers.new("Decimate", "DECIMATE")
     mod.decimate_type = "COLLAPSE"
@@ -469,9 +479,11 @@ def load_texture(path):
     return px
 
 
-def materials(mo, look, cat):
-    """One material per paint choice, all sampling the one texture."""
+def materials(mo, look, glow, cat):
+    """One material per paint choice, all sampling the one texture; the glowing ones emit the glow
+    image (glTF emissiveTexture), which the import turns into the game's glow layer."""
     img = to_image("ShadowColours", look)
+    gimg = to_image("ShadowGlow", glow)
     me = mo.data
     for name, (_, paint_, metal, rough, glows) in MATERIALS.items():
         m = bpy.data.materials.new(name)
@@ -485,7 +497,9 @@ def materials(mo, look, cat):
         bsdf.inputs["Metallic"].default_value = metal
         bsdf.inputs["Roughness"].default_value = rough
         if glows:
-            nt.links.new(tex.outputs["Color"], bsdf.inputs["Emission Color"])
+            gt = nt.nodes.new("ShaderNodeTexImage")
+            gt.image = gimg
+            nt.links.new(gt.outputs["Color"], bsdf.inputs["Emission Color"])
             bsdf.inputs["Emission Strength"].default_value = glows
         me.materials.append(m)
     order = [v[0] for v in MATERIALS.values()]
@@ -617,7 +631,8 @@ def weights(mo, ao, bones, H):
 def export(path):
     glb = path.lower().endswith(".glb")
     bpy.ops.export_scene.gltf(filepath=os.path.abspath(path), export_format="GLB" if glb else "GLTF_SEPARATE",
-                              export_yup=True, export_skins=True, export_animations=False, export_cameras=False,
+                              export_yup=True, export_skins=True, export_animations=True, export_animation_mode="ACTIONS",
+                              export_force_sampling=True, export_frame_step=1, export_cameras=False,
                               export_lights=False, export_image_format="AUTO", export_apply=False, export_extras=True,
                               use_selection=False)
 
@@ -761,16 +776,19 @@ def main():
     before, after = decimate(mo, args.tris)
     co, nr, tri, uv = arrays(mo.data)
     cat, bone, rel = classify(co, nr, tri, J, bones, H)
-    look, cmap = paint(co, nr, tri, uv, cat, bone, rel, J, H)
+    look, glow, cmap = paint(co, nr, tri, uv, cat, bone, rel, J, H)
     if args.texture:
         look = load_texture(args.texture)
         if look.shape[:2] != (TEX, TEX):
             ys = (np.arange(TEX) * look.shape[0] / TEX).astype(int)
             xs = (np.arange(TEX) * look.shape[1] / TEX).astype(int)
             look = look[ys][:, xs]
-    counts = materials(mo, look, cat)
+    counts = materials(mo, look, glow, cat)
     ao = armature(bones)
     fixed, sided, loose = weights(mo, ao, bones, H)
+    bpy.context.scene.render.fps = animate_shadow.FPS
+    actions = animate_shadow.build(ao)
+    print("SHADOW actions " + ", ".join(actions))
     vs = np.array([v.co[:] for v in mo.data.vertices])
     print("SHADOW triangles %d -> %d, vertices %d, height %.3f m, width %.3f m" % (before, after, len(vs), np.ptp(vs[:, 2]), np.ptp(vs[:, 0])))
     print("SHADOW materials " + ", ".join("%s %d" % (n, c) for n, c in zip(MATERIALS, counts)))
@@ -783,6 +801,7 @@ def main():
         os.makedirs(args.paint_out, exist_ok=True)
         save_png(os.path.join(args.paint_out, "ShadowColours.png"), look)
         save_png(os.path.join(args.paint_out, "ShadowDark.png"), stealth(look, cmap))
+        save_png(os.path.join(args.paint_out, "ShadowGlow.png"), glow)
     if args.blend:
         bpy.context.preferences.filepaths.save_version = 0
         bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.blend))

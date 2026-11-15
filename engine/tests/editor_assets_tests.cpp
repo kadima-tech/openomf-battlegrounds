@@ -263,6 +263,42 @@ static void har(const fs::path &data, const fs::path &tmp) {
 		}
 		CHECK(fighter_classes == 1);
 	}
+	{
+		// A script patch: members appended (past the stored source's terminator), a method replaced,
+		// a state and a method nested under it added; the fighter class compiles with them.
+		const std::string patch =
+		    "Comment lines before the first section.\n"
+		    "// ---- behavior BJaguar\n"
+		    "// ---- members\nfinal byte m_PatchKind=7;\n"
+		    "// ---- state Ground.PatchTest\nreplicate param byte Kind;\nexKillCallers();\nAnimActivate(seqStanding);\nexEndFrame();\n"
+		    "// ---- method Ground.PatchTest.TryLaunch\nif (IsUserControlled() && Input.Verify(g_StandardInput.seqDoubleTapBack))\n\tGround.PatchTest(m_PatchKind);\n"
+		    "// ---- method FighterChangedState\nSetGlobalInterest(InterestLevelNormal);\nBFighter::FighterChangedState();\n"
+		    "// ---- behavior BSomethingElse\n// ---- method Ignored\nreturn;\n";
+		auto sections = ed::parse_script_patch(patch);
+		CHECK(sections.size() == 5 && sections[0].kind == "members" && sections[1].kind == "state" && sections[1].name == "Ground.PatchTest");
+		de::PCode code = ed::read_pcode(proj->file().objects[size_t(o.behavior)]);
+		const size_t before = code.elements.size();
+		ed::ScriptPatchResult r = ed::apply_script_patch(code, sections);
+		CHECK(r.added >= 2 && r.added + r.replaced == 3 && r.members == 1 && code.elements.size() == before + size_t(r.added));
+		CHECK(code.members.source.find('\0') == std::string::npos && code.members.source.find("m_PatchKind=7") != std::string::npos);
+		bool nested = false;
+		for (size_t i = 0; i < code.elements.size(); ++i) nested |= code.qualified_name(i) == "Ground.PatchTest.TryLaunch" && code.elements[i].method_id == 1;
+		CHECK(nested);
+		de::PCode bad = code;
+		bool threw = false;
+		try {
+			ed::apply_script_patch(bad, ed::parse_script_patch("// ---- behavior BJaguar\n// ---- method NoSuch.Parent.Method\nreturn;\n"));
+		} catch (const std::exception &) {
+			threw = true;
+		}
+		CHECK(threw);
+		ed::write_behavior(*proj, uint32_t(o.behavior), code, ed::behavior_global_targets(*proj, uint32_t(o.behavior)));
+		ed::ScriptCompiler compiler(data);
+		auto res = compiler.compile(*proj, uint32_t(o.behavior_class));
+		for (auto &e : res.errors) printf("  patched: %s\n", e.str().c_str());
+		CHECK(res.ok);
+		printf("script patch: %d added, %d replaced, members extended; PJaguar compiles\n", r.added, r.replaced);
+	}
 	uint32_t paint = ed::create_paint_job(*proj, o, "Paint2");
 	auto images = ed::paint_images(*proj, paint);
 	CHECK(images.size() >= 2);

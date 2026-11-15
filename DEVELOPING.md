@@ -279,6 +279,12 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   images) so RGBMain / ReflectionMask / Bump can be replaced. Script constants rewrite the
   behavior's `final` line and Compile (or Save) rebuilds the fighter's classes (FINDINGS 527);
   `--har-constant NAME=VALUE` (repeatable) sets one in the HAR made or opened at start-up.
+  `--har-script patch.bgs` (repeatable) applies a script patch to the HAR's behaviors
+  (`ed::parse_script_patch`): sections as the object view writes them, `// ---- behavior <name>`
+  choosing the add-on's copy of that behavior, `// ---- members` appending to its members,
+  `// ---- state|method <qualified name>` replacing a method or adding it under its parent; then
+  `--compile` (or Save) rebuilds the classes. A mod keeps only its own code this way, not a copy of
+  the base robot's script (`mods/shadow/script/shadow.bgs`).
 - More scripted options: `--new-tournament "<Base>:<Name>"` (`blank=<Base>:<Name>` for a blank ladder),
   `--open-tournament <Name>`, `--new-har "<Robot>:<Name>"`, `--open-har <Name>`, `--asset-tab N`,
   `--asset-select N` (the tournament tree's row: a match index, -1 settings, -2 ending, -3 branches,
@@ -430,7 +436,7 @@ decoded images, skins, animations, extras), `model_export.h` turns DE content in
   untextured, unrigged AI-generated mesh): `blender -b --factory-startup --python
   mods/shadow/blender/prepare_shadow.py -- --fbx shadow-model.fbx --out shadow.glb [--blend shadow.blend]
   [--texture file.png] [--paint-out dir] [--picture choose_creature.png] [--preview prefix]` scales it
-  to 3.1 m, decimates it to 2,540 triangles, measures Mixamo joints from its surface, weights it
+  to 3.1 m (keeping all 5,406 triangles; `--tris N` decimates), measures Mixamo joints from its surface, weights it
   (Blender's automatic weights, on a voxel remesh when they fail on the mesh itself), paints a texture
   in its UVs (or takes `--texture`), splits it into six materials with `de_paint` and metallic, and
   writes the Stealth paint job and a Choose Creature strip; `mods/shadow/build.sh [--model]` runs it

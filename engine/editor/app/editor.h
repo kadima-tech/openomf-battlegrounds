@@ -52,6 +52,7 @@ struct Options {
 	std::string new_tournament, open_tournament, new_har, open_har;
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
+	std::vector<std::string> har_scripts;    // script patch files (ed::parse_script_patch) for the HAR's behaviors
 	std::string har_title, har_text, har_picture;  // Choose Creature's panel; the picture a PNG or "render"
 	std::vector<std::string> tournament_sets;  // KEY=VALUE: set in the tournament made or opened (ed::set_tournament_field)
 	std::string har_anim;  // the HAR preview's sequence, "Name" or "Name@t" (paused at t)
@@ -62,8 +63,9 @@ struct Options {
 	// 3D models (models.h): import a .glb / .gltf (straight in, or the dialog at a step), export an
 	// object, place an imported prop in the open arena.
 	std::filesystem::path import_file, export_out;
-	std::string import_kind, import_name, import_template, import_base, import_pose, export_spec, place_prop;
+	std::string import_kind, import_name, import_template, import_base, import_pose, import_lod0, export_spec, place_prop;
 	std::vector<std::string> import_paints;  // Name=image.png: a robot import's further paint jobs
+	std::vector<std::string> import_ghosts;  // Name=Sequence@t: a robot import's afterimages (HarPlan::ghosts)
 	bool import_dialog = false;
 	int import_step = 0;
 };

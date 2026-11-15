@@ -89,6 +89,7 @@ struct SequenceMapping {
 	std::string sequence;   // the base bank's name, as the scripts use it
 	int animation = -1;     // the file's animation replacing it; -1: the base robot's, retargeted
 	MapSource source = MapSource::None;
+	bool added = false;     // a new sequence: a file animation no base sequence is named after
 };
 
 struct SphereSource {
@@ -120,7 +121,7 @@ struct HarPlan {
 	// Per glTF material: -1 its own colours (RGBStatic), 0-2 one of the pilot's colours (the paint
 	// mask's channel). Chosen on the Materials page; else the material's extras.de_paint; else `paint`.
 	std::map<int, int> material_paint;
-	bool decimate_lod0 = false;  // LOD0 to the base robot's budget as well
+	int lod0_triangles = 0;  // LOD0's budget: 0 keeps the file's mesh, -1 the base robot's, else that many
 	// Further paint jobs: a copy of the model with this image as its colours (RGBStatic) or, when
 	// the paint is the pilot's, its paint mask (RGBMain); laid out as the model's texture.
 	struct ExtraPaint {
@@ -128,6 +129,13 @@ struct HarPlan {
 		std::filesystem::path image;
 	};
 	std::vector<ExtraPaint> extra_paints;
+	// Afterimages: the robot posed at a sequence's time, as a static translucent mesh on an Actor
+	// named `name` under the HAR's projectile actor (a script shows and moves it).
+	struct Ghost {
+		std::string name, sequence;
+		float t = 0.5f;
+	};
+	std::vector<Ghost> ghosts;
 	std::shared_ptr<const RobotRig> rig;
 	std::vector<std::string> notes;  // what the analysis found
 };

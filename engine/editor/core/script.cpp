@@ -154,6 +154,78 @@ BehaviorReferences read_behavior_references(const deo::Object &o) {
 
 }  // namespace
 
+std::vector<ScriptPatchSection> parse_script_patch(const std::string &text) {
+	std::vector<ScriptPatchSection> out;
+	std::string behavior;
+	ScriptPatchSection *cur = nullptr;
+	size_t at = 0;
+	while (at < text.size()) {
+		size_t end = text.find('\n', at);
+		if (end == std::string::npos) end = text.size();
+		std::string line = text.substr(at, end - at);
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		at = end + 1;
+		if (line.rfind("// ---- ", 0) == 0) {
+			std::string head = line.substr(8), kind = head.substr(0, head.find(' ')), name;
+			if (head.find(' ') != std::string::npos) name = head.substr(head.find(' ') + 1);
+			while (!name.empty() && name.back() == ' ') name.pop_back();
+			if (kind == "behavior") {
+				behavior = name;
+				cur = nullptr;
+				continue;
+			}
+			if (kind == "members" || kind == "state" || kind == "method") {
+				out.push_back({behavior, kind, kind == "members" ? std::string() : name, {}});
+				cur = &out.back();
+				continue;
+			}
+		}
+		if (cur) cur->source += line + "\r\n";
+	}
+	for (auto &s : out) {
+		while (s.source.size() >= 4 && s.source.compare(s.source.size() - 4, 4, "\r\n\r\n") == 0) s.source.resize(s.source.size() - 2);
+	}
+	return out;
+}
+
+ScriptPatchResult apply_script_patch(de::PCode &p, const std::vector<ScriptPatchSection> &sections) {
+	ScriptPatchResult r;
+	for (const auto &s : sections) {
+		if (s.behavior != p.name) continue;
+		if (s.kind == "members") {
+			// Stored sources can carry bytes past their terminator, which the compiler never reads.
+			if (auto nul = p.members.source.find('\0'); nul != std::string::npos) p.members.source.resize(nul);
+			if (!p.members.source.empty() && p.members.source.back() != '\n') p.members.source += "\r\n";
+			p.members.source += s.source;
+			++r.members;
+			continue;
+		}
+		int found = -1;
+		for (size_t i = 0; i < p.elements.size() && found < 0; ++i) {
+			if (p.elements[i].type == de::PCodeElement::kMethod && p.qualified_name(i) == s.name) found = int(i);
+		}
+		if (found >= 0) {
+			p.elements[size_t(found)].source = s.source;
+			p.elements[size_t(found)].method_id = s.kind == "state" ? 0 : 1;
+			++r.replaced;
+			continue;
+		}
+		int parent = -1;
+		std::string local = s.name;
+		if (auto dot = s.name.rfind('.'); dot != std::string::npos) {
+			const std::string prefix = s.name.substr(0, dot);
+			local = s.name.substr(dot + 1);
+			for (size_t i = 0; i < p.elements.size() && parent < 0; ++i) {
+				if (p.qualified_name(i) == prefix) parent = int(i);
+			}
+			if (parent < 0) throw deo::Error(p.name + ": " + s.name + " needs a method " + prefix);
+		}
+		p.elements.push_back(pcode_method(local, s.source, s.kind == "state", parent));
+		++r.added;
+	}
+	return r;
+}
+
 std::vector<Guid> behavior_global_targets(const Project &p, uint32_t behavior) {
 	std::vector<Guid> out;
 	for (auto &r : read_behavior_references(p.file().objects.at(behavior)).globals) out.push_back(p.target(r).guid);

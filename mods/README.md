@@ -5,7 +5,7 @@ Add-ons made with the content editor (`openbg-editor`). Each folder holds everyt
 | Mod | What it adds |
 |---|---|
 | [kreissack](kreissack/) | Major Kreissack, the villain of One Must Fall: 2097, as a pilot, plus a one-match tournament ("WAR Finale") that unlocks him |
-| [shadow](shadow/) | Shadow, the 2097 robot, from the user's model prepared in Blender and imported on Katana's moveset |
+| [shadow](shadow/) | Shadow, the 2097 robot, from the user's model prepared and animated in Blender, imported on Katana's moveset, with his 2097 shadow projections as specials |
 
 **Build and play**
 ```sh
