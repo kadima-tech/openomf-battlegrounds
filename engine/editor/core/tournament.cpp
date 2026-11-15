@@ -1418,6 +1418,11 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 	// limit (a session modifier: "3,000 Score Limit", "5 Wins"...), by name.
 	if (key == "game-type") return void(t.game_type = guid_of("Description\\SessionMaster", v));
 	if (key == "score-limit") return void(t.score_limit = guid_of("Description\\SessionModifier", v));
+	// The ending cinematic's scene (an environment description such as the World Open's
+	// "CinematickingofhillDescription"), and its name and description texts.
+	if (key == "ending-arena") return void(t.ending_arena = guid_of("Description\\Environment", v));
+	if (key == "ending-name") return void(t.ending_name = v);
+	if (key == "ending-description") return void(t.ending_description = v);
 	if (key == "unlock+") {
 		size_t colon = v.find(':');
 		std::string what = trim(v.substr(0, colon));
