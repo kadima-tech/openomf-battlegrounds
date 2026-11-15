@@ -3,7 +3,8 @@
 //               save -> reopen -> the engine's readers see the description, its session master
 //               and VMC2 that matches the add-on's behaviors.
 //   har:        new HAR variant -> edit stats -> save -> reopen -> the engine reads the stats.
-// Usage: editor-assets-tests <Data dir> [tournament|har]
+//   help:       Help topics for a HAR from a pages file -> the Help screen's tree lists them under the base topic.
+// Usage: editor-assets-tests <Data dir> [tournament|har|help]
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,8 @@
 #include "game/descriptions.h"
 #include "game/runtime.h"
 #include "har.h"
+#include "help.h"
+#include "image_io.h"
 #include "pilot.h"
 #include "script.h"
 #include "tournament.h"
@@ -345,9 +348,175 @@ static void har(const fs::path &data, const fs::path &tmp) {
 	set_env("OPENBG_ADDONS", "");
 }
 
+// A Description with a hierarchy block listing `kids` (local indices).
+static de::NewObject topic(const std::string &name, const std::vector<uint8_t> &kids = {}) {
+	de::NewObject o;
+	o.name = name, o.class_path = "Description", o.guid = de::new_guid();
+	o.hierarchy = {1, uint8_t(1 + kids.size() * 2)};
+	for (uint8_t k : kids) o.hierarchy.insert(o.hierarchy.end(), {1, uint8_t(0x32 + k)});
+	o.hierarchy.push_back(0);
+	return o;
+}
+
+// The Help list's tree over hand-made files: an add-on's topic named as one at the same place merges.
+static void topic_tree_merges() {
+	de::ObjectsFile base(de::write_objects_file("Base", de::new_guid(), {topic("Robots", {1, 2}), topic("Katana"), topic("Jaguar"), topic("Tips")}));
+	de::ObjectsFile addon(de::write_objects_file("Mod", de::new_guid(),
+	                                             {topic("Robots", {1}), topic("Shadow", {2}), topic("Moves"), topic("Tips", {4}), topic("Jaguar")}));
+	auto sorted = [](std::vector<de::ObjectRef> e) {
+		std::stable_sort(e.begin(), e.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
+		return e;
+	};
+	std::vector<de::ObjectRef> only{{&base, 0}, {&base, 1}, {&base, 2}, {&base, 3}};
+	only = sorted(only);
+	std::vector<de::ObjectRef> before = only;
+	std::vector<int> tree = game::topic_tree(only);
+	CHECK(only.size() == before.size() && tree.size() == only.size());
+	auto row = [](const std::vector<de::ObjectRef> &e, const de::ObjectsFile *f, uint32_t i) {
+		for (size_t k = 0; k < e.size(); ++k) {
+			if (e[k].file == f && e[k].index == i) return int(k);
+		}
+		return -1;
+	};
+	CHECK(tree[size_t(row(only, &base, 1))] == row(only, &base, 0) && tree[size_t(row(only, &base, 0))] == -1);
+	std::vector<de::ObjectRef> both;
+	for (uint32_t i = 0; i < 4; ++i) both.push_back({&base, i});
+	for (uint32_t i = 0; i < 5; ++i) both.push_back({&addon, i});
+	both = sorted(both);
+	tree = game::topic_tree(both);
+	CHECK(both.size() == 7 && tree.size() == 7);
+	CHECK(row(both, &addon, 0) < 0 && row(both, &addon, 3) < 0);
+	CHECK(tree[size_t(row(both, &addon, 1))] == row(both, &base, 0));
+	CHECK(tree[size_t(row(both, &addon, 2))] == row(both, &addon, 1));
+	CHECK(tree[size_t(row(both, &addon, 4))] == row(both, &base, 3));
+	CHECK(tree[size_t(row(both, &base, 2))] == row(both, &base, 0));
+}
+
+static void help(const fs::path &data, const fs::path &tmp) {
+	topic_tree_merges();
+	{
+		const std::string text =
+		    "# a comment\n== A/B\ntitle: Tee\nimage: picture\nalign: left\n\nLine one\n\nLine three\n\n\n== A/B/C\npage: X/Y\n";
+		auto t = ed::parse_help_file(text);
+		CHECK(t.size() == 2 && t[0].path == "A/B" && t[0].title == "Tee" && t[0].image == "picture" && t[0].left && t[0].text == "Line one\n\nLine three");
+		CHECK(t[1].same_as == "X/Y" && t[1].text.empty());
+		CHECK(ed::parse_help_file(ed::format_help_file(t)) == t);
+		for (const char *bad : {"text first\n== A\n", "== A\npage: B\nsome text\n", "== A\nalign: up\n", "== A//B\n"}) {
+			bool threw = false;
+			try {
+				ed::parse_help_file(bad);
+			} catch (const std::exception &) {
+				threw = true;
+			}
+			CHECK(threw);
+		}
+	}
+	ed::BaseData base(data);
+	auto paths = ed::base_help_paths(base);
+	printf("base Help topics: %zu\n", paths.size());
+	CHECK(paths.size() == 166);
+	CHECK(std::count(paths.begin(), paths.end(), "6. HAR (Robot) Reference/Katana/Special Attacks/Razor Spin") == 1);
+	const fs::path path = tmp / "HelpMod.DEObjects";
+	auto proj = ed::Project::create(base, path);
+	uint32_t d = ed::create_har_variant(*proj, "Jaguar", "Jaguar Mk2");
+	ed::HarObjects o = ed::har_objects(*proj, d);
+	ed::own_presentation(*proj, o);
+	const int picture = ed::read_presentation(*proj, o).picture;
+	CHECK(picture >= 0);
+	const fs::path png = tmp / "move.png";
+	{
+		std::vector<uint8_t> px(64 * 32 * 4, 200);
+		auto bytes = ed::encode_png(64, 32, px);
+		std::ofstream(png, std::ios::binary).write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+	}
+	const std::string robot = "6. HAR (Robot) Reference/Jaguar Mk2";
+	const std::string file = "== " + robot + "\ntitle: Jaguar Mk2\nimage: picture\nA faster Jaguar.\n\n== " + robot +
+	                         "/Quick Reference\nJAGUAR MK2\n\n-Specials-\n\nLeap: f,f+P\n\n== " + robot + "/Special Attacks\npage: 6. HAR (Robot) Reference/Jaguar/Special Attacks\n\n== " +
+	                         robot + "/Special Attacks/Leap\nimage: base:Katana\nLEAP\n\nf,f+P\n\nIt leaps.\n\n== " + robot + "/Special Attacks/Pounce\nimage: " + png.string() + "\nPOUNCE\n";
+	auto topics = ed::parse_help_file(file);
+	CHECK(topics.size() == 5);
+	ed::write_help(*proj, topics, picture);
+	const size_t objects = proj->file().objects.size();
+	ed::write_help(*proj, topics, picture);
+	CHECK(proj->file().objects.size() == objects);
+	for (const char *bad : {"== Nowhere/Topic\nText\n", "== 6. HAR (Robot) Reference/Katana\nText\n", "== 6. HAR (Robot) Reference/X\npage: No/Such\n"}) {
+		bool threw = false;
+		try {
+			ed::write_help(*proj, ed::parse_help_file(bad), picture);
+		} catch (const std::exception &) {
+			threw = true;
+		}
+		CHECK(threw);
+	}
+	{
+		auto back = ed::read_help(*proj);
+		CHECK(back.size() == 6);
+		if (back.size() == 6) {
+			CHECK(back[0].path == "6. HAR (Robot) Reference" && back[0].same_as == back[0].path);
+			CHECK(back[1].path == robot && back[1].title == "Jaguar Mk2" && back[1].text == "A faster Jaguar." && back[1].image == "picture");
+			CHECK(back[2].text == topics[1].text && back[2].title.empty() && back[2].image.empty());
+			CHECK(!back[3].same_as.empty() && back[3].same_as.find("/Special Attacks") != std::string::npos);
+			CHECK(back[4].image == "base:Katana" && back[4].text == "LEAP\n\nf,f+P\n\nIt leaps.");
+			CHECK(back[5].image == "Pounce Image" && back[5].text == "POUNCE");
+			// The panel's edit: a topic as read, its text changed, written back in place.
+			back[5].text = "POUNCE\n\nb,f+K";
+			ed::write_help(*proj, {back[1], back[5]}, picture);
+			CHECK(proj->file().objects.size() == objects && ed::read_help(*proj)[5].text == "POUNCE\n\nb,f+K");
+		}
+	}
+	for (auto &i : ed::validate(*proj)) {
+		if (i.severity != ed::Issue::Ok) printf("  validation: %s\n", i.text.c_str());
+		CHECK(i.severity != ed::Issue::Error);
+	}
+	proj->save();
+	set_env("OPENBG_ADDONS", path.string());
+	{
+		// As the Help screen lists them: every HelpEntry description, by name, as a tree.
+		de::World w(data);
+		de::ObjectRef cast = w.find("Description\\Cast", "HelpEntry");
+		std::vector<de::ObjectRef> entries;
+		for (const auto &[stem, f] : w.files()) {
+			for (uint32_t i = 0; i < f->objects().size(); ++i) {
+				if (f->objects()[i].class_path.rfind("Description", 0) != 0) continue;
+				for (auto &c : game::read_description(w, {f.get(), i}).casts) {
+					if (cast && c.info().guid.str() == cast.info().guid.str()) entries.push_back({f.get(), i});
+				}
+			}
+		}
+		std::stable_sort(entries.begin(), entries.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
+		const size_t listed = entries.size();
+		std::vector<int> tree = game::topic_tree(entries);
+		CHECK(entries.size() == listed - 1);
+		int har_ref = -1, mk2 = -1, leap = -1;
+		for (size_t k = 0; k < entries.size(); ++k) {
+			const std::string &n = entries[k].info().name;
+			if (n == "6. HAR (Robot) Reference") {
+				CHECK(har_ref < 0);
+				har_ref = int(k);
+			}
+			if (n == "Jaguar Mk2") mk2 = int(k);
+			if (n == "Leap") leap = int(k);
+		}
+		CHECK(har_ref >= 0 && mk2 >= 0 && leap >= 0);
+		if (har_ref >= 0 && mk2 >= 0 && leap >= 0) {
+			int katana = -1;
+			for (size_t k = 0; k < entries.size(); ++k) katana = entries[k].info().name == "Katana" && entries[k].file == w.file("OMFHelp") ? int(k) : katana;
+			CHECK(katana >= 0 && tree[size_t(katana)] == har_ref);
+			CHECK(tree[size_t(mk2)] == har_ref);
+			CHECK(entries[size_t(tree[size_t(leap)])].info().name == "Special Attacks" && tree[size_t(tree[size_t(leap)])] == mk2);
+			game::ControlLayout page = game::read_control_creator(w, game::read_description(w, entries[size_t(leap)]).large);
+			CHECK(page.align == 2 && page.items.size() == 2 && page.items[0].kind == game::ControlLayout::Image && page.items[1].text == " \r\nLEAP\r\n \r\nf,f+P\r\n \r\nIt leaps.");
+			game::ControlLayout robot_page = game::read_control_creator(w, game::read_description(w, entries[size_t(mk2)]).large);
+			CHECK(robot_page.items.size() == 3 && robot_page.items[0].kind == game::ControlLayout::Group && robot_page.items[0].items.size() == 1 &&
+			      robot_page.items[0].items[0].text == "Jaguar Mk2" && robot_page.items[0].text_height == 18);
+		}
+	}
+	set_env("OPENBG_ADDONS", "");
+}
+
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <Data dir> [tournament|har]\n", argv[0]);
+		fprintf(stderr, "usage: %s <Data dir> [tournament|har|help]\n", argv[0]);
 		return 2;
 	}
 	const fs::path data = argv[1];
@@ -356,6 +525,7 @@ int main(int argc, char **argv) {
 	fs::create_directories(tmp);
 	if (which.empty() || which == "tournament") tournament(data, tmp);
 	if (which.empty() || which == "har") har(data, tmp);
+	if (which.empty() || which == "help") help(data, tmp);
 	std::error_code ec;
 	fs::remove_all(tmp, ec);
 	if (failures) {

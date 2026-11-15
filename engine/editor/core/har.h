@@ -106,6 +106,10 @@ void write_presentation(Project &p, const HarObjects &o, const std::string &titl
 // The picture's pixels, scaled to its size (copying the panel first when needed).
 void set_presentation_picture(Project &p, const HarObjects &o, int width, int height, const std::vector<uint8_t> &rgba, const std::string &source);
 
+// A Value\String's text (its second chunk's first block), UTF-8.
+std::string string_text(const deo::Object &value);
+void set_string_text(deo::Object &value, const std::string &text);
+
 // An attack sphere (hit detectors, the leap attack's) rather than a body one, by its name.
 bool attack_sphere(const std::string &name);
 // The bone (nearest Actor above it) a sphere hangs from.

@@ -25,5 +25,5 @@ rm -rf "$out/Shadow.DEObjects" "$out/Shadow.assets"
 HOME=$home "$editor" --data "$data" "$out/Shadow.DEObjects" \
   --import "$here/source/shadow.glb" --import-kind robot --import-base Katana --import-name Shadow "${ghosts[@]}" \
   --import-paint "Stealth=$here/source/ShadowDark.png" --har-title Shadow --har-text "$text" --har-pilot Dawn \
-  --har-picture "$here/source/choose_creature.png" --har-script "$here/script/shadow.bgs" --compile --save --batch --frames 60
+  --har-picture "$here/source/choose_creature.png" --har-script "$here/script/shadow.bgs" --har-help "$here/help.txt" --compile --save --batch --frames 60
 echo "built $out/Shadow.DEObjects"

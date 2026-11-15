@@ -49,6 +49,54 @@ DescriptionInfo read_description(const de::World &data, const de::ObjectRef &d) 
 	return out;
 }
 
+std::vector<int> topic_tree(std::vector<de::ObjectRef> &entries) {
+	const size_t n = entries.size();
+	std::vector<int> parent(n, -1);
+	std::map<const de::ObjectsFile *, std::vector<int32_t>> parents;
+	for (size_t k = 0; k < n; ++k) {
+		const de::ObjectRef &e = entries[k];
+		auto it = parents.find(e.file);
+		if (it == parents.end()) it = parents.emplace(e.file, e.file->parents()).first;
+		int32_t p = it->second[e.index];
+		for (size_t j = 0; p >= 0 && j < n; ++j) {
+			if (entries[j].file == e.file && entries[j].index == uint32_t(p)) parent[k] = int(j);
+		}
+	}
+	std::vector<int> same(n);
+	for (size_t k = 0; k < n; ++k) same[k] = int(k);
+	auto topic = [&](int k) {
+		while (k >= 0 && same[size_t(k)] != k) k = same[size_t(k)];
+		return k;
+	};
+	bool merged = false;
+	for (bool changed = true; changed;) {
+		changed = false;
+		for (size_t k = 0; k < n; ++k) {
+			if (same[k] != int(k)) continue;
+			for (size_t j = 0; j < n; ++j) {
+				if (j == k || same[j] != int(j) || entries[j].file == entries[k].file || entries[j].info().name != entries[k].info().name) continue;
+				if (topic(parent[j]) != topic(parent[k])) continue;
+				size_t keep = std::min(j, k), drop = std::max(j, k);
+				same[drop] = int(keep);
+				changed = merged = true;
+				break;
+			}
+		}
+	}
+	if (!merged) return parent;
+	std::vector<int> row(n, -1);
+	std::vector<de::ObjectRef> kept;
+	for (size_t k = 0; k < n; ++k) {
+		if (same[k] == int(k)) row[k] = int(kept.size()), kept.push_back(entries[k]);
+	}
+	std::vector<int> out;
+	for (size_t k = 0; k < n; ++k) {
+		if (same[k] == int(k)) out.push_back(parent[k] < 0 ? -1 : row[size_t(topic(parent[k]))]);
+	}
+	entries = std::move(kept);
+	return out;
+}
+
 std::pair<int, int> environment_players(const de::ObjectRef &d) {
 	if (!d) return {0, 0};
 	try {

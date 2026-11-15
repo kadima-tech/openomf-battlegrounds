@@ -285,6 +285,10 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   `// ---- state|method <qualified name>` replacing a method or adding it under its parent; then
   `--compile` (or Save) rebuilds the classes. A mod keeps only its own code this way, not a copy of
   the base robot's script (`mods/shadow/script/shadow.bgs`).
+  `--har-help pages.txt` (repeatable) adds or updates in-game Help topics from a pages file
+  (`ed::parse_help_file`, docs/EDITOR_SPEC.md §5.6: `== <path>` under a base topic such as
+  `6. HAR (Robot) Reference`, then `title:`, `image: picture|base:<name>|file.png`, `page:`, the text);
+  the HAR document's Help tab (`--asset-tab 7`) loads, exports and edits them (`mods/shadow/help.txt`).
 - More scripted options: `--new-tournament "<Base>:<Name>"` (`blank=<Base>:<Name>` for a blank ladder),
   `--open-tournament <Name>`, `--new-har "<Robot>:<Name>"`, `--open-har <Name>`, `--asset-tab N`,
   `--asset-select N` (the tournament tree's row: a match index, -1 settings, -2 ending, -3 branches,
@@ -295,7 +299,7 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
   `.opponents=<count>`, `.opponent.K=<pilot>[,<robot>]` (`random` or empty for a random one),
   `.pre-quote+` / `.win-quote+` / `.lose-quote+=<slot>:<text>`, `.pre-quotes=` (clears); N and K from
   1). `editor-assets-tests` (ctest `editor-tournament`,
-  `editor-har`) copies North American Open, edits it (also through every `--tournament-set` key), regenerates (a user block survives), compiles,
+  `editor-har`, `editor-help`: a HAR's Help topics from a pages file, checked through the Help screen's tree) copies North American Open, edits it (also through every `--tournament-set` key), regenerates (a user block survives), compiles,
   validates, saves, reopens and checks the engine's description reader and the VMC2 change
   information; and makes Jaguar Mk2, edits stats, spheres, inputs, a constant and a paint job, and
   checks `read_fighter_stats` and `fighter_models` through `OPENBG_ADDONS`. `EDITOR_ASSETS_OUT=<dir>`

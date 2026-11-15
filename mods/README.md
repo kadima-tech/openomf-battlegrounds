@@ -16,6 +16,7 @@ openbg <Data> --addon mods/kreissack/build/Kreissack.DEObjects --addon mods/shad
 - To play them from the launcher, open its mod screen (`./configure.command`, or `configure.cmd` on Windows) and tick them: in a checkout it lists every `mods/*/build/*.DEObjects`. They stay where `build.sh` wrote them, so a rebuild is picked up the next launch. `openbg` started directly then loads them too ([launcher/README.md](../launcher/README.md#mods)); an explicit `--addon` of the same file name replaces the listed copy.
 - The scripts expect the patched game data in `source/patched/v2123/Data` (set `OPENBG_DATA` to change it) and a built `engine/build/openbg-editor` (`OPENBG_EDITOR`).
 - They run the editor with a temporary HOME, so your settings are untouched.
+- A HAR mod can carry in-game Help topics as a text file (`--har-help`, docs/EDITOR_SPEC.md §5.6; `shadow/help.txt`). The shipped Help has no pilot topics, so Kreissack has none.
 
 **Not in git**
 - `build/`: the add-ons contain copies of the base game's objects, so they are built locally and never committed.

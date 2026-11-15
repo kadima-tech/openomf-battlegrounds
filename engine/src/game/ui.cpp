@@ -1842,6 +1842,7 @@ bool DescriptionSelector::begin(AppManager &app) {
 		entries_.push_back(d);
 	}
 	std::stable_sort(entries_.begin(), entries_.end(), [](auto &a, auto &b) { return a.info().name < b.info().name; });
+	tree_ = hierarchy ? topic_tree(entries_) : std::vector<int>{};
 	selected_ = entries_.empty() ? -1 : 0;
 	for (size_t k = 0; k < entries_.size(); ++k) {
 		if (std::find(highlight.begin(), highlight.end(), entries_[k].info().name) != highlight.end()) selected_ = int(k);
@@ -1878,19 +1879,11 @@ void DescriptionSelector::setup_controls(AppManager &app) {
 	list_ = g.place(list_rect_)->add<List>();
 	list_->tree = hierarchy;
 	std::vector<List::Row> rows;
-	std::map<const de::ObjectsFile *, std::vector<int32_t>> parents;
-	for (auto &e : entries_) {
+	for (size_t k = 0; k < entries_.size(); ++k) {
+		const de::ObjectRef &e = entries_[k];
 		List::Row r{{e.info().name}};
 		if (app.is_locked(e)) r.color = {0.6f, 0.6f, 0.6f, 1};
-		if (hierarchy) {
-			// GetEntriesWithParent (Core 0x7004c280): under its parent object when that is listed too.
-			auto it = parents.find(e.file);
-			if (it == parents.end()) it = parents.emplace(e.file, e.file->parents()).first;
-			int32_t p = it->second[e.index];
-			for (size_t k = 0; p >= 0 && k < entries_.size(); ++k) {
-				if (entries_[k].file == e.file && entries_[k].index == uint32_t(p)) r.parent = int(k);
-			}
-		}
+		if (hierarchy && k < tree_.size()) r.parent = tree_[k];
 		rows.push_back(r);
 	}
 	if (hierarchy && selected_ >= 0) {

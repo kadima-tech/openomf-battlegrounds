@@ -8,9 +8,11 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <sstream>
 
 #include "assets.h"
 #include "har.h"
+#include "help.h"
 #include "icons.h"
 #include "image_io.h"
 #include "imgui_internal.h"
@@ -53,7 +55,7 @@ std::vector<std::pair<std::string, Paint>> preview_paints(const std::filesystem:
 class HarDocument : public Document {
 public:
 	HarDocument(Editor &e, const ed::Guid &g) : guid_(g) {
-		if (e.options().asset_tab >= 0) tab_ = std::clamp(e.options().asset_tab, 0, 6);
+		if (e.options().asset_tab >= 0) tab_ = std::clamp(e.options().asset_tab, 0, 7);
 		if (e.options().asset_select >= 0) pick_ = e.options().asset_select;
 		if (e.options().paint_job >= 0) paint_ = e.options().paint_job;
 		render_picture_ = e.options().har_picture == "render";
@@ -80,6 +82,7 @@ private:
 	void sounds(Editor &e);
 	void paint(Editor &e, const ed::HarObjects &o);
 	void script(Editor &e, const ed::HarObjects &o);
+	void help(Editor &e, const ed::HarObjects &o);
 
 	ed::Guid guid_;
 	ed::HarData data_, committed_;
@@ -103,6 +106,9 @@ private:
 	std::vector<std::pair<std::string, Paint>> paints_;
 	int colours_ = 0;
 	std::string pilot_wanted_;
+	// The add-on's Help topics, re-read when the project changes.
+	std::vector<ed::HelpTopic> help_;
+	uint64_t help_revision_ = 0;
 	const Paint &preview_paint() const { return colours_ < int(paints_.size()) ? paints_[size_t(colours_)].second : kDemoPaint; }
 };
 
@@ -250,7 +256,7 @@ void HarDocument::form(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 	ImGui::TextUnformatted(("HAR: " + data_.name).c_str());
 	ImGui::PopFont();
 	ImGui::Dummy(ImVec2(0, ui::px(2)));
-	ui::tab_strip("tabs", {"General", "Movement", "Inputs", "Hitboxes", "Sounds", "Paint", "Script"}, &tab_);
+	ui::tab_strip("tabs", {"General", "Movement", "Inputs", "Hitboxes", "Sounds", "Paint", "Script", "Help"}, &tab_);
 	ImGui::BeginChild("body", ImVec2(0, ImGui::GetContentRegionAvail().y - ui::px(10)), 0, 0);
 	ImGui::Dummy(ImVec2(0, ui::px(12)));
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::px(8), ui::px(10)));
@@ -263,7 +269,8 @@ void HarDocument::form(Editor &e, ImVec2 size, const ed::HarObjects &o) {
 		case 3: hitboxes(); break;
 		case 4: sounds(e); break;
 		case 5: paint(e, o); break;
-		default: script(e, o); break;
+		case 6: script(e, o); break;
+		default: help(e, o); break;
 	}
 	ImGui::PopStyleColor();
 	ImGui::PopStyleVar(2);
@@ -698,4 +705,80 @@ void HarDocument::script(Editor &e, const ed::HarObjects &o) {
 	if (!errors.empty()) ui::status_chip(ICON_CIRCLE_X, errors.front().str().c_str(), kError);
 	else if (stale) ui::status_chip(ICON_TRIANGLE_ALERT, "Changed since the last compile (Save compiles)", kWarning);
 	else ui::status_chip(ICON_CIRCLE_CHECK, "VMC2 current", kOk);
+}
+
+void HarDocument::help(Editor &e, const ed::HarObjects &o) {
+	ed::Project &p = *e.project();
+	if (help_revision_ != p.revision()) {
+		help_ = ed::read_help(p);
+		help_revision_ = p.revision();
+	}
+	ui::dim_text("Pages in the in-game Help, under a base topic such as \"6. HAR (Robot) Reference\" (docs/EDITOR_SPEC.md \xc2\xa7" "5.6). "
+	             "Load a pages file to add or update topics; edit a page's title and text here.",
+	             kTextMuted);
+	auto write = [&e, &p, o](const std::vector<ed::HelpTopic> &topics) {
+		try {
+			ed::write_help(p, topics, ed::read_presentation(p, o).picture);
+		} catch (const std::exception &ex) {
+			e.log(LogLine::Error, std::string("Help: ") + ex.what());
+		}
+	};
+	if (ui::toolbar_button(ICON_FILE_UP, "Load pages file", ui::Tone::Normal, true, "== path, then title:, image:, page: and the text", ImGui::GetFrameHeight())) {
+		e.file_dialog().open(FileDialog::OpenFile, "Help pages", {}, {".txt"}, [&e, write](const std::filesystem::path &path) {
+			try {
+				std::ifstream in(path, std::ios::binary);
+				std::stringstream ss;
+				ss << in.rdbuf();
+				auto topics = ed::parse_help_file(ss.str());
+				write(topics);
+				e.log(LogLine::Ok, std::to_string(topics.size()) + " Help topic(s) from " + path.filename().string());
+			} catch (const std::exception &ex) {
+				e.log(LogLine::Error, ex.what());
+			}
+		});
+	}
+	ImGui::SameLine();
+	if (ui::toolbar_button(ICON_DOWNLOAD, "Export pages file", ui::Tone::Ghost, !help_.empty(), nullptr, ImGui::GetFrameHeight())) {
+		std::vector<ed::HelpTopic> own;
+		for (auto &t : help_) {
+			if (t.same_as != t.path) own.push_back(t);
+		}
+		e.file_dialog().open(FileDialog::SaveFile, "Export Help pages", {}, {".txt"}, [&e, own](const std::filesystem::path &path) {
+			std::ofstream(path, std::ios::binary) << ed::format_help_file(own);
+			e.log(LogLine::Ok, "Wrote " + path.filename().string());
+		});
+	}
+	if (help_.empty()) {
+		ui::dim_text("No Help topics yet.", kTextDim);
+		return;
+	}
+	const float lw = ui::px(120);
+	for (size_t k = 0; k < help_.size(); ++k) {
+		ed::HelpTopic &t = help_[k];
+		if (t.same_as == t.path) continue;
+		ImGui::PushID(int(k));
+		ImGui::SeparatorText(t.path.c_str());
+		if (!t.same_as.empty()) {
+			ui::dim_text(("Shows the page of " + t.same_as).c_str(), kTextMuted);
+		} else {
+			bool commit = false;
+			if (!t.title.empty()) {
+				ui::form_label("Title", lw);
+				ImGui::SetNextItemWidth(-ui::px(4));
+				ImGui::InputText("##title", &t.title);
+				commit = ImGui::IsItemDeactivatedAfterEdit();
+			}
+			if (!t.image.empty()) {
+				ui::form_label("Picture", lw);
+				ImGui::AlignTextToFramePadding();
+				ui::dim_text(t.image.c_str(), kTextSoft);
+			}
+			ui::form_label("Text", lw);
+			float lines = float(std::count(t.text.begin(), t.text.end(), '\n') + 2);
+			ImGui::InputTextMultiline("##text", &t.text, ImVec2(-ui::px(4), std::min(ui::px(260), lines * ImGui::GetTextLineHeight() + ui::px(16))), ImGuiInputTextFlags_WordWrap);
+			commit = commit || ImGui::IsItemDeactivatedAfterEdit();
+			if (commit) write({t});
+		}
+		ImGui::PopID();
+	}
 }

@@ -29,6 +29,11 @@ struct DescriptionInfo {
 };
 DescriptionInfo read_description(const de::World &data, const de::ObjectRef &description);
 
+// GetEntriesWithParent (Core 0x7004c280): each entry's parent row (its parent object when listed too),
+// -1 at the root. An entry of another file with the name of a topic at the same place is merged into
+// it (an add-on's anchor topic, FINDINGS 774): dropped from `entries`, its children under the topic.
+std::vector<int> topic_tree(std::vector<de::ObjectRef> &entries);
+
 // DE_CDescription::IsLocked(id) (Core 0x701f2640): id 0 is locked when locked by default and not
 // unlocked since; any other id is locked until unlocked. Unlock (0x70010aa0) adds the id to the
 // description's registry value ObjectInfo\<guid>\DLock, the list of unlocked ids.

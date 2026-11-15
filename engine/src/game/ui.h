@@ -205,6 +205,7 @@ private:
 
 	friend class ModelPicker;
 	std::vector<de::ObjectRef> entries_;
+	std::vector<int> tree_;  // hierarchy: each entry's parent row
 	std::vector<de::ObjectRef> models_;
 	int model_ = 0;  // +0x184
 	std::shared_ptr<ModelPicker> picker_;  // +0x154

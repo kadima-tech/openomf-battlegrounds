@@ -420,6 +420,35 @@ they can be redone.
   In `openbg-fight` each special lands by scripted input against an idle Jaguar 300 units away, the
   AI casts them, and AI matches repeat byte for byte (FINDINGS 741-746).
 
+### 5.6 Help topics for add-on content
+The in-game Help lists every Description of COREMeshes' `HelpEntry` cast in any loaded file, as a
+tree of each file's own hierarchy, each topic's page its large representation (a ControlCreator;
+FINDINGS 770-772). An add-on adds topics with nothing but those structures; the editor writes them.
+- **Placing.** A file's hierarchy holds only its own objects, so an add-on cannot hang a topic under
+  OMFHelp's "6. HAR (Robot) Reference". The editor writes an **anchor**: a topic of the same name at
+  the same place whose page is the base topic's (a pool reference to its ControlCreator), and puts the
+  new topics under it. OpenBG's Help merges a topic of another file with the same name and place into
+  the first one (`game::topic_tree`), so Shadow lists among the eight robots; the original would show
+  the anchor as a second "6. HAR (Robot) Reference" holding only the add-on's topics (FINDINGS 773-774).
+- **Pages file** (`ed::parse_help_file`; `mods/shadow/help.txt`): `== <path>` starts a topic, its path
+  the names from the Help root separated by `/`, base topics first; then optional `title:` (a heading
+  in the robot pages' 18-pixel text), `image:` (`picture`: the HAR's Choose Creature picture;
+  `base:<name>`: an image of OMFHelp's, referenced, not copied; or a PNG/BMP imported as the topic's
+  own), `page: <base topic path>` (show that page instead of text, as Special Attacks does) and
+  `align: left`; then the text, blank lines kept. `#` lines are comments. Text is stored as the
+  shipped pages are: CR LF lines, a space for a blank line, a blank first line under a title or picture.
+- **Writing** (`ed::write_help`): every path, parent, page and image is checked before anything is
+  written; a topic copies a shipped leaf topic (fresh GUIDs, the cast kept), its page a shipped
+  ControlCreator and Value\String renamed and refilled (layout 2, centred or left, 13-pixel text,
+  images at 0.75 as the robot pages). Writing a topic again updates it in place.
+- **Batch:** `--har-help pages.txt` (repeatable) on the HAR opened, made or imported. **Panel:** the HAR
+  document's Help tab loads or exports a pages file and edits each page's title and text.
+- Pilots: the shipped Help has no per-pilot topics (only the generic "Selecting a Pilot", "Pilot Stats"
+  and "Picking the Right Pilot"), so a pilot add-on needs none; the same file format would add one.
+- Verified (2026-11-15): Shadow's 14 topics (an anchor and 13 under it) list under "6. HAR (Robot)
+  Reference" between Pyros and Warlord with his picture, Quick Reference, and Special and Super
+  Attacks pages; without add-ons the Help screen is byte-identical to before (`editor-help` test).
+
 ## 6. Prerequisites and risks
 1. **Lossless writing.** Fix the 49 of 65 files whose JSON round trip loses 2-32 bytes, or have the
    editor write at the object level through the engine's writer. Writing must be byte-exact for
