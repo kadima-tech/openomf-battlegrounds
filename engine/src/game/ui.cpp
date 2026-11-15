@@ -3098,8 +3098,14 @@ void AppManager::menu_select(int id) {
 		de::ObjectRef cast;
 		if (id == 2 || id == 3) cast = world.data().find("Description\\Cast", id == 3 ? "SinglePlayerCast" : "MultiPlayerCast");
 		for (const auto &[stem, f] : world.data().files()) {
+			std::vector<int32_t> parents;  // read once a file has a session master description
 			for (uint32_t i = 0; i < f->objects().size(); ++i) {
 				if (f->objects()[i].class_path != "Description\\SessionMaster") continue;
+				// Deviation: a description outside every folder is left out. The one there is a
+				// stray second "HAR Master (Mantis)" at the root of SinglePlayerFull (#543, after the
+				// Jaguar tournament's objects), which made the shipped list show that name twice.
+				if (parents.empty()) parents = f->parents();
+				if (i < parents.size() && parents[i] < 0) continue;
 				de::ObjectRef d{f.get(), i};
 				if (cast) {
 					DescriptionInfo info = read_description(world.data(), d);
