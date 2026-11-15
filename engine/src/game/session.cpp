@@ -1313,7 +1313,12 @@ void register_session_natives(World &w) {
 			// SetupCreatureControl (Session 0x4501a9b0): +0x1f8 for a locally controlled slot's
 			// creature whose client, if any, is local.
 			if (net_role(c.world) != NetRole::None) set_locally_controlled(c.world, sl->creature, sl->local && (!sl->client || sl->client->local));
-			if (Brain *b = sl->creature->brain; b && !b->started) {
+			// "Not yet run" is the executor's own count: the fighter's executors were attached
+			// (and marked started) when it was made, to run from the next tick, so a script
+			// calling it before then (the credits' ObjectSpawn, which switches it to
+			// Air.FallFromSpawn) would otherwise replace its entry before it ran (BPyros::Entry
+			// sets up and switches off the flame effects: Pyros sprayed fire through the credits).
+			if (Brain *b = sl->creature->brain; b && (!b->started || b->exec->instructions_executed() == 0)) {
 				b->started = true;
 				b->exec->pulse();
 				b->exec->pulse();
