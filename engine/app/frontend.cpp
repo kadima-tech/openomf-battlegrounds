@@ -640,7 +640,17 @@ int main(int argc, char **argv) {
 				std::string name(dt, size_t(strchr(dt, '@') - dt));
 				std::function<void(game::GameObject *, int)> dump = [&](game::GameObject *o, int depth) {
 					auto t = o->world().t;
-					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2]);
+					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f%s%s\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2],
+					        depth == 0 && o->parent ? " under " : "", depth == 0 && o->parent ? o->parent->name.c_str() : "");
+					if (depth == 0) {
+						auto z = o->world().rotate({0, 0, 1});
+						fprintf(stderr, "[tree %d]   facing %.2f %.2f %.2f; parent #%x; renderer camera #%x", fr, z[0], z[1], z[2], o->parent ? o->parent->handle : 0, world.renderer_camera ? world.renderer_camera->handle : 0);
+						if (game::GameObject *rc = world.renderer_camera) {
+							auto p = rc->world().t, rz = rc->world().rotate({0, 0, 1});
+							fprintf(stderr, " at %.0f %.0f %.0f facing %.2f %.2f %.2f", p[0], p[1], p[2], rz[0], rz[1], rz[2]);
+						}
+						fprintf(stderr, "\n");
+					}
 					if (depth < 6) for (game::GameObject *ch : o->children) dump(ch, depth + 1);
 				};
 				std::function<void(game::GameObject *)> find = [&](game::GameObject *o) {

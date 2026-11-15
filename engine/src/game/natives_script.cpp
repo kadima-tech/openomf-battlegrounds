@@ -91,6 +91,15 @@ std::optional<std::vector<uint8_t>> value_payload(const GameObject *v) {
 
 // Object values: Set*Value at run time, else the Value\\* data child of that name. A session
 // looks in its info first (DE_CSession::ObjFindValueByName, Core 0x20202bd0, 2.112).
+// object_value for a value the object may well not have, without adding an entry for it.
+World::ObjectValue *World::value_if_any(GameObject *o, const std::string &name) {
+	if (!o) return nullptr;
+	if (auto it = values.find(o); it != values.end()) {
+		if (auto j = it->second.find(name); j != it->second.end()) return &j->second;
+	}
+	return value_child(o, name) ? object_value(o, name) : nullptr;
+}
+
 World::ObjectValue *World::object_value(GameObject *o, const std::string &name) {
 	if (!o) return nullptr;
 	if (SessionState *s = session_of(*this, o); s && s->obj == o && s->description) {

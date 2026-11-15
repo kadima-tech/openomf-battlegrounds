@@ -820,6 +820,7 @@ public:
 	};
 	std::map<const GameObject *, std::map<std::string, ObjectValue>> values;  // Set*Value
 	ObjectValue *object_value(GameObject *o, const std::string &name);       // ... or the data's Value\\* child
+	ObjectValue *value_if_any(GameObject *o, const std::string &name);       // object_value, adding no entry when there is none
 	std::string instance_class(uint32_t instance) const {
 		auto it = instance_classes_.find(instance);
 		return it == instance_classes_.end() ? std::string() : it->second;
