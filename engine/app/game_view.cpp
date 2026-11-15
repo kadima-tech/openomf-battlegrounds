@@ -437,6 +437,20 @@ void GameView::draw(int dw, int dh, int fr, bool fixed_step) {
 		// The session's camera (the observer, BObserverCamera; the environment's cameras): its own
 		// lens, the field of view horizontal at 4:3 as the fight camera's.
 		CameraLens lens = camera_lens(scene_cam);
+		// An actor riding on the camera with a "ForceCameraAngle" value sets the view angle while it
+		// is there: the pilot quote frame (SinglePlayer SpDialogueFrame's FrameBevel, 70.5 degrees,
+		// attached by BAutoAttachToCurrentCamera) is laid out in front of the camera for that angle.
+		// Under the observer's own angle (20-34 degrees while it roams, as for a quote from a pilot
+		// who is not fighting) the frame was magnified out of the picture: no box, no photo.
+		for (game::GameObject *ch : scene_cam->children) {
+			if (!ch->is_actor) continue;
+			if (game::World::ObjectValue *v = world.value_if_any(ch, "ForceCameraAngle")) {
+				float a;
+				memcpy(&a, &v->bits, 4);
+				if (a > 0 && a < 180) lens.fov = a;
+				break;
+			}
+		}
 		auto ct = scene_cam->world();
 		auto f = ct.rotate({0, 0, 1}), up = ct.rotate({0, 1, 0});
 		float vfov = 2.0f * std::atan(std::tan(0.5f * lens.fov * 0.017453292f) * 0.75f) / 0.017453292f;

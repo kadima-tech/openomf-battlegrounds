@@ -62,6 +62,10 @@ struct SessionNode {
 	ScriptHook begin, update, set_as_master, ui_activate, ui_complete, state_changed, end;
 	SessionSlot *slot = nullptr;  // slot modifiers
 	bool initialized = false, begun = false;
+	// Executors made (their instances, so their interfaces answer) but not yet run: an attached
+	// modifier's, made by the modifier that attached it before that one's entry runs.
+	std::vector<struct Brain *> prepared;
+	bool made = false;
 };
 
 struct SessionState {

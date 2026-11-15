@@ -145,7 +145,15 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
 int main(int argc, char **argv) {
 	de::init_platform();
-	setvbuf(stdout, nullptr, _IOLBF, 0);
+#ifndef _WIN32
+	setvbuf(stdout, nullptr, _IOLBF, 0);  // Windows: unbuffered (init_platform)
+#endif
+	// OPENBG_TEST_CRASH=segv|throw|abort: crash on purpose, to check the crash report (init_platform).
+	if (const char *c = getenv("OPENBG_TEST_CRASH")) {
+		if (!strcmp(c, "segv")) *static_cast<volatile int *>(nullptr) = 1;
+		if (!strcmp(c, "throw")) std::thread([] { throw std::runtime_error("OPENBG_TEST_CRASH"); }).join();
+		if (!strcmp(c, "abort")) abort();
+	}
 	if (argc < 2) {
 		fprintf(stderr, "usage: %s <Data dir> [--addon file.DEObjects] [--screenshot out.png --frames N]\n", argv[0]);
 		return 2;
@@ -632,7 +640,17 @@ int main(int argc, char **argv) {
 				std::string name(dt, size_t(strchr(dt, '@') - dt));
 				std::function<void(game::GameObject *, int)> dump = [&](game::GameObject *o, int depth) {
 					auto t = o->world().t;
-					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2]);
+					fprintf(stderr, "[tree %d] %*s%s [%s] active %d visible %d in scene %d at %.1f %.1f %.1f%s%s\n", fr, depth * 2, "", o->name.c_str(), o->class_path.c_str(), o->active, o->visible, game::in_scene(*o), t[0], t[1], t[2],
+					        depth == 0 && o->parent ? " under " : "", depth == 0 && o->parent ? o->parent->name.c_str() : "");
+					if (depth == 0) {
+						auto z = o->world().rotate({0, 0, 1});
+						fprintf(stderr, "[tree %d]   facing %.2f %.2f %.2f; parent #%x; renderer camera #%x", fr, z[0], z[1], z[2], o->parent ? o->parent->handle : 0, world.renderer_camera ? world.renderer_camera->handle : 0);
+						if (game::GameObject *rc = world.renderer_camera) {
+							auto p = rc->world().t, rz = rc->world().rotate({0, 0, 1});
+							fprintf(stderr, " at %.0f %.0f %.0f facing %.2f %.2f %.2f", p[0], p[1], p[2], rz[0], rz[1], rz[2]);
+						}
+						fprintf(stderr, "\n");
+					}
 					if (depth < 6) for (game::GameObject *ch : o->children) dump(ch, depth + 1);
 				};
 				std::function<void(game::GameObject *)> find = [&](game::GameObject *o) {
@@ -846,7 +864,12 @@ int main(int argc, char **argv) {
 		for (int fr = 0; running;) {
 			SDL_Event e;
 			while (SDL_PollEvent(&e)) {
-				if (e.type == SDL_QUIT) running = false;
+				if (e.type == SDL_QUIT) {
+					// The window was closed (its close button, Alt+F4, or Windows asked): say so, so a quit
+					// is not taken for a crash.
+					fprintf(stderr, "[exit] the window was closed (frame %d)\n", fr);
+					running = false;
+				}
 				if (e.type == SDL_MOUSEMOTION) {
 					int ww, wh, dw, dh;
 					SDL_GetWindowSize(win, &ww, &wh);
@@ -887,7 +910,10 @@ int main(int argc, char **argv) {
 				save_registry(world.registry);
 				saved_registry = world.registry;
 			}
-			if (app.quit_requested) break;
+			if (app.quit_requested) {
+				fprintf(stderr, "[exit] Quit chosen in the menu (frame %d)\n", fr);
+				break;
+			}
 			Uint64 now = SDL_GetPerformanceCounter();
 			accum += double(now - last) * 1000.0 / double(SDL_GetPerformanceFrequency());
 			last = now;
