@@ -172,6 +172,47 @@ int wmain(int argc, wchar_t **argv) {
 	CHECK(Json::parse("{\"inode\": 340282366920938463463374607431768211455}")->unsigned_number("inode") == std::nullopt,
 	      "File IDs too large for 64 bits must not be truncated");
 	printf("Launcher consent checks passed (detection, selection, cancellation, reinsertion, confirmation, quoting, events)\n");
+
+	// The mod list the engine reads.
+	fs::path settings = root / L"user \u00E9" / L"openbg", folder = settings / L"mods", elsewhere = root / L"elsewhere";
+	fs::create_directories(folder);
+	fs::create_directories(elsewhere);
+	for (auto p : {folder / L"Beta.DEObjects", folder / L"alpha.deobjects", elsewhere / L"Zed.DEObjects", elsewhere / L"Off.DEObjects"})
+		std::ofstream(p) << "add-on";
+	std::ofstream(folder / L"notes.txt") << "";
+	CHECK(read_mods(root / L"none" / L"mods.txt").empty(), "No list and no folder: no mods");
+	fs::path list = settings / L"mods.txt";
+	std::ofstream(list, std::ios::binary) << "# comment\r\non " << narrow((elsewhere / L"Zed.DEObjects").wstring()) << "\r\noff ..\\..\\elsewhere\\Off.DEObjects\n"
+	                                       << "maybe x\non mods/Beta.DEObjects\non " << narrow((elsewhere / L"ZED.DEObjects").wstring()) << "\n";
+	auto mods = read_mods(list);
+	CHECK(mods.size() == 4 && mods[0].path.filename() == L"Zed.DEObjects" && mods[1].path == elsewhere / L"Off.DEObjects" &&
+	          !mods[1].enabled && mods[2].path.filename() == L"Beta.DEObjects" && mods[3].path.filename() == L"alpha.deobjects" && mods[3].enabled,
+	      "List order, relative paths, duplicates once (any case), then the folder's unlisted files enabled");
+	CHECK(write_mods(mods, list) && read_mods(list) == mods, "Written lists read back the same");
+	CHECK(read_file(list)->find("\r\noff " + narrow((elsewhere / L"Off.DEObjects").wstring()) + "\r\n") != std::string::npos,
+	      "Lines are on/off and the absolute UTF-8 path");
+	ModInfo present{true, false, 6, L""}, missing{};
+	CHECK(!mod_problem(mods, 0, &present) && mod_problem(mods, 0, &missing)->find(L"not found") != std::wstring::npos, "Missing files are flagged");
+	std::vector<ModEntry> twins{{L"C:\\a\\Kreissack.DEObjects", true}, {L"C:\\b\\kreissack.DEObjects", true}};
+	CHECK(mod_problem(twins, 1, &present)->find(L"mod 01") != std::wstring::npos, "Name clashes are flagged");
+
+	model.mods_file = list;
+	model.trash = [](const fs::path &p) { return fs::remove(p); };
+	model.load_mods();
+	CHECK(model.mods == mods, "The model shows the list");
+	model.toggle_mod(1);
+	model.move_mod(1, -1);
+	model.move_mod(0, -1);
+	auto saved = read_mods(list);
+	CHECK(saved[0].path.filename() == L"Off.DEObjects" && saved[0].enabled, "Toggles and moves are saved");
+	model.add_mod(root / L"New.DEObjects");
+	CHECK(read_mods(list).back().path == root / L"New.DEObjects", "Added files join the end");
+	model.remove_mod(model.mods.size() - 1);
+	model.remove_mod(2);
+	saved = read_mods(list);
+	CHECK(saved.size() == 3 && saved[2].path.filename() == L"alpha.deobjects" && !fs::exists(folder / L"Beta.DEObjects"),
+	      "Removing forgets an added file and moves a mods folder file away");
+	printf("Mod list checks passed (format, folder, order, problems, toggle, move, add, remove)\n");
 	if (argc == 3) return packaged_setup(argv[1], argv[2], root / L"packaged setup \u00E9");
 	return 0;
 }

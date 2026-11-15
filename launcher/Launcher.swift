@@ -10,6 +10,94 @@ private let muted = Color(red: 0.53, green: 0.56, blue: 0.55)
 private let bayPanel = Color(red: 0.078, green: 0.09, blue: 0.094)
 
 
+struct ModEntry: Equatable {
+    var path: String
+    var enabled: Bool
+}
+
+struct ModInfo: Equatable {
+    var exists = false
+    var size: Int64 = 0
+    var adds: [String] = []
+    var invalid = false
+}
+
+/// The player's mod list, read by the engine itself (engine/src/de/mods.h): mods.txt in the
+/// engine's settings folder, "on <path>" / "off <path>" lines in load order, then the unlisted
+/// add-ons of the "mods" folder beside it, enabled, in name order.
+enum ModConfig {
+    static func settingsFolder(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        let home = environment["HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent("Library/Application Support/openbg")
+    }
+
+    static func key(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    static func parse(_ text: String, base: URL) -> [ModEntry] {
+        var out: [ModEntry] = [], seen = Set<String>()
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
+            var line = String(raw)
+            if line.hasSuffix("\r") { line.removeLast() }
+            let on = line.hasPrefix("on "), off = line.hasPrefix("off ")
+            guard on || off else { continue }
+            let value = String(line.dropFirst(on ? 3 : 4))
+            guard !value.isEmpty else { continue }
+            let path = (value.hasPrefix("/") ? URL(fileURLWithPath: value) : base.appendingPathComponent(value)).standardizedFileURL.path
+            if seen.insert(key(path)).inserted { out.append(ModEntry(path: path, enabled: on)) }
+        }
+        return out
+    }
+
+    static func format(_ mods: [ModEntry]) -> String {
+        "# OpenBG mods, in load order: \"on\" or \"off\", a space, the add-on file.\n"
+            + mods.map { "\($0.enabled ? "on" : "off") \($0.path)\n" }.joined()
+    }
+
+    static func folderMods(_ folder: URL) -> [String] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension.lowercased() == "deobjects" }
+            .map(\.standardizedFileURL.path).sorted { ($0 as NSString).lastPathComponent.lowercased() < ($1 as NSString).lastPathComponent.lowercased() }
+    }
+
+    static func read(_ file: URL) -> [ModEntry] {
+        let base = file.deletingLastPathComponent()
+        var mods = (try? String(contentsOf: file, encoding: .utf8)).map { parse($0, base: base) } ?? []
+        var seen = Set(mods.map { key($0.path) })
+        for path in folderMods(base.appendingPathComponent("mods")) where seen.insert(key(path)).inserted {
+            mods.append(ModEntry(path: path, enabled: true))
+        }
+        return mods
+    }
+
+    static func write(_ mods: [ModEntry], to file: URL) throws {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try format(mods).write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    /// In a source checkout: the add-ons mods/<name>/build.sh wrote.
+    static func checkoutMods(_ project: URL) -> [String] {
+        let folder = project.appendingPathComponent("mods")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.sorted().flatMap { folderMods(folder.appendingPathComponent($0).appendingPathComponent("build")) }
+    }
+
+    /// The problem that keeps an enabled mod from loading, if any.
+    static func problem(_ mods: [ModEntry], _ index: Int, info: ModInfo?) -> String? {
+        guard let info else { return nil }
+        if !info.exists { return "File not found. Remove it, or put the file back." }
+        if info.invalid { return "Not a Battlegrounds add-on (.DEObjects)." }
+        let name = (mods[index].path as NSString).lastPathComponent.lowercased()
+        if mods[index].enabled, let first = mods[..<index].firstIndex(where: {
+            $0.enabled && ($0.path as NSString).lastPathComponent.lowercased() == name
+        }) {
+            return String(format: "Same file name as mod %02d, so only that one loads.", first + 1)
+        }
+        return nil
+    }
+}
+
 struct Stage {
     let title: String
     var detail: String
@@ -32,6 +120,11 @@ struct Stage {
     @Published var dropping = false
     @Published var showHelp = false
     @Published var showSettings = false
+    @Published var configuring = false
+    @Published var mods: [ModEntry] = []
+    @Published var modInfo: [String: ModInfo] = [:]
+    let modsFile = ModConfig.settingsFolder().appendingPathComponent("mods.txt")
+    var trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
     let resources: URL
     let project: URL?
     let home: URL
@@ -69,7 +162,8 @@ struct Stage {
     }
 
     func start() {
-        if preview { onNeedsWindow?(); return }
+        if configuring { loadMods() }
+        if preview && !configuring { onNeedsWindow?(); return }
         let resources = resources, home = home, project = project
         DispatchQueue.global(qos: .userInitiated).async {
             let manifest = try? JSONDecoder().decode(GameManifest.self, from: Data(contentsOf: resources.appendingPathComponent("game-files.json")))
@@ -82,7 +176,7 @@ struct Stage {
                 if let installed, FileManager.default.isExecutableFile(atPath: resources.appendingPathComponent("bin/openbg").path) {
                     self.readyGame = installed
                     self.ready = true
-                    self.launch()
+                    if self.configuring { self.onNeedsWindow?() } else { self.launch() }
                 } else {
                     self.onNeedsWindow?()
                     if manifest == nil { self.error = "The app is incomplete. Rebuild or download a complete copy." }
@@ -238,6 +332,120 @@ struct Stage {
         }
     }
 
+    var modsFolder: URL { modsFile.deletingLastPathComponent().appendingPathComponent("mods") }
+
+    func configure() {
+        loadMods()
+        configuring = true
+    }
+
+    func loadMods() {
+        var list = ModConfig.read(modsFile)
+        if let project {
+            var seen = Set(list.map { ModConfig.key($0.path) })
+            for path in ModConfig.checkoutMods(project) where seen.insert(ModConfig.key(path)).inserted {
+                list.append(ModEntry(path: path, enabled: false))
+            }
+        }
+        mods = list
+        inspectMods()
+    }
+
+    /// Size, presence and contents (`openbg --addon-info`) of each listed file, off the main thread.
+    func inspectMods() {
+        let paths = mods.map(\.path), engine = resources.appendingPathComponent("bin/openbg")
+        DispatchQueue.global(qos: .userInitiated).async {
+            var found = [ModInfo](repeating: ModInfo(), count: paths.count)
+            found.withUnsafeMutableBufferPointer { results in DispatchQueue.concurrentPerform(iterations: paths.count) { index in
+                let path = paths[index]
+                var info = ModInfo()
+                if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+                   attributes[.type] as? FileAttributeType == .typeRegular {
+                    info.exists = true
+                    info.size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                    if FileManager.default.isExecutableFile(atPath: engine.path) {
+                        let process = Process(), output = Pipe()
+                        process.executableURL = engine
+                        process.arguments = ["--addon-info", path]
+                        process.standardOutput = output
+                        process.standardError = FileHandle.nullDevice
+                        if (try? process.run()) != nil {
+                            let data = output.fileHandleForReading.readDataToEndOfFile()
+                            process.waitUntilExit()
+                            info.invalid = process.terminationStatus != 0
+                            info.adds = String(decoding: data, as: UTF8.self).split(separator: "\n").map {
+                                $0.replacingOccurrences(of: "\t", with: " ")
+                            }
+                        }
+                    }
+                }
+                results[index] = info
+            } }
+            DispatchQueue.main.async { self.modInfo.merge(zip(paths, found)) { $1 } }
+        }
+    }
+
+    func saveMods() {
+        do { try ModConfig.write(mods, to: modsFile) } catch {
+            self.error = "Your mod list could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    func toggleMod(_ index: Int) {
+        mods[index].enabled.toggle()
+        saveMods()
+    }
+
+    func moveMod(_ index: Int, by offset: Int) {
+        let target = index + offset
+        guard mods.indices.contains(index), mods.indices.contains(target) else { return }
+        mods.swapAt(index, target)
+        saveMods()
+    }
+
+    /// A file in the mods folder would come back on the next read, so it goes to the Trash.
+    func removeMod(_ index: Int) {
+        let entry = mods.remove(at: index)
+        let file = URL(fileURLWithPath: entry.path)
+        if ModConfig.key(file.deletingLastPathComponent().path) == ModConfig.key(modsFolder.path),
+           FileManager.default.fileExists(atPath: file.path) {
+            do { try trash(file) } catch {
+                mods.insert(ModEntry(path: entry.path, enabled: false), at: index)
+                self.error = "\(file.lastPathComponent) could not be moved to the Trash: \(error.localizedDescription)"
+            }
+        }
+        saveMods()
+    }
+
+    func addMod(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        if let index = mods.firstIndex(where: { ModConfig.key($0.path) == ModConfig.key(path) }) {
+            mods[index].enabled = true
+        } else {
+            mods.append(ModEntry(path: path, enabled: true))
+        }
+        saveMods()
+        inspectMods()
+    }
+
+    func chooseMod() {
+        let picker = NSOpenPanel()
+        picker.title = "Add a Battlegrounds mod"
+        picker.message = "Choose add-on files (.DEObjects) made with the content editor."
+        picker.allowedContentTypes = [UTType(filenameExtension: "DEObjects") ?? .data]
+        picker.allowsMultipleSelection = true
+        if picker.runModal() == .OK { picker.urls.forEach(addMod) }
+    }
+
+    func openModsFolder() {
+        try? FileManager.default.createDirectory(at: modsFolder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(modsFolder)
+    }
+
+    var activeMods: Int {
+        mods.indices.filter { mods[$0].enabled && ModConfig.problem(mods, $0, info: modInfo[mods[$0].path]) == nil }.count
+    }
+
     func revealFolder() { NSWorkspace.shared.open(home) }
     func openLog() {
         let name = ready ? "game.log" : (FileManager.default.fileExists(atPath: home.appendingPathComponent("install.log").path) ? "install.log" : "bootstrap.log")
@@ -273,8 +481,13 @@ struct LauncherView: View {
                 header
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        sourceControls
-                        stagePanel
+                        if model.configuring {
+                            modsPanel
+                            modActions
+                        } else {
+                            sourceControls
+                            stagePanel
+                        }
                         if let error = model.error { errorPanel(error) }
                         launchButton
                     }.padding(.horizontal, 38).padding(.top, 20).padding(.bottom, 18)
@@ -336,13 +549,14 @@ struct LauncherView: View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 7) {
                 Circle().fill(amber).frame(width: 5, height: 5)
-                Text(model.ready ? "ARENA SYSTEMS ONLINE" : "FIRST-TIME SETUP").tracking(2.4)
+                Text(model.configuring ? "MOD CONFIGURATION" : model.ready ? "ARENA SYSTEMS ONLINE" : "FIRST-TIME SETUP").tracking(2.4)
                 Spacer()
-                Text("SERVICE BAY  /  01").foregroundStyle(muted).tracking(1.5)
+                Text(model.configuring ? "SERVICE BAY  /  02" : "SERVICE BAY  /  01").foregroundStyle(muted).tracking(1.5)
             }.font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(amber)
-            Text(model.ready ? "You're ready for the arena." : "Prepare for the arena.")
+            Text(model.configuring ? "Fit out your arena." : model.ready ? "You're ready for the arena." : "Prepare for the arena.")
                 .font(.custom("DINCondensed-Bold", size: 44)).tracking(-0.5).minimumScaleFactor(0.8).lineLimit(1)
-            Text(model.busy ? "Setting things up. This may take a few minutes." : "Choose your game disc or ISO. We'll handle the rest.")
+            Text(model.configuring ? "Choose the mods to load and their order. Every launch uses this list."
+                 : model.busy ? "Setting things up. This may take a few minutes." : "Choose your game disc or ISO. We'll handle the rest.")
                 .font(.system(size: 16)).foregroundStyle(ivory.opacity(0.65))
         }.padding(.horizontal, 38).padding(.top, 26).padding(.bottom, 10)
     }
@@ -416,6 +630,97 @@ struct LauncherView: View {
         }.padding(16).background(ivory.opacity(0.018)).overlay(Rectangle().stroke(ivory.opacity(0.18), lineWidth: 1))
     }
 
+    var modsPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("ADD-ONS").tracking(2)
+                Spacer()
+                Text("LOAD ORDER").tracking(1.4)
+                Text("\(model.activeMods) ACTIVE").foregroundStyle(amber).fontWeight(.semibold)
+            }.font(.system(size: 9, design: .monospaced)).foregroundStyle(muted).padding(.bottom, 14)
+            if model.mods.isEmpty {
+                Rectangle().fill(ivory.opacity(0.1)).frame(height: 1)
+                Text("No mods yet. Add a .DEObjects add-on made with the content editor, or put one in your mods folder.")
+                    .font(.system(size: 12)).foregroundStyle(muted).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 18)
+            }
+            ForEach(model.mods.indices, id: \.self) { index in
+                Rectangle().fill(ivory.opacity(0.1)).frame(height: 1)
+                modRow(index)
+            }
+        }.padding(16).background(ivory.opacity(0.018)).overlay(Rectangle().stroke(ivory.opacity(0.18), lineWidth: 1))
+    }
+
+    func modRow(_ index: Int) -> some View {
+        let mod = model.mods[index], info = model.modInfo[mod.path]
+        let file = URL(fileURLWithPath: mod.path)
+        let problem = ModConfig.problem(model.mods, index, info: info)
+        let origin = ModConfig.key(file.deletingLastPathComponent().path) == ModConfig.key(model.modsFolder.path) ? "MODS FOLDER"
+            : model.project.map { ModConfig.key(mod.path).hasPrefix(ModConfig.key($0.appendingPathComponent("mods").path) + "/") } == true ? "CHECKOUT" : "ADDED"
+        var details = [ByteCountFormatter.string(fromByteCount: info?.size ?? 0, countStyle: .file), file.path]
+        if info?.exists != true { details.removeFirst() }
+        return HStack(alignment: .top, spacing: 15) {
+            Text(String(format: "%02d", index + 1)).font(.system(size: 11, design: .monospaced)).foregroundStyle(muted).padding(.top, 5)
+            Button { model.toggleMod(index) } label: {
+                ZStack {
+                    Rectangle().fill(mod.enabled ? amber : Color.clear).frame(width: 18, height: 18)
+                    Rectangle().stroke(mod.enabled ? amber : muted.opacity(0.7), lineWidth: 1).frame(width: 18, height: 18)
+                    if mod.enabled { Image(systemName: "checkmark").font(.system(size: 10, weight: .heavy)).foregroundStyle(Color.black) }
+                }.padding(.top, 2)
+            }.buttonStyle(.plain).accessibilityLabel(mod.enabled ? "Disable \(file.lastPathComponent)" : "Enable \(file.lastPathComponent)")
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(file.deletingPathExtension().lastPathComponent).font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(mod.enabled ? ivory : ivory.opacity(0.55))
+                    Text(origin).font(.system(size: 8, design: .monospaced)).tracking(1).foregroundStyle(muted)
+                        .padding(.horizontal, 5).padding(.vertical, 2).overlay(Rectangle().stroke(muted.opacity(0.4), lineWidth: 1))
+                }
+                if let adds = info?.adds, !adds.isEmpty {
+                    Text("Adds " + adds.joined(separator: " · ")).font(.system(size: 11)).foregroundStyle(ivory.opacity(0.7)).lineLimit(2)
+                }
+                Text(details.joined(separator: "  ·  ")).font(.system(size: 10, design: .monospaced)).foregroundStyle(muted)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                if let problem {
+                    Label(problem, systemImage: "exclamationmark.triangle").font(.system(size: 11)).foregroundStyle(amber)
+                }
+            }
+            Spacer(minLength: 3)
+            HStack(spacing: 4) {
+                modButton("chevron.up", "Move \(file.lastPathComponent) up") { model.moveMod(index, by: -1) }.disabled(index == 0)
+                modButton("chevron.down", "Move \(file.lastPathComponent) down") { model.moveMod(index, by: 1) }.disabled(index == model.mods.count - 1)
+                modButton("xmark", origin == "MODS FOLDER" ? "Move \(file.lastPathComponent) to the Trash" : "Remove \(file.lastPathComponent) from the list") {
+                    model.removeMod(index)
+                }
+            }
+        }.padding(.vertical, 11)
+    }
+
+    func modButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 10, weight: .semibold)).frame(width: 26, height: 24)
+                .background(ivory.opacity(0.04)).overlay(Rectangle().stroke(ivory.opacity(0.18), lineWidth: 1))
+        }.buttonStyle(.plain).foregroundStyle(ivory.opacity(0.8)).help(help).accessibilityLabel(help)
+    }
+
+    var modActions: some View {
+        HStack(spacing: 15) {
+            Button(action: model.chooseMod) {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.square.dashed").font(.system(size: 20, weight: .light))
+                    Text("Add mod…").font(.custom("DINCondensed-Bold", size: 22))
+                }.foregroundStyle(amber).frame(maxWidth: .infinity).frame(height: 52)
+                    .background(amber.opacity(0.025))
+                    .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(amber.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5])))
+            }.buttonStyle(.plain).accessibilityHint("Choose an add-on file anywhere on your Mac")
+            Button(action: model.openModsFolder) {
+                HStack(spacing: 9) {
+                    Image(systemName: "folder").font(.system(size: 16, weight: .light))
+                    Text("Open mods folder").font(.custom("DINCondensed-Bold", size: 20))
+                }.foregroundStyle(ivory.opacity(0.75)).frame(width: 220, height: 52)
+                    .background(ivory.opacity(0.025)).overlay(Rectangle().stroke(ivory.opacity(0.23), lineWidth: 1))
+            }.buttonStyle(.plain).help(model.modsFolder.path)
+        }
+    }
+
     func errorPanel(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(message, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(amber).fixedSize(horizontal: false, vertical: true)
@@ -429,11 +734,18 @@ struct LauncherView: View {
             .accessibilityAddTraits(.updatesFrequently)
     }
 
+    var launchTitle: String {
+        if model.busy { return "Preparing your game…" }
+        guard model.configuring else { return "Launch game" }
+        if !model.ready { return "Set up the game first" }
+        return model.activeMods == 0 ? "Play without mods" : "Play with \(model.activeMods) mod\(model.activeMods == 1 ? "" : "s")"
+    }
+
     var launchButton: some View {
         Button(action: model.launch) {
             HStack(spacing: 10) {
                 Image(systemName: "play.fill").font(.system(size: 14))
-                Text(model.busy ? "Preparing your game…" : "Launch game").font(.custom("DINCondensed-Bold", size: 24))
+                Text(launchTitle).font(.custom("DINCondensed-Bold", size: 24))
             }.frame(maxWidth: .infinity).frame(height: 51)
                 .foregroundStyle(model.ready ? Color.black : muted.opacity(0.65))
                 .background(model.ready ? amber : ivory.opacity(0.06))
@@ -449,6 +761,12 @@ struct LauncherView: View {
                 Image(systemName: "folder")
                 Text("Everything stays in your game folder.").font(.system(size: 10))
                 Spacer()
+                if model.configuring {
+                    Button { model.configuring = false } label: { Label(model.ready ? "Game" : "Setup", systemImage: "opticaldisc") }
+                } else {
+                    Button { model.configure() } label: { Label("Mods", systemImage: "puzzlepiece.extension") }
+                }
+                Rectangle().fill(muted.opacity(0.3)).frame(width: 1, height: 16).padding(.horizontal, 6)
                 Button { model.showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
                 Rectangle().fill(muted.opacity(0.3)).frame(width: 1, height: 16).padding(.horizontal, 6)
                 Button { model.showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
@@ -462,6 +780,7 @@ struct LauncherView: View {
             Text("Choose an ISO of your original English Battlegrounds 2.090 disc, or insert the CD and click Use game CD. An inserted game CD is detected automatically. Confirm Start setup to begin. Setup uses the update and tools bundled with this app, then verifies the finished installation.")
             Text("When everything is ready, the game starts. Next time, this screen is skipped automatically. Your original disc and ISO are never changed.")
             Text("First-time setup works offline and needs 3 GB of free space. No administrator password or system-wide packages are required.")
+            Text("To choose mods, hold Option while opening Battlegrounds, or click Mods below. The game remembers your list.")
             Button("Done") { model.showHelp = false }.keyboardShortcut(.defaultAction)
         }.font(.system(size: 14)).foregroundStyle(muted).padding(30).frame(width: 480).background(bayPanel)
     }
@@ -485,6 +804,8 @@ struct LauncherView: View {
     var window: NSWindow?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        model.configuring = CommandLine.arguments.contains("--configure")
+            || !NSEvent.modifierFlags.intersection([.option, .shift]).isEmpty
         model.onNeedsWindow = { [weak self] in self?.showWindow() }
         model.start()
         let menu = NSMenu()
@@ -509,7 +830,7 @@ struct LauncherView: View {
         NSApp.activate(ignoringOtherApps: true)
         if let index = CommandLine.arguments.firstIndex(of: "--screenshot"), CommandLine.arguments.count > index + 1 {
             let output = CommandLine.arguments[index + 1]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 guard let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { NSApp.terminate(nil); return }
                 view.cacheDisplay(in: view.bounds, to: bitmap)
                 try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output))

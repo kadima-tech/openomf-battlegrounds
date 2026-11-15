@@ -236,7 +236,14 @@ layout live in `<user data>/openbg/editor` (`layout.ini`; Tools > Reset Layout r
 - **Launch Game** (F5) writes the add-on to `<user data>/openbg/editor/launch/` and starts `openbg`
   (next to the editor, or `OPENBG_GAME`) with `<Data> --addon <file>`; its output goes to the Output Log.
   `openbg --addon file.DEObjects` (repeatable) and `OPENBG_ADDONS` (paths separated by `:`, `;` on
-  Windows; read by every program's `de::World`) load add-on files as if they were in `Data`.
+  Windows; read by every program's `de::World`) load add-on files after the `Data` files, in that order.
+  In normal play `openbg` also loads the player's mod list first (`mods.txt` and the `mods` folder in
+  the settings folder, which the launchers' mod screen edits; `src/de/mods.*`): an explicit add-on
+  replaces a listed mod of the same file name, `--no-mods` skips the list, `--mods <file>` reads
+  another one (also in screenshot and headless runs, which otherwise skip it, as they skip the
+  registry). `openbg --addon-info <file>` prints what an add-on adds, a `<kind>\t<name>` line per pilot,
+  robot, model, arena and tournament description (exit 1 when it is not an add-on). Format and
+  precedence: [launcher/README.md](launcher/README.md#mods).
 - **Scripted runs** for screenshots and checks: `--new-pilot Lucas:Jetta`, `--open-pilot Jetta`,
   `--tab 0-4`, `--preview photo|robot`, `--photo file.png`, `--pilot-set KEY=VALUE` (repeatable: every
   field of the opened pilot, `ed::set_pilot_field`: `name`, `sex`, `bio` (`\n` breaks), `listed`,

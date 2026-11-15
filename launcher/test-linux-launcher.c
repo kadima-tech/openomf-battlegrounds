@@ -140,6 +140,96 @@ static void test_events_drive_stages(void) {
 	CHECK(M.error && strcmp(M.error, "Game file needs repair: Data/X") == 0, "error events are shown");
 }
 
+static gboolean test_trash(const char *path) { return g_remove(path) == 0; }
+
+static const char *mod_name(guint i) { return strrchr(((ModEntry *)M.mods->pdata[i])->path, '/') + 1; }
+
+static void test_mods(const char *root) {
+	char *user = g_build_filename(root, "user home", NULL);
+	g_setenv("HOME", user, TRUE);
+	g_unsetenv("XDG_DATA_HOME");
+	char *settings = mods_settings_folder();
+	char *expected = g_build_filename(user, ".local/share/openbg", NULL);
+	CHECK(strcmp(settings, expected) == 0, "the mod list lives in the engine's settings folder");
+	char *folder = g_build_filename(settings, "mods", NULL), *elsewhere = g_build_filename(root, "elsewhere", NULL);
+	g_mkdir_with_parents(folder, 0755);
+	g_mkdir_with_parents(elsewhere, 0755);
+	write_file(folder, "Beta.DEObjects", "add-on");
+	write_file(folder, "alpha.deobjects", "add-on");
+	write_file(folder, "notes.txt", "");
+	write_file(elsewhere, "Zed.DEObjects", "add-on");
+	write_file(elsewhere, "Off.DEObjects", "add-on");
+	char *file = g_build_filename(settings, "mods.txt", NULL);
+	GPtrArray *none = mods_read("/nonexistent/openbg/mods.txt");
+	CHECK(none->len == 0, "no list and no folder: no mods");
+	g_ptr_array_unref(none);
+	char *text = g_strdup_printf("# comment\r\non %s/Zed.DEObjects\r\noff ../../../../elsewhere/Off.DEObjects\nmaybe x\n"
+	                             "on mods/Beta.DEObjects\non %s/Zed.DEObjects\n", elsewhere, elsewhere);
+	write_file(settings, "mods.txt", text);
+	g_free(text);
+	model_init("/nonexistent/resources", FALSE);
+	CHECK(strcmp(M.mods_file, file) == 0, "the model edits the shared list");
+	M.trash = test_trash;
+	load_mods();
+	CHECK(M.mods->len == 4 && strcmp(mod_name(0), "Zed.DEObjects") == 0 && strcmp(mod_name(1), "Off.DEObjects") == 0 &&
+	      !((ModEntry *)M.mods->pdata[1])->enabled && strcmp(mod_name(2), "Beta.DEObjects") == 0 &&
+	      strcmp(mod_name(3), "alpha.deobjects") == 0 && ((ModEntry *)M.mods->pdata[3])->enabled,
+	      "list order, relative paths, duplicates once, then the folder's unlisted files enabled");
+	char *off = g_build_filename(elsewhere, "Off.DEObjects", NULL);
+	CHECK(strcmp(((ModEntry *)M.mods->pdata[1])->path, off) == 0, "relative paths are resolved from the list's folder");
+	save_mods();
+	char *written = NULL;
+	CHECK(g_file_get_contents(file, &written, NULL, NULL), "the list is written");
+	char *line = g_strdup_printf("\noff %s\n", off);
+	CHECK(strstr(written, line) != NULL, "lines are on/off and the absolute path");
+	GPtrArray *again = mods_read(file);
+	CHECK(again->len == 4 && strcmp(((ModEntry *)again->pdata[3])->path, ((ModEntry *)M.mods->pdata[3])->path) == 0,
+	      "written lists read back the same");
+	g_ptr_array_unref(again);
+	ModInfo present = {TRUE, FALSE, 6, NULL}, missing = {FALSE, FALSE, 0, NULL};
+	char *problem = mod_problem(M.mods, 0, &present);
+	CHECK(!problem, "a present add-on has no problem");
+	problem = mod_problem(M.mods, 0, &missing);
+	CHECK(problem && strstr(problem, "not found"), "missing files are flagged");
+	g_free(problem);
+	GPtrArray *twins = mods_new();
+	mods_add(twins, "/a/Kreissack.DEObjects", TRUE);
+	mods_add(twins, "/b/kreissack.DEObjects", TRUE);
+	problem = mod_problem(twins, 1, &present);
+	CHECK(problem && strstr(problem, "mod 01"), "name clashes are flagged");
+	g_free(problem);
+	g_ptr_array_unref(twins);
+
+	toggle_mod(1);
+	move_mod(1, -1);
+	move_mod(0, -1);
+	GPtrArray *saved = mods_read(file);
+	CHECK(strcmp(strrchr(((ModEntry *)saved->pdata[0])->path, '/') + 1, "Off.DEObjects") == 0 &&
+	      ((ModEntry *)saved->pdata[0])->enabled, "toggles and moves are saved");
+	g_ptr_array_unref(saved);
+	char *added = g_build_filename(root, "New.DEObjects", NULL);
+	add_mod(added);
+	CHECK(M.mods->len == 5 && strcmp(((ModEntry *)M.mods->pdata[4])->path, added) == 0, "added files join the end");
+	remove_mod(4);
+	remove_mod(2);  // Beta, in the mods folder
+	saved = mods_read(file);
+	char *beta = g_build_filename(folder, "Beta.DEObjects", NULL);
+	CHECK(saved->len == 3 && strcmp(strrchr(((ModEntry *)saved->pdata[2])->path, '/') + 1, "alpha.deobjects") == 0 &&
+	      !g_file_test(beta, G_FILE_TEST_EXISTS), "removing forgets an added file and moves a mods folder file away");
+	g_ptr_array_unref(saved);
+	g_free(beta);
+	g_free(added);
+	g_free(line);
+	g_free(written);
+	g_free(off);
+	g_free(file);
+	g_free(elsewhere);
+	g_free(folder);
+	g_free(expected);
+	g_free(settings);
+	g_free(user);
+}
+
 int main(void) {
 	char *root = g_dir_make_tmp("openbg-launcher-XXXXXX", NULL);
 	CHECK(root, "temporary folder");
@@ -148,10 +238,11 @@ int main(void) {
 	test_home_locations(root);
 	test_consent(root);
 	test_events_drive_stages();
+	test_mods(root);
 	char *command = g_strdup_printf("rm -rf '%s'", root);
 	if (system(command) != 0) g_printerr("could not remove %s\n", root);
 	g_free(command);
 	g_free(root);
-	g_print("Linux launcher checks passed (events, disc detection, locations, consent)\n");
+	g_print("Linux launcher checks passed (events, disc detection, locations, consent, mod list)\n");
 	return 0;
 }

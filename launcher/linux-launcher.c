@@ -39,6 +39,11 @@ typedef struct {
 	gboolean busy, ready;
 	char *error, *disc, *pending_source, *source_name, *last_source, *ready_game;
 	GSubprocess *worker, *game;
+	gboolean configuring;
+	GPtrArray *mods;       // ModEntry, in load order
+	GHashTable *mod_info;  // path -> ModInfo
+	char *mods_file;
+	gboolean (*trash)(const char *path);  // tests replace moving to the trash
 	void (*changed)(void);
 	void (*needs_window)(void);
 	void (*hide_window)(void);
@@ -432,6 +437,348 @@ static char *default_home(void) {
 	return g_build_filename(g_get_user_data_dir(), "openbg", NULL);
 }
 
+// ---------------------------------------------------------------------------- mods
+
+// The player's mod list, read by the engine itself (engine/src/de/mods.h): mods.txt in the
+// engine's settings folder, "on <path>" / "off <path>" lines in load order, then the unlisted
+// add-ons of the "mods" folder beside it, enabled, in name order.
+typedef struct {
+	char *path;
+	gboolean enabled;
+} ModEntry;
+
+typedef struct {
+	gboolean exists, invalid;
+	gint64 size;
+	char *adds;  // "pilot Major Kreissack · tournament WAR Finale", or NULL
+} ModInfo;
+
+static void mod_free(gpointer data) {
+	ModEntry *mod = data;
+	g_free(mod->path);
+	g_free(mod);
+}
+
+static void mod_info_free(gpointer data) {
+	ModInfo *info = data;
+	g_free(info->adds);
+	g_free(info);
+}
+
+static GPtrArray *mods_new(void) { return g_ptr_array_new_with_free_func(mod_free); }
+
+static void mods_add(GPtrArray *mods, const char *path, gboolean enabled) {
+	ModEntry *mod = g_new0(ModEntry, 1);
+	mod->path = g_strdup(path);
+	mod->enabled = enabled;
+	g_ptr_array_add(mods, mod);
+}
+
+static char *mods_settings_folder(void) {
+	const char *xdg = g_getenv("XDG_DATA_HOME");
+	if (xdg && *xdg) return g_build_filename(xdg, "openbg", NULL);
+	const char *home = g_getenv("HOME");
+	return g_build_filename(home && *home ? home : g_get_home_dir(), ".local/share/openbg", NULL);
+}
+
+static char *mod_key(const char *path) {
+	char *resolved = realpath(path, NULL);
+	if (resolved) {
+		char *key = g_strdup(resolved);
+		free(resolved);
+		return key;
+	}
+	return g_canonicalize_filename(path, NULL);
+}
+
+// Adds `path` unless an entry already names that file; `seen` holds the keys.
+static gboolean mods_add_new(GPtrArray *mods, GHashTable *seen, const char *path, gboolean enabled) {
+	char *key = mod_key(path);
+	if (g_hash_table_contains(seen, key)) {
+		g_free(key);
+		return FALSE;
+	}
+	g_hash_table_add(seen, key);
+	mods_add(mods, path, enabled);
+	return TRUE;
+}
+
+static GHashTable *mods_keys(GPtrArray *mods) {
+	GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	for (guint i = 0; i < mods->len; i++) g_hash_table_add(seen, mod_key(((ModEntry *)mods->pdata[i])->path));
+	return seen;
+}
+
+static GPtrArray *mods_parse(const char *text, const char *base) {
+	GPtrArray *mods = mods_new();
+	GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	char **lines = g_strsplit(text, "\n", -1);
+	for (char **l = lines; *l; l++) {
+		size_t n = strlen(*l);
+		if (n && (*l)[n - 1] == '\r') (*l)[n - 1] = 0;
+		gboolean on = g_str_has_prefix(*l, "on "), off = g_str_has_prefix(*l, "off ");
+		const char *value = *l + (on ? 3 : 4);
+		if ((!on && !off) || !*value) continue;
+		char *path = g_canonicalize_filename(value, base);
+		mods_add_new(mods, seen, path, on);
+		g_free(path);
+	}
+	g_strfreev(lines);
+	g_hash_table_unref(seen);
+	return mods;
+}
+
+static char *mods_format(GPtrArray *mods) {
+	GString *text = g_string_new("# OpenBG mods, in load order: \"on\" or \"off\", a space, the add-on file.\n");
+	for (guint i = 0; i < mods->len; i++) {
+		ModEntry *mod = mods->pdata[i];
+		g_string_append_printf(text, "%s %s\n", mod->enabled ? "on" : "off", mod->path);
+	}
+	return g_string_free(text, FALSE);
+}
+
+static gint compare_names(gconstpointer a, gconstpointer b) {
+	char *x = g_ascii_strdown(*(const char *const *)a, -1), *y = g_ascii_strdown(*(const char *const *)b, -1);
+	int order = strcmp(x, y);
+	g_free(x);
+	g_free(y);
+	return order;
+}
+
+// The *.DEObjects files in `folder`, as full paths in name order.
+static GPtrArray *folder_mods(const char *folder) {
+	GPtrArray *names = g_ptr_array_new_with_free_func(g_free);
+	GDir *dir = g_dir_open(folder, 0, NULL);
+	for (const char *name; dir && (name = g_dir_read_name(dir));) {
+		char *lower = g_ascii_strdown(name, -1);
+		if (g_str_has_suffix(lower, ".deobjects")) g_ptr_array_add(names, g_strdup(name));
+		g_free(lower);
+	}
+	if (dir) g_dir_close(dir);
+	g_ptr_array_sort(names, compare_names);
+	GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+	for (guint i = 0; i < names->len; i++) g_ptr_array_add(paths, g_build_filename(folder, names->pdata[i], NULL));
+	g_ptr_array_unref(names);
+	return paths;
+}
+
+static GPtrArray *mods_read(const char *file) {
+	char *base = g_path_get_dirname(file), *text = NULL;
+	GPtrArray *mods = g_file_get_contents(file, &text, NULL, NULL) ? mods_parse(text, base) : mods_new();
+	g_free(text);
+	GHashTable *seen = mods_keys(mods);
+	char *folder = g_build_filename(base, "mods", NULL);
+	GPtrArray *found = folder_mods(folder);
+	for (guint i = 0; i < found->len; i++) mods_add_new(mods, seen, found->pdata[i], TRUE);
+	g_ptr_array_unref(found);
+	g_hash_table_unref(seen);
+	g_free(folder);
+	g_free(base);
+	return mods;
+}
+
+static gboolean mods_write(GPtrArray *mods, const char *file, GError **error) {
+	char *base = g_path_get_dirname(file);
+	g_mkdir_with_parents(base, 0755);
+	g_free(base);
+	char *text = mods_format(mods);
+	gboolean ok = g_file_set_contents(file, text, -1, error);
+	g_free(text);
+	return ok;
+}
+
+// In a source checkout: the add-ons mods/<name>/build.sh wrote.
+static GPtrArray *checkout_mods(const char *project) {
+	GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+	char *mods = g_build_filename(project, "mods", NULL);
+	GPtrArray *names = g_ptr_array_new_with_free_func(g_free);
+	GDir *dir = g_dir_open(mods, 0, NULL);
+	for (const char *name; dir && (name = g_dir_read_name(dir));) g_ptr_array_add(names, g_strdup(name));
+	if (dir) g_dir_close(dir);
+	g_ptr_array_sort(names, compare_names);
+	for (guint i = 0; i < names->len; i++) {
+		char *build = g_build_filename(mods, names->pdata[i], "build", NULL);
+		GPtrArray *found = folder_mods(build);
+		for (guint j = 0; j < found->len; j++) g_ptr_array_add(paths, g_strdup(found->pdata[j]));
+		g_ptr_array_unref(found);
+		g_free(build);
+	}
+	g_ptr_array_unref(names);
+	g_free(mods);
+	return paths;
+}
+
+// The problem that keeps a mod from loading, or NULL.
+static char *mod_problem(GPtrArray *mods, guint index, const ModInfo *info) {
+	if (!info) return NULL;
+	if (!info->exists) return g_strdup("File not found. Remove it, or put the file back.");
+	if (info->invalid) return g_strdup("Not a Battlegrounds add-on (.DEObjects).");
+	ModEntry *mod = mods->pdata[index];
+	if (!mod->enabled) return NULL;
+	char *name = g_path_get_basename(mod->path), *lower = g_ascii_strdown(name, -1);
+	char *problem = NULL;
+	for (guint i = 0; i < index && !problem; i++) {
+		ModEntry *other = mods->pdata[i];
+		char *other_name = g_path_get_basename(other->path), *other_lower = g_ascii_strdown(other_name, -1);
+		if (other->enabled && strcmp(lower, other_lower) == 0)
+			problem = g_strdup_printf("Same file name as mod %02u, so only that one loads.", i + 1);
+		g_free(other_lower);
+		g_free(other_name);
+	}
+	g_free(lower);
+	g_free(name);
+	return problem;
+}
+
+// Presence, size and contents (`openbg --addon-info`) of an add-on file.
+static ModInfo *inspect_mod(const char *path) {
+	ModInfo *info = g_new0(ModInfo, 1);
+	GStatBuf st;
+	if (g_stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return info;
+	info->exists = TRUE;
+	info->size = st.st_size;
+	char *engine = g_build_filename(M.resources, "bin/openbg", NULL);
+	if (g_file_test(engine, G_FILE_TEST_IS_EXECUTABLE)) {
+		const char *argv[] = {engine, "--addon-info", path, NULL};
+		char *out = NULL;
+		int status = 0;
+		if (g_spawn_sync(NULL, (char **)argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL, &status, NULL)) {
+			info->invalid = !g_spawn_check_wait_status(status, NULL);
+			g_strstrip(out);
+			if (!info->invalid && *out) {
+				char **lines = g_strsplit(out, "\n", -1);
+				for (char **l = lines; *l; l++) g_strdelimit(*l, "\t", ' ');
+				info->adds = g_strjoinv(" · ", lines);
+				g_strfreev(lines);
+			}
+		}
+		g_free(out);
+	}
+	g_free(engine);
+	return info;
+}
+
+static const ModInfo *mod_info(const char *path) {
+	ModInfo *info = g_hash_table_lookup(M.mod_info, path);
+	if (!info) {
+		info = inspect_mod(path);
+		g_hash_table_insert(M.mod_info, g_strdup(path), info);
+	}
+	return info;
+}
+
+static char *mods_folder(void) {
+	char *base = g_path_get_dirname(M.mods_file);
+	char *folder = g_build_filename(base, "mods", NULL);
+	g_free(base);
+	return folder;
+}
+
+static gboolean in_mods_folder(const char *path) {
+	char *folder = mods_folder(), *parent = g_path_get_dirname(path);
+	char *a = mod_key(folder), *b = mod_key(parent);
+	gboolean inside = strcmp(a, b) == 0;
+	g_free(a);
+	g_free(b);
+	g_free(parent);
+	g_free(folder);
+	return inside;
+}
+
+static void load_mods(void) {
+	if (M.mods) g_ptr_array_unref(M.mods);
+	M.mods = mods_read(M.mods_file);
+	if (M.project) {
+		GHashTable *seen = mods_keys(M.mods);
+		GPtrArray *found = checkout_mods(M.project);
+		for (guint i = 0; i < found->len; i++) mods_add_new(M.mods, seen, found->pdata[i], FALSE);
+		g_ptr_array_unref(found);
+		g_hash_table_unref(seen);
+	}
+	g_hash_table_remove_all(M.mod_info);
+}
+
+static void save_mods(void) {
+	GError *error = NULL;
+	if (!mods_write(M.mods, M.mods_file, &error)) {
+		char *message = g_strdup_printf("Your mod list could not be saved: %s", error->message);
+		set_error(message);
+		g_free(message);
+		g_error_free(error);
+	}
+	M.changed();
+}
+
+static void toggle_mod(guint index) {
+	if (index >= M.mods->len) return;
+	ModEntry *mod = M.mods->pdata[index];
+	mod->enabled = !mod->enabled;
+	save_mods();
+}
+
+static void move_mod(guint index, int offset) {
+	guint target = index + offset;
+	if (index >= M.mods->len || target >= M.mods->len) return;
+	gpointer a = M.mods->pdata[index];
+	M.mods->pdata[index] = M.mods->pdata[target];
+	M.mods->pdata[target] = a;
+	save_mods();
+}
+
+// A file in the mods folder would come back on the next read, so it goes to the trash.
+static void remove_mod(guint index) {
+	if (index >= M.mods->len) return;
+	ModEntry *mod = M.mods->pdata[index];
+	if (in_mods_folder(mod->path) && g_file_test(mod->path, G_FILE_TEST_EXISTS)) {
+		GFile *file = g_file_new_for_path(mod->path);
+		GError *error = NULL;
+		gboolean trashed = M.trash ? M.trash(mod->path) : g_file_trash(file, NULL, &error);
+		g_object_unref(file);
+		if (!trashed) {
+			char *name = g_path_get_basename(mod->path);
+			char *message = g_strdup_printf("%s could not be moved to the trash%s%s", name, error ? ": " : ".",
+			                                error ? error->message : "");
+			mod->enabled = FALSE;
+			set_error(message);
+			g_free(message);
+			g_free(name);
+			g_clear_error(&error);
+			save_mods();
+			return;
+		}
+	}
+	g_ptr_array_remove_index(M.mods, index);
+	save_mods();
+}
+
+static void add_mod(const char *path) {
+	char *absolute = g_canonicalize_filename(path, NULL), *key = mod_key(absolute);
+	gboolean found = FALSE;
+	for (guint i = 0; i < M.mods->len && !found; i++) {
+		ModEntry *mod = M.mods->pdata[i];
+		char *other = mod_key(mod->path);
+		if (strcmp(other, key) == 0) mod->enabled = found = TRUE;
+		g_free(other);
+	}
+	if (!found) mods_add(M.mods, absolute, TRUE);
+	g_hash_table_remove(M.mod_info, absolute);
+	g_free(key);
+	g_free(absolute);
+	save_mods();
+}
+
+static guint active_mods(void) {
+	guint count = 0;
+	for (guint i = 0; i < M.mods->len; i++) {
+		ModEntry *mod = M.mods->pdata[i];
+		if (!mod->enabled) continue;
+		char *problem = mod_problem(M.mods, i, mod_info(mod->path));
+		if (!problem) count++;
+		g_free(problem);
+	}
+	return count;
+}
+
 static void model_init(const char *resources, gboolean preview) {
 	memset(&M, 0, sizeof M);
 	M.resources = g_strdup(resources);
@@ -443,6 +790,11 @@ static void model_init(const char *resources, gboolean preview) {
 	M.stages[1] = (Stage){"Bundled update", g_strdup("Updated offline to version 2.123"), "waiting"};
 	M.stages[2] = (Stage){"Local setup", g_strdup("Everything installed in your game folder"), "waiting"};
 	M.changed = M.needs_window = M.hide_window = M.quit = noop;
+	M.mods = g_ptr_array_new_with_free_func(mod_free);
+	M.mod_info = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, mod_info_free);
+	char *settings = mods_settings_folder();
+	M.mods_file = g_build_filename(settings, "mods.txt", NULL);
+	g_free(settings);
 }
 
 // Ask readiness.py (on the private Python) for a verified installation.
@@ -533,12 +885,30 @@ static const char *CSS =
 	".sheet-title { font-size: 20px; font-weight: bold; color: #e8e3d4; }\n"
 	".sheet label { color: #878f8c; font-size: 14px; }\n"
 	".sheet label.sheet-title { color: #e8e3d4; }\n"
-	".path { font-family: monospace; font-size: 12px; }\n";
+	".path { font-family: monospace; font-size: 12px; }\n"
+	"button.addmod { border-radius: 2px; min-height: 52px; background-color: rgba(255,181,41,0.025);"
+	"  border: 1.5px dashed rgba(255,181,41,0.8); color: #ffb529; font-size: 22px; }\n"
+	"button.addmod:hover { background-color: rgba(255,181,41,0.10); }\n"
+	"button.modsfolder { border-radius: 0; min-height: 52px; background-color: rgba(232,227,212,0.025);"
+	"  border: 1px solid rgba(232,227,212,0.23); color: rgba(232,227,212,0.75); font-size: 20px; }\n"
+	"button.addmod label, button.modsfolder label { color: inherit; }\n"
+	"button.modcheck { min-width: 18px; min-height: 18px; padding: 0; border-radius: 0; background-color: transparent;"
+	"  border: 1px solid rgba(135,143,140,0.7); color: #000; font-weight: 800; font-size: 11px; }\n"
+	"button.modcheck.on { background-color: #ffb529; border-color: #ffb529; }\n"
+	"button.modcheck label { color: #000; }\n"
+	"button.modtool { min-width: 26px; min-height: 24px; padding: 0; border-radius: 0; background-color: rgba(232,227,212,0.04);"
+	"  border: 1px solid rgba(232,227,212,0.18); color: rgba(232,227,212,0.8); font-size: 10px; }\n"
+	"button.modtool:disabled { opacity: 0.4; }\n"
+	".badge { font-family: monospace; font-size: 8px; color: #878f8c; border: 1px solid rgba(135,143,140,0.4); padding: 1px 5px; }\n"
+	".adds { font-size: 11px; color: rgba(232,227,212,0.7); }\n"
+	".off { color: rgba(232,227,212,0.55); }\n";
 
 static struct {
 	GtkWidget *window, *sidebar, *status, *title, *subtitle, *iso, *iso_hint, *cd, *cd_hint, *source;
 	GtkWidget *stage_icon[3], *stage_detail[3], *stage_state[3], *error, *error_label, *retry, *launch;
-	GtkWidget *launch_label, *confirm;
+	GtkWidget *launch_label, *confirm, *bay;
+	GtkWidget *pages, *mod_list, *mod_count, *mode_link;
+	guint rebuild;
 	GdkPixbuf *artwork;
 	gboolean shown;
 	char *screenshot;
@@ -792,6 +1162,8 @@ static void on_help(GtkButton *button, gpointer data) {
 		"When everything is ready, the game starts. Next time, this screen is skipped automatically. "
 		"Your original disc and ISO are never changed.",
 		"First-time setup works offline and needs 3 GB of free space. No root password or system-wide packages are required.",
+		"To choose mods, start Battlegrounds with --configure (or its Configure Mods menu action), or click Mods below. "
+		"The game remembers your list.",
 		NULL};
 	GtkWidget *dialog = sheet("Getting arena-ready", paragraphs, NULL);
 	sheet_button(dialog, "Done", GTK_RESPONSE_CLOSE, TRUE);
@@ -840,12 +1212,227 @@ static void ask_confirmation(void) {
 	g_free(name);
 }
 
+static void on_mod_toggle(GtkButton *button, gpointer index) {
+	(void)button;
+	toggle_mod(GPOINTER_TO_UINT(index));
+}
+
+static void on_mod_up(GtkButton *button, gpointer index) {
+	(void)button;
+	move_mod(GPOINTER_TO_UINT(index), -1);
+}
+
+static void on_mod_down(GtkButton *button, gpointer index) {
+	(void)button;
+	move_mod(GPOINTER_TO_UINT(index), 1);
+}
+
+static void on_mod_remove(GtkButton *button, gpointer index) {
+	(void)button;
+	remove_mod(GPOINTER_TO_UINT(index));
+}
+
+static void on_add_mod(GtkButton *button, gpointer data) {
+	(void)button; (void)data;
+	GtkFileChooserNative *chooser = gtk_file_chooser_native_new(
+		"Add a Battlegrounds mod", GTK_WINDOW(V.window), GTK_FILE_CHOOSER_ACTION_OPEN, "_Add", "_Cancel");
+	gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(chooser), TRUE);
+	GtkFileFilter *filter = gtk_file_filter_new();
+	gtk_file_filter_set_name(filter, "Add-ons (*.DEObjects)");
+	gtk_file_filter_add_pattern(filter, "*.DEObjects");
+	gtk_file_filter_add_pattern(filter, "*.deobjects");
+	gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser), filter);
+	if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(chooser)) == GTK_RESPONSE_ACCEPT) {
+		GSList *files = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(chooser));
+		for (GSList *f = files; f; f = f->next) add_mod(f->data);
+		g_slist_free_full(files, g_free);
+	}
+	g_object_unref(chooser);
+}
+
+static void on_open_mods_folder(GtkButton *button, gpointer data) {
+	(void)button; (void)data;
+	char *folder = mods_folder();
+	g_mkdir_with_parents(folder, 0755);
+	open_path(folder);
+	g_free(folder);
+}
+
+static void on_mode(GtkButton *button, gpointer data) {
+	(void)button; (void)data;
+	M.configuring = !M.configuring;
+	if (M.configuring) load_mods();
+	refresh();
+}
+
+static GtkWidget *mod_tool(const char *glyph, const char *tip, GCallback handler, guint index, gboolean sensitive) {
+	GtkWidget *button = gtk_button_new_with_label(glyph);
+	add_class(button, "modtool");
+	gtk_widget_set_tooltip_text(button, tip);
+	gtk_widget_set_sensitive(button, sensitive);
+	gtk_widget_set_valign(button, GTK_ALIGN_START);
+	g_signal_connect(button, "clicked", handler, GUINT_TO_POINTER(index));
+	return button;
+}
+
+static gboolean rebuild_mods(gpointer data) {
+	(void)data;
+	V.rebuild = 0;
+	GList *children = gtk_container_get_children(GTK_CONTAINER(V.mod_list));
+	for (GList *c = children; c; c = c->next) gtk_widget_destroy(c->data);
+	g_list_free(children);
+	char *count = g_strdup_printf("%u ACTIVE", active_mods());
+	gtk_label_set_text(GTK_LABEL(V.mod_count), count);
+	g_free(count);
+	if (!M.mods->len) {
+		GtkWidget *divider = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+		add_class(divider, "divider");
+		gtk_box_pack_start(GTK_BOX(V.mod_list), divider, FALSE, FALSE, 0);
+		GtkWidget *empty = label("No mods yet. Add a .DEObjects add-on made with the content editor, or put one in your mods folder.",
+		                         "muted small");
+		gtk_label_set_line_wrap(GTK_LABEL(empty), TRUE);
+		g_object_set(empty, "margin-top", 18, "margin-bottom", 18, NULL);
+		gtk_box_pack_start(GTK_BOX(V.mod_list), empty, FALSE, FALSE, 0);
+	}
+	char *project_mods = NULL;
+	if (M.project) {
+		char *folder = g_build_filename(M.project, "mods", NULL), *key = mod_key(folder);
+		project_mods = g_strconcat(key, G_DIR_SEPARATOR_S, NULL);
+		g_free(key);
+		g_free(folder);
+	}
+	for (guint i = 0; i < M.mods->len; i++) {
+		ModEntry *mod = M.mods->pdata[i];
+		const ModInfo *info = mod_info(mod->path);
+		char *problem = mod_problem(M.mods, i, info);
+		char *name = g_path_get_basename(mod->path);
+		char *stem = g_strdup(name);
+		char *dot = strrchr(stem, '.');
+		if (dot && dot != stem) *dot = 0;
+		gboolean folder = in_mods_folder(mod->path);
+		char *key = mod_key(mod->path);
+		const char *origin = folder ? "MODS FOLDER" : project_mods && g_str_has_prefix(key, project_mods) ? "CHECKOUT" : "ADDED";
+		g_free(key);
+
+		GtkWidget *divider = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+		add_class(divider, "divider");
+		gtk_box_pack_start(GTK_BOX(V.mod_list), divider, FALSE, FALSE, 0);
+		GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 15);
+		g_object_set(line, "margin-top", 11, "margin-bottom", 11, NULL);
+		char number[8];
+		g_snprintf(number, sizeof number, "%02u", i + 1);
+		GtkWidget *index = label(number, "mono muted");
+		gtk_widget_set_valign(index, GTK_ALIGN_START);
+		gtk_box_pack_start(GTK_BOX(line), index, FALSE, FALSE, 0);
+		GtkWidget *check = gtk_button_new_with_label(mod->enabled ? "✓" : "");
+		add_class(check, "modcheck");
+		set_class(check, "on", mod->enabled);
+		gtk_widget_set_valign(check, GTK_ALIGN_START);
+		gtk_widget_set_tooltip_text(check, mod->enabled ? "Loaded: click to disable" : "Not loaded: click to enable");
+		g_signal_connect(check, "clicked", G_CALLBACK(on_mod_toggle), GUINT_TO_POINTER(i));
+		gtk_box_pack_start(GTK_BOX(line), check, FALSE, FALSE, 0);
+
+		GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+		GtkWidget *title = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+		GtkWidget *title_label = label(stem, mod->enabled ? "stage-title" : "stage-title off");
+		gtk_box_pack_start(GTK_BOX(title), title_label, FALSE, FALSE, 0);
+		GtkWidget *badge = label(origin, "badge");
+		gtk_widget_set_valign(badge, GTK_ALIGN_CENTER);
+		gtk_box_pack_start(GTK_BOX(title), badge, FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(text), title, FALSE, FALSE, 0);
+		if (info->adds) {
+			char *adds = g_strdup_printf("Adds %s", info->adds);
+			GtkWidget *adds_label = label(adds, "adds");
+			gtk_label_set_line_wrap(GTK_LABEL(adds_label), TRUE);
+			gtk_box_pack_start(GTK_BOX(text), adds_label, FALSE, FALSE, 0);
+			g_free(adds);
+		}
+		char *size = g_format_size(info->size);
+		char *details = info->exists ? g_strdup_printf("%s  ·  %s", size, mod->path) : g_strdup(mod->path);
+		GtkWidget *details_label = label(details, "mono muted");
+		gtk_label_set_ellipsize(GTK_LABEL(details_label), PANGO_ELLIPSIZE_MIDDLE);
+		gtk_label_set_selectable(GTK_LABEL(details_label), TRUE);
+		gtk_box_pack_start(GTK_BOX(text), details_label, FALSE, FALSE, 0);
+		if (problem) {
+			char *warning = g_strdup_printf("⚠  %s", problem);
+			gtk_box_pack_start(GTK_BOX(text), label(warning, "amber small"), FALSE, FALSE, 0);
+			g_free(warning);
+		}
+		gtk_box_pack_start(GTK_BOX(line), text, TRUE, TRUE, 0);
+
+		GtkWidget *tools = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+		gtk_box_pack_start(GTK_BOX(tools), mod_tool("▲", "Move up", G_CALLBACK(on_mod_up), i, i > 0), FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(tools), mod_tool("▼", "Move down", G_CALLBACK(on_mod_down), i, i + 1 < M.mods->len), FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(tools), mod_tool("✕", folder ? "Move to the trash" : "Remove from the list", G_CALLBACK(on_mod_remove), i, TRUE),
+		                   FALSE, FALSE, 0);
+		gtk_widget_set_valign(tools, GTK_ALIGN_START);
+		gtk_box_pack_end(GTK_BOX(line), tools, FALSE, FALSE, 0);
+		gtk_box_pack_start(GTK_BOX(V.mod_list), line, FALSE, FALSE, 0);
+		g_free(details);
+		g_free(size);
+		g_free(stem);
+		g_free(name);
+		g_free(problem);
+	}
+	g_free(project_mods);
+	gtk_widget_show_all(V.mod_list);
+	return G_SOURCE_REMOVE;
+}
+
+static GtkWidget *build_mods_page(void) {
+	GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
+	GtkWidget *panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	add_class(panel, "panel");
+	GtkWidget *heading = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_set_margin_bottom(heading, 14);
+	gtk_box_pack_start(GTK_BOX(heading), label("ADD-ONS", "mono muted"), FALSE, FALSE, 0);
+	V.mod_count = label("", "mono amber");
+	gtk_box_pack_end(GTK_BOX(heading), V.mod_count, FALSE, FALSE, 0);
+	gtk_box_pack_end(GTK_BOX(heading), label("LOAD  ORDER", "mono muted"), FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(panel), heading, FALSE, FALSE, 0);
+	GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scroll), 260);
+	V.mod_list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_container_add(GTK_CONTAINER(scroll), V.mod_list);
+	gtk_box_pack_start(GTK_BOX(panel), scroll, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(page), panel, TRUE, TRUE, 0);
+
+	GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 15);
+	GtkWidget *add = gtk_button_new();
+	add_class(add, "addmod");
+	GtkWidget *add_label = label("⊕  Add mod…", "display");
+	gtk_label_set_xalign(GTK_LABEL(add_label), 0.5);
+	gtk_container_add(GTK_CONTAINER(add), add_label);
+	gtk_widget_set_tooltip_text(add, "Choose an add-on file anywhere on your computer");
+	g_signal_connect(add, "clicked", G_CALLBACK(on_add_mod), NULL);
+	gtk_box_pack_start(GTK_BOX(actions), add, TRUE, TRUE, 0);
+	GtkWidget *open = gtk_button_new();
+	add_class(open, "modsfolder");
+	GtkWidget *open_label = label("▣  Open mods folder", "display");
+	gtk_label_set_xalign(GTK_LABEL(open_label), 0.5);
+	gtk_container_add(GTK_CONTAINER(open), open_label);
+	gtk_widget_set_size_request(open, 220, -1);
+	char *folder = mods_folder();
+	gtk_widget_set_tooltip_text(open, folder);
+	g_free(folder);
+	g_signal_connect(open, "clicked", G_CALLBACK(on_open_mods_folder), NULL);
+	gtk_box_pack_start(GTK_BOX(actions), open, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(page), actions, FALSE, FALSE, 0);
+	return page;
+}
+
 static void refresh(void) {
 	if (!V.window) return;
-	gtk_label_set_text(GTK_LABEL(V.status), M.ready ? "ARENA SYSTEMS ONLINE" : "FIRST-TIME SETUP");
-	gtk_label_set_text(GTK_LABEL(V.title), M.ready ? "You're ready for the arena." : "Prepare for the arena.");
-	gtk_label_set_text(GTK_LABEL(V.subtitle), M.busy ? "Setting things up. This may take a few minutes."
-	                                                 : "Choose your game disc or ISO. We'll handle the rest.");
+	gtk_label_set_text(GTK_LABEL(V.status), M.configuring ? "MOD CONFIGURATION" : M.ready ? "ARENA SYSTEMS ONLINE" : "FIRST-TIME SETUP");
+	gtk_label_set_text(GTK_LABEL(V.title), M.configuring ? "Fit out your arena." : M.ready ? "You're ready for the arena." : "Prepare for the arena.");
+	gtk_label_set_text(GTK_LABEL(V.subtitle), M.configuring ? "Choose the mods to load and their order. Every launch uses this list."
+	                                          : M.busy ? "Setting things up. This may take a few minutes."
+	                                                   : "Choose your game disc or ISO. We'll handle the rest.");
+	gtk_label_set_text(GTK_LABEL(V.bay), M.configuring ? "SERVICE BAY  /  02" : "SERVICE BAY  /  01");
+	gtk_stack_set_visible_child_name(GTK_STACK(V.pages), M.configuring ? "mods" : "setup");
+	gtk_button_set_label(GTK_BUTTON(V.mode_link), M.configuring ? (M.ready ? "◎  Game" : "◎  Setup") : "◧  Mods");
+	if (M.configuring && !V.rebuild) V.rebuild = g_idle_add(rebuild_mods, NULL);
 	gboolean locked = M.busy || M.ready;
 	gtk_widget_set_sensitive(V.iso, !locked);
 	gtk_widget_set_sensitive(V.cd, !locked && M.disc);
@@ -878,7 +1465,16 @@ static void refresh(void) {
 	}
 	set_class(V.launch, "ready", M.ready);
 	gtk_widget_set_sensitive(V.launch, M.ready && !M.game);
-	gtk_label_set_text(GTK_LABEL(V.launch_label), M.busy ? "▶  Preparing your game…" : "▶  Launch game");
+	char *play = NULL;
+	if (M.busy) play = g_strdup("▶  Preparing your game…");
+	else if (!M.configuring) play = g_strdup("▶  Launch game");
+	else if (!M.ready) play = g_strdup("▶  Set up the game first");
+	else {
+		guint active = active_mods();
+		play = active ? g_strdup_printf("▶  Play with %u mod%s", active, active == 1 ? "" : "s") : g_strdup("▶  Play without mods");
+	}
+	gtk_label_set_text(GTK_LABEL(V.launch_label), play);
+	g_free(play);
 	if (M.pending_source && !V.confirm && V.shown) ask_confirmation();
 }
 
@@ -1033,7 +1629,8 @@ static void build_window(void) {
 	gtk_box_pack_start(GTK_BOX(status_row), label("●", "status"), FALSE, FALSE, 0);
 	V.status = label("", "status");
 	gtk_box_pack_start(GTK_BOX(status_row), V.status, FALSE, FALSE, 0);
-	gtk_box_pack_end(GTK_BOX(status_row), label("SERVICE BAY  /  01", "status muted"), FALSE, FALSE, 0);
+	V.bay = label("SERVICE BAY  /  01", "status muted");
+	gtk_box_pack_end(GTK_BOX(status_row), V.bay, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(header), status_row, FALSE, FALSE, 0);
 	V.title = label("", "title");
 	gtk_widget_set_margin_top(V.title, 13);
@@ -1066,7 +1663,13 @@ static void build_window(void) {
 	V.source = label("", "muted small");
 	gtk_label_set_ellipsize(GTK_LABEL(V.source), PANGO_ELLIPSIZE_MIDDLE);
 	gtk_box_pack_start(GTK_BOX(sources), V.source, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(body), sources, FALSE, FALSE, 0);
+	V.pages = gtk_stack_new();
+	gtk_stack_set_vhomogeneous(GTK_STACK(V.pages), FALSE);
+	GtkWidget *setup_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
+	gtk_stack_add_named(GTK_STACK(V.pages), setup_page, "setup");
+	gtk_stack_add_named(GTK_STACK(V.pages), build_mods_page(), "mods");
+	gtk_box_pack_start(GTK_BOX(body), V.pages, TRUE, TRUE, 0);
+	gtk_box_pack_start(GTK_BOX(setup_page), sources, FALSE, FALSE, 0);
 
 	GtkWidget *panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	add_class(panel, "panel");
@@ -1117,7 +1720,7 @@ static void build_window(void) {
 		gtk_box_pack_end(GTK_BOX(line), V.stage_state[i], FALSE, FALSE, 0);
 		gtk_box_pack_start(GTK_BOX(panel), line, FALSE, FALSE, 0);
 	}
-	gtk_box_pack_start(GTK_BOX(body), panel, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(setup_page), panel, FALSE, FALSE, 0);
 
 	V.error = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	add_class(V.error, "error");
@@ -1167,6 +1770,15 @@ static void build_window(void) {
 	add_class(settings, "link");
 	g_signal_connect(settings, "clicked", G_CALLBACK(on_settings), NULL);
 	gtk_box_pack_end(GTK_BOX(footer_row), settings, FALSE, FALSE, 0);
+	GtkWidget *mode_separator = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	add_class(mode_separator, "divider");
+	gtk_widget_set_size_request(mode_separator, 1, 16);
+	gtk_widget_set_valign(mode_separator, GTK_ALIGN_CENTER);
+	gtk_box_pack_end(GTK_BOX(footer_row), mode_separator, FALSE, FALSE, 6);
+	V.mode_link = gtk_button_new_with_label("◧  Mods");
+	add_class(V.mode_link, "link");
+	g_signal_connect(V.mode_link, "clicked", G_CALLBACK(on_mode), NULL);
+	gtk_box_pack_end(GTK_BOX(footer_row), V.mode_link, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(footer), footer_row, FALSE, FALSE, 0);
 	gtk_box_pack_end(GTK_BOX(main), footer, FALSE, FALSE, 0);
 }
@@ -1181,6 +1793,7 @@ static int create_desktop_entry(const char *executable) {
 		if (strchr("\"`$\\", *c)) g_string_append_c(exec, '\\');
 		g_string_append_c(exec, *c);
 	}
+	char *configure = g_strdup_printf("%s\" --configure", exec->str);
 	g_string_append(exec, "\" %f");
 	char *icon = g_build_filename(M.resources, "assets/robot-blueprint.png", NULL);
 	GKeyFile *entry = g_key_file_new();
@@ -1193,12 +1806,16 @@ static int create_desktop_entry(const char *executable) {
 	g_key_file_set_string(entry, group, "Terminal", "false");
 	g_key_file_set_string(entry, group, "Categories", "Game;ActionGame;");
 	g_key_file_set_string(entry, group, "StartupWMClass", "Battlegrounds");
+	g_key_file_set_string(entry, group, "Actions", "configure;");
+	g_key_file_set_string(entry, "Desktop Action configure", "Name", "Configure Mods");
+	g_key_file_set_string(entry, "Desktop Action configure", "Exec", configure);
 	GError *error = NULL;
 	gboolean saved = g_key_file_save_to_file(entry, path, &error);
 	if (saved) g_print("Created %s\n", path);
 	else g_printerr("Could not create %s: %s\n", path, error->message);
 	g_clear_error(&error);
 	g_key_file_unref(entry);
+	g_free(configure);
 	g_free(icon);
 	g_string_free(exec, TRUE);
 	g_free(path);
@@ -1213,10 +1830,11 @@ int main(int argc, char **argv) {
 	if (!self) self = g_canonicalize_filename(argv[0], NULL);
 	char *app_dir = g_path_get_dirname(self);
 	char *resources = g_build_filename(app_dir, "resources", NULL);
-	gboolean preview = FALSE;
+	gboolean preview = FALSE, configure = FALSE;
 	const char *initial = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--preview") == 0) preview = TRUE;
+		else if (strcmp(argv[i], "--configure") == 0) configure = TRUE;
 		else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
 			preview = TRUE;
 			V.screenshot = argv[++i];
@@ -1224,9 +1842,10 @@ int main(int argc, char **argv) {
 			model_init(resources, FALSE);
 			return create_desktop_entry(self);
 		} else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-			g_print("usage: Battlegrounds [--preview] [--screenshot PATH] [--create-desktop-entry] [ISO]\n\n"
+			g_print("usage: Battlegrounds [--configure] [--preview] [--screenshot PATH] [--create-desktop-entry] [ISO]\n\n"
 			        "Starts the game, or first-time setup when no verified installation exists.\n"
 			        "  ISO                     offer setup from this disc image (asks first)\n"
+			        "  --configure             choose mods before playing (or hold Shift while starting)\n"
 			        "  --create-desktop-entry  add Battlegrounds to your application menu\n"
 			        "  --preview               show setup without installing or launching\n"
 			        "  --screenshot PATH       save the setup window as a PNG and exit\n");
@@ -1234,11 +1853,12 @@ int main(int argc, char **argv) {
 		} else if (argv[i][0] != '-') initial = argv[i];
 	}
 	model_init(resources, preview);
+	M.configuring = configure;
 	char *ready = preview ? NULL : find_ready_game();
 
 	if (!gtk_init_check(&argc, &argv)) {
 		// No display: a verified game can still start; setup needs a window.
-		if (ready && engine_present()) {
+		if (ready && engine_present() && !configure) {
 			char *engine = g_build_filename(M.resources, "bin/openbg", NULL);
 			char *data = g_build_filename(ready, "Data", NULL);
 			g_mkdir_with_parents(M.home, 0755);
@@ -1255,6 +1875,10 @@ int main(int argc, char **argv) {
 	char *icon = g_build_filename(M.resources, "assets/robot-blueprint.png", NULL);
 	gtk_window_set_default_icon_from_file(icon, NULL);
 	g_free(icon);
+	GdkDisplay *display = gdk_display_get_default();
+	if (display && (gdk_keymap_get_modifier_state(gdk_keymap_get_for_display(display)) & (GDK_SHIFT_MASK | GDK_MOD1_MASK)))
+		M.configuring = TRUE;
+	if (M.configuring) load_mods();
 	build_window();
 	M.changed = refresh;
 	M.needs_window = show_window;
@@ -1268,7 +1892,8 @@ int main(int argc, char **argv) {
 	} else if (ready && engine_present()) {
 		set_string(&M.ready_game, ready);
 		M.ready = TRUE;
-		launch();
+		if (M.configuring) show_window();
+		else launch();
 	} else {
 		show_window();
 		if (!manifest_present()) set_error("The app is incomplete. Rebuild or download a complete copy.");

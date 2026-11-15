@@ -13,6 +13,7 @@ mods/kreissack/build.sh          # writes mods/kreissack/build/Kreissack.DEObjec
 mods/shadow/build.sh             # writes mods/shadow/build/Shadow.DEObjects
 openbg <Data> --addon mods/kreissack/build/Kreissack.DEObjects --addon mods/shadow/build/Shadow.DEObjects
 ```
+- To play them from the launcher, open its mod screen (`./configure.command`, or `configure.cmd` on Windows) and tick them: in a checkout it lists every `mods/*/build/*.DEObjects`. They stay where `build.sh` wrote them, so a rebuild is picked up the next launch. `openbg` started directly then loads them too ([launcher/README.md](../launcher/README.md#mods)); an explicit `--addon` of the same file name replaces the listed copy.
 - The scripts expect the patched game data in `source/patched/v2123/Data` (set `OPENBG_DATA` to change it) and a built `engine/build/openbg-editor` (`OPENBG_EDITOR`).
 - They run the editor with a temporary HOME, so your settings are untouched.
 

@@ -10,6 +10,18 @@ The artwork is original and available before the player's disc is unpacked. Its
 left rail carries the brand and schematic; the main panel has ISO/drop and CD
 actions, three preparation stages, launch, and contextual errors. Settings shows
 the local install folder; Help explains disc requirements and first-time setup.
+
+The mod screen (service bay 02, "Fit out your arena.") reuses that layout: the same left rail and
+header, then an ADD-ONS panel shaped like the setup stages (mono heading with LOAD ORDER and the
+amber active count, hairline-divided numbered rows). Each row has an amber square check box (filled
+with a black tick when enabled, a muted outline when not), the file's stem in semibold (dimmed when
+off) with a small outlined mono origin badge (MODS FOLDER, ADDED, CHECKOUT), an "Adds pilot …"
+line, a mono size and path line truncated in the middle, an amber warning line for a missing,
+invalid or shadowed file, and three small outlined square tool buttons (up, down, remove) at the
+right. Below: a dashed amber **Add mod…** button (the ISO panel's style, 52 px high) beside an
+ivory-outlined **Open mods folder**, then the full-width amber launch bar reading "Play with N
+mods" ("Play without mods", or "Set up the game first" without an installation). The footer's
+**Mods** link (beside Settings) switches to it and back ("Game" / "Setup").
 CDs are recognized by the game's installer GUID. A verified ready installation
 opens directly into the engine without displaying the setup window.
 

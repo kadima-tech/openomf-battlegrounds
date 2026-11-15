@@ -46,6 +46,7 @@ cmake --build "$build/runtime" --target openbg unshield openbg-editor Battlegrou
 rm -rf "$app"
 mkdir -p "$resources/bin" "$resources/assets" "$resources/licenses" "$resources/patches"
 cp "$build/runtime/Battlegrounds.exe" "$app/Battlegrounds.exe"
+printf '@start "" "%%~dp0Battlegrounds.exe" --configure %%*\r\n' > "$app/Configure Battlegrounds.cmd"
 cp "$build/runtime/engine/openbg.exe" "$resources/bin/openbg.exe"
 cp "$build/runtime/_deps/unshield-build/src/unshield.exe" "$resources/bin/unshield.exe"
 # Refuse to produce a download that secretly relies on a compiler runtime or library DLL.

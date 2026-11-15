@@ -24,7 +24,7 @@ namespace {
 
 constexpr UINT WM_APP_RUN = WM_APP + 1;
 constexpr UINT_PTR TIMER_SPINNER = 1, TIMER_SCREENSHOT = 2;
-enum Control { ID_ISO = 101, ID_CD, ID_RETRY, ID_LOG, ID_LAUNCH, ID_SETTINGS, ID_HELP, ID_COUNT };
+enum Control { ID_ISO = 101, ID_CD, ID_RETRY, ID_LOG, ID_LAUNCH, ID_SETTINGS, ID_HELP, ID_MODS, ID_ADD_MOD, ID_MODS_FOLDER, ID_COUNT };
 
 const gp::Color amber(255, 255, 181, 41), ivory(255, 232, 227, 212), muted(255, 135, 143, 140), bay(255, 20, 23, 24);
 gp::Color alpha(const gp::Color &c, double a) { return gp::Color(BYTE(std::clamp(a, 0.0, 1.0) * 255), c.GetR(), c.GetG(), c.GetB()); }
@@ -70,10 +70,16 @@ private:
 	bool watching_ = false, shown_ = false;
 	std::wstring screenshot_;
 
+	struct ModRow {
+		gp::RectF row, check, up, down, remove;
+		size_t index;
+	};
 	struct Layout {
-		gp::RectF iso, cd, source, stages, error, retry, log, launch, settings, help, footer;
+		gp::RectF iso, cd, source, stages, error, retry, log, launch, settings, help, footer, mods, mods_button, add_mod, mods_folder;
 		float row = 59, row_pad = 11;
+		std::vector<ModRow> mod_rows;
 	} layout_;
+	size_t mod_scroll_ = 0;  // the first row shown
 
 	static LRESULT CALLBACK proc(HWND, UINT, WPARAM, LPARAM);
 	LRESULT handle(UINT, WPARAM, LPARAM);
@@ -85,6 +91,11 @@ private:
 	void paint(gp::Graphics &g, bool with_buttons);
 	void paint_sidebar(gp::Graphics &g, float height);
 	void paint_stages(gp::Graphics &g);
+	void paint_mods(gp::Graphics &g);
+	float mod_row_height(size_t index);
+	void mod_click(float x, float y);
+	void choose_mod();
+	std::wstring launch_label();
 	void draw_button(gp::Graphics &g, int id, const gp::RectF &r, bool enabled, bool focused, bool pressed);
 	void text(gp::Graphics &g, const std::wstring &s, const gp::Font *font, const gp::Color &color, const gp::RectF &r,
 	          gp::StringAlignment h = gp::StringAlignmentNear, gp::StringAlignment v = gp::StringAlignmentNear,
@@ -148,6 +159,9 @@ bool Window::create(HINSTANCE instance) {
 	labels[ID_LAUNCH] = L"Launch game";
 	labels[ID_SETTINGS] = L"Settings";
 	labels[ID_HELP] = L"Help";
+	labels[ID_MODS] = L"Mods";
+	labels[ID_ADD_MOD] = L"Add mod\u2026";
+	labels[ID_MODS_FOLDER] = L"Open mods folder";
 	// Files dropped on a button (the ISO panel above all) reach the window like any other drop.
 	auto forward_drops = [](HWND button, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) -> LRESULT {
 		if (msg == WM_DROPFILES) return SendMessageW(GetParent(button), msg, wp, lp);
@@ -280,6 +294,30 @@ LRESULT Window::handle(UINT msg, WPARAM wp, LPARAM lp) {
 			break;
 		case ID_SETTINGS: settings(); break;
 		case ID_HELP: help(); break;
+		case ID_MODS:
+			model_.configuring = !model_.configuring;
+			if (model_.configuring) model_.load_mods();
+			mod_scroll_ = 0;
+			relayout();
+			break;
+		case ID_ADD_MOD: choose_mod(); break;
+		case ID_MODS_FOLDER: {
+			std::error_code ec;
+			fs::create_directories(model_.mods_folder(), ec);
+			ShellExecuteW(hwnd_, L"open", model_.mods_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			break;
+		}
+		}
+		return 0;
+	case WM_LBUTTONUP:
+		if (model_.configuring) mod_click(float(GET_X_LPARAM(lp)), float(GET_Y_LPARAM(lp)));
+		return 0;
+	case WM_MOUSEWHEEL:
+		if (model_.configuring) {
+			int step = GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1;
+			if (step < 0 && mod_scroll_ > 0) --mod_scroll_;
+			else if (step > 0 && !layout_.mod_rows.empty() && layout_.mod_rows.back().index + 1 < model_.mods.size()) ++mod_scroll_;
+			relayout();
 		}
 		return 0;
 	case WM_DROPFILES: {
@@ -384,14 +422,39 @@ void Window::relayout() {
 	layout_.row_pad = row_pad;
 	layout_.row = px(1) + 2 * row_pad + px(36);
 	float y = top;
-	layout_.iso = gp::RectF(x0 + pad, y, width - px(15) - px(171), source_h);
-	layout_.cd = gp::RectF(layout_.iso.GetRight() + px(15), y, px(171), source_h);
-	y += source_h + px(12);
-	layout_.source = gp::RectF(x0 + pad, y, width, px(16));
-	y += px(16) + px(20);
-	float stages_h = px(16) + px(12) + px(14) + 3 * layout_.row + px(16);
-	layout_.stages = gp::RectF(x0 + pad, y, width, stages_h);
-	y += stages_h + px(20);
+	layout_.mod_rows.clear();
+	if (model_.configuring) {
+		layout_.iso = layout_.cd = layout_.source = layout_.stages = gp::RectF();
+		float bottom = H - footer - px(18) - px(51) - px(20) - (error ? error_h + px(20) : 0);
+		float actions_y = bottom - px(52);
+		float panel_bottom = actions_y - px(20);
+		layout_.mods = gp::RectF(x0 + pad, y, width, std::max(px(80), panel_bottom - y));
+		layout_.add_mod = gp::RectF(x0 + pad, actions_y, width - px(15) - px(220), px(52));
+		layout_.mods_folder = gp::RectF(layout_.add_mod.GetRight() + px(15), actions_y, px(220), px(52));
+		float ry = y + px(16) + px(12) + px(14), limit = layout_.mods.GetBottom() - px(8);
+		mod_scroll_ = std::min(mod_scroll_, model_.mods.empty() ? 0 : model_.mods.size() - 1);
+		for (size_t i = mod_scroll_; i < model_.mods.size(); ++i) {
+			float h = mod_row_height(i);
+			if (ry + h > limit && i > mod_scroll_) break;
+			float rx = layout_.mods.X + px(16), rw = layout_.mods.Width - px(32), top_y = ry + px(1) + px(11);
+			float tools = rx + rw - 3 * px(26) - 2 * px(4);
+			layout_.mod_rows.push_back({gp::RectF(rx, ry, rw, h), gp::RectF(rx + px(38), top_y + px(1), px(18), px(18)),
+			                            gp::RectF(tools, top_y, px(26), px(24)), gp::RectF(tools + px(30), top_y, px(26), px(24)),
+			                            gp::RectF(tools + px(60), top_y, px(26), px(24)), i});
+			ry += h;
+		}
+		y = bottom + px(20);
+	} else {
+		layout_.mods = layout_.add_mod = layout_.mods_folder = gp::RectF();
+		layout_.iso = gp::RectF(x0 + pad, y, width - px(15) - px(171), source_h);
+		layout_.cd = gp::RectF(layout_.iso.GetRight() + px(15), y, px(171), source_h);
+		y += source_h + px(12);
+		layout_.source = gp::RectF(x0 + pad, y, width, px(16));
+		y += px(16) + px(20);
+		float stages_h = px(16) + px(12) + px(14) + 3 * layout_.row + px(16);
+		layout_.stages = gp::RectF(x0 + pad, y, width, stages_h);
+		y += stages_h + px(20);
+	}
 	if (error) {
 		layout_.error = gp::RectF(x0 + pad, y, width, error_h);
 		float by = y + error_h - px(15) - px(26);
@@ -407,6 +470,7 @@ void Window::relayout() {
 	float fy = H - footer + px(20);
 	layout_.help = gp::RectF(W - px(30) - px(62), fy, px(62), px(20));
 	layout_.settings = gp::RectF(layout_.help.X - px(13) - px(84), fy, px(84), px(20));
+	layout_.mods_button = gp::RectF(layout_.settings.X - px(13) - px(72), fy, px(72), px(20));
 	sync();
 }
 
@@ -419,6 +483,9 @@ gp::RectF Window::button_rect(int id) const {
 	case ID_LAUNCH: return layout_.launch;
 	case ID_SETTINGS: return layout_.settings;
 	case ID_HELP: return layout_.help;
+	case ID_MODS: return layout_.mods_button;
+	case ID_ADD_MOD: return layout_.add_mod;
+	case ID_MODS_FOLDER: return layout_.mods_folder;
 	}
 	return {};
 }
@@ -444,7 +511,7 @@ void Window::sync() {
 		EnableWindow(buttons_[id], enabled(id));
 		InvalidateRect(buttons_[id], nullptr, FALSE);
 	}
-	SetWindowTextW(buttons_[ID_LAUNCH], model_.busy ? L"Preparing your game\u2026" : L"Launch game");
+	SetWindowTextW(buttons_[ID_LAUNCH], launch_label().c_str());
 	bool spinning = std::any_of(model_.stages.begin(), model_.stages.end(), [](const Stage &s) { return s.status == "active"; });
 	if (spinning) SetTimer(hwnd_, TIMER_SPINNER, 60, nullptr);
 	else KillTimer(hwnd_, TIMER_SPINNER);
@@ -498,16 +565,20 @@ void Window::paint(gp::Graphics &g, bool with_buttons) {
 	float y = px(26);
 	gp::SolidBrush dot(amber);
 	g.FillEllipse(&dot, x0 + pad, y + px(3.5f), px(5), px(5));
-	text(g, model_.ready ? L"ARENA SYSTEMS ONLINE" : L"FIRST-TIME SETUP", fonts_.mono9.get(), amber,
+	bool mods = model_.configuring;
+	text(g, mods ? L"MOD CONFIGURATION" : model_.ready ? L"ARENA SYSTEMS ONLINE" : L"FIRST-TIME SETUP", fonts_.mono9.get(), amber,
 	     gp::RectF(x0 + pad + px(12), y, px(300), px(13)));
-	text(g, L"SERVICE BAY  /  01", fonts_.mono9.get(), muted, gp::RectF(right - px(300), y, px(300), px(13)), gp::StringAlignmentFar);
-	fitted(g, model_.ready ? L"You're ready for the arena." : L"Prepare for the arena.", fonts_.title.get(), ivory,
+	text(g, mods ? L"SERVICE BAY  /  02" : L"SERVICE BAY  /  01", fonts_.mono9.get(), muted, gp::RectF(right - px(300), y, px(300), px(13)),
+	     gp::StringAlignmentFar);
+	fitted(g, mods ? L"Fit out your arena." : model_.ready ? L"You're ready for the arena." : L"Prepare for the arena.", fonts_.title.get(), ivory,
 	       gp::RectF(x0 + pad - px(2), y + px(22), right - x0 - pad, px(54)));
-	text(g, model_.busy ? L"Setting things up. This may take a few minutes." : L"Choose your game disc or ISO. We'll handle the rest.",
+	text(g, mods ? L"Choose the mods to load and their order. Every launch uses this list."
+	             : model_.busy ? L"Setting things up. This may take a few minutes." : L"Choose your game disc or ISO. We'll handle the rest.",
 	     fonts_.subtitle.get(), alpha(ivory, 0.65), gp::RectF(x0 + pad, y + px(83), right - x0 - pad, px(24)));
+	if (mods) paint_mods(g);
 
 	// Source line
-	{
+	if (!mods) {
 		// A small disc, or a tick once a source has been chosen.
 		gp::Pen pen(muted, std::max(1.f, px(1)));
 		float cx = layout_.source.X + px(6), cy = layout_.source.Y + layout_.source.Height / 2;
@@ -523,7 +594,7 @@ void Window::paint(gp::Graphics &g, bool with_buttons) {
 	     gp::RectF(layout_.source.X + px(20), layout_.source.Y, layout_.source.Width - px(20), layout_.source.Height),
 	     gp::StringAlignmentNear, gp::StringAlignmentCenter);
 
-	paint_stages(g);
+	if (!mods) paint_stages(g);
 
 	if (model_.error) {
 		gp::RectF r = layout_.error;
@@ -544,6 +615,7 @@ void Window::paint(gp::Graphics &g, bool with_buttons) {
 	     gp::StringAlignmentNear, gp::StringAlignmentCenter);
 	gp::SolidBrush bar(alpha(muted, 0.3));
 	g.FillRectangle(&bar, layout_.settings.GetRight() + px(6), fy + px(2), std::max(1.f, px(1)), px(16));
+	g.FillRectangle(&bar, layout_.mods_button.GetRight() + px(6), fy + px(2), std::max(1.f, px(1)), px(16));
 
 	if (with_buttons)
 		for (int id = ID_ISO; id < ID_COUNT; ++id) {
@@ -702,7 +774,7 @@ void Window::draw_button(gp::Graphics &g, int id, const gp::RectF &r, bool on, b
 		gp::Pen frame(alpha(ivory, 0.14), std::max(1.f, px(1)));
 		g.DrawRectangle(&frame, r.X, r.Y, r.Width - px(1), r.Height - px(1));
 		gp::Color c = on ? gp::Color(255, 0, 0, 0) : alpha(muted, 0.65);
-		std::wstring label = model_.busy ? L"Preparing your game\u2026" : L"Launch game";
+		std::wstring label = launch_label();
 		gp::RectF box;
 		g.MeasureString(label.c_str(), INT(label.size()), fonts_.launch.get(), gp::PointF(0, 0), &box);
 		float start = r.X + (r.Width - box.Width - px(24)) / 2, mid = r.Y + r.Height / 2;
@@ -714,11 +786,32 @@ void Window::draw_button(gp::Graphics &g, int id, const gp::RectF &r, bool on, b
 		break;
 	}
 	case ID_SETTINGS:
-	case ID_HELP: {
+	case ID_HELP:
+	case ID_MODS: {
 		gp::Color c = pressed ? ivory : muted;
-		icon(g, id == ID_SETTINGS ? L"\uE713" : L"\uE897", fonts_.icon.get(), c, gp::RectF(r.X, r.Y, px(18), r.Height));
-		text(g, id == ID_SETTINGS ? L"Settings" : L"Help", fonts_.small.get(), c, gp::RectF(r.X + px(20), r.Y, r.Width - px(20), r.Height),
-		     gp::StringAlignmentNear, gp::StringAlignmentCenter);
+		const wchar_t *glyph = id == ID_SETTINGS ? L"\uE713" : id == ID_HELP ? L"\uE897" : model_.configuring ? L"\uE958" : L"\uEA86";
+		std::wstring label = id == ID_SETTINGS ? L"Settings" : id == ID_HELP ? L"Help" : !model_.configuring ? L"Mods" : model_.ready ? L"Game" : L"Setup";
+		icon(g, glyph, fonts_.icon.get(), c, gp::RectF(r.X, r.Y, px(18), r.Height));
+		text(g, label, fonts_.small.get(), c, gp::RectF(r.X + px(20), r.Y, r.Width - px(20), r.Height), gp::StringAlignmentNear,
+		     gp::StringAlignmentCenter);
+		break;
+	}
+	case ID_ADD_MOD: {
+		gp::SolidBrush fill(over_bay(amber, pressed ? 0.10 : 0.025));
+		g.FillRectangle(&fill, r);
+		gp::Pen dash(alpha(amber, 0.8), std::max(1.f, px(1.5f)));
+		float pattern[] = {7.f / 1.5f, 5.f / 1.5f};
+		dash.SetDashPattern(pattern, 2);
+		g.DrawRectangle(&dash, r.X + px(1), r.Y + px(1), r.Width - px(2), r.Height - px(2));
+		text(g, L"+  Add mod\u2026", fonts_.cd.get(), amber, r, gp::StringAlignmentCenter, gp::StringAlignmentCenter);
+		break;
+	}
+	case ID_MODS_FOLDER: {
+		gp::SolidBrush fill(over_bay(ivory, pressed ? 0.06 : 0.025));
+		g.FillRectangle(&fill, r);
+		gp::Pen frame(alpha(ivory, 0.23), std::max(1.f, px(1)));
+		g.DrawRectangle(&frame, r.X, r.Y, r.Width - px(1), r.Height - px(1));
+		text(g, L"Open mods folder", fonts_.launch.get(), alpha(ivory, 0.75), r, gp::StringAlignmentCenter, gp::StringAlignmentCenter);
 		break;
 	}
 	}
@@ -727,6 +820,163 @@ void Window::draw_button(gp::Graphics &g, int id, const gp::RectF &r, bool on, b
 		focus.SetDashStyle(gp::DashStyleDot);
 		g.DrawRectangle(&focus, r.X + px(3), r.Y + px(3), r.Width - px(7), r.Height - px(7));
 	}
+}
+
+std::wstring Window::launch_label() {
+	if (model_.busy) return L"Preparing your game…";
+	if (!model_.configuring) return L"Launch game";
+	if (!model_.ready) return L"Set up the game first";
+	size_t n = model_.active_mods();
+	return n == 0 ? L"Play without mods" : L"Play with " + std::to_wstring(n) + (n == 1 ? L" mod" : L" mods");
+}
+
+float Window::mod_row_height(size_t i) {
+	const ModInfo &info = model_.info(model_.mods[i].path);
+	bool problem = mod_problem(model_.mods, i, &info).has_value();
+	return px(1) + 2 * px(11) + px(18) + (info.adds.empty() ? 0 : px(20)) + px(18) + (problem ? px(20) : 0);
+}
+
+void Window::paint_mods(gp::Graphics &g) {
+	gp::RectF r = layout_.mods;
+	gp::SolidBrush panel(over_bay(ivory, 0.018));
+	g.FillRectangle(&panel, r);
+	gp::Pen border(alpha(ivory, 0.18), std::max(1.f, px(1)));
+	g.DrawRectangle(&border, r.X, r.Y, r.Width, r.Height);
+	float x = r.X + px(16), w = r.Width - px(32), y = r.Y + px(16);
+	std::wstring active = std::to_wstring(model_.active_mods()) + L" ACTIVE";
+	text(g, L"ADD-ONS", fonts_.mono9.get(), muted, gp::RectF(x, y, px(200), px(12)));
+	text(g, active, fonts_.mono9.get(), amber, gp::RectF(x, y, w, px(12)), gp::StringAlignmentFar);
+	text(g, L"LOAD ORDER", fonts_.mono9.get(), muted, gp::RectF(x, y, w - px(8) * float(active.size()) - px(10), px(12)), gp::StringAlignmentFar);
+	gp::SolidBrush rule(alpha(ivory, 0.1));
+	if (model_.mods.empty()) {
+		float ey = y + px(12) + px(14);
+		g.FillRectangle(&rule, x, ey, w, std::max(1.f, px(1)));
+		text(g, L"No mods yet. Add a .DEObjects add-on made with the content editor, or put one in your mods folder.", fonts_.body.get(),
+		     muted, gp::RectF(x, ey + px(18), w, px(40)), gp::StringAlignmentNear, gp::StringAlignmentNear, true);
+		return;
+	}
+	std::wstring folder = mod_key(model_.mods_folder());
+	std::optional<std::wstring> project;
+	if (model_.where.project) project = mod_key(*model_.where.project / L"mods") + L"\\";
+	for (const ModRow &row : layout_.mod_rows) {
+		const ModEntry &mod = model_.mods[row.index];
+		const ModInfo &info = model_.info(mod.path);
+		auto problem = mod_problem(model_.mods, row.index, &info);
+		g.FillRectangle(&rule, row.row.X, row.row.Y, row.row.Width, std::max(1.f, px(1)));
+		float cy = row.row.Y + px(1) + px(11);
+		wchar_t number[8];
+		swprintf(number, 8, L"%02d", int(row.index + 1));
+		text(g, number, fonts_.mono11.get(), muted, gp::RectF(row.row.X, cy + px(2), px(24), px(16)));
+		gp::RectF box = row.check;
+		if (mod.enabled) {
+			gp::SolidBrush on(amber);
+			g.FillRectangle(&on, box);
+			gp::Pen tick(gp::Color(255, 0, 0, 0), std::max(1.5f, px(2)));
+			gp::PointF mark[] = {{box.X + px(4), box.Y + px(9.5f)}, {box.X + px(7.5f), box.Y + px(13)}, {box.X + px(14), box.Y + px(5)}};
+			g.DrawLines(&tick, mark, 3);
+		} else {
+			gp::Pen frame(alpha(muted, 0.7), std::max(1.f, px(1)));
+			g.DrawRectangle(&frame, box.X, box.Y, box.Width - px(1), box.Height - px(1));
+		}
+		std::wstring key = mod_key(mod.path);
+		const wchar_t *origin = mod_key(mod.path.parent_path()) == folder ? L"MODS FOLDER"
+		                        : project && key.starts_with(*project)  ? L"CHECKOUT"
+		                                                                 : L"ADDED";
+		float tx = box.GetRight() + px(15), tw = row.up.X - px(12) - tx;
+		std::wstring name = mod.path.stem().wstring();
+		gp::RectF measured;
+		g.MeasureString(name.c_str(), INT(name.size()), fonts_.stage_title.get(), gp::PointF(0, 0), &measured);
+		text(g, name, fonts_.stage_title.get(), mod.enabled ? ivory : alpha(ivory, 0.55), gp::RectF(tx, cy, tw, px(18)));
+		gp::RectF badge(tx + measured.Width + px(6), cy + px(2), px(8) + px(6.2f) * float(wcslen(origin)), px(14));
+		gp::Pen badge_frame(alpha(muted, 0.4), std::max(1.f, px(1)));
+		g.DrawRectangle(&badge_frame, badge);
+		text(g, origin, fonts_.mono8.get(), muted, badge, gp::StringAlignmentCenter, gp::StringAlignmentCenter);
+		float ly = cy + px(20);
+		if (!info.adds.empty()) {
+			text(g, L"Adds " + info.adds, fonts_.small.get(), alpha(ivory, 0.7), gp::RectF(tx, ly, tw, px(16)));
+			ly += px(20);
+		}
+		std::wstring details = mod.path.wstring();
+		if (info.exists) {
+			wchar_t size[32];
+			if (info.size >= 1024 * 1024) swprintf(size, 32, L"%.1f MB", double(info.size) / (1024 * 1024));
+			else if (info.size >= 1024) swprintf(size, 32, L"%.0f KB", double(info.size) / 1024);
+			else swprintf(size, 32, L"%llu bytes", (unsigned long long)info.size);
+			details = std::wstring(size) + L"  ·  " + details;
+		}
+		{
+			gp::StringFormat format;
+			format.SetTrimming(gp::StringTrimmingEllipsisPath);
+			format.SetFormatFlags(gp::StringFormatFlagsNoWrap);
+			gp::SolidBrush brush(muted);
+			gp::RectF line(tx, ly, tw, px(16));
+			g.DrawString(details.c_str(), INT(details.size()), fonts_.mono10.get(), line, &format, &brush);
+		}
+		ly += px(18);
+		if (problem) {
+			icon(g, L"", fonts_.icon.get(), amber, gp::RectF(tx, ly, px(18), px(16)));
+			text(g, *problem, fonts_.small.get(), amber, gp::RectF(tx + (has_icons_ ? px(20) : 0), ly, tw, px(16)));
+		}
+		auto tool = [&](const gp::RectF &t, int kind, bool on) {
+			gp::SolidBrush fill(over_bay(ivory, 0.04));
+			g.FillRectangle(&fill, t);
+			gp::Pen frame(alpha(ivory, 0.18), std::max(1.f, px(1)));
+			g.DrawRectangle(&frame, t.X, t.Y, t.Width - px(1), t.Height - px(1));
+			gp::Pen pen(alpha(ivory, on ? 0.8 : 0.3), std::max(1.2f, px(1.4f)));
+			float mx = t.X + t.Width / 2, my = t.Y + t.Height / 2, d = px(4);
+			if (kind == 0) {
+				gp::PointF p[] = {{mx - d, my + d / 2}, {mx, my - d / 2}, {mx + d, my + d / 2}};
+				g.DrawLines(&pen, p, 3);
+			} else if (kind == 1) {
+				gp::PointF p[] = {{mx - d, my - d / 2}, {mx, my + d / 2}, {mx + d, my - d / 2}};
+				g.DrawLines(&pen, p, 3);
+			} else {
+				g.DrawLine(&pen, mx - d, my - d, mx + d, my + d);
+				g.DrawLine(&pen, mx - d, my + d, mx + d, my - d);
+			}
+		};
+		tool(row.up, 0, row.index > 0);
+		tool(row.down, 1, row.index + 1 < model_.mods.size());
+		tool(row.remove, 2, true);
+	}
+}
+
+void Window::mod_click(float x, float y) {
+	for (const ModRow &row : layout_.mod_rows) {
+		size_t i = row.index;
+		if (row.check.Contains(x, y) || (row.row.Contains(x, y) && x < row.up.X - px(12) && !row.up.Contains(x, y))) return model_.toggle_mod(i);
+		if (row.up.Contains(x, y)) return model_.move_mod(i, -1);
+		if (row.down.Contains(x, y)) return model_.move_mod(i, 1);
+		if (row.remove.Contains(x, y)) return model_.remove_mod(i);
+	}
+}
+
+void Window::choose_mod() {
+	IFileOpenDialog *dialog = nullptr;
+	if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) return;
+	COMDLG_FILTERSPEC filters[] = {{L"Add-ons (*.DEObjects)", L"*.DEObjects"}};
+	dialog->SetFileTypes(1, filters);
+	dialog->SetTitle(L"Add a Battlegrounds mod");
+	dialog->SetOptions(FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM | FOS_ALLOWMULTISELECT);
+	std::vector<fs::path> chosen;
+	if (SUCCEEDED(dialog->Show(hwnd_))) {
+		IShellItemArray *items = nullptr;
+		if (SUCCEEDED(dialog->GetResults(&items))) {
+			DWORD count = 0;
+			items->GetCount(&count);
+			for (DWORD k = 0; k < count; ++k) {
+				IShellItem *item = nullptr;
+				if (FAILED(items->GetItemAt(k, &item))) continue;
+				PWSTR path = nullptr;
+				if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) chosen.emplace_back(path);
+				CoTaskMemFree(path);
+				item->Release();
+			}
+			items->Release();
+		}
+	}
+	dialog->Release();
+	for (auto &p : chosen) model_.add_mod(p);
 }
 
 // ---------------------------------------------------------------- actions
@@ -809,7 +1059,9 @@ void Window::help() {
 	            L"When everything is ready, the game starts. Next time, this screen is skipped automatically. Your original disc "
 	            L"and ISO are never changed.\n\n"
 	            L"First-time setup works offline and needs 3 GB of free space. No administrator rights, installers or "
-	            L"system-wide changes are required.",
+	            L"system-wide changes are required.\n\n"
+	            L"To choose mods, hold Shift while opening Battlegrounds, use Configure Battlegrounds, or click Mods below. "
+	            L"The game remembers your list.",
 	            {{IDOK, L"Done"}}, IDOK, false);
 }
 
@@ -862,11 +1114,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
 	int argc = 0;
 	LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-	bool preview = false;
+	bool preview = false, configure = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 	std::wstring screenshot;
 	for (int k = 1; k < argc; ++k) {
 		std::wstring a = argv[k];
 		if (a == L"--preview") preview = true;
+		if (a == L"--configure") configure = true;
 		if (a == L"--screenshot" && k + 1 < argc) preview = true, screenshot = argv[++k];
 	}
 	LocalFree(argv);
@@ -874,6 +1127,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 	int code = 0;
 	{
 		LauncherModel model(Locations::detect(executable_dir()), preview);
+		model.configuring = configure;
 		Window window(model);
 		if (!window.create(instance)) return 1;
 		if (!screenshot.empty()) window.screenshot_after_show(screenshot);

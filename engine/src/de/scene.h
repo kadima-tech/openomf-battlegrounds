@@ -37,8 +37,8 @@ std::vector<std::filesystem::path> addon_paths();
 
 class World {
 public:
-	// Every *.DEObjects in `data_dir` and in OPENBG_ADDONS (add-on files, separated by ';' on
-	// Windows and ':' elsewhere), plus the objects files the engine modules carry as "DEOBJECTS"
+	// Every *.DEObjects in `data_dir`, then those OPENBG_ADDONS names in its order (add-on files,
+	// separated by ';' on Windows and ':' elsewhere), plus the objects files the engine modules carry as "DEOBJECTS"
 	// resources (Core.ModuleDLL: COREMeshes -- fonts, primitives -- and COREImages) when the
 	// game's Engine directory sits next to it.
 	explicit World(const std::filesystem::path &data_dir);
