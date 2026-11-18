@@ -225,6 +225,28 @@ struct NeedSystem {
 	}
 };
 
+// Deviation (by request, PLACEHOLDERS "Computer fighters and items"): BStandardPilot.AttemptPowerup
+// rolls for an item every AI tick whatever is going on, so computer fighters broke off fights to run
+// for one, mostly with the enemy 10 to 30 units away. A fighter with an enemy fighter within
+// kCloseFight (melee) neither rolls for an item (PowerupLikelihood 0) nor picks one; out of melee
+// it does as the original.
+constexpr float kCloseFight = 60;
+bool in_close_fight(World &w, const GameObject &o) {
+	const auto at = o.world().t;
+	// World::fighters() scans every object made; once a frame is enough.
+	static const World *for_world = nullptr;
+	static uint32_t for_frame = ~0u;
+	static std::vector<GameObject *> fighters;
+	if (for_world != &w || for_frame != w.frame()) for_world = &w, for_frame = w.frame(), fighters = w.fighters();
+	float nearest = 1e9f;
+	for (GameObject *f : fighters) {
+		if (f == &o || f->destroyed_seq || !in_scene(*f)) continue;
+		if (o.team >= 0 && f->team == o.team) continue;  // a teammate
+		nearest = std::min(nearest, dist(f->world().t, at));
+	}
+	return nearest < kCloseFight;
+}
+
 void register_need_natives(World &w) {
 	auto reg = [&](const std::string &key, Native fn) { w.register_native(key, std::move(fn)); };
 	auto sys = std::make_shared<NeedSystem>(w);
@@ -249,14 +271,17 @@ void register_need_natives(World &w) {
 	reg("CCreature::class CActor FindPowerupToAquire(float)", [sys](const NativeContext &c) {
 		GameObject *o = c.self();
 		float t = c.arg<float>(0);
-		GameObject *p = o && o->fighter ? sys->find_powerup(o, t) : nullptr;
+		GameObject *p = o && o->fighter && !in_close_fight(c.world, *o) ? sys->find_powerup(o, t) : nullptr;
 		if (debug && o) fprintf(stderr, "[needs %u] %s FindPowerupToAquire -> %s (%.3f)\n", c.world.frame(), o->name.c_str(), p ? p->name.c_str() : "-", t);
 		c.ret_object(p);
 	});
 	reg("CCreature::float PowerupLikelihood()", [sys](const NativeContext &c) {
 		GameObject *o = c.self();
 		float t = 0;
-		if (o && o->fighter) sys->find_powerup(o, t);
+		if (o && o->fighter) {
+			sys->find_powerup(o, t);
+			if (in_close_fight(c.world, *o)) t = 0;
+		}
 		if (debug && o && c.world.frame() % 60 == 0) {
 			auto &k = sys->update(o);
 			fprintf(stderr, "[needs %u] %s: %zu known, greatest %s (%.3f), powerup likelihood %.3f\n", c.world.frame(), o->name.c_str(), k.needs.size(),
