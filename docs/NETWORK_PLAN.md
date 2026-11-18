@@ -218,7 +218,7 @@ Each phase ends with something testable, merged and pushed.
   public). Data-dependent runs stay local, like today's tests.
 
 ## 6. Decisions (agreed 2026-11-06)
-1. Transport: ENet + libsodium. Changed 2026-11-12: Monocypher 4.0.2 (two C files, BSD-2-Clause / CC0)
+1. Transport: ENet + libsodium. Changed 2026-11-12: Monocypher 4.0.2 (two C files, BSD-2-Clause / CC0); updated 2026-11-18 to 4.0.3 (Ed25519 timing-leak fix, same API)
    instead of libsodium, for the same primitives (X25519, Ed25519, XChaCha20-Poly1305, BLAKE2b) without
    libsodium's autotools build on MinGW and universal macOS builds.
 2. Lobby server in Go, in this repo; who hosts the default instance is still open, so none is built

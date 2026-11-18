@@ -40,27 +40,31 @@ jobs:
           - name: windows-x64
             runner: windows-2025
             exe: build/Release/deobjects-edit.exe
+            cmake_flags: ''
           - name: macos-arm64
-            runner: macos-15
+            runner: macos-26
             exe: build/deobjects-edit
+            cmake_flags: -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
           - name: macos-x86_64
-            runner: macos-15-intel
+            runner: macos-26-intel
+            cmake_flags: -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
             exe: build/deobjects-edit
           - name: linux-x64
             runner: ubuntu-latest
             exe: build/deobjects-edit
+            cmake_flags: ''
     defaults:
       run:
         shell: bash
         working-directory: tools/deobjects-editor
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # Windows uses the runner's Visual Studio (MSVC) through CMake's default generator.
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_flags }}
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -71,7 +75,7 @@ jobs:
           "${{ matrix.exe }}" schemas > /dev/null
 
       - name: Upload
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deobjects-edit-${{ matrix.name }}
           path: |

@@ -3,7 +3,7 @@
 # The result needs no compiler, MSYS2, Python or DLLs beyond those every Windows 10/11 PC has.
 #
 # Run it in an MSYS2 UCRT64 shell on Windows, or cross-compile from Linux/macOS with a
-# MinGW-w64 toolchain (x86_64-w64-mingw32-gcc). Needs CMake 3.20+, Ninja, Python 3 and network
+# MinGW-w64 toolchain (x86_64-w64-mingw32-gcc). Needs CMake 3.21+, Ninja, Python 3 and network
 # access for the pinned dependencies.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
