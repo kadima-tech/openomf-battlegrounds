@@ -23,6 +23,7 @@ struct TOpponent {
 	Guid pilot;    // Description\Pilot
 	Guid robot;    // Description\Creature\Fighter; zero: a random robot (CreatureListGetRandom)
 	Guid faction;  // Description\Faction, team games only
+	int ai_offset = 0;  // on top of the match's: SetAIDifficultyOffset for this opponent alone
 	bool operator==(const TOpponent &) const = default;
 };
 

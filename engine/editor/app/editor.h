@@ -51,7 +51,7 @@ struct Options {
 	// The asset side (assets.h): tournaments and HAR variants.
 	std::string new_tournament, open_tournament, new_har, open_har;
 	std::vector<std::string> har_constants;  // NAME=VALUE: set in the HAR being made or opened
-	std::vector<std::string> har_sets;       // listed=on|off, locked=on|off, ticks=N (ms per update)
+	std::vector<std::string> har_sets;       // listed=on|off, locked=on|off, ticks=N (ms per update), cast+=/cast-=Cast
 	std::vector<std::string> har_paints;     // Job[:Image=file.png]: a paint job made or its image set
 	std::vector<std::string> har_scripts;    // script patch files (ed::parse_script_patch) for the HAR's behaviors
 	// Base objects copied into the add-on with what they hold (Class:Name), the copies' names then

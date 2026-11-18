@@ -339,7 +339,14 @@ void assets_startup(Editor &e) {
 				if (key == "listed") d.listed = on;
 				else if (key == "locked") d.locked = on;
 				else if (key == "ticks" && atoi(v.c_str()) > 0 && d.ticks > 0) d.ticks = atoi(v.c_str());
-				else ok = false;
+				else if (key == "cast+" || key == "cast-") {
+					try {
+						ed::set_har_cast(*e.project(), ho, v, key == "cast+");
+					} catch (const std::exception &ex) {
+						e.log(LogLine::Error, spec + ": " + ex.what());
+						ok = false;
+					}
+				} else ok = false;
 				e.log(ok ? LogLine::Ok : LogLine::Error, (ok ? "Set " : "Cannot set ") + spec + (key == "ticks" ? " (was " + std::to_string(ed::read_har(*e.project(), ho).ticks) + ")" : ""));
 			}
 			ed::write_har(*e.project(), ho, d);

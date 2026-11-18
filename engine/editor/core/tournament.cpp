@@ -395,6 +395,7 @@ std::string model_json(const Tournament &t) {
 			e["pilot"] = guid_hex(op.pilot);
 			e["robot"] = guid_hex(op.robot);
 			e["faction"] = guid_hex(op.faction);
+			e["ai_offset"] = op.ai_offset;
 			ops.push(e);
 		}
 		o["opponents"] = ops;
@@ -472,7 +473,7 @@ Tournament model_from_json(const std::string &text) {
 			x.description = str_at(o, "description");
 			x.intro = str_at(o, "intro");
 			if (auto *ops = o.find("opponents")) {
-				for (auto &e : ops->items()) x.opponents.push_back({guid_of(str_at(e, "pilot")), guid_of(str_at(e, "robot")), guid_of(str_at(e, "faction"))});
+				for (auto &e : ops->items()) x.opponents.push_back({guid_of(str_at(e, "pilot")), guid_of(str_at(e, "robot")), guid_of(str_at(e, "faction")), int_at(e, "ai_offset", 0)});
 			}
 			x.player_faction = guid_of(str_at(o, "player_faction"));
 			x.enemy_faction = guid_of(str_at(o, "enemy_faction"));
@@ -1197,9 +1198,9 @@ GeneratedScripts generate_scripts(const Project &p, const TournamentObjects &o, 
 		if (!c.empty() || blocks.count(cid)) add(pcode_method("MatchComplete", lines_dos(c + block(blocks, cid)), false, me, true));
 
 		std::string ib;
-		float level = t.ai_difficulty + float(m.ai_offset);
-		if (level != 0) {
-			for (size_t k = 0; k < m.opponents.size(); ++k) ib += "SlotPilot(" + std::to_string(k + 1) + ").SetAIDifficultyOffset(" + fmt_float(level) + ");\n";
+		for (size_t k = 0; k < m.opponents.size(); ++k) {
+			float level = t.ai_difficulty + float(m.ai_offset) + float(m.opponents[k].ai_offset);
+			if (level != 0) ib += "SlotPilot(" + std::to_string(k + 1) + ").SetAIDifficultyOffset(" + fmt_float(level) + ");\n";
 		}
 		const std::string iid = method + ".InitialBeginAction";
 		if (!ib.empty() || blocks.count(iid)) add(pcode_method("InitialBeginAction", lines_dos(ib + block(blocks, iid)), false, me, true));
@@ -1508,7 +1509,10 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 		d.delay = b == std::string::npos ? 0.0f : float(integer(trim(v.substr(b + 1)), 0, 600000));
 		m.drop_ons.push_back(d);
 	} else if (f == "opponents") m.opponents.resize(size_t(integer(trim(v), 1, 5)));
-	else if (f.rfind("opponent.", 0) == 0) {
+	else if (f.rfind("opponent-ai.", 0) == 0) {
+		int k = integer(f.substr(12), 1, long(m.opponents.size()));
+		m.opponents[size_t(k - 1)].ai_offset = integer(trim(v), -10, 10);
+	} else if (f.rfind("opponent.", 0) == 0) {
 		int k = integer(f.substr(9), 1, long(std::min<size_t>(m.opponents.size() + 1, 5)));
 		if (size_t(k) > m.opponents.size()) m.opponents.resize(size_t(k));
 		size_t comma = v.find(',');

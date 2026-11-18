@@ -818,3 +818,47 @@ std::string sphere_bone(const Project &p, int sphere) {
 }
 
 }  // namespace ed
+
+namespace ed {
+
+// The robot description's casts (its references' second chunk: the cast list first). A random
+// robot pick (BCreatureList) keeps only members of its required casts, e.g. SPLadderCreatureCast.
+void set_har_cast(Project &p, const HarObjects &o, const std::string &cast, bool member) {
+	if (o.description < 0) throw deo::Error("the robot has no description");
+	const BaseObject *c = nullptr;
+	for (const BaseObject *x : p.base().of_class("Description\\Cast")) {
+		if (x->name == cast) c = x;
+	}
+	if (!c) throw deo::Error("no cast named " + cast);
+	deo::Object &desc = p.file().objects[size_t(o.description)];
+	Chunks rc = split_chunks(desc.references);
+	if (rc.chunks.size() < 2) throw deo::Error("the robot's description has no cast list");
+	RawChunk &c1 = rc.chunks[1];
+	deo::Reader r(c1.body);
+	std::vector<Guid> casts;
+	while (r.u8() == 1) {
+		Ref ref = read_ref(r);
+		if (ref.kind != Ref::Null) casts.push_back(p.target(ref).guid);
+	}
+	Bytes rest(c1.body.begin() + long(r.pos()), c1.body.end());
+	auto it = std::find(casts.begin(), casts.end(), c->guid);
+	if (member && it == casts.end()) casts.push_back(c->guid);
+	if (!member && it != casts.end()) casts.erase(it);
+	deo::Writer w;
+	for (const Guid &g : casts) {
+		Ref ref;
+		int local = p.find(g);
+		if (local >= 0) ref.kind = Ref::Local, ref.index = uint32_t(local);
+		else ref.kind = Ref::Pool, ref.index = p.pool_index(g);
+		w.u8(1);
+		write_ref(w, ref);
+	}
+	w.u8(0);
+	w.bytes(rest);
+	c1.body = w.data();
+	desc.references = join_chunks(rc);
+	desc.packed.clear();
+	p.touch();
+}
+
+}  // namespace ed
