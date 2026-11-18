@@ -61,7 +61,17 @@ if(WIN32)
 endif()
 # unshield's own CTest suite downloads nothing, but it is not this project's tests.
 set(BUILD_TESTING OFF)
+if(WIN32)
+    # unshield 1.6.2 exports libunshield with a PUBLIC dependency on ZLIB::ZLIB.
+    # On Windows that alias is FetchContent's zlibstatic, which is not installed
+    # (ZLIB_INSTALL is off so zlib's own shared target does not also claim the
+    # alias). The export is unused: setup links the built unshield binary.
+    set(CMAKE_SKIP_INSTALL_RULES TRUE)
+endif()
 FetchContent_MakeAvailable(unshield)
+if(WIN32)
+    unset(CMAKE_SKIP_INSTALL_RULES)
+endif()
 unset(BUILD_TESTING)
 unset(CMAKE_C_STANDARD)
 
