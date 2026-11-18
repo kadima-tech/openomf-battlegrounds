@@ -115,7 +115,7 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 			g_lighting.lights.push_back(l);
 		}
 		static const bool dbg = getenv("OPENBG_DEBUG_LIGHTS") != nullptr;
-		if (dbg && fr % 60 == 0) {
+		if ((dbg && fr % 60 == 0) || world.capturing()) {
 			for (auto &[ra, ow] : render_affectors) fprintf(stderr, "  render affector %s owned by %s\n", ra->name.c_str(), ow->name.c_str());
 			fprintf(stderr, "[lights %d] ambient %.2f %.2f %.2f, %zu lights\n", fr, g_lighting.ambient[0], g_lighting.ambient[1],
 			        g_lighting.ambient[2], g_lighting.lights.size());

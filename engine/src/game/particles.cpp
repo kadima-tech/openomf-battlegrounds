@@ -439,7 +439,8 @@ void ParticleSystem::step() {
 			}
 		}
 	}
-	if (debug && w_.frame() % 60 == 0) {
+	if ((debug && w_.frame() % 60 == 0) || w_.capturing()) {
+		if (w_.capturing()) fprintf(stderr, "[capture %u] %s\n", w_.frame(), debug_counts().c_str());
 		for (auto &in : instances_) {
 			if (in->stepped == w_.frame() && !in->particles.empty()) {
 				const auto &p = in->particles.front();
