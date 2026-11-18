@@ -1633,10 +1633,12 @@ private:
 			p = q + 1;
 		}
 		// Entry i from 1 stays only while the description is not locked under 0x10063 + i
-		// (UnlockSinglePlayerMatch); unless debugging, a locked one is blanked.
+		// (UnlockSinglePlayerMatch); unless debugging, a locked one is blanked. OPENBG_ALL_MATCHES=1
+		// (testing) lists every match, as if the tournament had been won.
 		matches_unlocked_ = 1;
+		const bool all = getenv("OPENBG_ALL_MATCHES") != nullptr;
 		for (size_t i = matches_.size(); i-- > 1;) {
-			if (description_locked(app.world, {md->file, md->index}, uint32_t(0x10063 + i))) matches_[i].clear();
+			if (!all && description_locked(app.world, {md->file, md->index}, uint32_t(0x10063 + i))) matches_[i].clear();
 			else ++matches_unlocked_;
 		}
 	}
