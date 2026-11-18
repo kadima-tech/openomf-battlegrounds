@@ -327,6 +327,24 @@ void assets_startup(Editor &e) {
 			}
 		}
 	}
+	if (!o.har_sets.empty()) {
+		const std::string target = har_target;
+		for (uint32_t h : ed::addon_hars(*e.project())) {
+			if (tutf8(e.project()->file().objects[h].info.name_text()) != target) continue;
+			ed::HarObjects ho = ed::har_objects(*e.project(), h);
+			ed::HarData d = ed::read_har(*e.project(), ho);
+			for (auto &spec : o.har_sets) {
+				std::string key = spec.substr(0, spec.find('=')), v = spec.find('=') == std::string::npos ? "" : spec.substr(spec.find('=') + 1);
+				bool on = v == "on" || v == "1" || v == "true" || v == "yes", ok = true;
+				if (key == "listed") d.listed = on;
+				else if (key == "locked") d.locked = on;
+				else if (key == "ticks" && atoi(v.c_str()) > 0 && d.ticks > 0) d.ticks = atoi(v.c_str());
+				else ok = false;
+				e.log(ok ? LogLine::Ok : LogLine::Error, (ok ? "Set " : "Cannot set ") + spec + (key == "ticks" ? " (was " + std::to_string(ed::read_har(*e.project(), ho).ticks) + ")" : ""));
+			}
+			ed::write_har(*e.project(), ho, d);
+		}
+	}
 	if (!o.har_constants.empty()) {
 		const std::string target = har_target;
 		for (uint32_t h : ed::addon_hars(*e.project())) {

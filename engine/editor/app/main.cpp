@@ -74,6 +74,7 @@ int main(int argc, char **argv) {
 		else if (arg("--new-har")) opt.new_har = argv[++i];
 		else if (arg("--open-har")) opt.open_har = argv[++i];
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
+		else if (arg("--har-set")) opt.har_sets.push_back(argv[++i]);
 		else if (arg("--har-paint")) opt.har_paints.push_back(argv[++i]);
 		else if (arg("--har-script")) opt.har_scripts.push_back(argv[++i]);
 		else if (arg("--copy-tree")) opt.copy_trees.push_back(argv[++i]);

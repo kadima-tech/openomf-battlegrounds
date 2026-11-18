@@ -325,6 +325,12 @@ HarData read_har(const Project &p, const HarObjects &o) {
 		}
 	}
 	if (o.fighter >= 0) {
+		// DE_CCreature's chunk (the actor's second, v2..4) starts with SceneTicksPerUpdate.
+		Chunks cs = split_chunks(objs[size_t(o.fighter)].contents);
+		if (cs.chunks.size() > 1 && cs.chunks[1].version >= 2 && cs.chunks[1].version <= 4 && cs.chunks[1].body.size() >= 4)
+			memcpy(&h.ticks, cs.chunks[1].body.data(), 4);
+	}
+	if (o.fighter >= 0) {
 		size_t body, end;
 		uint8_t v;
 		const Bytes &c = objs[size_t(o.fighter)].contents;
@@ -434,6 +440,13 @@ void write_har(Project &p, const HarObjects &o, const HarData &d) {
 		uint8_t v;
 		Bytes &c = objs[size_t(o.fighter)].contents;
 		if (last_chunk(c, &body, &end, &v) && v == 2 && end - body >= 120) memcpy(c.data() + body, d.stats.data(), 120);
+		if (d.ticks > 0 && d.ticks != before.ticks) {
+			Chunks cs = split_chunks(c);
+			if (cs.chunks.size() > 1 && cs.chunks[1].version >= 2 && cs.chunks[1].version <= 4 && cs.chunks[1].body.size() >= 4) {
+				memcpy(cs.chunks[1].body.data(), &d.ticks, 4);
+				c = join_chunks(cs);
+			}
+		}
 		objs[size_t(o.fighter)].packed.clear();
 	}
 	for (auto &s : d.spheres) {

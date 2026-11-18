@@ -52,6 +52,7 @@ struct HarConstant {
 struct HarData {
 	std::string name;
 	bool listed = true, locked = false;
+	int ticks = 0;  // the fighter's SceneTicksPerUpdate (ms per update); 0: none read
 	std::array<float, 30> stats{};
 	std::vector<HarSphere> spheres;
 	std::vector<HarInput> inputs;
