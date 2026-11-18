@@ -75,8 +75,19 @@ FrameLights collect_lights(game::World &world, int fr, const std::function<bool(
 				l.near_begin = aff->near_begin, l.near_end = aff->near_end;
 			}
 			// A value the scripts set on this copy (BEffectFader's Intensity) rather than the data's.
+			// Its holder is found up the actor's parents, then on through the parent a script took a
+			// branch away from (detached_from): the super fireball's ExplosionActor, detached when it
+			// explodes, still reads the fireball's LightColorModulate, which fades to 0. Once that
+			// holder is destroyed its value objects are gone, and the reference gives 0; ours fell
+			// back to the data's value and left the explosion lit for good.
 			de::LiveFloat live = [&world, aff](const de::ObjectRef &r) -> std::optional<float> {
-				for (const game::GameObject *p = aff; p; p = p->parent) {
+				int steps = 0;
+				for (const game::GameObject *p = aff; p && ++steps < 64; p = p->parent ? p->parent : p->detached_from) {
+					if (p->destroyed_seq) {
+						for (const game::GameObject *ch : p->children) {
+							if (ch->file == r.file && ch->index == r.index) return 0.0f;
+						}
+					}
 					auto it = world.values.find(p);
 					if (it == world.values.end()) continue;
 					for (const game::GameObject *ch : p->children) {

@@ -113,6 +113,9 @@ struct GameObject {
 	std::string name;
 	std::string class_path;
 	GameObject *parent = nullptr;
+	// The parent a script took it away from (SetParent(null)): values it references by object still
+	// belong there (the super fireball's ExplosionActor light reads the fireball's LightColorModulate).
+	GameObject *detached_from = nullptr;
 	std::vector<GameObject *> children;
 	std::vector<GameObject *> components;  // actor component references (meshes, properties, ...)
 	bool is_actor = false;
