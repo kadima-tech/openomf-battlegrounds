@@ -1184,7 +1184,7 @@ std::optional<Pilot> read_pilot(const de::ObjectsFile &f, const de::ObjectInfo &
 	p.name = o.name;
 	p.stats = {c.f32(), c.f32(), c.f32(), c.f32()};
 	for (float v : {p.stats.power, p.stats.agility, p.stats.endurance, p.stats.focus}) {
-		if (!(v >= 0 && v <= 200)) {
+		if (!(v >= 0 && v <= 1000)) {  // the formulas take any value; mods may go past 100
 			return std::nullopt;
 		}
 	}
