@@ -236,6 +236,7 @@ const de::ObjectInfo *find_child(const de::ObjectsFile &f, size_t parent, const 
 }  // namespace
 
 Lighting g_lighting;
+bool g_capture = false;
 de::LiveFloat g_live_values;
 const int *g_texture_detail = nullptr;
 
@@ -1541,8 +1542,8 @@ static void draw_glow_batches(GLuint prog_, const std::vector<MeshBatch> &batche
 		bool specular = b.glow <= 0;
 		static const bool dbg = getenv("OPENBG_DEBUG_GLOW") != nullptr;
 		static int shown = 0;
-		if (dbg && shown < 40) {
-			++shown;
+		if ((dbg && shown < 40) || g_capture) {
+			if (!g_capture) ++shown;
 			fprintf(stderr, "[glow] batch %d tris, glow %.2f specular %.2f, mode %d, bounds %.0f %.0f %.0f .. %.0f %.0f %.0f\n", b.count / 3, b.glow, b.specular, b.mode[0],
 			        b.bmin[0], b.bmin[1], b.bmin[2], b.bmax[0], b.bmax[1], b.bmax[2]);
 		}

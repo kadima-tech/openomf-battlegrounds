@@ -156,6 +156,8 @@ struct Lighting {
 };
 // The frame's lights; the app fills it before drawing.
 extern Lighting g_lighting;
+// Set for the frame F9 captures: the glow passes are listed in the log.
+extern bool g_capture;
 // Values the scripts set (the arenas' SceneTime), read by modifiers and bump stages as they draw.
 extern de::LiveFloat g_live_values;
 // The applied Bump Mapping Enabled (options +8): off, DE_CGenericShader::AddStage inserts no

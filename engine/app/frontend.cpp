@@ -322,6 +322,8 @@ int main(int argc, char **argv) {
 		if (!shot && !headless) load_registry(world.registry);
 		game::migrate_lock_records(world.registry);
 		// OPENBG_SET="name=value;..." sets registry values for this run (testing).
+		// OPENBG_CAPTURE_AT=<frame>: F9's capture at that world frame (for scripted runs).
+		if (const char *at = getenv("OPENBG_CAPTURE_AT")) world.capture_frame = uint32_t(strtoul(at, nullptr, 10));
 		if (const char *set = getenv("OPENBG_SET")) {
 			std::string l = set;
 			for (size_t p = 0; p < l.size();) {
@@ -934,6 +936,13 @@ int main(int argc, char **argv) {
 				if (e.type == SDL_KEYUP) app.key_up(int(e.key.keysym.sym), int(e.key.keysym.scancode));
 				if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(true, e.button.clicks);
 				if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) app.mouse_button(false);
+				// F9: the next frame's lights, particle effects and glow passes go to the log, with a
+				// snapshot of the screen (to track down a stray glow or effect when it shows).
+				if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F9 && !e.key.repeat) {
+					world.capture_frame = world.frame() + 1;
+					app.snapshot_requested = true;
+					fprintf(stderr, "[capture] F9 at frame %u: the lights, effects and glow passes of frame %u follow\n", world.frame(), world.capture_frame);
+				}
 				if (e.type == SDL_KEYDOWN) app.key(int(e.key.keysym.sym), int(e.key.keysym.scancode));
 				if (e.type == SDL_TEXTINPUT) app.text(e.text.text);
 				if (e.type == SDL_MOUSEWHEEL) app.wheel(e.wheel.y);
@@ -1051,7 +1060,9 @@ int main(int argc, char **argv) {
 			// A session's scene (DE_CSceneViewerControl3d over the whole window), then the GUI.
 			bool game_shown = world.session != nullptr;
 			if (game_shown) {
+				render::g_capture = world.capturing();
 				{ PERF_ZONE("frame.view_draw"); view.draw(dw, dh, fr, shot != nullptr); }
+				render::g_capture = false;
 				game_shown = view.has_arena();
 			}
 			test_switches(fr);

@@ -944,6 +944,10 @@ public:
 	const GameObject *focus = nullptr;
 	// openbg-fight --watch: the computer drives the user's fighter too (a test mode, not the game's).
 	bool all_ai = false;
+	// F9 in the game: the world frame whose lights, particle effects and glow passes are written to
+	// the log (as the OPENBG_DEBUG_LIGHTS / _PARTICLES / _GLOW dumps), with a snapshot of the screen.
+	uint32_t capture_frame = ~0u;
+	bool capturing() const { return capture_frame == frame_; }
 	// CImage::SetPhase (DE_CImage +0x54) by image data object: an AVI image shows the frame for
 	// it (the renderer's animated textures follow this map).
 	std::map<std::pair<const de::ObjectsFile *, uint32_t>, float> image_phases;
