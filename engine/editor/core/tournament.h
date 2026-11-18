@@ -51,6 +51,7 @@ struct TMatch {
 	std::vector<TOpponent> opponents;  // slots 1..
 	Guid player_faction, enemy_faction;  // team games: SubSessionSetFactions
 	Guid arena;  // Description\Environment; zero: random
+	Guid score_limit;  // a Description\SessionModifier for this match alone; zero: the tournament's
 	std::vector<TQuote> pre_quotes, win_quotes, lose_quotes;
 	std::string win_commentary, lose_commentary;
 	std::vector<TDropOn> drop_ons;

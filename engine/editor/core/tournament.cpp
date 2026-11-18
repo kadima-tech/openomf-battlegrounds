@@ -401,6 +401,7 @@ std::string model_json(const Tournament &t) {
 		o["player_faction"] = guid_hex(x.player_faction);
 		o["enemy_faction"] = guid_hex(x.enemy_faction);
 		o["arena"] = guid_hex(x.arena);
+		o["score_limit"] = guid_hex(x.score_limit);
 		o["pre_quotes"] = quotes_json(x.pre_quotes);
 		o["win_quotes"] = quotes_json(x.win_quotes);
 		o["lose_quotes"] = quotes_json(x.lose_quotes);
@@ -476,6 +477,7 @@ Tournament model_from_json(const std::string &text) {
 			x.player_faction = guid_of(str_at(o, "player_faction"));
 			x.enemy_faction = guid_of(str_at(o, "enemy_faction"));
 			x.arena = guid_of(str_at(o, "arena"));
+			x.score_limit = guid_of(str_at(o, "score_limit"));
 			x.pre_quotes = quotes_from(o.find("pre_quotes"));
 			x.win_quotes = quotes_from(o.find("win_quotes"));
 			x.lose_quotes = quotes_from(o.find("lose_quotes"));
@@ -1095,18 +1097,39 @@ GeneratedScripts generate_scripts(const Project &p, const TournamentObjects &o, 
 			size_t had = s.find(branch);
 			if (had != std::string::npos) s.erase(had, branch.size());
 			if (lose_branches && at != std::string::npos) s.insert(at + marker.size(), branch);
+			// A match with its own score limit attaches that one instead of g_ScoreLimit.
+			const std::string attach = "m_AttachedSubSessionModifiersGUIDs+=g_ScoreLimit.GUID();";
+			const std::string open = "/*MatchScoreLimits*/", close = "/*EndMatchScoreLimits*/";
+			size_t a = s.find(open), b = s.find(close);
+			if (a != std::string::npos && b != std::string::npos && b > a) s.replace(a, b + close.size() - a, attach);
+			std::string limits;
+			for (auto &x : t.matches) {
+				if (guid_zero(x.score_limit)) continue;
+				limits += std::string(limits.empty() ? "if" : "else if") + " (m_MatchNumber==match" + x.key + ")\n\tm_AttachedSubSessionModifiersGUIDs+=g_ScoreLimit" + x.key + ".GUID();\n";
+			}
+			size_t c = s.find(attach);
+			if (!limits.empty() && c != std::string::npos) s.replace(c, attach.size(), open + "\n" + limits + "else\n\t" + attach + "\n" + close);
 			e.source = lines_dos(s);
 		}
 		std::vector<Guid> targets;
+		std::vector<std::string> names;
 		BehaviorGlobals g = behavior_globals_of(p.file().objects[size_t(o.bmaster)]);
 		for (size_t k = 0; k < g.names.size(); ++k) {
+			// g_ScoreLimit<Key>: a match's own limit, written afresh below.
+			if (g.names[k].rfind("g_ScoreLimit", 0) == 0 && g.names[k] != "g_ScoreLimit") continue;
 			Guid target = k < g.refs.size() ? p.target(g.refs[k]).guid : Guid{};
 			if (g.names[k] == "g_GameDescription" && !guid_zero(t.game_type)) target = t.game_type;
 			if (g.names[k] == "g_ScoreLimit" && !guid_zero(t.score_limit)) target = t.score_limit;
 			if (g.names[k] == "g_EndingEnvironment" && !guid_zero(t.ending_arena)) target = t.ending_arena;
+			names.push_back(g.names[k]);
 			targets.push_back(target);
 		}
-		m.global.globals = g.names;
+		for (auto &x : t.matches) {
+			if (guid_zero(x.score_limit)) continue;
+			names.push_back("g_ScoreLimit" + x.key);
+			targets.push_back(x.score_limit);
+		}
+		m.global.globals = names;
 		out.master = std::move(m);
 		out.master_globals = std::move(targets);
 	}
@@ -1459,6 +1482,7 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 	else if (f == "win-commentary") m.win_commentary = v;
 	else if (f == "lose-commentary") m.lose_commentary = v;
 	else if (f == "arena") m.arena = guid_of("Description\\Environment", v);
+	else if (f == "score-limit") m.score_limit = trim(v).empty() ? Guid{} : guid_of("Description\\SessionModifier", v);
 	else if (f == "ai-offset") m.ai_offset = integer(trim(v), -5, 5);
 	else if (f == "drop-ons") {
 		if (!trim(v).empty()) throw deo::Error(key + ": only an empty value (clear) is taken");
