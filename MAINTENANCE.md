@@ -2,6 +2,11 @@
 
 ## Maintenance Log
 
+- **2026-11-18:** weekly dependency bump onto current main (Go was already 1.26.11).
+  - Go lobby toolchain 1.26.11 → 1.27.4 (`server/go.mod` and `golang:1.27.4-alpine`). Standard library only.
+  - Bundled CPython 3.12.12 / python-build-standalone `20251028` → 3.15.2 / `20261110`, unpacked directly because uv 0.13.7 still fetches the `20261026` rebuild. uv 0.9.7 → 0.13.7. bsdiff4 1.2.6 → 1.4.2.
+  - unshield 1.5.1 → 1.6.2 (needs CMake 3.21), Dear ImGui `v1.92.5-docking` → `v1.93.0-docking`, Monocypher 4.0.2 → 4.0.3, stb_image to commit `52a3128f`, Lucide 0.469.0 → lucide-static 1.72.0.
+  - macOS CI runners `macos-15` → `macos-26`. App deployment target stays 13.0. Linux player builds stay on `ubuntu-22.04` (glibc 2.35). The zlib notice now matches the existing 1.4 pin.
 - **2026-11-12:** new dependencies for internet play.
   - Monocypher 4.0.2 (with its optional Ed25519), pinned by commit and SHA-256 via FetchContent in `engine/CMakeLists.txt`; its licence is bundled by the macOS, Windows and Linux app builds and listed in the third-party notices. Windows links `bcrypt` for `BCryptGenRandom`.
   - The lobby server `server/` needs a Go toolchain (`go.mod`: 1.22; standard library only, so no module pins). Its CI (`.github/workflows/server.yml`) pins `actions/setup-go` v7.0.0 by commit and the Dockerfile's build image `golang:1.22-alpine`.

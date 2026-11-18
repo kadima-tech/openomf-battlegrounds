@@ -119,10 +119,10 @@ target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 target_compile_options(enet PRIVATE -w)
 
 # Monocypher (monocypher.org, BSD-2-Clause or CC0): the game traffic's X25519 key exchange, Ed25519
-# host identities and XChaCha20-Poly1305 (src/net/secure.h). Pinned to 4.0.2.
+# host identities and XChaCha20-Poly1305 (src/net/secure.h). Pinned to 4.0.3.
 FetchContent_Declare(monocypher
-	URL https://codeload.github.com/LoupVaillant/Monocypher/tar.gz/0d85f98c9d9b0227e42cf795cb527dff372b40a4
-	URL_HASH SHA256=7339f8a4729d5339ad6df61ba11937f8d5d163ba5a49edf5fdf3d8717b73d1a9
+	URL https://codeload.github.com/LoupVaillant/Monocypher/tar.gz/ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f
+	URL_HASH SHA256=60dda1114a817826a0c753275190968e1b4a2d9f7e31e3d6daa09272c4746f5f
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(monocypher)
 add_library(monocypher STATIC ${monocypher_SOURCE_DIR}/src/monocypher.c ${monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c)
@@ -226,8 +226,8 @@ FetchContent_Declare(cgltf
 	SOURCE_SUBDIR headers-only
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_Declare(stb
-	URL https://codeload.github.com/nothings/stb/tar.gz/f58f558c120e9b32c217290b80bad1a0729fbb2c
-	URL_HASH SHA256=be1a5dad9ac38f42ef8abf00bd7db776101661b77603f832fcc0bae843d82846
+	URL https://codeload.github.com/nothings/stb/tar.gz/52a3128f493138d01204272e030926ee693f5f2b
+	URL_HASH SHA256=cd61de0375169a3190a29d2e8f9b40892f14f996e3e936db09d3fcdfeed5efc1
 	SOURCE_SUBDIR headers-only
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(cgltf stb)
@@ -298,8 +298,8 @@ target_link_libraries(openbg PRIVATE game dmusic ${OPENBG_SDL_LIBS} OpenGL::GL Z
 # Inter, JetBrains Mono (SIL OFL 1.1) and Lucide icons (ISC) from third_party/fonts built in.
 include(FetchContent)
 FetchContent_Declare(imgui
-	URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.5-docking.tar.gz
-	URL_HASH SHA256=c816c20e8c75f3e15ae867350e79925502d1a6a85938bb1a73b8927e5f31f9cb
+	URL https://github.com/ocornut/imgui/archive/refs/tags/v1.93.0-docking.tar.gz
+	URL_HASH SHA256=746c265540bd3aa109570f29492ef4d8f5b421dd9fd0049c35ca35f21496f1a5
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(imgui)
 add_library(imgui STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp

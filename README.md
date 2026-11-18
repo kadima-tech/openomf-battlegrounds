@@ -99,7 +99,7 @@ update; a complete game installation is not included.
 
 openomf-battlegrounds builds on **macOS** (Apple silicon or Intel), **Linux** (x86_64 or aarch64;
 Ubuntu, Debian and Fedora are tested) and **Windows 10/11** (x64, see
-[below](#building-on-windows)). On macOS and Linux you need CMake 3.20 or newer, a C++20 compiler
+[below](#building-on-windows)). On macOS and Linux you need CMake 3.21 or newer, a C++20 compiler
 and SDL2. On macOS, use Xcode's command-line tools and Homebrew:
 
 ```sh

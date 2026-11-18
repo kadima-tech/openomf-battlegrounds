@@ -122,9 +122,9 @@ def tool(resources: Path, name: str) -> Path:
 
 
 def unshield_path(path: Path) -> str:
-    """A path as unshield 1.5.1 can take it apart. It finds a cabinet's other volumes
-    (data1.hdr, data2.cab) by splitting at the last "/", so on Windows a path with
-    backslashes sends it looking for the wrong files. Windows accepts forward slashes."""
+    """A path unshield 1.6.2 can take apart. It finds a cabinet's other volumes
+    (data1.hdr, data2.cab) at the last '/' or, on Windows, the last '\\' if that
+    comes later. Forward slashes work on Windows, so the path is written that way."""
     return path.as_posix() if WINDOWS else str(path)
 
 
