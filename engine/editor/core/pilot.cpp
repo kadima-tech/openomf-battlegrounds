@@ -574,7 +574,7 @@ void set_pilot_field(const Project &p, PilotData &d, const std::string &key_in, 
 	static const char *const stat_keys[4] = {"power", "agility", "endurance", "focus"};
 	for (int k = 0; k < 4; ++k) {
 		if (key == stat_keys[k]) {
-			d.stats[size_t(k)] = std::round(number(key, v, 0, 100));
+			d.stats[size_t(k)] = std::round(number(key, v, 0, 1000));  // above 100: beyond any stock pilot (agility 360 doubles the top movement speed)
 			return;
 		}
 	}
