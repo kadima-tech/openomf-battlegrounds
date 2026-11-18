@@ -56,7 +56,12 @@ test -f "$resources/python/python.exe"
 
 export UV_CACHE_DIR="$tools/uv-cache"
 export UV_NO_CONFIG=1
-"$uv" --no-config pip install --python-platform x86_64-pc-windows-msvc --python-version 3.12 \
+# On Windows, the bundled interpreter, so uv never inspects one from PATH: a Windows uv rejects
+# MSYS2's python.exe ("Unknown operating system: mingw_x86_64_ucrt_gnu"). Other hosts cannot run
+# the Windows interpreter, so uv keeps its own lookup there.
+target_python=()
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) target_python=(--python "$resources/python/python.exe") ;; esac
+"$uv" --no-config pip install "${target_python[@]}" --python-platform x86_64-pc-windows-msvc --python-version 3.12 \
     --target "$resources/python-packages" --only-binary :all: --require-hashes --no-python-downloads \
     -r "$launcher/requirements.txt"
 test -f "$resources/python-packages/bsdiff4/core.cp312-win_amd64.pyd"
