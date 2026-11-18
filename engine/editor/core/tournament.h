@@ -23,6 +23,7 @@ struct TOpponent {
 	Guid pilot;    // Description\Pilot
 	Guid robot;    // Description\Creature\Fighter; zero: a random robot (CreatureListGetRandom)
 	Guid faction;  // Description\Faction, team games only
+	int ai_offset = 0;  // on top of the match's: SetAIDifficultyOffset for this opponent alone
 	bool operator==(const TOpponent &) const = default;
 };
 
@@ -51,6 +52,7 @@ struct TMatch {
 	std::vector<TOpponent> opponents;  // slots 1..
 	Guid player_faction, enemy_faction;  // team games: SubSessionSetFactions
 	Guid arena;  // Description\Environment; zero: random
+	Guid score_limit;  // a Description\SessionModifier for this match alone; zero: the tournament's
 	std::vector<TQuote> pre_quotes, win_quotes, lose_quotes;
 	std::string win_commentary, lose_commentary;
 	std::vector<TDropOn> drop_ons;

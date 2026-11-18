@@ -395,12 +395,14 @@ std::string model_json(const Tournament &t) {
 			e["pilot"] = guid_hex(op.pilot);
 			e["robot"] = guid_hex(op.robot);
 			e["faction"] = guid_hex(op.faction);
+			e["ai_offset"] = op.ai_offset;
 			ops.push(e);
 		}
 		o["opponents"] = ops;
 		o["player_faction"] = guid_hex(x.player_faction);
 		o["enemy_faction"] = guid_hex(x.enemy_faction);
 		o["arena"] = guid_hex(x.arena);
+		o["score_limit"] = guid_hex(x.score_limit);
 		o["pre_quotes"] = quotes_json(x.pre_quotes);
 		o["win_quotes"] = quotes_json(x.win_quotes);
 		o["lose_quotes"] = quotes_json(x.lose_quotes);
@@ -471,11 +473,12 @@ Tournament model_from_json(const std::string &text) {
 			x.description = str_at(o, "description");
 			x.intro = str_at(o, "intro");
 			if (auto *ops = o.find("opponents")) {
-				for (auto &e : ops->items()) x.opponents.push_back({guid_of(str_at(e, "pilot")), guid_of(str_at(e, "robot")), guid_of(str_at(e, "faction"))});
+				for (auto &e : ops->items()) x.opponents.push_back({guid_of(str_at(e, "pilot")), guid_of(str_at(e, "robot")), guid_of(str_at(e, "faction")), int_at(e, "ai_offset", 0)});
 			}
 			x.player_faction = guid_of(str_at(o, "player_faction"));
 			x.enemy_faction = guid_of(str_at(o, "enemy_faction"));
 			x.arena = guid_of(str_at(o, "arena"));
+			x.score_limit = guid_of(str_at(o, "score_limit"));
 			x.pre_quotes = quotes_from(o.find("pre_quotes"));
 			x.win_quotes = quotes_from(o.find("win_quotes"));
 			x.lose_quotes = quotes_from(o.find("lose_quotes"));
@@ -1095,18 +1098,39 @@ GeneratedScripts generate_scripts(const Project &p, const TournamentObjects &o, 
 			size_t had = s.find(branch);
 			if (had != std::string::npos) s.erase(had, branch.size());
 			if (lose_branches && at != std::string::npos) s.insert(at + marker.size(), branch);
+			// A match with its own score limit attaches that one instead of g_ScoreLimit.
+			const std::string attach = "m_AttachedSubSessionModifiersGUIDs+=g_ScoreLimit.GUID();";
+			const std::string open = "/*MatchScoreLimits*/", close = "/*EndMatchScoreLimits*/";
+			size_t a = s.find(open), b = s.find(close);
+			if (a != std::string::npos && b != std::string::npos && b > a) s.replace(a, b + close.size() - a, attach);
+			std::string limits;
+			for (auto &x : t.matches) {
+				if (guid_zero(x.score_limit)) continue;
+				limits += std::string(limits.empty() ? "if" : "else if") + " (m_MatchNumber==match" + x.key + ")\n\tm_AttachedSubSessionModifiersGUIDs+=g_ScoreLimit" + x.key + ".GUID();\n";
+			}
+			size_t c = s.find(attach);
+			if (!limits.empty() && c != std::string::npos) s.replace(c, attach.size(), open + "\n" + limits + "else\n\t" + attach + "\n" + close);
 			e.source = lines_dos(s);
 		}
 		std::vector<Guid> targets;
+		std::vector<std::string> names;
 		BehaviorGlobals g = behavior_globals_of(p.file().objects[size_t(o.bmaster)]);
 		for (size_t k = 0; k < g.names.size(); ++k) {
+			// g_ScoreLimit<Key>: a match's own limit, written afresh below.
+			if (g.names[k].rfind("g_ScoreLimit", 0) == 0 && g.names[k] != "g_ScoreLimit") continue;
 			Guid target = k < g.refs.size() ? p.target(g.refs[k]).guid : Guid{};
 			if (g.names[k] == "g_GameDescription" && !guid_zero(t.game_type)) target = t.game_type;
 			if (g.names[k] == "g_ScoreLimit" && !guid_zero(t.score_limit)) target = t.score_limit;
 			if (g.names[k] == "g_EndingEnvironment" && !guid_zero(t.ending_arena)) target = t.ending_arena;
+			names.push_back(g.names[k]);
 			targets.push_back(target);
 		}
-		m.global.globals = g.names;
+		for (auto &x : t.matches) {
+			if (guid_zero(x.score_limit)) continue;
+			names.push_back("g_ScoreLimit" + x.key);
+			targets.push_back(x.score_limit);
+		}
+		m.global.globals = names;
 		out.master = std::move(m);
 		out.master_globals = std::move(targets);
 	}
@@ -1174,9 +1198,9 @@ GeneratedScripts generate_scripts(const Project &p, const TournamentObjects &o, 
 		if (!c.empty() || blocks.count(cid)) add(pcode_method("MatchComplete", lines_dos(c + block(blocks, cid)), false, me, true));
 
 		std::string ib;
-		float level = t.ai_difficulty + float(m.ai_offset);
-		if (level != 0) {
-			for (size_t k = 0; k < m.opponents.size(); ++k) ib += "SlotPilot(" + std::to_string(k + 1) + ").SetAIDifficultyOffset(" + fmt_float(level) + ");\n";
+		for (size_t k = 0; k < m.opponents.size(); ++k) {
+			float level = t.ai_difficulty + float(m.ai_offset) + float(m.opponents[k].ai_offset);
+			if (level != 0) ib += "SlotPilot(" + std::to_string(k + 1) + ").SetAIDifficultyOffset(" + fmt_float(level) + ");\n";
 		}
 		const std::string iid = method + ".InitialBeginAction";
 		if (!ib.empty() || blocks.count(iid)) add(pcode_method("InitialBeginAction", lines_dos(ib + block(blocks, iid)), false, me, true));
@@ -1414,6 +1438,15 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 	if (key == "listed") return void(t.listed = on(trim(v)));
 	if (key == "locked") return void(t.locked = on(trim(v)));
 	if (key == "ai-difficulty") return void(t.ai_difficulty = float(integer(trim(v), -3, 5)));
+	// The Settings form's Game type (a session master: Demolition, Last Man Standing...) and Score
+	// limit (a session modifier: "3,000 Score Limit", "5 Wins"...), by name.
+	if (key == "game-type") return void(t.game_type = guid_of("Description\\SessionMaster", v));
+	if (key == "score-limit") return void(t.score_limit = guid_of("Description\\SessionModifier", v));
+	// The ending cinematic's scene (an environment description such as the World Open's
+	// "CinematickingofhillDescription"), and its name and description texts.
+	if (key == "ending-arena") return void(t.ending_arena = guid_of("Description\\Environment", v));
+	if (key == "ending-name") return void(t.ending_name = v);
+	if (key == "ending-description") return void(t.ending_description = v);
 	if (key == "unlock+") {
 		size_t colon = v.find(':');
 		std::string what = trim(v.substr(0, colon));
@@ -1450,9 +1483,36 @@ void set_tournament_field(const Project &p, Tournament &t, const std::string &ke
 	else if (f == "win-commentary") m.win_commentary = v;
 	else if (f == "lose-commentary") m.lose_commentary = v;
 	else if (f == "arena") m.arena = guid_of("Description\\Environment", v);
+	else if (f == "score-limit") m.score_limit = trim(v).empty() ? Guid{} : guid_of("Description\\SessionModifier", v);
 	else if (f == "ai-offset") m.ai_offset = integer(trim(v), -5, 5);
-	else if (f == "opponents") m.opponents.resize(size_t(integer(trim(v), 1, 5)));
-	else if (f.rfind("opponent.", 0) == 0) {
+	else if (f == "drop-ons") {
+		if (!trim(v).empty()) throw deo::Error(key + ": only an empty value (clear) is taken");
+		m.drop_ons.clear();
+	} else if (f == "drop-on+") {
+		// slot:actor[:delay ms]: the actor dropped on that slot's creature (AddDropActorOnSlotCreature),
+		// as the North American Open drops RavensHandler on Raven.
+		size_t a = v.find(':'), b = a == std::string::npos ? a : v.find(':', a + 1);
+		if (a == std::string::npos) throw deo::Error(key + ": give slot:actor[:delay]");
+		TDropOn d;
+		d.slot = integer(trim(v.substr(0, a)), 0, 5);
+		// What the base tournaments drop (the Settings form's list: Acid, SabotageExplosion, EndlessGW...),
+		// then any actor of the add-on or the base game by name.
+		const std::string actor = trim(v.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1));
+		for (auto &[label, g] : drop_on_choices(p.base())) {
+			if (label == actor) {
+				d.actor = g;
+				break;
+			}
+		}
+		if (d.actor == Guid{}) d.actor = guid_of("Actor", actor);
+		if (d.actor == Guid{}) throw deo::Error(key + ": no actor named");
+		d.delay = b == std::string::npos ? 0.0f : float(integer(trim(v.substr(b + 1)), 0, 600000));
+		m.drop_ons.push_back(d);
+	} else if (f == "opponents") m.opponents.resize(size_t(integer(trim(v), 1, 5)));
+	else if (f.rfind("opponent-ai.", 0) == 0) {
+		int k = integer(f.substr(12), 1, long(m.opponents.size()));
+		m.opponents[size_t(k - 1)].ai_offset = integer(trim(v), -10, 10);
+	} else if (f.rfind("opponent.", 0) == 0) {
 		int k = integer(f.substr(9), 1, long(std::min<size_t>(m.opponents.size() + 1, 5)));
 		if (size_t(k) > m.opponents.size()) m.opponents.resize(size_t(k));
 		size_t comma = v.find(',');

@@ -52,6 +52,7 @@ struct HarConstant {
 struct HarData {
 	std::string name;
 	bool listed = true, locked = false;
+	int ticks = 0;  // the fighter's SceneTicksPerUpdate (ms per update); 0: none read
 	std::array<float, 30> stats{};
 	std::vector<HarSphere> spheres;
 	std::vector<HarInput> inputs;
@@ -73,6 +74,8 @@ uint32_t create_har_variant(Project &p, const std::string &base_fighter, const s
 HarData read_har(const Project &p, const HarObjects &o);
 // Data only; a changed constant rewrites the behavior's members (compile afterwards).
 void write_har(Project &p, const HarObjects &o, const HarData &d);
+// Adds the robot to a cast (member) or takes it out (e.g. SPLadderCreatureCast: random picks).
+void set_har_cast(Project &p, const HarObjects &o, const std::string &cast, bool member);
 void import_sound(Project &p, uint32_t noise, const Bytes &wav, const std::string &source);
 
 // A new paint job: a copy of the model of paint job `from` (a FighterModelDescription; -1: the

@@ -5,6 +5,7 @@
 //                 [--photo image.png] [--pilot-set KEY=VALUE] [--content <type>] [--base-content] [--browse-file <file stem>]
 //                 [--new-tournament Base:Name] [--open-tournament Name] [--tournament-set KEY=VALUE]
 //                 [--tournament-image image.png] [--tournament-icon icon.png]
+//                 [--copy-tree Class:Name [--copy-rename Old=New]] [--script-patch patch.txt]
 //                 [--open-base Class:Name] [--select-base Class:Name] [--copy-base <pilot>]
 //                 [--select <object name>] [--level] [--save] [--launch-game]
 //                 [--arena <name or stem>] [--variant] [--select-node <name>] [--camera x,y,z,yaw,pitch]
@@ -73,8 +74,12 @@ int main(int argc, char **argv) {
 		else if (arg("--new-har")) opt.new_har = argv[++i];
 		else if (arg("--open-har")) opt.open_har = argv[++i];
 		else if (arg("--har-constant")) opt.har_constants.push_back(argv[++i]);
+		else if (arg("--har-set")) opt.har_sets.push_back(argv[++i]);
 		else if (arg("--har-paint")) opt.har_paints.push_back(argv[++i]);
 		else if (arg("--har-script")) opt.har_scripts.push_back(argv[++i]);
+		else if (arg("--copy-tree")) opt.copy_trees.push_back(argv[++i]);
+		else if (arg("--copy-rename")) opt.copy_renames.push_back(argv[++i]);
+		else if (arg("--script-patch")) opt.script_patches.push_back(argv[++i]);
 		else if (arg("--har-help")) opt.har_help.push_back(argv[++i]);
 		else if (arg("--har-title")) opt.har_title = argv[++i];
 		else if (arg("--har-text")) opt.har_text = argv[++i];
