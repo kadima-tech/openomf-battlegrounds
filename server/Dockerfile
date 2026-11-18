@@ -4,7 +4,7 @@
 #   docker run -p 27900:27900/udp -p 27901-27964:27901-27964/udp openbg-lobby
 #
 # Settings are the binary's flags or OPENBG_LOBBY_* environment variables (see DEVELOPING.md).
-FROM golang:1.22-alpine AS build
+FROM golang:1.26.11-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 COPY . .
