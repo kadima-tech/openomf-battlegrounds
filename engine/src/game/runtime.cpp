@@ -1,5 +1,6 @@
 #include "game/runtime.h"
 #include "game/perf.h"
+#include "game/bone_channels.h"
 #include "game/netplay.h"
 #include "game/impulses.h"
 
@@ -678,6 +679,10 @@ void World::pose_skeleton(GameObject &f) {
 		}
 		return false;
 	};
+	// Which actor of a bone's name a channel drives: game/bone_channels.h.
+	const int body = bank.channel("Body");
+	auto channel_of = [&](const std::string &n) { return bank.channel(n); };
+	auto channel_parent = [&](int c) { return bank.channels[size_t(c)].parent; };
 	// Walk the fighter's actor tree in its model space; bone actors take their channel's pose,
 	// everything else (hit detectors, effect anchors) keeps its offset from its parent.
 	std::function<void(GameObject &, const de::Transform &)> walk = [&](GameObject &o, const de::Transform &parent) {
@@ -686,7 +691,7 @@ void World::pose_skeleton(GameObject &f) {
 				continue;
 			}
 			if (ch->channel == -2) {
-				ch->channel = bank.channel(ch->name);
+				ch->channel = bone_channel(f, *ch, body, channel_of, channel_parent);
 			}
 			de::Transform model;
 			if (ch->channel >= 0 && size_t(ch->channel) < pose.size() && (!ch->managed || streamed(ch->channel))) {
