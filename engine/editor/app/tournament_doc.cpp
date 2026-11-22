@@ -439,6 +439,8 @@ void TournamentDocument::match_form(Editor &e, int mi) {
 	}
 	ui::form_label("Arena", lw);
 	guid_combo("##arena", &m.arena, choices(e, "Description\\Environment"), "Random arena (SinglePlayerPickRandomEnvironment)");
+	ui::form_label("Score limit", lw);
+	guid_combo("##mlimit", &m.score_limit, choices(e, "ScoreLimit"), "The tournament's");
 	ui::form_label("Intro commentary", lw);
 	ImGui::InputTextMultiline("##intro", &m.intro, ImVec2(-ui::px(4), fh * 2), ImGuiInputTextFlags_WordWrap);
 	ui::form_label("Next match text", lw);
