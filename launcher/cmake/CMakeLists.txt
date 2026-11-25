@@ -75,7 +75,7 @@ endif()
 unset(BUILD_TESTING)
 unset(CMAKE_C_STANDARD)
 
-set(OPENINDEO_GIT_TAG "5452df0c8900f0892e701253481bf5c311a9a9d7" CACHE STRING "" FORCE)
+set(OPENINDEO_GIT_TAG "cd14ed5bbf76fabdc16896b9fc921a2b2fb61f96" CACHE STRING "" FORCE)
 set(OPENINDEO_DIR "${CMAKE_CURRENT_BINARY_DIR}/no-local-openindeo" CACHE PATH "" FORCE)
 # Never bake disc-derived DirectX data into a redistributable app.
 set(OPENBG_GAME_ISO "${CMAKE_CURRENT_BINARY_DIR}/no-bundled-game-data.iso" CACHE FILEPATH "" FORCE)

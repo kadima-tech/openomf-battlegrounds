@@ -13,37 +13,39 @@ check_sha256() {  # file expected
     else echo "$2  $1" | shasum -a 256 -c - >/dev/null; fi
 }
 
-# uv 0.13.7 installs the hash-locked decoder. It does not select the interpreter:
-# its managed CPython is still python-build-standalone 20261026. The archive below
-# is release 20261110, the newer rebuild of CPython 3.15.2 (zlib 1.4, Expat 2.10.0).
-uv="$build/tools/uv-0.13.7-$os-$arch"
+# uv 0.13.9 installs the hash-locked decoder. It does not select the interpreter:
+# this release predates python-build-standalone 20261124, so its managed CPython
+# is an older rebuild. The archive below is 20261124 (still CPython 3.15.2), which
+# updates the bundled Expat, zstd and libffi for CVE-2026-134703, CVE-2026-124851
+# and the libffi 3.8.1 advisories.
+uv="$build/tools/uv-0.13.9-$os-$arch"
 if [ ! -x "$uv" ]; then
     case "$os/$arch" in
-        Darwin/arm64) triple=aarch64-apple-darwin; checksum=81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731 ;;
-        Darwin/x86_64) triple=x86_64-apple-darwin; checksum=20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7 ;;
-        Linux/x86_64) triple=x86_64-unknown-linux-gnu; checksum=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83 ;;
-        Linux/aarch64) triple=aarch64-unknown-linux-gnu; checksum=71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc ;;
+        Darwin/arm64) triple=aarch64-apple-darwin; checksum=5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca ;;
+        Darwin/x86_64) triple=x86_64-apple-darwin; checksum=617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041 ;;
+        Linux/x86_64) triple=x86_64-unknown-linux-gnu; checksum=a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5 ;;
+        Linux/aarch64) triple=aarch64-unknown-linux-gnu; checksum=0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d ;;
         *) echo "Unsupported platform: $os $arch" >&2; exit 1 ;;
     esac
     archive="$build/tools/uv-$os-$arch.tar.gz"
-    curl --proto '=https' --tlsv1.2 -fL --retry 2 "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-$triple.tar.gz" -o "$archive"
+    curl --proto '=https' --tlsv1.2 -fL --retry 2 "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-$triple.tar.gz" -o "$archive"
     check_sha256 "$archive" "$checksum"
     tar -xzf "$archive" -C "$build/tools" "uv-$triple/uv"
     cp "$build/tools/uv-$triple/uv" "$uv"
 fi
 
 case "$os/$arch" in
-    Darwin/arm64) py_triple=aarch64-apple-darwin; py_checksum=7e58607647b5b4832092a339ff1c55eeeccee128221232509b8fc8d27957065e ;;
-    Darwin/x86_64) py_triple=x86_64-apple-darwin; py_checksum=11143c2a2556b14619e8241d3f74bb43ad97181c0eb4909bab87d7aad1154e49 ;;
-    Linux/x86_64) py_triple=x86_64-unknown-linux-gnu; py_checksum=ad23d1b73fac26440b0306ae06911031344c49a90ec19716c8362e7fa40cae43 ;;
-    Linux/aarch64) py_triple=aarch64-unknown-linux-gnu; py_checksum=d1367a6c3cd86a9e35712072841f1376859f3b47a2a54e224421a0f9fd169047 ;;
+    Darwin/arm64) py_triple=aarch64-apple-darwin; py_checksum=2cc8874f034f7a0deff879530020108ebe6d318f5e8c6689673a866ab5fb7fdc ;;
+    Darwin/x86_64) py_triple=x86_64-apple-darwin; py_checksum=f076837c5fb804e6f200841c3be3b2050633f7e19ea97934f81fd9727ada6b71 ;;
+    Linux/x86_64) py_triple=x86_64-unknown-linux-gnu; py_checksum=d94bcba1ca1c63f591fa63109c3eeaacc76ee6796844ac7bdf2ae10715646f05 ;;
+    Linux/aarch64) py_triple=aarch64-unknown-linux-gnu; py_checksum=dac9832fe240524c092015b99ed76fcef1a32a096d744fcb39eafa980d1a0ffa ;;
     *) echo "Unsupported platform: $os $arch" >&2; exit 1 ;;
 esac
-py_name="cpython-3.15.2+20261110-${py_triple}-install_only_stripped.tar.gz"
+py_name="cpython-3.15.2+20261124-${py_triple}-install_only_stripped.tar.gz"
 py_archive="$build/tools/$py_name"
 if [ ! -f "$py_archive" ] || ! check_sha256 "$py_archive" "$py_checksum"; then
     curl --proto '=https' --tlsv1.2 -fL --retry 2 \
-        "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.15.2%2B20261110-${py_triple}-install_only_stripped.tar.gz" \
+        "https://github.com/astral-sh/python-build-standalone/releases/download/20261124/cpython-3.15.2%2B20261124-${py_triple}-install_only_stripped.tar.gz" \
         -o "$py_archive.part"
     check_sha256 "$py_archive.part" "$py_checksum" || { echo "Checksum mismatch for $py_name" >&2; rm -f "$py_archive.part"; exit 1; }
     mv "$py_archive.part" "$py_archive"
@@ -63,5 +65,5 @@ cp "$resources/python/lib/python3.15/LICENSE.txt" "$resources/licenses/Python.tx
 # Preserve all upstream runtime/package license files in the bundle, including
 # the decoder's dist-info license. Nothing is installed on the build host.
 "$resources/python/bin/python3" -I -B -c \
-    'import sys; sys.path.insert(0, sys.argv[1]); import bsdiff4; assert bsdiff4.__version__ == "1.4.2"' \
+    'import sys; sys.path.insert(0, sys.argv[1]); import bsdiff4; assert bsdiff4.__version__ == "1.4.3"' \
     "$resources/python-packages"

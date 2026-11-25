@@ -226,8 +226,8 @@ FetchContent_Declare(cgltf
 	SOURCE_SUBDIR headers-only
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_Declare(stb
-	URL https://codeload.github.com/nothings/stb/tar.gz/52a3128f493138d01204272e030926ee693f5f2b
-	URL_HASH SHA256=cd61de0375169a3190a29d2e8f9b40892f14f996e3e936db09d3fcdfeed5efc1
+	URL https://codeload.github.com/nothings/stb/tar.gz/98bc6401414a635954d608be603fa39a6a7eded4
+	URL_HASH SHA256=7df34841855cec3cf588a639756ce36529b9de63813e439f38f02b234c759669
 	SOURCE_SUBDIR headers-only
 	DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(cgltf stb)

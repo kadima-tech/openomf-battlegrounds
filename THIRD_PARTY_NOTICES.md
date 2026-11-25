@@ -19,11 +19,11 @@ upstream texts, rather than this index, define each component's terms.
 | GothicKit dmusic | [GothicKit/dmusic](https://github.com/GothicKit/dmusic), vendored revision `b73b270b` with local changes | Upstream MIT modern variant; `licenses/dmusic.txt`; provenance and modifications in `licenses/dmusic.md` |
 | DirectMusic software synthesizer sample (DDKSynth) | Microsoft Windows Driver Kit 8.1 sample, ported to C in dmusic | MIT, Microsoft Corporation; `licenses/DDKSynth.txt` |
 | zlib (Windows only) | [madler/zlib](https://github.com/madler/zlib), 1.4 | zlib; `licenses/zlib.txt` (macOS uses the system zlib) |
-| openindeo | [kadima-tech/openindeo](https://github.com/kadima-tech/openindeo), commit `5452df0c8900f0892e701253481bf5c311a9a9d7` | MIT; `licenses/openindeo.txt` |
+| openindeo | [kadima-tech/openindeo](https://github.com/kadima-tech/openindeo), commit `cd14ed5bbf76fabdc16896b9fc921a2b2fb61f96` | MIT; `licenses/openindeo.txt` |
 | ENet | [lsalzman/enet](https://github.com/lsalzman/enet), 1.3.18 (commit `2662c0de09e36f2a2030ccc2c528a3e4c9e8138a`) | MIT; `licenses/enet.txt` |
 | Monocypher | [LoupVaillant/Monocypher](https://github.com/LoupVaillant/Monocypher), 4.0.3 (commit `ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f`), with its optional Ed25519 | BSD-2-Clause or CC0-1.0, at the user's choice; `licenses/Monocypher.txt` |
-| CPython runtime and included libraries | Python 3.15.2 from [python-build-standalone](https://github.com/astral-sh/python-build-standalone) release `20261110` (macOS, Linux and Windows `install_only_stripped` archives; the Windows build includes its Visual C++ runtime DLLs) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
-| bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.4.2 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.4.2.dist-info/` |
+| CPython runtime and included libraries | Python 3.15.2 from [python-build-standalone](https://github.com/astral-sh/python-build-standalone) release `20261124` (macOS, Linux and Windows `install_only_stripped` archives; the Windows build includes its Visual C++ runtime DLLs) | Python and included third-party license terms; `licenses/Python.txt` and notices retained under `python/` |
+| bsdiff4 | [ilanschnell/bsdiff4](https://github.com/ilanschnell/bsdiff4), 1.4.3 | BSD-style terms; full license retained in `python-packages/bsdiff4-1.4.3.dist-info/` |
 | Tcl/Tk (Linux runtime only) | Included in the Linux CPython runtime ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)), which also links X11 client libraries into Tk; the launcher does not use Tk | Tcl/Tk BSD-style license; `licenses/Tcl-Tk.txt`; X.Org libraries under MIT/X11-style terms |
 
 The vendored dmusic source notices are also available in
@@ -48,10 +48,10 @@ The editor is a development tool built from source and not part of the app downl
 | --- | --- | --- |
 | Dear ImGui (docking branch) | [ocornut/imgui](https://github.com/ocornut/imgui), `v1.93.0-docking`, fetched by CMake | MIT |
 | cgltf | [jkuhlmann/cgltf](https://github.com/jkuhlmann/cgltf), `v1.15`, fetched by CMake (glTF reading) | MIT |
-| stb_image | [nothings/stb](https://github.com/nothings/stb), commit `52a3128f493138d01204272e030926ee693f5f2b`, fetched by CMake (JPEG textures) | MIT or public domain (Unlicense), at the user's choice |
+| stb_image | [nothings/stb](https://github.com/nothings/stb), commit `98bc6401414a635954d608be603fa39a6a7eded4`, fetched by CMake (JPEG textures) | MIT or public domain (Unlicense), at the user's choice |
 | Inter | [rsms/inter](https://github.com/rsms/inter), 4.1 (Regular, SemiBold); `engine/third_party/fonts/Inter-LICENSE.txt` | SIL Open Font License 1.1 |
 | JetBrains Mono | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono), 2.304 (Regular); `engine/third_party/fonts/JetBrainsMono-LICENSE.txt` | SIL Open Font License 1.1 |
-| Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 1.72.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |
+| Lucide icons | [lucide-icons/lucide](https://github.com/lucide-icons/lucide), lucide-static 1.75.0 (`lucide.ttf`); `engine/third_party/fonts/lucide-LICENSE.txt` | ISC (portions MIT, from Feather) |
 
 ## The lobby server (openbg-lobby)
 

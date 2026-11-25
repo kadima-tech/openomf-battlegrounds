@@ -2,6 +2,12 @@
 
 ## Maintenance Log
 
+- **2026-11-25:** weekly dependency bump.
+  - uv 0.13.7 → 0.13.9. bsdiff4 1.4.2 → 1.4.3. Applying an existing BSDIFF40 patch is unchanged.
+  - python-build-standalone `20261110` → `20261124` (still CPython 3.15.2). The release is newer than the 7-day cutoff; it is the rebuild that carries Expat 2.11.0 (CVE-2026-134703), zstd 1.6.0 (CVE-2026-124851) and libffi 3.8.1 (GHSA-fq46-69xf-x5gf, GHSA-5pc3-hr6f-q3mm, GHSA-h52h-3759-xqm4, GHSA-vg77-j273-647r, GHSA-23hx-9rxv-9qfp). uv 0.13.9 does not fetch it, so the bundle scripts unpack it directly.
+  - stb_image `52a3128f` → `98bc6401`. Lucide lucide-static 1.72.0 → 1.75.0 (the icons in use keep their codepoints). openindeo `5452df0c` → `cd14ed5b` (its workflow file only).
+  - `actions/setup-go` v7.0.0 → v7.1.0. Go stays 1.27.4.
+  - Held: SDL 3.4.20 (the client is SDL2), Ubuntu 22.04 download runners (glibc 2.35), and other releases published after 2026-11-18.
 - **2026-11-18:** weekly dependency bump onto current main (Go was already 1.26.11).
   - Go lobby toolchain 1.26.11 → 1.27.4 (`server/go.mod` and `golang:1.27.4-alpine`). Standard library only.
   - Bundled CPython 3.12.12 / python-build-standalone `20251028` → 3.15.2 / `20261110`, unpacked directly because uv 0.13.7 still fetches the `20261026` rebuild. uv 0.9.7 → 0.13.7. bsdiff4 1.2.6 → 1.4.2.

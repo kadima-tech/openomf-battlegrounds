@@ -147,13 +147,13 @@ launcher/build-app.sh
 
 Distribute `dist/Battlegrounds.app` as a zip. The build script includes the
 engine, static extractor, cumulative update, relocatable CPython 3.15.2 and
-bsdiff4 1.4.2, together with the project's MIT license, third-party notice index
+bsdiff4 1.4.3, together with the project's MIT license, third-party notice index
 and upstream license files in `Contents/Resources/licenses/`. Additional runtime
 and package notices remain inside `python/` and `python-packages/`. See
 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for the component list and the
 separate status of original game/update data. Python and its decoder are
 private to the app; no Homebrew packages, system Python or player-side downloads
-are used. uv 0.13.7 is a pinned build-time tool and is not shipped in the app.
+are used. uv 0.13.9 is a pinned build-time tool and is not shipped in the app.
 The build machine needs network access to fetch pinned dependencies. A complete
 game installation and disc-derived DirectX tables are not included.
 
@@ -380,7 +380,7 @@ Battlegrounds\
   Battlegrounds.exe          The launcher
   resources\bin\             openbg.exe (engine) and unshield.exe (extractor)
   resources\python\          Private CPython 3.15.2 for Windows x64
-  resources\python-packages\ bsdiff4 1.4.2
+  resources\python-packages\ bsdiff4 1.4.3
   resources\...               Setup scripts, manifests, bundled update, artwork, licenses
 ```
 
@@ -407,7 +407,7 @@ launcher/windows/build-windows.sh
 
 The script works natively in MSYS2 and as a cross build from Linux or macOS with
 MinGW-w64 (`windows/mingw-w64-x86_64.cmake`). It fetches pinned SDL2, zlib,
-unshield and openindeo sources, uv 0.13.7 for the build host and the
+unshield and openindeo sources, uv 0.13.9 for the build host and the
 python-build-standalone CPython archive for Windows (checksums pinned in
 `windows/bundle-python.sh`), and refuses to package an executable that is not x64
 or imports a non-system DLL (`windows/check-imports.py`). `OPENBG_VERSION` and
