@@ -1,4 +1,4 @@
-// Lucide icon font codepoints (engine/third_party/fonts/lucide.ttf, lucide-static 1.72.0, ISC).
+// Lucide icon font codepoints (engine/third_party/fonts/lucide.ttf, lucide-static 1.75.0, ISC).
 #pragma once
 
 #define ICON_ARROW_UP_RIGHT "\xee\x81\x8d"

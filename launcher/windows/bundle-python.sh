@@ -20,36 +20,36 @@ fetch() {  # url file sha256
     fi
 }
 
-# uv 0.13.7 for the build host, as in ../bundle-setup.sh. It installs the decoder for Windows
+# uv 0.13.9 for the build host, as in ../bundle-setup.sh. It installs the decoder for Windows
 # whatever the host is (--python-platform). It does not fetch this interpreter.
 case "$(uname -s)-$(uname -m)" in
-    MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64) triple=x86_64-pc-windows-msvc; checksum=0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021; kind=zip ;;
-    Linux-x86_64) triple=x86_64-unknown-linux-gnu; checksum=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83; kind=tar.gz ;;
-    Linux-aarch64) triple=aarch64-unknown-linux-gnu; checksum=71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc; kind=tar.gz ;;
-    Darwin-arm64) triple=aarch64-apple-darwin; checksum=81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731; kind=tar.gz ;;
-    Darwin-x86_64) triple=x86_64-apple-darwin; checksum=20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7; kind=tar.gz ;;
+    MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64) triple=x86_64-pc-windows-msvc; checksum=edd61f7f5728a56cc62455386661860bdfc7bab65872f39b0c25bdcc1d8e1beb; kind=zip ;;
+    Linux-x86_64) triple=x86_64-unknown-linux-gnu; checksum=a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5; kind=tar.gz ;;
+    Linux-aarch64) triple=aarch64-unknown-linux-gnu; checksum=0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d; kind=tar.gz ;;
+    Darwin-arm64) triple=aarch64-apple-darwin; checksum=5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca; kind=tar.gz ;;
+    Darwin-x86_64) triple=x86_64-apple-darwin; checksum=617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041; kind=tar.gz ;;
     *) echo "Unsupported build host: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
-uv="$tools/uv-0.13.7-$triple/uv"
+uv="$tools/uv-0.13.9-$triple/uv"
 if [ ! -x "$uv" ] && [ ! -x "$uv.exe" ]; then
     archive="$tools/uv-$triple.$kind"
-    fetch "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-$triple.$kind" "$archive" "$checksum"
-    mkdir -p "$tools/uv-0.13.7-$triple"
+    fetch "https://github.com/astral-sh/uv/releases/download/0.13.9/uv-$triple.$kind" "$archive" "$checksum"
+    mkdir -p "$tools/uv-0.13.9-$triple"
     if [ "$kind" = zip ]; then
         "${PYTHON:-python3}" -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
-            "$archive" "$tools/uv-0.13.7-$triple"
+            "$archive" "$tools/uv-0.13.9-$triple"
     else
-        tar -xzf "$archive" -C "$tools/uv-0.13.7-$triple" --strip-components 1 "uv-$triple/uv"
+        tar -xzf "$archive" -C "$tools/uv-0.13.9-$triple" --strip-components 1 "uv-$triple/uv"
     fi
 fi
 [ -x "$uv.exe" ] && uv="$uv.exe"
 
-# CPython 3.15.2 for Windows x64, python-build-standalone 20261110: the same release
-# ../bundle-setup.sh unpacks for macOS and Linux. uv 0.13.7 still fetches the older
-# 20261026 build, and it cannot install a Windows interpreter from another host.
-python_archive="$tools/cpython-3.15.2+20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
-fetch "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.15.2%2B20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz" \
-    "$python_archive" ecd90d78accb906e3d47f6cdb409a610da10475f94d15ebdd8cb2e0561b71df6
+# CPython 3.15.2 for Windows x64, python-build-standalone 20261124: the same release
+# ../bundle-setup.sh unpacks for macOS and Linux. uv 0.13.9 predates that rebuild,
+# and it cannot install a Windows interpreter from another host.
+python_archive="$tools/cpython-3.15.2+20261124-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
+fetch "https://github.com/astral-sh/python-build-standalone/releases/download/20261124/cpython-3.15.2%2B20261124-x86_64-pc-windows-msvc-install_only_stripped.tar.gz" \
+    "$python_archive" 547cdbb844edc425b235513fdf0267f64e8e59c8f484527bb7ef92d3aad91dd9
 # Generated bundle directories: never keep files from an older build.
 rm -rf "$resources/python" "$resources/python-packages"
 tar -xzf "$python_archive" -C "$resources"
